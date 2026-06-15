@@ -79,6 +79,9 @@ import BillingScreen from '../screens/BillingScreen';
 import BillingSupportScreen from '../screens/BillingSupportScreen';
 import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
 import { SessionContext } from '../context/SessionContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('AppNavigator');
+
 
 // --- Define Param Lists for Type Safety --- //
 export type AuthStackParamList = {
@@ -659,7 +662,7 @@ const AppNavigator = () => {
           require('../assets/rounded_sssync.png'),
         ]);
       } catch (e) {
-        console.warn(e);
+        log.warn(e);
       } finally {
         setAppIsReady(true);
       }
@@ -690,12 +693,12 @@ const AppNavigator = () => {
       try {
         await AsyncStorage.setItem('userToken', token);
       } catch (e) {
-        console.log(e);
+        log.debug(e);
       }
     },
     // Make signOut effectively synchronous for state update, but return Promise for type compatibility
     signOut: async () => {
-      console.log("[AuthContext] signOut called, clearing tokens and Clerk session.")
+      log.debug("[AuthContext] signOut called, clearing tokens and Clerk session.")
       setUserToken(null);
       AsyncStorage.removeItem('userToken').catch(() => { });
       try {
@@ -708,9 +711,9 @@ const AppNavigator = () => {
             // - "Cannot read property 'origin'" is a web-specific error on React Native
             const errorMsg = e?.message || String(e);
             if (errorMsg.includes('signed out') || errorMsg.includes('origin')) {
-              console.log('[AuthContext] Sign out completed (expected error on React Native)');
+              log.debug('[AuthContext] Sign out completed (expected error on React Native)');
             } else {
-              console.error('[AuthContext] Sign out error:', e);
+              log.error('[AuthContext] Sign out error:', e);
             }
           }
         }
@@ -728,7 +731,7 @@ const AppNavigator = () => {
       try {
         await AsyncStorage.setItem('userToken', token);
       } catch (e) {
-        console.log(e);
+        log.debug(e);
       }
     }
   }), [clerkSignOut]); // Remove navigation dependency
@@ -750,7 +753,7 @@ const AppNavigator = () => {
         if (firstLaunch) await AsyncStorage.setItem('alreadyLaunched', 'true');
         setIsFirstLaunch(firstLaunch);
       } catch (e) {
-        console.log('Initial launch check error:', e);
+        log.debug('Initial launch check error:', e);
         setIsFirstLaunch(true);
       }
     })();
@@ -807,7 +810,7 @@ const AppNavigator = () => {
       }
 
       if (!token) {
-        console.warn('[Onboarding Check] Supabase token unavailable. Keeping existing signed-in user on TabNavigator.');
+        log.warn('[Onboarding Check] Supabase token unavailable. Keeping existing signed-in user on TabNavigator.');
         setInitialAppScreen('TabNavigator');
         return;
       }
@@ -818,7 +821,7 @@ const AppNavigator = () => {
       if (!userId) {
         const debug = `me=null | session.user.id=${session?.user?.id ?? 'null'}`;
         setLastOnboardingDebugInfo(debug);
-        console.warn('[Onboarding Check] me view returned no user (JWT sub mismatch or no row). Showing AccountSyncIssue.');
+        log.warn('[Onboarding Check] me view returned no user (JWT sub mismatch or no row). Showing AccountSyncIssue.');
         setInitialAppScreen('AccountSyncIssueScreen');
         return;
       }
@@ -832,25 +835,25 @@ const AppNavigator = () => {
       if (dbError) {
         const debug = `dbError=${dbError.message} | userId=${userId}`;
         setLastOnboardingDebugInfo(debug);
-        console.error("[Onboarding Check] DB fetch error:", dbError);
+        log.error("[Onboarding Check] DB fetch error:", dbError);
         setInitialAppScreen('AccountSyncIssueScreen');
       } else if (!dbUser) {
         const debug = `no Users row | userId=${userId} | me.id=${me?.id}`;
         setLastOnboardingDebugInfo(debug);
-        console.log(`[Onboarding Check] No Users row found for ${userId}. Showing AccountSyncIssue (ambiguous).`);
+        log.debug(`[Onboarding Check] No Users row found for ${userId}. Showing AccountSyncIssue (ambiguous).`);
         setInitialAppScreen('AccountSyncIssueScreen');
       } else if (dbUser?.isOnboardingComplete) {
-        console.log(`[Onboarding Check] User ID: ${userId} - Onboarding complete. Going to TabNavigator`);
+        log.debug(`[Onboarding Check] User ID: ${userId} - Onboarding complete. Going to TabNavigator`);
         setInitialAppScreen('TabNavigator');
       } else {
-        console.log(`[Onboarding Check] User ID: ${userId} - Onboarding INCOMPLETE in DB. Going to CreateAccountScreen`);
+        log.debug(`[Onboarding Check] User ID: ${userId} - Onboarding INCOMPLETE in DB. Going to CreateAccountScreen`);
         setInitialAppScreen('CreateAccountScreen');
       }
 
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       setLastOnboardingDebugInfo(`catch: ${errMsg}`);
-      console.error("Error during onboarding check:", error);
+      log.error("Error during onboarding check:", error);
       setInitialAppScreen('AccountSyncIssueScreen');
     } finally {
       setIsLoading(false);

@@ -6,6 +6,9 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { ENABLE_DOC_MODES } from '../../config/features';
 import { CameraMode } from './types';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('BottomControls');
+
 
 const MAX_BATCH_ITEMS = 100;
 
@@ -103,7 +106,7 @@ export const BottomControls: React.FC<{
     const onLongPressMode = () => {
       // Toggle text search from parent? We need a callback prop for this
       // For now, we'll just log it. In real usage, pass onTextSearchToggle prop.
-      console.log('Long press mode button');
+      log.debug('Long press mode button');
     };
 
     // Pan gesture handler callback (non-deprecated approach)

@@ -16,6 +16,9 @@ import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { useOrg } from '../context/OrgContext';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PoolLocationCombobox');
+
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
@@ -123,7 +126,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   // Load data exactly like LocationsManagerV2.loadList
   const loadData = useCallback(async () => {
     if (!effectiveOrgId) {
-      console.log('[PoolLocationCombobox] No org ID available');
+      log.debug('[PoolLocationCombobox] No org ID available');
       return;
     }
 
@@ -139,9 +142,9 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
       if (poolsRes.ok) {
         const poolData = await poolsRes.json();
         setPools(Array.isArray(poolData) ? poolData : []);
-        console.log('[PoolLocationCombobox] Loaded pools:', poolData?.length || 0);
+        log.debug('[PoolLocationCombobox] Loaded pools:', poolData?.length || 0);
       } else {
-        console.error('[PoolLocationCombobox] Pools fetch failed', poolsRes.status);
+        log.error('[PoolLocationCombobox] Pools fetch failed', poolsRes.status);
         setPools([]);
       }
 
@@ -153,11 +156,11 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
           .in('PlatformConnectionId', connectionIds);
 
         if (error) {
-          console.error('[PoolLocationCombobox] Error loading locations:', error);
+          log.error('[PoolLocationCombobox] Error loading locations:', error);
           setSingleLocations([]);
         } else {
           setSingleLocations(platformLocs || []);
-          console.log('[PoolLocationCombobox] Loaded locations:', platformLocs?.length || 0);
+          log.debug('[PoolLocationCombobox] Loaded locations:', platformLocs?.length || 0);
         }
       } else {
         setSingleLocations([]);
@@ -172,7 +175,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
         const partnerPools = poolList.filter(p => p.isPartnerPool || p.name.toLowerCase().includes('partner'));
 
         if (partnerPools.length > 0) {
-          console.log('[PoolLocationCombobox] Detected Partner Pools:', partnerPools.length);
+          log.debug('[PoolLocationCombobox] Detected Partner Pools:', partnerPools.length);
 
           setPools(prevPools => {
             return prevPools.map(pool => {
@@ -205,7 +208,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
         }
       }
     } catch (error) {
-      console.error('[PoolLocationCombobox] Error loading data:', error);
+      log.error('[PoolLocationCombobox] Error loading data:', error);
       Alert.alert('Error', 'Failed to load pools and locations');
     } finally {
       setLoading(false);

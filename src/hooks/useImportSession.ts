@@ -16,6 +16,9 @@ import {
   DraftDecision,
 } from '../types/importSession';
 import type { MappingSuggestion as BackendMappingSuggestion } from '../contracts';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useImportSession');
+
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
@@ -246,7 +249,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         setConnection(data);
       }
     } catch (e) {
-      console.error('[useImportSession] Error fetching connection:', e);
+      log.error('[useImportSession] Error fetching connection:', e);
     }
   }, [connectionId, externalConnection]);
 
@@ -271,7 +274,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         setPlatformConnections(filtered);
       }
     } catch (e) {
-      console.error('[useImportSession] Error fetching connections:', e);
+      log.error('[useImportSession] Error fetching connections:', e);
     }
   }, [externalPlatformConnections]);
 
@@ -319,11 +322,11 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
           .eq('PlatformConnectionId', connectionId);
 
         if (mappingsError) {
-          console.error('[useImportSession] Mappings query error:', mappingsError.message);
+          log.error('[useImportSession] Mappings query error:', mappingsError.message);
         }
 
         if (mappings && mappings.length > 0) {
-          console.log(`[useImportSession] ✅ ${mappings.length} existing mappings from DB`);
+          log.debug(`[useImportSession] ✅ ${mappings.length} existing mappings from DB`);
           const mapped: MappingSuggestion[] = mappings.map((m: any) => {
             const pv = m.ProductVariants;
             return {
@@ -355,7 +358,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
           suggestions = [...suggestions, ...mapped];
         }
       } catch (err: any) {
-        console.error('[useImportSession] Error loading mappings:', err?.message);
+        log.error('[useImportSession] Error loading mappings:', err?.message);
       }
 
       // 2️⃣ Unmapped org variants from /missing-mappings → UNMATCHED items to push
@@ -367,7 +370,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         if (missingResp.ok) {
           const missing = await missingResp.json();
           if (Array.isArray(missing) && missing.length > 0) {
-            console.log(`[useImportSession] ✅ ${missing.length} unmapped items from /missing-mappings`);
+            log.debug(`[useImportSession] ✅ ${missing.length} unmapped items from /missing-mappings`);
             const missingAsSuggestions: MappingSuggestion[] = missing.map((m: any) => ({
               action: 'UNMATCHED' as const,
               direction: 'anorha_to_platform' as const,
@@ -405,7 +408,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         if (response.ok) {
           const data = await response.json();
           if (Array.isArray(data) && data.length > 0) {
-            console.log(`[useImportSession] 🔄 ${data.length} scan suggestions available, merging...`);
+            log.debug(`[useImportSession] 🔄 ${data.length} scan suggestions available, merging...`);
 
             // Build a lookup of existing suggestions by platform product ID
             const existingIds = new Set(suggestions.map(s => s.platformProduct?.id).filter(Boolean));

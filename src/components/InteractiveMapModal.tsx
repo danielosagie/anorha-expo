@@ -4,6 +4,9 @@ import { View, Modal, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Ale
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import { X, Check, Search, MapPin, Crosshair } from 'lucide-react-native';
+import { createLogger } from '../utils/logger';
+const log = createLogger('InteractiveMapModal');
+
 
 interface InteractiveMapModalProps {
     visible: boolean;
@@ -58,7 +61,7 @@ export default function InteractiveMapModal({ visible, onClose, onSelect, initia
             updateMapCenter(location.coords.latitude, location.coords.longitude);
 
         } catch (error) {
-            console.error("Error getting location:", error);
+            log.error("Error getting location:", error);
             setCurrentLocation({ lat: fallbackLat, lng: fallbackLng });
         } finally {
             setLoadingLocation(false);
@@ -84,7 +87,7 @@ export default function InteractiveMapModal({ visible, onClose, onSelect, initia
             const data = await response.json();
             setSearchResults(data.features || []);
         } catch (e) {
-            console.error('Search failed', e);
+            log.error('Search failed', e);
         } finally {
             setIsSearching(false);
         }
@@ -117,7 +120,7 @@ export default function InteractiveMapModal({ visible, onClose, onSelect, initia
                 return [p.city, p.state, p.country].filter(Boolean).join(', ');
             }
         } catch (e) {
-            console.log('Reverse geocoding failed', e);
+            log.debug('Reverse geocoding failed', e);
         }
         return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
     }
@@ -132,7 +135,7 @@ export default function InteractiveMapModal({ visible, onClose, onSelect, initia
                 setAddress(name);
             }
         } catch (e) {
-            console.error("Error parsing webview message", e);
+            log.error("Error parsing webview message", e);
         }
     };
 

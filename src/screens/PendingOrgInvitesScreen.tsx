@@ -12,6 +12,9 @@ import {
 import { useOrganizationList } from '@clerk/clerk-expo';
 import { showMessage } from 'react-native-flash-message';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PendingOrgInvitesScreen');
+
 
 const { width } = Dimensions.get('window');
 const BG_COLOR = '#FFFCF5';
@@ -52,7 +55,7 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
                 routes: [{ name: 'TabNavigator' }],
             });
         } catch (err: any) {
-            console.error('Error accepting invitation:', err);
+            log.error('Error accepting invitation:', err);
             showMessage({
                 message: "Error",
                 description: err.message || "Failed to accept invitation",
@@ -72,7 +75,7 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
                 type: "info",
             });
         } catch (err: any) {
-            console.error('Error declining invitation:', err);
+            log.error('Error declining invitation:', err);
             showMessage({
                 message: "Error",
                 description: "Failed to decline invitation",

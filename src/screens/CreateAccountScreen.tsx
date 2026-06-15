@@ -38,6 +38,9 @@ import Animated, {
   FadeInDown,
 } from 'react-native-reanimated';
 import ConnectAccountsStep from '../components/onboarding/ConnectAccountsStep';
+import { createLogger } from '../utils/logger';
+const log = createLogger('CreateAccountScreen');
+
 
 const { width } = Dimensions.get('window');
 const API_BASE = API_BASE_URL;
@@ -1094,7 +1097,7 @@ export default function CreateAccountScreen() {
       const { data: { user: supabaseUser }, error: authError } = await supabase.auth.getUser();
 
       if (authError || !supabaseUser?.id) {
-        console.error('Supabase Auth Error:', authError);
+        log.error('Supabase Auth Error:', authError);
         Alert.alert('Error', 'Could not identify user. Please restart the app.');
         return;
       }
@@ -1136,7 +1139,7 @@ export default function CreateAccountScreen() {
           createdOrgId = org?.id || null;
           if (formData.invites.length > 0) {
             for (const email of formData.invites) {
-              try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { console.warn(`Failed to invite ${email}`, inviteErr); }
+              try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { log.warn(`Failed to invite ${email}`, inviteErr); }
             }
           }
         } catch (e) { /* ignore */ }
@@ -1174,7 +1177,7 @@ export default function CreateAccountScreen() {
                 }),
               });
             } else {
-              console.warn('[CreateAccount] Missing Supabase JWT; skipped org business address update');
+              log.warn('[CreateAccount] Missing Supabase JWT; skipped org business address update');
             }
           } catch (addrErr) {
             // Error handling

@@ -1,6 +1,9 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import * as Sentry from '@sentry/react-native';
+import { createLogger } from './logger';
+const log = createLogger('SafeErrorBoundary');
+
 
 interface Props {
   children: React.ReactNode;
@@ -23,7 +26,7 @@ export class SafeErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('[SafeErrorBoundary] Caught error:', error, errorInfo);
+    log.error('[SafeErrorBoundary] Caught error:', error, errorInfo);
     try {
       Sentry.captureException(error, {
         extra: { componentStack: errorInfo?.componentStack },

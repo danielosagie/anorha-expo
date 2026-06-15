@@ -21,6 +21,9 @@ import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import PillTabs from '../components/ui/PillTabs';
 import { supabase } from '../../lib/supabase';
 import { useOrg } from '../context/OrgContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('CSVColumnMappingScreen');
+
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -79,7 +82,7 @@ export function CSVColumnMappingScreen() {
             try {
                 const token = await getToken();
                 if (!token) {
-                    console.warn('[CSVColumnMapping] No auth token, falling back to basic matching');
+                    log.warn('[CSVColumnMapping] No auth token, falling back to basic matching');
                     fallbackToBasicMatching();
                     return;
                 }
@@ -102,9 +105,9 @@ export function CSVColumnMappingScreen() {
 
                 const result = await response.json();
                 setMappings(result.mappings || {});
-                console.log('[CSVColumnMapping] AI mapped', Object.keys(result.mappings || {}).length, 'fields');
+                log.debug('[CSVColumnMapping] AI mapped', Object.keys(result.mappings || {}).length, 'fields');
             } catch (error) {
-                console.error('[CSVColumnMapping] AI mapping failed:', error);
+                log.error('[CSVColumnMapping] AI mapping failed:', error);
                 fallbackToBasicMatching();
             } finally {
                 setIsLoadingAI(false);
@@ -183,7 +186,7 @@ export function CSVColumnMappingScreen() {
                 .single();
 
             if (insertError) {
-                console.error('[CSVColumnMapping] Failed to create CSV connection:', insertError);
+                log.error('[CSVColumnMapping] Failed to create CSV connection:', insertError);
                 // Fallback to passing just the 'csv-import' flag so we can still proceed
                 // The connection won't be saved for later, but the import will work.
                 navigation.navigate('MappingReview', {
@@ -195,7 +198,7 @@ export function CSVColumnMappingScreen() {
                 return;
             }
 
-            console.log('[CSVColumnMapping] Created CSV connection:', newConnection.Id);
+            log.debug('[CSVColumnMapping] Created CSV connection:', newConnection.Id);
 
             navigation.navigate('MappingReview', {
                 connectionId: newConnection.Id,
@@ -204,7 +207,7 @@ export function CSVColumnMappingScreen() {
                 isCSVImport: true,
             } as any);
         } catch (error) {
-            console.error('[CSVColumnMapping] Error processing data:', error);
+            log.error('[CSVColumnMapping] Error processing data:', error);
             Alert.alert('Error', 'Failed to process CSV data.');
         } finally {
             setIsProcessing(false);

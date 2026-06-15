@@ -9,6 +9,9 @@ import { supabase } from '../../lib/supabase';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
+import { createLogger } from '../utils/logger';
+const log = createLogger('SyncRulesScreen');
+
 
 type SyncDirection = 'two-way' | 'push-only' | 'pull-only';
 type SourceOfTruth = 'sssync' | 'platform';
@@ -89,7 +92,7 @@ const SyncRulesScreen = () => {
         .single();
 
       if (error) {
-        console.error('Error loading sync rules:', error);
+        log.error('Error loading sync rules:', error);
         return;
       }
 
@@ -103,7 +106,7 @@ const SyncRulesScreen = () => {
         setSyncPricing(rules.syncPricing !== undefined ? rules.syncPricing : true);
       }
     } catch (err) {
-      console.error('Error loading sync rules:', err);
+      log.error('Error loading sync rules:', err);
     } finally {
       setLoading(false);
     }
@@ -140,7 +143,7 @@ const SyncRulesScreen = () => {
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
     } catch (err: any) {
-      console.error('Error saving sync rules:', err);
+      log.error('Error saving sync rules:', err);
       Alert.alert('Error', 'Failed to save sync rules. Please try again.');
     } finally {
       setSaving(false);

@@ -17,6 +17,9 @@ import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../../config/env';
 import { capture, AnalyticsEvents } from '../../lib/analytics';
 import { showMessage } from 'react-native-flash-message';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('InviteMemberModal');
+
 
 const ANORHA_GREEN = '#93C822';
 const ANORHA_GREEN_TINT = 'rgba(147,200,34,0.12)';
@@ -73,7 +76,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
       const data = await res.json();
       setPools(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error('[InviteMemberModal] Error loading pools:', error);
+      log.error('[InviteMemberModal] Error loading pools:', error);
     } finally {
       setLoadingPools(false);
     }

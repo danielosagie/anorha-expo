@@ -46,6 +46,9 @@ import ConnectDisclosureModal from '../components/ConnectDisclosureModal';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
+import { createLogger } from '../utils/logger';
+const log = createLogger('ProfileScreen');
+
 
 const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
@@ -289,7 +292,7 @@ const showStatusNotification = (title: string, message: string, type: 'success' 
     });
   } catch (error) {
     // Fallback to Alert if showMessage fails
-    console.warn('[ProfileScreen] Error showing notification, falling back to Alert:', error);
+    log.warn('[ProfileScreen] Error showing notification, falling back to Alert:', error);
     Alert.alert(title, message);
   }
 };
@@ -299,7 +302,7 @@ const showStatusNotification = (title: string, message: string, type: 'success' 
  * Returns { success: boolean, errorMessage?: string }
  */
 const parseOAuthResult = (result: any, platformName: string): { success: boolean; errorMessage?: string } => {
-  console.log(`[parseOAuthResult] Parsing result for ${platformName}:`, result);
+  log.debug(`[parseOAuthResult] Parsing result for ${platformName}:`, result);
 
   if (result.type === 'cancel' || result.type === 'dismiss') {
     return { success: false, errorMessage: `You cancelled the ${platformName} connection.` };
@@ -312,7 +315,7 @@ const parseOAuthResult = (result: any, platformName: string): { success: boolean
       const message = url.searchParams.get('message');
 
       if (status === 'error' && message) {
-        console.log(`[parseOAuthResult] OAuth error from ${platformName}:`, message);
+        log.debug(`[parseOAuthResult] OAuth error from ${platformName}:`, message);
         return { success: false, errorMessage: message };
       }
 
@@ -320,7 +323,7 @@ const parseOAuthResult = (result: any, platformName: string): { success: boolean
         return { success: true };
       }
     } catch (e) {
-      console.warn('[parseOAuthResult] Failed to parse result URL:', e);
+      log.warn('[parseOAuthResult] Failed to parse result URL:', e);
     }
   }
 
@@ -421,7 +424,7 @@ const ProfileScreen = () => {
           setOptimizationSummary(data);
         }
       } catch (err) {
-        console.error('[ProfileScreen] Error fetching optimization summary:', err);
+        log.error('[ProfileScreen] Error fetching optimization summary:', err);
       }
     };
     fetchSummary();
@@ -502,7 +505,7 @@ const ProfileScreen = () => {
           }
         } else {
           // Fallback for locations if no Org logic (usually 0 is fine here as locations depend on connections)
-          console.log('[ProfileScreen] Stats - No currentOrg.id for locations');
+          log.debug('[ProfileScreen] Stats - No currentOrg.id for locations');
         }
 
         setStats({
@@ -529,7 +532,7 @@ const ProfileScreen = () => {
         );
 
         if (realOrgMem && switchOrg) {
-          console.log('[ProfileScreen] Auto-switching to real org:', realOrgMem.organization.name);
+          log.debug('[ProfileScreen] Auto-switching to real org:', realOrgMem.organization.name);
           // Use switchOrg(orgId) from OrgContext
           switchOrg(realOrgMem.organization.id);
         }
@@ -584,7 +587,7 @@ const ProfileScreen = () => {
   const loadPools = useCallback(async () => {
     try {
       if (!currentOrg?.id) {
-        console.log('[ProfileScreen] No currentOrg.id yet, skipping pool load');
+        log.debug('[ProfileScreen] No currentOrg.id yet, skipping pool load');
         setPools([]);
         return;
       }
@@ -628,9 +631,9 @@ const ProfileScreen = () => {
         sync_inventory: p.sync_inventory,
         sync_pricing: p.sync_pricing
       })));
-      console.log('[ProfileScreen] Loaded pools from API:', list.length);
+      log.debug('[ProfileScreen] Loaded pools from API:', list.length);
     } catch (e) {
-      console.error('[ProfileScreen] Failed loading pools', e);
+      log.error('[ProfileScreen] Failed loading pools', e);
       setPools([]);
     } finally {
       setLoadingPools(false);
@@ -696,12 +699,12 @@ const ProfileScreen = () => {
 
   useEffect(() => {
     if (!isFocused) return;
-    console.log('[ProfileScreen] Setting up overlay for screen');
+    log.debug('[ProfileScreen] Setting up overlay for screen');
     // Use a stable wrapper that calls the ref
     const stableHandler = (platform: string) => handleStartConnectRef.current(platform);
     overlay.enableForScreen(stableHandler);
     return () => {
-      console.log('[ProfileScreen] Cleaning up overlay for screen');
+      log.debug('[ProfileScreen] Cleaning up overlay for screen');
       overlay.disableForScreen();
     };
   }, [isFocused, overlay.enableForScreen, overlay.disableForScreen]); // Enable only while this screen is focused
@@ -709,7 +712,7 @@ const ProfileScreen = () => {
   // Auto-open overlay if coming from onboarding
   useEffect(() => {
     if (route.params?.openAddConnection) {
-      console.log('[ProfileScreen] Auto-opening add connection overlay from onboarding');
+      log.debug('[ProfileScreen] Auto-opening add connection overlay from onboarding');
       // Small delay to ensure overlay is ready
       const timer = setTimeout(() => {
         overlay.show();
@@ -737,7 +740,7 @@ const ProfileScreen = () => {
     setTimeout(() => {
       InteractionManager.runAfterInteractions(async () => {
         try {
-          console.log('[ProfileScreen] Starting document picker via InteractionManager...');
+          log.debug('[ProfileScreen] Starting document picker via InteractionManager...');
 
           const result = await DocumentPicker.getDocumentAsync({
             type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
@@ -745,12 +748,12 @@ const ProfileScreen = () => {
           });
 
           if (result.canceled || !result.assets?.[0]) {
-            console.log('[ProfileScreen] CSV picking cancelled');
+            log.debug('[ProfileScreen] CSV picking cancelled');
             return;
           }
 
           const file = result.assets[0];
-          console.log('[ProfileScreen] CSV selected:', file.name);
+          log.debug('[ProfileScreen] CSV selected:', file.name);
 
           // Check for null uri
           if (!file.uri) {
@@ -782,7 +785,7 @@ const ProfileScreen = () => {
           });
 
           const sampleRow = csvData[0] || {};
-          console.log('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
+          log.debug('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
 
           capture(AnalyticsEvents.INVENTORY_IMPORT_STARTED, { source: 'csv', row_count: csvData.length });
 
@@ -795,7 +798,7 @@ const ProfileScreen = () => {
           });
 
         } catch (error: any) {
-          console.error('[ProfileScreen] CSV import error:', error);
+          log.error('[ProfileScreen] CSV import error:', error);
           Alert.alert('Import Error', `Failed to read the CSV file: ${error.message}`);
         }
       });
@@ -814,7 +817,7 @@ const ProfileScreen = () => {
 
     try {
       setIsDisconnectingMobile(true);
-      console.log(`[ProfileScreen] Attempting to disconnect connection ID: ${disconnectTarget.id} with strategy: ${archiveProductsMobile ? 'archive' : 'keep'}`);
+      log.debug(`[ProfileScreen] Attempting to disconnect connection ID: ${disconnectTarget.id} with strategy: ${archiveProductsMobile ? 'archive' : 'keep'}`);
 
       // 1. Get Auth Token
       const token = await getApiToken();
@@ -838,7 +841,7 @@ const ProfileScreen = () => {
         throw new Error(errorData.message || `Failed to disconnect. Status: ${response.status}`);
       }
 
-      console.log(`[ProfileScreen] Successfully disconnected connection ID: ${disconnectTarget.id}`);
+      log.debug(`[ProfileScreen] Successfully disconnected connection ID: ${disconnectTarget.id}`);
 
       // Refresh list after disconnect
       await refreshConnections();
@@ -850,7 +853,7 @@ const ProfileScreen = () => {
       setIsEditMode(false);
 
     } catch (err: any) {
-      console.error('[ProfileScreen] Disconnect error:', err);
+      log.error('[ProfileScreen] Disconnect error:', err);
       Alert.alert('Disconnect Error', err.message || 'Failed to disconnect. Please try again.');
     } finally {
       setIsDisconnectingMobile(false);
@@ -907,7 +910,7 @@ const ProfileScreen = () => {
           text: "Reconnect",
           style: "default",
           onPress: async () => {
-            console.log(`[ProfileScreen] Initiating reconnect for ${platformName} (connection ID: ${connectionId})`);
+            log.debug(`[ProfileScreen] Initiating reconnect for ${platformName} (connection ID: ${connectionId})`);
             setIsEditMode(false); // Exit edit mode
             try {
               const token = await getApiToken();
@@ -933,7 +936,7 @@ const ProfileScreen = () => {
               }
 
               const { authUrl } = await response.json();
-              console.log(`[ProfileScreen] Got reconnect URL for ${platformName}, opening in browser...`);
+              log.debug(`[ProfileScreen] Got reconnect URL for ${platformName}, opening in browser...`);
 
               // Open the auth URL in browser
               const supported = await Linking.canOpenURL(authUrl);
@@ -945,7 +948,7 @@ const ProfileScreen = () => {
               }
 
             } catch (error: unknown) {
-              console.error("[ProfileScreen] Error reconnecting platform:", error);
+              log.error("[ProfileScreen] Error reconnecting platform:", error);
               const message = error instanceof Error ? error.message : String(error);
               Alert.alert('Reconnect Failed', `Failed to reconnect ${platformName}: ${message}`);
             }
@@ -965,7 +968,7 @@ const ProfileScreen = () => {
       // User will sign in through normal Clerk flow if not already authenticated
       await WebBrowser.openBrowserAsync(`${WEB_APP_URL}/billing`);
     } catch (error: any) {
-      console.error('Failed to open billing:', error);
+      log.error('Failed to open billing:', error);
       Alert.alert('Error', `Failed to open billing: ${error.message}`);
     }
   };
@@ -976,20 +979,20 @@ const ProfileScreen = () => {
       // User will sign in through normal Clerk flow if not already authenticated
       await WebBrowser.openBrowserAsync(`${WEB_APP_URL}/team`);
     } catch (error: any) {
-      console.error('Failed to open team page:', error);
+      log.error('Failed to open team page:', error);
       Alert.alert('Error', `Failed to open team page: ${error.message}`);
     }
   };
 
   // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
   const openShopifyForCopy = async () => {
-    console.log("[ProfileScreen] Opening Shopify for user to copy URL...");
+    log.debug("[ProfileScreen] Opening Shopify for user to copy URL...");
     // Get User ID directly from Supabase auth
     const { data: { user }, error: userError } = await supabase.auth.getUser();
 
     if (userError || !user) {
       Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-      console.error("[ProfileScreen] Error getting user from Supabase:", userError);
+      log.error("[ProfileScreen] Error getting user from Supabase:", userError);
       return;
     }
     const userId = user.id;
@@ -1006,11 +1009,11 @@ const ProfileScreen = () => {
     const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
     const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
 
-    console.log(`[ProfileScreen] Opening URL with Expo WebBrowser: ${backendInitiationUrl}`);
+    log.debug(`[ProfileScreen] Opening URL with Expo WebBrowser: ${backendInitiationUrl}`);
     try {
       await WebBrowser.openBrowserAsync(backendInitiationUrl);
     } catch (error: unknown) {
-      console.error('[ProfileScreen] WebBrowser Error opening for copy:', error);
+      log.error('[ProfileScreen] WebBrowser Error opening for copy:', error);
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert('Browser Error', `An error occurred opening the browser: ${message}`);
     }
@@ -1026,12 +1029,12 @@ const ProfileScreen = () => {
 
   // --- NEW: Logic for Guided Shopify Flow Steps 6 & 7 (Confirm/Connect) ---
   const connectWithExtractedShopName = async (extractedShopName: string) => {
-    console.log(`[ProfileScreen] Connecting with extracted shop name: ${extractedShopName}`);
+    log.debug(`[ProfileScreen] Connecting with extracted shop name: ${extractedShopName}`);
     // Get User ID
     const { data: { user }, error: userError } = await supabase.auth.getUser();
     if (userError || !user) {
       Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-      console.error("[ProfileScreen] Error getting user:", userError);
+      log.error("[ProfileScreen] Error getting user:", userError);
       return;
     }
     const userId = user.id;
@@ -1043,14 +1046,14 @@ const ProfileScreen = () => {
 
     const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
     const directLoginUrl = `${directLoginUrlBase}?userId=${userId}&shop=${extractedShopName}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
-    console.log(`[ProfileScreen] Opening Final Auth URL: ${directLoginUrl}`);
+    log.debug(`[ProfileScreen] Opening Final Auth URL: ${directLoginUrl}`);
 
     try {
       const result = await WebBrowser.openAuthSessionAsync(
         directLoginUrl,
         finalRedirectUri
       );
-      console.log('[ProfileScreen] Final WebBrowser Auth Result: ', result);
+      log.debug('[ProfileScreen] Final WebBrowser Auth Result: ', result);
 
       // Parse result for errors (handles error query params from backend)
       const parsed = parseOAuthResult(result, 'Shopify');
@@ -1061,7 +1064,7 @@ const ProfileScreen = () => {
       }
 
     } catch (error: unknown) {
-      console.error('[ProfileScreen] Final WebBrowser Auth Error:', error);
+      log.error('[ProfileScreen] Final WebBrowser Auth Error:', error);
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert('Connection Error', `An error occurred opening the browser for final auth: ${message}`);
     }
@@ -1069,7 +1072,7 @@ const ProfileScreen = () => {
 
   // REVISED: Single handler for confirm button in the combined modal
   const handleConfirmInput = () => {
-    console.log(`[ProfileScreen] Confirming input: URL='${pastedShopifyUrl}', Manual='${manualShopName}'`);
+    log.debug(`[ProfileScreen] Confirming input: URL='${pastedShopifyUrl}', Manual='${manualShopName}'`);
     let shopNameToConnect: string | null = null;
     let isValid = false;
 
@@ -1080,7 +1083,7 @@ const ProfileScreen = () => {
       if (match && match[1]) {
         shopNameToConnect = match[1];
         isValid = true;
-        console.log(`[ProfileScreen] Extracted shop name from URL: ${shopNameToConnect}`);
+        log.debug(`[ProfileScreen] Extracted shop name from URL: ${shopNameToConnect}`);
       } else {
         Alert.alert(
           "Invalid URL Format",
@@ -1099,14 +1102,14 @@ const ProfileScreen = () => {
         const match = trimmedName.match(shopNameRegex);
         if (match && match[1]) {
           extractedShopName = match[1];
-          console.log(`[ProfileScreen] Extracted shop name from manual URL: ${extractedShopName}`);
+          log.debug(`[ProfileScreen] Extracted shop name from manual URL: ${extractedShopName}`);
         }
       }
 
       if (extractedShopName && !extractedShopName.includes(' ')) { // Example validation
         shopNameToConnect = extractedShopName;
         isValid = true;
-        console.log(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
+        log.debug(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
       } else {
         Alert.alert(
           "Invalid Shop Name",
@@ -1131,7 +1134,7 @@ const ProfileScreen = () => {
 
   // --- NEW: Function to start platform scan ---
   const startPlatformScan = async (connectionId: string, platformName: string, isReconnect: boolean = false) => {
-    console.log(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
+    log.debug(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
     setIsEditMode(false); // Exit edit mode
 
     // ✅ NAVIGATE IMMEDIATELY - Don't wait for API response
@@ -1166,10 +1169,10 @@ const ProfileScreen = () => {
         }
 
         const responseData = await response.json().catch(() => ({}));
-        console.log(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Job ID: ${responseData.jobId}`);
+        log.debug(`[ProfileScreen] Successfully initiated scan for ${platformName} (Connection ID: ${connectionId}). Job ID: ${responseData.jobId}`);
 
       } catch (error: unknown) {
-        console.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
+        log.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
         const message = error instanceof Error ? error.message : String(error);
         // Show error notification - user is already on MappingReviewScreen
         showStatusNotification('Scan Error', `Could not start scan for ${platformName}: ${message}`, 'danger');
@@ -1242,13 +1245,13 @@ const ProfileScreen = () => {
 
   // --- NEW: Clover Connection Logic ---
   const handleCloverConnect = async () => {
-    console.log("[ProfileScreen] Initiating Clover connection (New OAuth Flow)...");
+    log.debug("[ProfileScreen] Initiating Clover connection (New OAuth Flow)...");
     try {
       // 1. Get SSSync User ID
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
         Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-        console.error("[ProfileScreen] Clover Connect: Error getting user:", userError);
+        log.error("[ProfileScreen] Clover Connect: Error getting user:", userError);
         return;
       }
       const sssyncUserId = user.id;
@@ -1259,11 +1262,11 @@ const ProfileScreen = () => {
       // 3. Construct Backend Authorization URL with orgId
       const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
       const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/clover/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
-      console.log("[ProfileScreen] Clover Connect: Backend Auth URL:", backendAuthUrl);
+      log.debug("[ProfileScreen] Clover Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
       const result = await WebBrowser.openAuthSessionAsync(backendAuthUrl, finalRedirectUri);
-      console.log("[ProfileScreen] Clover Connect: WebBrowser result:", result);
+      log.debug("[ProfileScreen] Clover Connect: WebBrowser result:", result);
 
       // 5. Handle Callback from finalRedirectUri
       if (result.type === 'success' && result.url) {
@@ -1274,12 +1277,12 @@ const ProfileScreen = () => {
         const message = urlParams.get('message');
         const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
 
-        console.log("[ProfileScreen] Clover Connect: Callback params:", { status, message, connectionId });
+        log.debug("[ProfileScreen] Clover Connect: Callback params:", { status, message, connectionId });
 
         if (status === 'success') {
           Alert.alert("Success", message || "Clover account connected successfully!");
           if (connectionId) {
-            console.log(`[ProfileScreen] Clover Connect: Connection ID ${connectionId}. Syncing locations...`);
+            log.debug(`[ProfileScreen] Clover Connect: Connection ID ${connectionId}. Syncing locations...`);
             // Sync locations first, then start scan
             try {
               const token = await ensureSupabaseJwt();
@@ -1290,9 +1293,9 @@ const ProfileScreen = () => {
                   'Content-Type': 'application/json',
                 },
               });
-              console.log(`[ProfileScreen] Clover Connect: Locations synced for ${connectionId}`);
+              log.debug(`[ProfileScreen] Clover Connect: Locations synced for ${connectionId}`);
             } catch (syncError) {
-              console.error(`[ProfileScreen] Clover Connect: Failed to sync locations:`, syncError);
+              log.error(`[ProfileScreen] Clover Connect: Failed to sync locations:`, syncError);
               // Continue anyway - scan can still start
             }
             // Call startPlatformScan
@@ -1301,21 +1304,21 @@ const ProfileScreen = () => {
           refreshConnections(); // Refresh connections list
         } else {
           Alert.alert("Connection Failed", message || "Failed to connect Clover account.");
-          console.error("[ProfileScreen] Clover Connect: Connection failed via backend callback:", { status, message });
+          log.error("[ProfileScreen] Clover Connect: Connection failed via backend callback:", { status, message });
         }
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
         Alert.alert("Cancelled", "Clover connection process was cancelled.");
-        console.log("[ProfileScreen] Clover Connect: User cancelled or dismissed flow.");
+        log.debug("[ProfileScreen] Clover Connect: User cancelled or dismissed flow.");
       } else {
         let errorMessage = "An unexpected error occurred during Clover authentication.";
         if (result.type === 'locked') {
           errorMessage = "The authentication session is locked. Please try again or use another method.";
         }
         Alert.alert("Connection Error", errorMessage);
-        console.warn("[ProfileScreen] Clover Connect: Unexpected WebBrowser result type:", result.type, result);
+        log.warn("[ProfileScreen] Clover Connect: Unexpected WebBrowser result type:", result.type, result);
       }
     } catch (error: unknown) {
-      console.error("[ProfileScreen] Clover Connect: General error:", error);
+      log.error("[ProfileScreen] Clover Connect: General error:", error);
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert("Error", `Failed to connect Clover: ${message}`);
     }
@@ -1325,13 +1328,13 @@ const ProfileScreen = () => {
 
   // --- NEW: Square Connection Logic ---
   const handleSquareConnect = async (forceNewSession = false) => {
-    console.log(`[ProfileScreen] Initiating Square connection (New OAuth Flow)... Force New Session: ${forceNewSession}`);
+    log.debug(`[ProfileScreen] Initiating Square connection (New OAuth Flow)... Force New Session: ${forceNewSession}`);
     try {
       // 1. Get SSSync User ID
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
         Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-        console.error("[ProfileScreen] Square Connect: Error getting user:", userError);
+        log.error("[ProfileScreen] Square Connect: Error getting user:", userError);
         return;
       }
       const sssyncUserId = user.id;
@@ -1342,7 +1345,7 @@ const ProfileScreen = () => {
       // 3. Construct Backend Authorization URL with orgId
       const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
       const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/square/login?userId=${sssyncUserId}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
-      console.log("[ProfileScreen] Square Connect: Backend Auth URL:", backendAuthUrl);
+      log.debug("[ProfileScreen] Square Connect: Backend Auth URL:", backendAuthUrl);
 
       // 4. Open WebBrowser for OAuth flow, listening for finalRedirectUri
       // Use ephemeral session if requested (forces login prompt)
@@ -1354,7 +1357,7 @@ const ProfileScreen = () => {
           showInRecents: true
         }
       );
-      console.log("[ProfileScreen] Square Connect: WebBrowser result:", result);
+      log.debug("[ProfileScreen] Square Connect: WebBrowser result:", result);
 
       // 5. Handle Callback from finalRedirectUri
       if (result.type === 'success' && result.url) {
@@ -1366,12 +1369,12 @@ const ProfileScreen = () => {
         const errorCode = urlParams.get('error_code');
         const connectionId = urlParams.get('connectionId'); // Assuming backend might send this
 
-        console.log("[ProfileScreen] Square Connect: Callback params:", { status, message, errorCode, connectionId });
+        log.debug("[ProfileScreen] Square Connect: Callback params:", { status, message, errorCode, connectionId });
 
         if (status === 'success') {
           Alert.alert("Success", message || "Square account connected successfully!");
           if (connectionId) {
-            console.log(`[ProfileScreen] Square Connect: Connection ID ${connectionId}. Syncing locations...`);
+            log.debug(`[ProfileScreen] Square Connect: Connection ID ${connectionId}. Syncing locations...`);
             // Sync locations first, then start scan
             try {
               const token = await ensureSupabaseJwt();
@@ -1382,9 +1385,9 @@ const ProfileScreen = () => {
                   'Content-Type': 'application/json',
                 },
               });
-              console.log(`[ProfileScreen] Square Connect: Locations synced for ${connectionId}`);
+              log.debug(`[ProfileScreen] Square Connect: Locations synced for ${connectionId}`);
             } catch (syncError) {
-              console.error(`[ProfileScreen] Square Connect: Failed to sync locations:`, syncError);
+              log.error(`[ProfileScreen] Square Connect: Failed to sync locations:`, syncError);
               // Continue anyway - scan can still start
             }
             // Call startPlatformScan
@@ -1410,22 +1413,22 @@ const ProfileScreen = () => {
             );
           } else {
             Alert.alert("Connection Failed", message || "Failed to connect Square account.");
-            console.error("[ProfileScreen] Square Connect: Connection failed via backend callback:", { status, message });
+            log.error("[ProfileScreen] Square Connect: Connection failed via backend callback:", { status, message });
           }
         }
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
         Alert.alert("Cancelled", "Square connection process was cancelled.");
-        console.log("[ProfileScreen] Square Connect: User cancelled or dismissed flow.");
+        log.debug("[ProfileScreen] Square Connect: User cancelled or dismissed flow.");
       } else {
         let errorMessage = "An unexpected error occurred during Square authentication.";
         if (result.type === 'locked') {
           errorMessage = "The authentication session is locked. Please try again or use another method.";
         }
         Alert.alert("Connection Error", errorMessage);
-        console.warn("[ProfileScreen] Square Connect: Unexpected WebBrowser result type:", result.type, result);
+        log.warn("[ProfileScreen] Square Connect: Unexpected WebBrowser result type:", result.type, result);
       }
     } catch (error: unknown) {
-      console.error("[ProfileScreen] Square Connect: General error:", error);
+      log.error("[ProfileScreen] Square Connect: General error:", error);
       const message = error instanceof Error ? error.message : String(error);
       Alert.alert("Error", `Failed to connect Square: ${message}`);
     }
@@ -1449,7 +1452,7 @@ const ProfileScreen = () => {
       const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
       const backendAuthUrl = `${SSSYNC_API_BASE_URL}/api/auth/facebook/login?userId=${user.id}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}&mode=personal_marketplace`;
 
-      console.log(`[ProfileScreen] Facebook Connect: Opening in ${USE_EXTERNAL_BROWSER_FOR_FACEBOOK ? 'External' : 'Internal'} browser...`);
+      log.debug(`[ProfileScreen] Facebook Connect: Opening in ${USE_EXTERNAL_BROWSER_FOR_FACEBOOK ? 'External' : 'Internal'} browser...`);
 
       if (USE_EXTERNAL_BROWSER_FOR_FACEBOOK) {
         // Option A: Open in Chrome/Safari - user will be redirected back via custom scheme
@@ -1467,16 +1470,16 @@ const ProfileScreen = () => {
           finalRedirectUri
         );
 
-        console.log('[ProfileScreen] Facebook Auth Result:', result.type);
+        log.debug('[ProfileScreen] Facebook Auth Result:', result.type);
         if (result.type === 'cancel' || result.type === 'dismiss') {
           // User cancelled
         } else if (result.type !== 'success') {
-          console.warn('[ProfileScreen] Facebook Auth Result type:', result.type);
+          log.warn('[ProfileScreen] Facebook Auth Result type:', result.type);
         }
       }
 
     } catch (error: unknown) {
-      console.error("[ProfileScreen] Facebook Connect Error:", error);
+      log.error("[ProfileScreen] Facebook Connect Error:", error);
       Alert.alert("Error", "Failed to open Facebook login. Please try again.");
     }
   };
@@ -1486,7 +1489,7 @@ const ProfileScreen = () => {
 
   // --- NEW: Handler for Review & Sync ---
   const handleReviewAndSync = (connectionId: string, platformName: string) => {
-    console.log(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
+    log.debug(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
 
     // Navigate to the MappingReview screen
     navigation.navigate('ImportOverview', { connectionId, platformName });
@@ -1511,14 +1514,14 @@ const ProfileScreen = () => {
   };
 
   const handleLogout = async () => {
-    console.log("[ProfileScreen] handleLogout initiated...");
+    log.debug("[ProfileScreen] handleLogout initiated...");
     try {
       // Use global auth context signOut which also stops Supabase bridge and Clerk session
       await authContext?.signOut();
       // Don't manually reset to a root route from a child navigator; SignedOut gating will switch the shell.
       // If you want an immediate visual change, you can optionally navigate to a local screen here.
     } catch (error) {
-      console.error('Logout Error in handleLogout:', error);
+      log.error('Logout Error in handleLogout:', error);
     }
   };
 
@@ -1575,7 +1578,7 @@ const ProfileScreen = () => {
         Alert.alert('Error', data.message || 'Failed to delete account. Please contact support.');
       }
     } catch (error) {
-      console.error('Delete account error:', error);
+      log.error('Delete account error:', error);
       Alert.alert('Error', 'An error occurred while deleting your account. Please try again.');
     } finally {
       setIsDeletingAccount(false);
@@ -1586,12 +1589,12 @@ const ProfileScreen = () => {
     try {
       const token = await getApiToken();
       if (token) {
-        console.log('Current API token:', token);
+        log.debug('Current API token:', token);
       } else {
-        console.log('No active API token found.');
+        log.debug('No active API token found.');
       }
     } catch (catchError: any) {
-      console.error("Caught unexpected error getting session:", catchError.message);
+      log.error("Caught unexpected error getting session:", catchError.message);
     }
   };
 
@@ -1611,7 +1614,7 @@ const ProfileScreen = () => {
         const devMode = await AsyncStorage.getItem('devMode');
         setIsDevMode(devMode === 'true');
       } catch (error) {
-        console.error('Error loading dev mode setting:', error);
+        log.error('Error loading dev mode setting:', error);
       }
     };
     loadDevMode();
@@ -1623,7 +1626,7 @@ const ProfileScreen = () => {
       await AsyncStorage.setItem('devMode', value.toString());
       setIsDevMode(value);
     } catch (error) {
-      console.error('Error saving dev mode setting:', error);
+      log.error('Error saving dev mode setting:', error);
     }
   };
 
@@ -1959,10 +1962,10 @@ const ProfileScreen = () => {
               <Button
                 title="Import Inventory/Connect Platform"
                 onPress={() => {
-                  console.log('[ProfileScreen] Add Connection button pressed');
-                  console.log('[ProfileScreen] Before show - overlay.visible:', overlay.visible);
+                  log.debug('[ProfileScreen] Add Connection button pressed');
+                  log.debug('[ProfileScreen] Before show - overlay.visible:', overlay.visible);
                   overlay.show();
-                  console.log('[ProfileScreen] After show - overlay.visible:', overlay.visible);
+                  log.debug('[ProfileScreen] After show - overlay.visible:', overlay.visible);
                 }}
                 style={styles.addConnectionButton}
               />

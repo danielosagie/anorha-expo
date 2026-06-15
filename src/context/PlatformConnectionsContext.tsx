@@ -3,6 +3,9 @@ import { supabase, ensureSupabaseJwt, getSupabaseUserId } from '../../lib/supaba
 import { API_BASE_URL } from '../config/env';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 import { TABLES } from '../constants/tableNames';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PlatformConnectionsContext');
+
 
 export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot' | 'etsy';
 
@@ -117,7 +120,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   const scheduleRefresh = useCallback((reason: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
-      console.log(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
+      log.debug(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
       fetchConnections();
     }, 600);
     // NOTE: do NOT add `scheduleRefresh` to its own deps — the self-reference made
@@ -154,27 +157,27 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
             ...(currentUserId ? { filter: `UserId=eq.${currentUserId}` } : {}),
           },
           (payload) => {
-            console.log('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
+            log.debug('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
             // Refetch all connections on any change
             scheduleRefresh('realtime');
           }
         )
         .subscribe((status) => {
-          console.log('[PlatformConnectionsContext] Realtime subscription status:', status);
+          log.debug('[PlatformConnectionsContext] Realtime subscription status:', status);
           if (status === 'SUBSCRIBED') {
             retryCount = 0; // Reset on success
           } else if (status === 'CHANNEL_ERROR') {
             // Auto-retry with exponential backoff
             if (retryCount < maxRetries) {
               const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-              console.log(`[PlatformConnectionsContext] Retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+              log.debug(`[PlatformConnectionsContext] Retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
               retryTimeout = setTimeout(() => {
                 retryCount++;
                 if (channel) supabase.removeChannel(channel);
                 setupSubscription();
               }, delay);
             } else {
-              console.error('[PlatformConnectionsContext] Max retries reached for realtime subscription');
+              log.error('[PlatformConnectionsContext] Max retries reached for realtime subscription');
             }
           }
         });
@@ -184,7 +187,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
 
     // Cleanup subscription on unmount
     return () => {
-      console.log('[PlatformConnectionsContext] Unsubscribing from realtime updates');
+      log.debug('[PlatformConnectionsContext] Unsubscribing from realtime updates');
       if (retryTimeout) clearTimeout(retryTimeout);
       if (channel) supabase.removeChannel(channel);
     };
@@ -247,7 +250,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
         s.on('connection:status', onConnectionStatus);
       })
       .catch((error) => {
-        console.error('[PlatformConnectionsContext] Failed to acquire collaboration socket:', error);
+        log.error('[PlatformConnectionsContext] Failed to acquire collaboration socket:', error);
         releaseOnce();
       });
 

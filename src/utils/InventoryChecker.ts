@@ -1,4 +1,7 @@
 import { supabase } from '../lib/supabase';
+import { createLogger } from './logger';
+const log = createLogger('InventoryChecker');
+
 
 export interface InventoryMatch {
   productId: string;
@@ -54,7 +57,7 @@ export async function checkInventoryByBarcode(barcode: string): Promise<Inventor
       .eq('Products.UserId', user.id);
 
     if (error) {
-      console.error('Error checking barcode inventory:', error);
+      log.error('Error checking barcode inventory:', error);
       return { exists: false, matches: [], suggestions: [] };
     }
 
@@ -96,7 +99,7 @@ export async function checkInventoryByBarcode(barcode: string): Promise<Inventor
       suggestions
     };
   } catch (error) {
-    console.error('Error in checkInventoryByBarcode:', error);
+    log.error('Error in checkInventoryByBarcode:', error);
     return { exists: false, matches: [], suggestions: [] };
   }
 }
@@ -133,7 +136,7 @@ export async function checkInventoryBySku(sku: string): Promise<InventoryCheckRe
       .eq('Products.UserId', user.id);
 
     if (error) {
-      console.error('Error checking SKU inventory:', error);
+      log.error('Error checking SKU inventory:', error);
       return { exists: false, matches: [], suggestions: [] };
     }
 
@@ -162,7 +165,7 @@ export async function checkInventoryBySku(sku: string): Promise<InventoryCheckRe
       }]
     };
   } catch (error) {
-    console.error('Error in checkInventoryBySku:', error);
+    log.error('Error in checkInventoryBySku:', error);
     return { exists: false, matches: [], suggestions: [] };
   }
 }
@@ -201,7 +204,7 @@ export async function searchInventoryByTitle(title: string): Promise<InventoryCh
       .limit(10);
 
     if (error) {
-      console.error('Error searching inventory by title:', error);
+      log.error('Error searching inventory by title:', error);
       return { exists: false, matches: [], suggestions: [] };
     }
 
@@ -230,7 +233,7 @@ export async function searchInventoryByTitle(title: string): Promise<InventoryCh
       }]
     };
   } catch (error) {
-    console.error('Error in searchInventoryByTitle:', error);
+    log.error('Error in searchInventoryByTitle:', error);
     return { exists: false, matches: [], suggestions: [] };
   }
 }
@@ -268,7 +271,7 @@ export async function getRecentProducts(limit: number = 10): Promise<InventoryMa
       .limit(limit);
 
     if (error) {
-      console.error('Error fetching recent products:', error);
+      log.error('Error fetching recent products:', error);
       return [];
     }
 
@@ -283,7 +286,7 @@ export async function getRecentProducts(limit: number = 10): Promise<InventoryMa
       lastUpdated: variant.UpdatedAt
     })) || [];
   } catch (error) {
-    console.error('Error in getRecentProducts:', error);
+    log.error('Error in getRecentProducts:', error);
     return [];
   }
 } 

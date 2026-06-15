@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api, ApiError } from '../lib/apiClient';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useProductDraft');
+
 
 interface DraftData {
   [key: string]: any;
@@ -35,7 +38,7 @@ export const useProductDraft = (variantId: string): UseProductDraftReturn => {
     } catch (error) {
       // A missing draft is an expected, non-error state.
       if (!(error instanceof ApiError && error.status === 404)) {
-        console.error('Load draft error:', error);
+        log.error('Load draft error:', error);
       }
       setDraftData(null);
     } finally {
@@ -52,7 +55,7 @@ export const useProductDraft = (variantId: string): UseProductDraftReturn => {
     try {
       await api.delete(`/api/products/drafts/${variantId}`);
     } catch (error) {
-      console.error('Discard draft error:', error);
+      log.error('Discard draft error:', error);
     }
     setDraftData(null);
   }, [variantId]);

@@ -16,6 +16,9 @@ import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { showMessage } from 'react-native-flash-message';
 import Button from './Button';
 import Card from './Card';
+import { createLogger } from '../utils/logger';
+const log = createLogger('OrgSwitcher');
+
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
@@ -60,7 +63,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
       });
 
       if (!response.ok) {
-        console.error('[OrgSwitcher] Failed to load orgs, status:', response.status);
+        log.error('[OrgSwitcher] Failed to load orgs, status:', response.status);
         throw new Error('Failed to load orgs');
       }
 
@@ -72,7 +75,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
       }));
 
       setOrganizations(orgs);
-      console.log('[OrgSwitcher] Loaded organizations:', orgs.length);
+      log.debug('[OrgSwitcher] Loaded organizations:', orgs.length);
 
       // Fetch active organization
       const activeResponse = await fetch(`${API_BASE_URL}/api/organizations/me/active`, {
@@ -84,22 +87,22 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
 
       if (activeResponse.ok) {
         const activeData = await activeResponse.json();
-        console.log('[OrgSwitcher] Active org response:', activeData);
+        log.debug('[OrgSwitcher] Active org response:', activeData);
         // The backend returns { orgId }, find the matching org
         const activeOrg = orgs.find(org => org.Id === activeData.orgId);
         if (activeOrg) {
           setCurrentOrg(activeOrg);
-          console.log('[OrgSwitcher] Set current org to:', activeOrg.Name);
+          log.debug('[OrgSwitcher] Set current org to:', activeOrg.Name);
         } else if (orgs.length > 0) {
           setCurrentOrg(orgs[0]);
-          console.log('[OrgSwitcher] No active org matched, defaulted to first:', orgs[0].Name);
+          log.debug('[OrgSwitcher] No active org matched, defaulted to first:', orgs[0].Name);
         }
       } else if (orgs.length > 0) {
         setCurrentOrg(orgs[0]);
-        console.log('[OrgSwitcher] Failed to get active org, defaulted to first:', orgs[0].Name);
+        log.debug('[OrgSwitcher] Failed to get active org, defaulted to first:', orgs[0].Name);
       }
     } catch (error) {
-      console.error('[OrgSwitcher] Error loading orgs:', error);
+      log.error('[OrgSwitcher] Error loading orgs:', error);
     } finally {
       setLoading(false);
     }
@@ -134,7 +137,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
 
       onOrgChanged?.(org.Id, org.Name);
     } catch (error) {
-      console.error('[OrgSwitcher] Error switching org:', error);
+      log.error('[OrgSwitcher] Error switching org:', error);
       showMessage({
         message: 'Error',
         description: 'Failed to switch organization',
@@ -179,7 +182,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
       setIsCreateModalVisible(false);
       await loadOrganizations();
     } catch (error) {
-      console.error('[OrgSwitcher] Error creating org:', error);
+      log.error('[OrgSwitcher] Error creating org:', error);
       showMessage({
         message: 'Error',
         description: 'Failed to create organization',

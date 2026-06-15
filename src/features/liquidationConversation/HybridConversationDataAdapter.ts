@@ -35,6 +35,9 @@ import type {
   StreamTurnInput,
   StreamTurnObserver,
 } from './types';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('HybridConversationDataAdapter');
+
 
 const CONVEX_URL = process.env.EXPO_PUBLIC_CONVEX_URL || 'https://merry-buffalo-800.convex.cloud';
 
@@ -754,7 +757,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     try {
       return await this.requestNest<T>(path, init);
     } catch (error) {
-      console.log('[HybridAdapter] Nest request skipped:', path, error);
+      log.debug('[HybridAdapter] Nest request skipped:', path, error);
       return null;
     }
   }
@@ -1003,7 +1006,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       await this.setConvexAuth();
       return await this.convex.query(path as any, args);
     } catch (error) {
-      console.log('[HybridAdapter] Convex query skipped:', path, error);
+      log.debug('[HybridAdapter] Convex query skipped:', path, error);
       return null;
     }
   }
@@ -1027,7 +1030,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       ) {
         return;
       }
-      console.log('[HybridAdapter] Convex mutation skipped:', path, error);
+      log.debug('[HybridAdapter] Convex mutation skipped:', path, error);
     }
   }
 

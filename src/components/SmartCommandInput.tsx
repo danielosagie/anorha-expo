@@ -18,6 +18,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as FileSystem from 'expo-file-system';
+import { createLogger } from '../utils/logger';
+const log = createLogger('SmartCommandInput');
+
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -266,7 +269,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             // Request permissions using AudioModule
             const permission = await AudioModule.requestRecordingPermissionsAsync();
             if (!permission.granted) {
-                console.warn('[SmartCommandInput] Microphone permission denied');
+                log.warn('[SmartCommandInput] Microphone permission denied');
                 setRecordingError('Microphone access is off. Enable it in Settings, or type your request.');
                 return;
             }
@@ -304,7 +307,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             );
             pulseLoop.current.start();
         } catch (err) {
-            console.error('[SmartCommandInput] Could not start recording:', err);
+            log.error('[SmartCommandInput] Could not start recording:', err);
             setRecordingError('I couldn’t start recording. Try again, or type your request.');
             // Reset to expanded state so user can try again or type instead
             setState('expanded');
@@ -369,7 +372,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
                 setState('expanded');
             }
         } catch (err) {
-            console.error('[SmartCommandInput] Transcription error:', err);
+            log.error('[SmartCommandInput] Transcription error:', err);
             setState('expanded');
         }
     }, [audioRecorder, apiBaseUrl, getAuthToken, pulseAnim, waveAnim]);
@@ -436,7 +439,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
         try {
             await onSubmit(submitText, fieldMentions);
         } catch (e) {
-            console.error('[SmartCommandInput] Submit error:', e);
+            log.error('[SmartCommandInput] Submit error:', e);
         }
     }, [text, mentionedFields, availableFields, onSubmit]);
 

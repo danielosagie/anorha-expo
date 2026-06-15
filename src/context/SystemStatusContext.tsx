@@ -10,6 +10,9 @@ import {
   type SupabaseJwtAcquisitionState,
 } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('SystemStatusContext');
+
 
 export type RemoteStatusMode = 'operational' | 'degraded' | 'maintenance';
 export type EffectiveSystemMode = RemoteStatusMode | 'offline';
@@ -189,7 +192,7 @@ export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ 
         setBackendState(backendOk ? 'operational' : 'degraded');
       }
     } catch (error) {
-      console.warn('[SystemStatus] Status refresh failed:', error);
+      log.warn('[SystemStatus] Status refresh failed:', error);
       setConnectivityState('unknown');
       setBackendReachable(false);
       setBackendState('degraded');
@@ -210,10 +213,10 @@ export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, [isSignedIn]);
 
   useEffect(() => {
-    refreshStatus().catch(console.error);
+    refreshStatus().catch(log.error);
 
     const interval = setInterval(() => {
-      refreshStatus().catch(console.error);
+      refreshStatus().catch(log.error);
     }, STATUS_POLL_INTERVAL_MS);
 
     let appState = AppState.currentState;
@@ -222,7 +225,7 @@ export const SystemStatusProvider: React.FC<{ children: React.ReactNode }> = ({ 
       appState = nextState;
 
       if (nextState === 'active' && wasBackgrounded) {
-        refreshStatus().catch(console.error);
+        refreshStatus().catch(log.error);
       }
     });
 

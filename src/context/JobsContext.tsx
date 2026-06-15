@@ -12,6 +12,9 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { fetchGenerateJobStatus } from '../lib/generateJobs';
+import { createLogger } from '../utils/logger';
+const log = createLogger('JobsContext');
+
 
 // Types
 export type StepStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'skipped';
@@ -98,7 +101,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 JSON.stringify(newState)
             );
         } catch (e) {
-            console.warn('[JobsContext] Failed to persist state:', e);
+            log.warn('[JobsContext] Failed to persist state:', e);
         }
     }, []);
 
@@ -110,7 +113,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 return JSON.parse(stored);
             }
         } catch (e) {
-            console.warn('[JobsContext] Failed to load state:', e);
+            log.warn('[JobsContext] Failed to load state:', e);
         }
         return null;
     }, []);
@@ -166,7 +169,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 .single();
 
             if (genError || !generateJob) {
-                console.warn('[JobsContext] Could not fetch generate job:', genError);
+                log.warn('[JobsContext] Could not fetch generate job:', genError);
                 return;
             }
 
@@ -198,15 +201,15 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                         });
                     }
                 });
-                console.log(`[JobsContext] Updated ${generateResults.length} items from generate job ${generateJobId}`);
+                log.debug(`[JobsContext] Updated ${generateResults.length} items from generate job ${generateJobId}`);
                 return;
             }
 
             // Do not fall back to "most recent match job" - that would mix jobs from different flows.
             // The screen should have been opened with items/jobMap from the current flow (Match) or we stay empty.
-            console.log(`[JobsContext] No current match job in context; skipping init from generate job ${generateJobId} to avoid wrong-job mix`);
+            log.debug(`[JobsContext] No current match job in context; skipping init from generate job ${generateJobId} to avoid wrong-job mix`);
         } catch (e) {
-            console.error('[JobsContext] Error in initializeFromGenerateJob:', e);
+            log.error('[JobsContext] Error in initializeFromGenerateJob:', e);
         }
     }, [state.matchJobId, state.items, persistState]);
 
@@ -330,7 +333,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                     });
                 }
             } catch (e) {
-                console.warn(`[JobsContext] Poll failed for job ${job.jobId}:`, e);
+                log.warn(`[JobsContext] Poll failed for job ${job.jobId}:`, e);
             }
         }
     }, [state.generateJobs, markGenerateComplete, markGenerateFailed, updateGenerateJob]);

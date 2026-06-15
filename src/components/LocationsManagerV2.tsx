@@ -25,6 +25,9 @@ import { getPlatform, listPlatforms } from '../config/platforms';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { SessionContext } from '../context/SessionContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('LocationsManagerV2');
+
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
@@ -528,14 +531,14 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
     }
 
     const result = Array.from(byPlatform.values());
-    console.log('[LocationsManagerV2] Transformed locations:', result.length, 'platforms');
+    log.debug('[LocationsManagerV2] Transformed locations:', result.length, 'platforms');
     return result;
   };
 
   // Load available locations for creating/editing
   const loadAvailableLocations = useCallback(async () => {
     if (!session?.bridgeReady) {
-      console.log('[LocationsManagerV2] Skipping available locations load until auth bridge is ready');
+      log.debug('[LocationsManagerV2] Skipping available locations load until auth bridge is ready');
       setAvailable([]);
       return;
     }
@@ -543,12 +546,12 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
     try {
       const token = await ensureSupabaseJwt();
       if (!token) {
-        console.warn('[LocationsManagerV2] No JWT available for available locations load');
+        log.warn('[LocationsManagerV2] No JWT available for available locations load');
         setAvailable([]);
         return;
       }
       if (!resolvedOrgId) {
-        console.log('[LocationsManagerV2] No org ID, skipping locations load');
+        log.debug('[LocationsManagerV2] No org ID, skipping locations load');
         setAvailable([]);
         return;
       }
@@ -565,7 +568,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       const transformed = transformAvailableLocations(rawRecord);
       setAvailable(transformed);
     } catch (e) {
-      console.error('[LocationsManagerV2] loadAvailableLocations error', e);
+      log.error('[LocationsManagerV2] loadAvailableLocations error', e);
       setAvailable([]);
     }
   }, [resolvedOrgId, session?.bridgeReady]);
@@ -578,7 +581,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
     }
 
     if (!session?.bridgeReady) {
-      console.log('[LocationsManagerV2] Skipping list load until auth bridge is ready');
+      log.debug('[LocationsManagerV2] Skipping list load until auth bridge is ready');
       setIsLoading(false);
       return;
     }
@@ -587,7 +590,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
     try {
       const token = await ensureSupabaseJwt();
       if (!token) {
-        console.warn('[LocationsManagerV2] No JWT available for list load');
+        log.warn('[LocationsManagerV2] No JWT available for list load');
         setPools([]);
         setPartnerships([]);
         setPendingInvites([]);
@@ -602,12 +605,12 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       // Load pools, partnerships, invites, and members in parallel
       const headers = { Authorization: `Bearer ${token}` };
 
-      console.log('[LocationsManagerV2] Fetching data for org:', resolvedOrgId);
+      log.debug('[LocationsManagerV2] Fetching data for org:', resolvedOrgId);
 
       const [poolsRes, partnersRes, invitesRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, { headers }),
-        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${resolvedOrgId}`, { headers }).catch(e => { console.error('Partners fetch failed', e); return null; }),
-        fetch(`${API_BASE_URL}/api/cross-org/invites/pending?orgId=${resolvedOrgId}`, { headers }).catch(e => { console.error('Invites fetch failed', e); return null; }),
+        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${resolvedOrgId}`, { headers }).catch(e => { log.error('Partners fetch failed', e); return null; }),
+        fetch(`${API_BASE_URL}/api/cross-org/invites/pending?orgId=${resolvedOrgId}`, { headers }).catch(e => { log.error('Invites fetch failed', e); return null; }),
       ]);
 
       // Handle Pools
@@ -615,7 +618,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
         const poolData = await poolsRes.json();
         setPools(Array.isArray(poolData) ? poolData : []);
       } else {
-        console.error('[LocationsManagerV2] Pools fetch failed', poolsRes.status, await poolsRes.text());
+        log.error('[LocationsManagerV2] Pools fetch failed', poolsRes.status, await poolsRes.text());
         setPools([]);
       }
 
@@ -624,7 +627,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
         const data = await partnersRes.json();
         setPartnerships(data.partnerships || []);
       } else {
-        if (partnersRes) console.error('[LocationsManagerV2] Partners fetch failed', partnersRes.status);
+        if (partnersRes) log.error('[LocationsManagerV2] Partners fetch failed', partnersRes.status);
         setPartnerships([]);
       }
 
@@ -633,7 +636,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
         const data = await invitesRes.json();
         setPendingInvites(data.sent || []);
       } else {
-        if (invitesRes) console.error('[LocationsManagerV2] Invites fetch failed', invitesRes.status);
+        if (invitesRes) log.error('[LocationsManagerV2] Invites fetch failed', invitesRes.status);
         setPendingInvites([]);
       }
 
@@ -648,7 +651,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
         setSingleLocations([]);
       }
     } catch (e) {
-      console.error('[LocationsManagerV2] loadList error', e);
+      log.error('[LocationsManagerV2] loadList error', e);
       Alert.alert('Error', 'Failed to load locations');
       setPools([]);
       setSingleLocations([]);
@@ -699,7 +702,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
 
       if (!res.ok) {
         const errText = await res.text();
-        console.error('[LocationsManagerV2] Invite failed:', res.status, errText);
+        log.error('[LocationsManagerV2] Invite failed:', res.status, errText);
         throw new Error(`Failed to send invite: ${errText || res.status}`);
       }
 
@@ -712,7 +715,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       setViewMode('default');
       loadList(); // Refresh
     } catch (e: any) {
-      console.error('[LocationsManagerV2] sendPartnerInvite error', e);
+      log.error('[LocationsManagerV2] sendPartnerInvite error', e);
       Alert.alert('Error', e.message || 'Failed to send invite');
     } finally {
       setIsInviting(false);
@@ -755,7 +758,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
         return draft;
 
       } catch (e) {
-        console.error('[LocationsManagerV2] loadPoolForEditing error', e);
+        log.error('[LocationsManagerV2] loadPoolForEditing error', e);
         Alert.alert('Error', 'Failed to load pool details');
         return null;
       }
@@ -770,19 +773,19 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       const token = await ensureSupabaseJwt();
 
       // Load available locations FIRST
-      console.log('[LocationsManagerV2] enterManageMode: loading available locations');
+      log.debug('[LocationsManagerV2] enterManageMode: loading available locations');
       await loadAvailableLocations();
 
       if (!resolvedOrgId) return;
 
       // Load all pools and prepare drafts
-      console.log('[LocationsManagerV2] enterManageMode: loading pools for org', resolvedOrgId);
+      log.debug('[LocationsManagerV2] enterManageMode: loading pools for org', resolvedOrgId);
       const res = await fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Failed to load pools');
       const poolList: LocationPool[] = await res.json();
-      console.log('[LocationsManagerV2] enterManageMode: found', poolList.length, 'pools');
+      log.debug('[LocationsManagerV2] enterManageMode: found', poolList.length, 'pools');
 
       // Load each pool's locations with metadata
       const drafts: Record<string, DraftPool> = {};
@@ -800,7 +803,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
 
       setViewMode('managePools');
     } catch (e) {
-      console.error('[LocationsManagerV2] enterManageMode error', e);
+      log.error('[LocationsManagerV2] enterManageMode error', e);
       Alert.alert('Error', 'Failed to load managing view');
     } finally {
       setLoadingManage(false);
@@ -933,7 +936,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       setViewMode('default');
       setDraftPools({});
     } catch (e) {
-      console.error('[LocationsManagerV2] confirmManageChanges error', e);
+      log.error('[LocationsManagerV2] confirmManageChanges error', e);
       const errorMessage = e instanceof Error ? e.message : 'Failed to save changes';
       Alert.alert(
         'Failed to Save Changes',
@@ -987,7 +990,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       await loadList();
       setViewMode('default');
     } catch (e) {
-      console.error('[LocationsManagerV2] confirmCreate error', e);
+      log.error('[LocationsManagerV2] confirmCreate error', e);
       Alert.alert('Error', e instanceof Error ? e.message : 'Failed to create pool');
     } finally {
       setSaving(false);
@@ -1012,7 +1015,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       setDeleteState(prev => ({ ...prev, availablePools: filteredPools }));
       return filteredPools;
     } catch (e) {
-      console.error('[LocationsManagerV2] loadAvailablePoolsForDelete error', e);
+      log.error('[LocationsManagerV2] loadAvailablePoolsForDelete error', e);
       setDeleteState(prev => ({ ...prev, availablePools: [] }));
       return [];
     }
@@ -1050,7 +1053,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       setDeleteState({ visible: false, poolId: null, poolName: null, mergeTarget: null, availablePools: [], loading: false });
       await loadList(); // Refresh the list
     } catch (e) {
-      console.error('[LocationsManagerV2] deletePool error', e);
+      log.error('[LocationsManagerV2] deletePool error', e);
       Alert.alert('Error', e instanceof Error ? e.message : 'Failed to delete pool');
       setDeleteState(prev => ({ ...prev, loading: false }));
     }

@@ -1,4 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createLogger } from './logger';
+const log = createLogger('billingGatePersistence');
+
 
 const BILLING_GATE_PENDING_KEY = 'sssync_billing_gate_pending_v1';
 
@@ -24,7 +27,7 @@ export async function loadPendingBillingAction(): Promise<PendingBillingAction |
     const raw = await AsyncStorage.getItem(BILLING_GATE_PENDING_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch (error) {
-    console.warn('[billingGatePersistence] Failed to load pending billing action:', error);
+    log.warn('[billingGatePersistence] Failed to load pending billing action:', error);
     return null;
   }
 }
@@ -33,7 +36,7 @@ export async function savePendingBillingAction(action: PendingBillingAction): Pr
   try {
     await AsyncStorage.setItem(BILLING_GATE_PENDING_KEY, JSON.stringify(action));
   } catch (error) {
-    console.warn('[billingGatePersistence] Failed to save pending billing action:', error);
+    log.warn('[billingGatePersistence] Failed to save pending billing action:', error);
   }
 }
 
@@ -41,6 +44,6 @@ export async function clearPendingBillingAction(): Promise<void> {
   try {
     await AsyncStorage.removeItem(BILLING_GATE_PENDING_KEY);
   } catch (error) {
-    console.warn('[billingGatePersistence] Failed to clear pending billing action:', error);
+    log.warn('[billingGatePersistence] Failed to clear pending billing action:', error);
   }
 }

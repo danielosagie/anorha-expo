@@ -17,6 +17,9 @@ import * as Haptics from 'expo-haptics';
 import { useAuth } from '@clerk/clerk-expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
 import { OPTIMIZER_THRESHOLDS } from '../../hooks/useOptimizerQueues';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('OptimizerPhotoModeView');
+
 
 const { width } = Dimensions.get('window');
 
@@ -88,7 +91,7 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
             setProducts(needingPhotos);
             Animated.spring(cardAnim, { toValue: 1, useNativeDriver: true, tension: 50, friction: 8 }).start();
         } catch (err) {
-            console.error('[OptimizerPhoto] Error loading products', err);
+            log.error('[OptimizerPhoto] Error loading products', err);
             Alert.alert('Error', 'Failed to load products.');
         } finally {
             setLoading(false);
@@ -117,7 +120,7 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
         } catch (error) {
-            console.error('[OptimizerPhoto] Capture failed', error);
+            log.error('[OptimizerPhoto] Capture failed', error);
         }
     };
 

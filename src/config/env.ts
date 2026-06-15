@@ -1,3 +1,6 @@
+
+import { createLogger } from '../utils/logger';
+const log = createLogger('env');
 /**
  * Single source of truth for runtime configuration.
  *
@@ -36,7 +39,7 @@ function resolveApiBaseUrl(): string {
           '(or EXPO_PUBLIC_API_BASE_URL) in your .env.local or EAS environment.',
       );
     }
-    console.warn('[env] API base URL not set; using production default.');
+    log.warn('[env] API base URL not set; using production default.');
     return DEFAULT_API_BASE_URL;
   }
 

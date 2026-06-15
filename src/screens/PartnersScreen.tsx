@@ -47,6 +47,9 @@ import { API_BASE_URL } from '../config/env';
 import BaseModal from '../components/BaseModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PageHeader } from '../components/ui/PageHeader';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PartnersScreen');
+
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
@@ -196,7 +199,7 @@ export default function PartnersScreen() {
                     }
                 }
             } catch (error: any) {
-                console.error('[PartnersScreen] Error loading data:', error);
+                log.error('[PartnersScreen] Error loading data:', error);
                 showMessage({ message: 'Error', description: 'Failed to load partners data', type: 'danger' });
             } finally {
                 setLoading(false);
@@ -237,7 +240,7 @@ export default function PartnersScreen() {
                     token: inv.token || inv.id,
                 })));
             }
-        } catch (e) { console.error("Background refresh failed", e); }
+        } catch (e) { log.error("Background refresh failed", e); }
     };
 
 
@@ -311,7 +314,7 @@ export default function PartnersScreen() {
                     });
                     refreshData();
                     showMessage({ message: 'Invite revoked', type: 'info' });
-                } catch (e) { console.error(e); }
+                } catch (e) { log.error(e); }
             }
         });
     };
@@ -328,7 +331,7 @@ export default function PartnersScreen() {
                 headers: { Authorization: `Bearer ${token}` }
             });
         } catch (e) {
-            console.log(e);
+            log.debug(e);
             refreshData();
         }
     };
@@ -350,7 +353,7 @@ export default function PartnersScreen() {
                     });
                     refreshData();
                     showMessage({ message: 'Partnership ended', type: 'info' });
-                } catch (e) { console.error(e); }
+                } catch (e) { log.error(e); }
             }
         });
     };
@@ -447,7 +450,7 @@ export default function PartnersScreen() {
                     });
                     setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
                     showMessage({ message: 'Invite declined', type: 'info' });
-                } catch (e) { console.error(e); }
+                } catch (e) { log.error(e); }
             }
         });
     };

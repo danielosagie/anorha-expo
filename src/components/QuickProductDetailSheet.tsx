@@ -20,6 +20,9 @@ import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import PlatformFilterChips from './PlatformFilterChips';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { createLogger } from '../utils/logger';
+const log = createLogger('QuickProductDetailSheet');
+
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -70,13 +73,13 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
     const loadData = async () => {
       try {
         setIsLoading(true);
-        console.log('[QUICK DETAIL] Loading data for product:', product.variant?.Id || 'unknown');
+        log.debug('[QUICK DETAIL] Loading data for product:', product.variant?.Id || 'unknown');
 
         let loadedVariants: VariantInventory[] = [];
 
         // Handle backend format: { variant, inventoryLevels, images }
         if (product.variant && product.inventoryLevels) {
-          console.log('[QUICK DETAIL] Backend format detected, transforming data');
+          log.debug('[QUICK DETAIL] Backend format detected, transforming data');
 
           // Transform inventoryLevels to inventoryByLocation format
           const inventoryByLocation: Record<string, { quantity: number; price?: number }> = {};
@@ -92,7 +95,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
           // Check if we have the base variant or need to fetch all variants for the product
           const baseVariant = product.variant;
 
-          console.log('[QUICK DETAIL] Base variant:', {
+          log.debug('[QUICK DETAIL] Base variant:', {
             id: baseVariant.Id,
             productId: baseVariant.ProductId,
             title: baseVariant.Title,
@@ -107,7 +110,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 .select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, PrimaryImageUrl, CreatedAt, UpdatedAt')
                 .eq('ProductId', baseVariant.ProductId);
 
-              console.log('[QUICK DETAIL] DB Query result:', {
+              log.debug('[QUICK DETAIL] DB Query result:', {
                 productId: baseVariant.ProductId,
                 variantCount: allVariants?.length || 0,
                 error: variantsError?.message,
@@ -137,7 +140,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 ? optionVariants
                 : (allVariants || []);
 
-              console.log('[QUICK DETAIL] Filtered variants:', {
+              log.debug('[QUICK DETAIL] Filtered variants:', {
                 total: allVariants?.length || 0,
                 optionVariants: optionVariants.length,
                 usingVariants: variantsToUse.length,
@@ -184,14 +187,14 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 }];
               }
 
-              console.log(`[QUICK DETAIL] Loaded ${loadedVariants.length} variants from DB`);
-              console.log('[QUICK DETAIL] Loaded variants:', loadedVariants.map(v => ({
+              log.debug(`[QUICK DETAIL] Loaded ${loadedVariants.length} variants from DB`);
+              log.debug('[QUICK DETAIL] Loaded variants:', loadedVariants.map(v => ({
                 id: v.id,
                 name: v.name,
                 inventoryLocCount: Object.keys(v.inventoryByLocation).length
               })));
             } catch (dbError) {
-              console.warn('[QUICK DETAIL] Could not fetch variants from DB:', dbError);
+              log.warn('[QUICK DETAIL] Could not fetch variants from DB:', dbError);
               // Fallback to single variant
               loadedVariants = [{
                 id: baseVariant.Id,
@@ -203,7 +206,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             }
           } else {
             // No ProductId - use single base variant with inventoryLevels
-            console.log('[QUICK DETAIL] No ProductId, using single base variant');
+            log.debug('[QUICK DETAIL] No ProductId, using single base variant');
             loadedVariants = [{
               id: baseVariant.Id,
               name: baseVariant.Title || 'Default',
@@ -215,12 +218,12 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
         }
         // Handle frontend format: { variants: [...] }
         else if (product.variants && product.variants.length > 0) {
-          console.log('[QUICK DETAIL] Frontend format detected');
+          log.debug('[QUICK DETAIL] Frontend format detected');
           loadedVariants = product.variants;
         }
 
         setVariants(loadedVariants);
-        console.log(`[QUICK DETAIL] Set ${loadedVariants.length} variants`);
+        log.debug(`[QUICK DETAIL] Set ${loadedVariants.length} variants`);
 
         // Determine locations list
         let locationsList: LocationInventory[] = [];
@@ -263,13 +266,13 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
         }
 
         setLocations(locationsList);
-        console.log(`[QUICK DETAIL] Set ${locationsList.length} locations`);
+        log.debug(`[QUICK DETAIL] Set ${locationsList.length} locations`);
 
         if (locationsList.length > 0) {
           setSelectedLocationId(locationsList[0].id);
         }
       } catch (error) {
-        console.error('[QUICK DETAIL] Error loading data:', error);
+        log.error('[QUICK DETAIL] Error loading data:', error);
         Alert.alert('Error', 'Failed to load product details');
       } finally {
         setIsLoading(false);
@@ -344,7 +347,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
       Alert.alert('Success', `Updated ${updates.length} item(s)`);
       onClose();
     } catch (error) {
-      console.error('[QUICK DETAIL] Save error:', error);
+      log.error('[QUICK DETAIL] Save error:', error);
       Alert.alert('Error', 'Failed to save inventory updates');
     } finally {
       setIsSaving(false);
@@ -585,9 +588,9 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             <View style={{ gap: 12, zIndex: 1, paddingBottom: 24 }}>
               {(() => {
                 // Debug: Log what we're passing
-                console.log('[QUICK DETAIL] Rendering VariantInventoryEditor');
-                console.log('[QUICK DETAIL] variants:', variants.length, 'selectedLocationId:', selectedLocationId);
-                console.log('[QUICK DETAIL] locations:', locations.length, 'selectedPlatformFilter:', selectedPlatformFilter);
+                log.debug('[QUICK DETAIL] Rendering VariantInventoryEditor');
+                log.debug('[QUICK DETAIL] variants:', variants.length, 'selectedLocationId:', selectedLocationId);
+                log.debug('[QUICK DETAIL] locations:', locations.length, 'selectedPlatformFilter:', selectedPlatformFilter);
 
                 // MATCH ListingEditorForm EXACTLY:
                 // 1. Build locations list based on active tab/filter
@@ -626,7 +629,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                   }
                 }
 
-                console.log(`[QUICK DETAIL] editorLocations: ${editorLocations.length} locations`);
+                log.debug(`[QUICK DETAIL] editorLocations: ${editorLocations.length} locations`);
 
                 // 2. Prepare Variants - MATCH ListingEditorForm EXACTLY
                 // Deduplicate variants by ID using a Map (same as ListingEditorForm)
@@ -672,14 +675,14 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
 
                 const editorVariants = Array.from(variantMap.values());
 
-                console.log('[QUICK DETAIL] editorVariants:', editorVariants.length, 'variants');
+                log.debug('[QUICK DETAIL] editorVariants:', editorVariants.length, 'variants');
                 editorVariants.forEach(v => {
-                  console.log(`  - ${v.name}: ${Object.keys(v.inventory).length} location(s)`);
+                  log.debug(`  - ${v.name}: ${Object.keys(v.inventory).length} location(s)`);
                 });
 
                 // 3. Callback
                 const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
-                  console.log(`[QUICK DETAIL] Update: ${variantId} @ ${locationId}, ${field} = ${value}`);
+                  log.debug(`[QUICK DETAIL] Update: ${variantId} @ ${locationId}, ${field} = ${value}`);
                   const key = `${variantId}:${locationId}`;
                   setInventoryUpdates(prev => ({
                     ...prev,

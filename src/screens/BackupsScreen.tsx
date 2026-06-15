@@ -25,6 +25,9 @@ import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { createLogger } from '../utils/logger';
+const log = createLogger('BackupsScreen');
+
 
 type BackupsScreenRouteProp = RouteProp<AppStackParamList, 'Backups'>;
 type BackupsScreenNavProp = StackNavigationProp<AppStackParamList, 'Backups'>;
@@ -90,7 +93,7 @@ export default function BackupsScreen() {
       setSnapshots(data.snapshots || []);
       setOrgName(data.orgName ?? null);
     } catch (e) {
-      console.warn('[Backups] loadSnapshots error:', e);
+      log.warn('[Backups] loadSnapshots error:', e);
       setSnapshots([]);
     }
   }, [orgId]);
@@ -107,7 +110,7 @@ export default function BackupsScreen() {
       const data = await res.json();
       setBackupFrequency(data.backupFrequency || 'daily');
     } catch (e) {
-      console.warn('[Backups] loadBackupSettings error:', e);
+      log.warn('[Backups] loadBackupSettings error:', e);
     }
   }, [orgId]);
 

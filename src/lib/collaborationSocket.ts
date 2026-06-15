@@ -1,6 +1,9 @@
 import { io, Socket } from 'socket.io-client';
 import { ensureSupabaseJwt } from './supabase';
 import { SOCKET_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('collaborationSocket');
+
 
 // Re-exported so consumers get the Socket type without importing socket.io-client
 // directly (the lint guardrail funnels all socket usage through src/lib).
@@ -43,7 +46,7 @@ let currentUserName: string | undefined;
 async function createSocket(): Promise<Socket | null> {
   const token = await ensureSupabaseJwt();
   if (!token) {
-    console.warn('[collaborationSocket] No auth token available; not connecting');
+    log.warn('[collaborationSocket] No auth token available; not connecting');
     return null;
   }
   return io(COLLABORATION_URL, {

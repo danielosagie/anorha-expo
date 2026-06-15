@@ -13,6 +13,9 @@ import { API_BASE_URL } from '../config/env';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { JobResponse } from './MatchSelectionScreen';
 import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PastScansScreen');
+
 
 // --- Interfaces for Data Types ---
 
@@ -112,7 +115,7 @@ const PastScansScreen = () => {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error fetching match jobs:', error);
+        log.error('Error fetching match jobs:', error);
         throw new Error('Failed to fetch match jobs.');
       }
 
@@ -142,19 +145,19 @@ const PastScansScreen = () => {
         .order('created_at', { ascending: false });
 
       if (primaryQuery.error?.code === '42703') {
-        console.warn('[PastScans] generate_jobs.match_job_id missing; falling back to schema-compatible select');
+        log.warn('[PastScans] generate_jobs.match_job_id missing; falling back to schema-compatible select');
         const fallbackQuery = await supabase
           .from("generate_jobs")
           .select('job_id, created_at, status, summary, results')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false });
         if (fallbackQuery.error) {
-          console.error('Database error (fallback query):', fallbackQuery.error);
+          log.error('Database error (fallback query):', fallbackQuery.error);
           throw new Error('Failed to fetch past scans');
         }
         data = fallbackQuery.data;
       } else if (primaryQuery.error) {
-        console.error('Database error:', primaryQuery.error);
+        log.error('Database error:', primaryQuery.error);
         throw new Error('Failed to fetch past scans');
       } else {
         data = primaryQuery.data;
@@ -189,7 +192,7 @@ const PastScansScreen = () => {
           .in('Id', variantIds);
 
         if (variantError) {
-          console.error('Error fetching ProductVariants for generate_jobs:', variantError);
+          log.error('Error fetching ProductVariants for generate_jobs:', variantError);
         } else if (Array.isArray(variants)) {
           variantCoverMap = variants.reduce((acc: Record<string, string>, v: any) => {
             const id = v?.Id;
@@ -251,7 +254,7 @@ const PastScansScreen = () => {
 
       setGenerationJobs(Array.from(groupedByWorkflow.values()));
     } catch (err: any) {
-      console.error('Error in fetchPastGenerations:', err);
+      log.error('Error in fetchPastGenerations:', err);
       setError(err.message || 'Failed to fetch past scans');
     } finally {
       setLoading(false);
@@ -325,7 +328,7 @@ const PastScansScreen = () => {
         focusIndex: 0,
       } as any);
     } else {
-      console.log(`Job status is '${job.status}', cannot view results yet.`);
+      log.debug(`Job status is '${job.status}', cannot view results yet.`);
     }
   };
 

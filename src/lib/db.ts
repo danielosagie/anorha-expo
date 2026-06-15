@@ -10,6 +10,9 @@ import { z } from 'zod';
 import { supabase } from '../../lib/supabase';
 import { rowSchemas } from '../types/schema';
 import type { Tables } from '../types/database.types';
+import { createLogger } from '../utils/logger';
+const log = createLogger('db');
+
 
 type TableName = keyof typeof rowSchemas;
 
@@ -28,7 +31,7 @@ export function safeRows<T extends TableName>(table: T, rows: unknown[]): Tables
   for (const r of rows) {
     const res = schema.safeParse(r);
     if (res.success) out.push(res.data as Tables<T>);
-    else console.warn(`[db] ${table} row failed validation:`, res.error.issues?.[0]);
+    else log.warn(`[db] ${table} row failed validation:`, res.error.issues?.[0]);
   }
   return out;
 }

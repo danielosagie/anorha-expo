@@ -5,6 +5,9 @@ import {
   ListingCreationProcessState,
   AIGenerationProcessState 
 } from './ProcessPersistence';
+import { createLogger } from './logger';
+const log = createLogger('ProcessHelpers');
+
 
 // Helper functions for common process operations
 
@@ -27,7 +30,7 @@ export class ProcessHelpers {
     );
 
     await this.processPersistence.saveProcess(process);
-    console.log('[ProcessHelpers] Created listing process:', process.id);
+    log.debug('[ProcessHelpers] Created listing process:', process.id);
     
     return process.id;
   }
@@ -49,7 +52,7 @@ export class ProcessHelpers {
     );
 
     await this.processPersistence.saveProcess(process);
-    console.log('[ProcessHelpers] Created AI generation process:', process.id);
+    log.debug('[ProcessHelpers] Created AI generation process:', process.id);
     
     return process.id;
   }
@@ -70,7 +73,7 @@ export class ProcessHelpers {
       });
     }
 
-    console.log(`[ProcessHelpers] Updated listing process ${processId} to stage: ${stage} (${progress}%)`);
+    log.debug(`[ProcessHelpers] Updated listing process ${processId} to stage: ${stage} (${progress}%)`);
   }
 
   // Update AI generation stage
@@ -89,31 +92,31 @@ export class ProcessHelpers {
       });
     }
 
-    console.log(`[ProcessHelpers] Updated AI generation process ${processId} to stage: ${stage} (${progress}%)`);
+    log.debug(`[ProcessHelpers] Updated AI generation process ${processId} to stage: ${stage} (${progress}%)`);
   }
 
   // Mark process as completed successfully
   static async completeProcess(processId: string): Promise<void> {
     await this.processPersistence.updateProcessStatus(processId, ProcessStatus.COMPLETED);
-    console.log(`[ProcessHelpers] Completed process ${processId}`);
+    log.debug(`[ProcessHelpers] Completed process ${processId}`);
   }
 
   // Mark process as failed
   static async failProcess(processId: string, error: string): Promise<void> {
     await this.processPersistence.updateProcessStatus(processId, ProcessStatus.FAILED, error);
-    console.log(`[ProcessHelpers] Failed process ${processId}:`, error);
+    log.debug(`[ProcessHelpers] Failed process ${processId}:`, error);
   }
 
   // Pause a process (when user backgrounds the app during long operation)
   static async pauseProcess(processId: string): Promise<void> {
     await this.processPersistence.updateProcessStatus(processId, ProcessStatus.PAUSED);
-    console.log(`[ProcessHelpers] Paused process ${processId}`);
+    log.debug(`[ProcessHelpers] Paused process ${processId}`);
   }
 
   // Resume a paused process
   static async resumeProcess(processId: string): Promise<void> {
     await this.processPersistence.updateProcessStatus(processId, ProcessStatus.IN_PROGRESS);
-    console.log(`[ProcessHelpers] Resumed process ${processId}`);
+    log.debug(`[ProcessHelpers] Resumed process ${processId}`);
   }
 
   // Get process data for resumption
@@ -125,7 +128,7 @@ export class ProcessHelpers {
   // Clean up old processes
   static async cleanupUserProcesses(userId: string): Promise<void> {
     await this.processPersistence.cleanupOldProcesses(userId);
-    console.log(`[ProcessHelpers] Cleaned up old processes for user ${userId}`);
+    log.debug(`[ProcessHelpers] Cleaned up old processes for user ${userId}`);
   }
 }
 

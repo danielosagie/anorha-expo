@@ -13,6 +13,9 @@
 import { z } from 'zod';
 import * as Crypto from 'expo-crypto';
 import { ensureSupabaseJwt, forceRefreshSupabaseJwt, getApiBaseUrl } from './supabase';
+import { createLogger } from '../utils/logger';
+const log = createLogger('apiClient');
+
 
 export class ApiError extends Error {
   status: number;
@@ -225,7 +228,7 @@ export function parseOrWarn<S extends z.ZodType>(schema: S, data: unknown, label
       .slice(0, 3)
       .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
       .join(' · ');
-    console.warn(`[contract] ${label} drifted from contract — ${issues}`);
+    log.warn(`[contract] ${label} drifted from contract — ${issues}`);
   }
   return data as z.infer<S>;
 }

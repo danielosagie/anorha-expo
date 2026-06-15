@@ -26,6 +26,9 @@ import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
+import { createLogger } from '../utils/logger';
+const log = createLogger('ListingEditorForm');
+
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
@@ -204,7 +207,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
-    console.log('[ListingEditorForm] platformKeys:', keys);
+    log.debug('[ListingEditorForm] platformKeys:', keys);
     return keys;
   }, [platforms]);
 
@@ -212,7 +215,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     // Prefer first platform that has locations (connected); avoid always preferring Shopify
     const keyWithLocs = platformKeys.find((pk) => (platformLocations || {})[pk]?.length > 0);
     const key = keyWithLocs || platformKeys[0] || 'shopify';
-    console.log('[ListingEditorForm] canonicalKey:', key, 'from platformKeys:', platformKeys);
+    log.debug('[ListingEditorForm] canonicalKey:', key, 'from platformKeys:', platformKeys);
     return key;
   }, [platformKeys, platformLocations]);
 
@@ -356,13 +359,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   // Update activeTab only if current tab becomes invalid. Avoid redundant resets.
   useEffect(() => {
-    console.log('[ListingEditorForm] activeTab effect', { canonicalKey, activeTab, platformKeys });
+    log.debug('[ListingEditorForm] activeTab effect', { canonicalKey, activeTab, platformKeys });
     // Always allow 'all' tab
     if (activeTab === 'all') return;
     // If current platform tab is valid, keep it
     const activeExists = platformKeys.includes(activeTab);
     if (!activeExists && activeTab !== canonicalKey) {
-      console.log('[ListingEditorForm] activeTab invalid → switching to all');
+      log.debug('[ListingEditorForm] activeTab invalid → switching to all');
       setActiveTab('all');
     }
   }, [canonicalKey, platformKeys, activeTab]);
@@ -400,7 +403,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
 
       if (!res.ok) {
-        console.error('[ListingEditorForm] Taxonomy search failed:', res.status);
+        log.error('[ListingEditorForm] Taxonomy search failed:', res.status);
         setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: [] }));
         return;
       }
@@ -418,7 +421,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
       setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: options }));
     } catch (error) {
-      console.error('[ListingEditorForm] Taxonomy search error:', error);
+      log.error('[ListingEditorForm] Taxonomy search error:', error);
       setTaxonomyResults(prev => ({ ...prev, [normalizedPlatform]: [] }));
     } finally {
       setTaxonomyLoading(prev => ({ ...prev, [normalizedPlatform]: false }));
@@ -438,14 +441,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const query = activeData.title || '';
     if (!query || query.length < 3) return;
 
-    console.log(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using title: "${query}"`);
+    log.debug(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using title: "${query}"`);
 
     setTaxonomyLoading(prev => ({ ...prev, [activePlatformKeyLower]: true }));
 
     try {
       const token = await ensureSupabaseJwt();
       const safeQuery = query.trim();
-      console.log(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using query: "${safeQuery}"`);
+      log.debug(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using query: "${safeQuery}"`);
 
       const categorySuggestion = (activeData as any).categorySuggestion || activeData.categoryPath || activeData.productCategory || activeData.category;
       const productType = (activeData as any).productType;
@@ -513,7 +516,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       // Auto-Save the best match if confidence is high (e.g. first result from search usually best)
       if (autoApply && data?.suggested) {
         const best = data.suggested;
-        console.log(`[Taxonomy] Auto-applying best match: ${best.path || best.name}`);
+        log.debug(`[Taxonomy] Auto-applying best match: ${best.path || best.name}`);
 
         // Only apply if we don't have one yet
         const currentId = activePlatformKeyLower === 'shopify' ? activeData.productCategoryId : activeData.categoryId;
@@ -535,12 +538,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
           patchPlatform(prev => ({ ...prev, ...updates }));
         } else if (!currentId) {
-          console.log(`[Taxonomy] Auto-apply skipped (score ${bestScore} < ${minAutoScore}).`);
+          log.debug(`[Taxonomy] Auto-apply skipped (score ${bestScore} < ${minAutoScore}).`);
         }
       }
 
     } catch (e) {
-      console.error('[Taxonomy] Suggestion error:', e);
+      log.error('[Taxonomy] Suggestion error:', e);
     } finally {
       setTaxonomyLoading(prev => ({ ...prev, [activePlatformKeyLower]: false }));
     }
@@ -600,7 +603,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       const data = await res.json();
       setAspects(Array.isArray(data) ? data : (data?.aspects || []));
     } catch (e) {
-      console.error('[ListingEditorForm] Aspects fetch error:', e);
+      log.error('[ListingEditorForm] Aspects fetch error:', e);
       setAspects([]);
     } finally {
       setAspectsLoading(false);
@@ -621,7 +624,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       const conditions = data?.conditions || [];
       setEbayConditions(conditions);
     } catch (e) {
-      console.error('[ListingEditorForm] eBay conditions fetch error:', e);
+      log.error('[ListingEditorForm] eBay conditions fetch error:', e);
       setEbayConditions([]);
     } finally {
       setEbayConditionsLoading(false);
@@ -662,7 +665,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setPricingResearchResult(data);
       setPricingResearchModalVisible(true);
     } catch (e) {
-      console.error('[ListingEditorForm] Pricing research error:', e);
+      log.error('[ListingEditorForm] Pricing research error:', e);
       setPricingResearchResult({ error: (e as Error)?.message || 'Failed to research pricing' });
       setPricingResearchModalVisible(true);
     } finally {
@@ -836,9 +839,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const patchPlatform = (updater: (prev: PlatformState) => PlatformState) => {
     const prev = (platforms[activePlatformKey] || {}) as PlatformState;
     const nextPlatform = updater(prev);
-    console.log(`[PATCH] ${activePlatformKey}: variants before=${(prev.variants || []).length}, after=${(nextPlatform.variants || []).length}`);
+    log.debug(`[PATCH] ${activePlatformKey}: variants before=${(prev.variants || []).length}, after=${(nextPlatform.variants || []).length}`);
     if (nextPlatform.variants?.length) {
-      console.log(`[PATCH] First variant inv keys:`, Object.keys(nextPlatform.variants[0]?.inventoryByLocation || {}));
+      log.debug(`[PATCH] First variant inv keys:`, Object.keys(nextPlatform.variants[0]?.inventoryByLocation || {}));
     }
     onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
   };
@@ -895,7 +898,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const platformLocsRaw = platformLocations?.[platformKey] || [];
     const platformLocs = collapseSingleLocationLocs(platformKey, platformLocsRaw);
 
-    console.log(`[ListingEditorForm LOCS] platform=${platformKey}, platformLocsKeys=${Object.keys(platformLocations || {}).join(',')}, count=${platformLocs.length}`);
+    log.debug(`[ListingEditorForm LOCS] platform=${platformKey}, platformLocsKeys=${Object.keys(platformLocations || {}).join(',')}, count=${platformLocs.length}`);
 
     if (platformLocs.length > 0) {
       return platformLocs.map((loc: any) => ({
@@ -925,7 +928,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
       const collapsed = collapseSingleLocationLocs(platformKey, filtered);
       if (collapsed.length > 0) {
-        console.log(`[ListingEditorForm LOCS] Filtered ${activeData.locations.length} → ${collapsed.length} for ${platformKey}`);
+        log.debug(`[ListingEditorForm LOCS] Filtered ${activeData.locations.length} → ${collapsed.length} for ${platformKey}`);
         return collapsed.map((loc: any) => ({
           ...loc,
           locationId: loc.locationId || loc.id,
@@ -950,13 +953,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   useEffect(() => {
     const firstValidLoc = locations[0]?.id || 'loc-1';
     if (!locations.find(l => l.id === selectedLocationId)) {
-      console.log(`[LOC-RESET] selectedLocationId ${selectedLocationId} no longer valid! Resetting to ${firstValidLoc}`);
+      log.debug(`[LOC-RESET] selectedLocationId ${selectedLocationId} no longer valid! Resetting to ${firstValidLoc}`);
       setSelectedLocationId(firstValidLoc);
     }
   }, [locations]);
 
   // Debug logging for inventory state (after locations are defined)
-  console.log('[ListingEditorForm] Inventory state:', {
+  log.debug('[ListingEditorForm] Inventory state:', {
     activePlatformKey,
     selectedInventoryType,
     isAdvanced,
@@ -977,12 +980,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   const recomputeVariants = () => {
-    console.log('[recomputeVariants] Starting variant recomputation for', activePlatformKey, 'activeTab:', activeTab);
+    log.debug('[recomputeVariants] Starting variant recomputation for', activePlatformKey, 'activeTab:', activeTab);
     const opts = (activeData.options || []).filter(o => Array.isArray(o.values) && o.values.length);
-    console.log('[recomputeVariants] Options:', opts);
+    log.debug('[recomputeVariants] Options:', opts);
 
     if (!opts.length) {
-      console.log('[recomputeVariants] No options, clearing variants');
+      log.debug('[recomputeVariants] No options, clearing variants');
       patchPlatform(prev => ({ ...prev, variants: [] }));
       return;
     }
@@ -990,12 +993,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const names = opts.map(o => o.name);
     const vals = opts.map(o => o.values);
     const combos = cartesian(vals);
-    console.log('[recomputeVariants] Generated', combos.length, 'variant combinations');
+    log.debug('[recomputeVariants] Generated', combos.length, 'variant combinations');
 
     // CRITICAL: ALWAYS sync variants to ALL platforms when options change
     // This ensures consistency - user edits on any tab apply everywhere
     const platformsToUpdate = platformKeys;
-    console.log('[recomputeVariants] Updating ALL platforms:', platformsToUpdate);
+    log.debug('[recomputeVariants] Updating ALL platforms:', platformsToUpdate);
 
     // Build updated platforms object
     const updatedPlatforms = { ...platforms };
@@ -1038,7 +1041,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             };
           });
 
-          console.log(`[recomputeVariants] Created new variant for ${platformKey}:`, id);
+          log.debug(`[recomputeVariants] Created new variant for ${platformKey}:`, id);
           return {
             id,
             optionValues,
@@ -1058,7 +1061,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       };
     }
 
-    console.log('[recomputeVariants] Updating', platformsToUpdate.length, 'platforms with variants');
+    log.debug('[recomputeVariants] Updating', platformsToUpdate.length, 'platforms with variants');
     onChangePlatforms(updatedPlatforms);
   };
 
@@ -1077,12 +1080,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   useEffect(() => {
-    console.log('[Options useEffect] Running for platform:', activePlatformKey, 'options:', activeData.options);
+    log.debug('[Options useEffect] Running for platform:', activePlatformKey, 'options:', activeData.options);
     const cleaned = normalizeOptions(activeData.options);
-    console.log('[Options useEffect] Normalized options:', cleaned);
+    log.debug('[Options useEffect] Normalized options:', cleaned);
 
     if (JSON.stringify(cleaned) !== JSON.stringify(activeData.options || [])) {
-      console.log('[Options useEffect] Options changed, updating platform');
+      log.debug('[Options useEffect] Options changed, updating platform');
       patchPlatform(prev => ({ ...prev, options: cleaned }));
     }
 
@@ -1091,19 +1094,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const platformChanged = lastPlatformRef.current !== activePlatformKey;
     const optionsChanged = lastOptionsRef.current !== optionsJson;
 
-    console.log('[Options useEffect] Changes detected:', { platformChanged, optionsChanged, hasPreviousPlatform: !!lastPlatformRef.current, prevOptions: lastOptionsRef.current, currentOptions: optionsJson });
+    log.debug('[Options useEffect] Changes detected:', { platformChanged, optionsChanged, hasPreviousPlatform: !!lastPlatformRef.current, prevOptions: lastOptionsRef.current, currentOptions: optionsJson });
 
     // ONLY recompute if options actually changed, NOT on platform switch
     if (optionsChanged && (optionsJson !== '[]' || lastOptionsRef.current !== '[]')) {
       // Options truly changed (not just switching to empty options)
-      console.log('[Options useEffect] Scheduling recomputeVariants (options actually changed)');
+      log.debug('[Options useEffect] Scheduling recomputeVariants (options actually changed)');
       setTimeout(recomputeVariants, 0);
     } else if (platformChanged && lastPlatformRef.current) {
       // Just switching platforms - DON'T recompute, preserve variants from current platform
-      console.log('[Options useEffect] Platform switched - NOT recomputing variants (preserving data)');
+      log.debug('[Options useEffect] Platform switched - NOT recomputing variants (preserving data)');
     } else if (!lastPlatformRef.current) {
       // First load of ANY platform
-      console.log('[Options useEffect] First load - recomputing variants');
+      log.debug('[Options useEffect] First load - recomputing variants');
       setTimeout(recomputeVariants, 0);
     }
 
@@ -1182,7 +1185,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         throw new Error('User not authenticated');
       }
 
-      console.log('[fetchAllPlatformOptions] ⚡ Querying PlatformOptions directly from DB (no API call)...');
+      log.debug('[fetchAllPlatformOptions] ⚡ Querying PlatformOptions directly from DB (no API call)...');
 
       // Step 1: Get active connections for this user
       const { data: connections, error: connError } = await supabase
@@ -1192,14 +1195,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         .eq('IsEnabled', true);
 
       if (connError || !connections || connections.length === 0) {
-        console.log('[fetchAllPlatformOptions] No active connections found');
+        log.debug('[fetchAllPlatformOptions] No active connections found');
         setAllPlatformOptions([]);
         setOptionPresets([]);
         return;
       }
 
       const connectionIds = connections.map(c => c.Id);
-      console.log('[fetchAllPlatformOptions] Found', connectionIds.length, 'active connections');
+      log.debug('[fetchAllPlatformOptions] Found', connectionIds.length, 'active connections');
 
       // Step 2: Query PlatformOptions for these connections
       const { data: platformOptions, error } = await supabase
@@ -1208,11 +1211,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         .in('PlatformConnectionId', connectionIds);
 
       if (error) {
-        console.error('[fetchAllPlatformOptions] DB query error:', error);
+        log.error('[fetchAllPlatformOptions] DB query error:', error);
         return;
       }
 
-      console.log('[fetchAllPlatformOptions] Retrieved', platformOptions?.length || 0, 'raw options from DB');
+      log.debug('[fetchAllPlatformOptions] Retrieved', platformOptions?.length || 0, 'raw options from DB');
 
       // Step 3: Group by option name to deduplicate and merge
       const optionsByName = new Map<string, { values: Set<string>; sources: Set<string> }>();
@@ -1238,11 +1241,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         sources: Array.from(data.sources)
       }));
 
-      console.log('[fetchAllPlatformOptions] ✅ Loaded', formatted.length, 'deduplicated platform options from DB in <1s');
+      log.debug('[fetchAllPlatformOptions] ✅ Loaded', formatted.length, 'deduplicated platform options from DB in <1s');
       setAllPlatformOptions(formatted);
       setOptionPresets(formatted); // Reuse as presets too
     } catch (error) {
-      console.error('[fetchAllPlatformOptions] Error:', error);
+      log.error('[fetchAllPlatformOptions] Error:', error);
     } finally {
       setLoadingPlatformOptions(false);
     }
@@ -1349,24 +1352,24 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, [activePlatformKey]);
 
   const setVariantAtLocation = (variantId: string, locId: string, field: 'quantity' | 'price' | 'image', value: any) => {
-    console.log(`[INV] setVariantAtLocation START - variant: ${variantId}, location: ${locId}, field: ${field}, value: ${value}`);
+    log.debug(`[INV] setVariantAtLocation START - variant: ${variantId}, location: ${locId}, field: ${field}, value: ${value}`);
     patchPlatform(prev => {
       const variants = (prev.variants || []).map(v => {
         if (v.id !== variantId) return v;
 
-        console.log(`[INV] Found variant ${variantId}, current inventoryByLocation keys:`, Object.keys(v.inventoryByLocation || {}));
+        log.debug(`[INV] Found variant ${variantId}, current inventoryByLocation keys:`, Object.keys(v.inventoryByLocation || {}));
 
         const inv = { ...(v.inventoryByLocation || {}) };
         if (!inv[locId]) {
-          console.log(`[INV] ⚠️  Location ${locId} missing! Creating new entry`);
+          log.debug(`[INV] ⚠️  Location ${locId} missing! Creating new entry`);
           inv[locId] = { quantity: 0, price: 0 };
         }
 
         const oldVal = inv[locId][field];
         inv[locId] = { ...inv[locId], [field]: value };
 
-        console.log(`[INV] Updated ${field}: ${oldVal} → ${value} at location ${locId}`);
-        console.log(`[INV] After update, inventoryByLocation keys:`, Object.keys(inv));
+        log.debug(`[INV] Updated ${field}: ${oldVal} → ${value} at location ${locId}`);
+        log.debug(`[INV] After update, inventoryByLocation keys:`, Object.keys(inv));
 
         return { ...v, inventoryByLocation: inv };
       });
@@ -1376,7 +1379,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   // NEW: Set global variant price (does not touch per-location quantities)
   const setVariantPrice = (variantId: string, price: number) => {
-    console.log(`[PRICE] setVariantPrice START - variant: ${variantId}, price: ${price}`);
+    log.debug(`[PRICE] setVariantPrice START - variant: ${variantId}, price: ${price}`);
     patchPlatform(prev => {
       const variants = (prev.variants || []).map(v => v.id === variantId ? { ...v, price } : v);
       return { ...prev, variants };
@@ -1407,7 +1410,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       try {
         await onGeneratePlatform(platformKey);
       } catch (error) {
-        console.error('Platform generation failed:', error);
+        log.error('Platform generation failed:', error);
       } finally {
         setGeneratingPlatforms(prev => {
           const newSet = new Set(prev);
@@ -1576,7 +1579,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   try {
                     await onGeneratePlatform(key);
                   } catch (e) {
-                    console.error('Generate platform on tap failed:', e);
+                    log.error('Generate platform on tap failed:', e);
                   } finally {
                     setGeneratingPlatforms(prev => { const s = new Set(prev); s.delete(key); return s; });
                   }
@@ -2388,7 +2391,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <Text style={styles.sectionTitle}>Inventory{activeTab === 'all' ? ' (All Platforms)' : ''}</Text>
             {/* DEBUG: Log LocationDropdown condition */}
             {(() => {
-              console.log(`[LocationDropdown DEBUG] activeTab=${activeTab}, selectedInventoryType=${selectedInventoryType}, shouldShow=${selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'}, locationsCount=${locations?.length}`);
+              log.debug(`[LocationDropdown DEBUG] activeTab=${activeTab}, selectedInventoryType=${selectedInventoryType}, shouldShow=${selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'}, locationsCount=${locations?.length}`);
               return null;
             })()}
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
@@ -2400,14 +2403,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 name: loc.name || 'Unknown Location',
                 platformType: activePlatformKey.toLowerCase()
               }));
-              console.log(`[LocationDropdown FILTERED] platform=${activePlatformKey}, count=${platformLocs.length}`);
+              log.debug(`[LocationDropdown FILTERED] platform=${activePlatformKey}, count=${platformLocs.length}`);
               if (platformLocs.length === 0) return null;
               return (
                 <LocationDropdown
                   locations={platformLocs}
                   selectedId={selectedLocationId}
                   onChange={(id) => {
-                    console.log(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
+                    log.debug(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
                     setSelectedLocationId(id);
                   }}
                 />
@@ -2474,7 +2477,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </View>
 
         {(() => {
-          console.log('[Inventory Render] supportsVariants:', supportsVariants, 'variants count:', (activeData.variants || []).length);
+          log.debug('[Inventory Render] supportsVariants:', supportsVariants, 'variants count:', (activeData.variants || []).length);
           return null;
         })()}
         {supportsVariants ? (
@@ -2568,7 +2571,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                       platformKey: pk,
                       isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
                     });
-                    console.log(`[ListingEditorForm] Auto-added virtual location for missing platform: ${pk}`);
+                    log.debug(`[ListingEditorForm] Auto-added virtual location for missing platform: ${pk}`);
                   }
                 });
 
@@ -2586,7 +2589,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 const seenIds = new Set<string>();
                 allLocs = collapsedAllLocsRaw.filter(loc => {
                   if (seenIds.has(loc.id)) {
-                    console.warn(`[ListingEditorForm] Filtered duplicate location: ${loc.id} (${loc.name})`);
+                    log.warn(`[ListingEditorForm] Filtered duplicate location: ${loc.id} (${loc.name})`);
                     return false;
                   }
                   seenIds.add(loc.id);
@@ -2628,7 +2631,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 }
               }
 
-              console.log(`[VariantInventoryEditor LOCS] activeTab=${activeTab}, selectedLocId=${selectedLocationId}, locsCount=${allLocs.length}`);
+              log.debug(`[VariantInventoryEditor LOCS] activeTab=${activeTab}, selectedLocId=${selectedLocationId}, locsCount=${allLocs.length}`);
 
               // 2. Prepare Variants based on Active Tab
               let preparedVariants: VariantInventoryEditorProps['variants'] = [];
@@ -2666,7 +2669,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     const vId = optionKey;
                     const existing = variantMap.get(vId);
 
-                    console.log(`[ListingEditorForm] Aggregating variant: platform=${pk}, optionKey=${optionKey}, existingEntry=${!!existing}`);
+                    log.debug(`[ListingEditorForm] Aggregating variant: platform=${pk}, optionKey=${optionKey}, existingEntry=${!!existing}`);
 
                     const inv: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }> = existing ? { ...existing.inventory } : {};
                     const platformPrice = typeof v.price === 'number' ? v.price : undefined;
@@ -2772,7 +2775,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 }
 
                 preparedVariants = [baseVariant];
-                console.log('[ListingEditorForm] Injected Base Product variant for non-variant product');
+                log.debug('[ListingEditorForm] Injected Base Product variant for non-variant product');
               }
 
               // 3. Callback - per-location pricing for non-Shopify, global for Shopify
@@ -2821,7 +2824,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   const matchesByOptionKey = activeTab === 'all' && getOptionKey(v) === variantId;
 
                   if (matchesById || matchesByOptionKey) {
-                    console.log(`[handleUpdateInventory] ✅ Matched variant: id=${v.id.slice(0, 8)}, optionKey=${getOptionKey(v)}, variantId=${variantId}, field=${field}, value=${value}, isShopify=${isShopify}`);
+                    log.debug(`[handleUpdateInventory] ✅ Matched variant: id=${v.id.slice(0, 8)}, optionKey=${getOptionKey(v)}, variantId=${variantId}, field=${field}, value=${value}, isShopify=${isShopify}`);
 
                     if (field === 'price') {
                       if (isShopify && isShopifyGlobal) {
@@ -2842,8 +2845,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                           };
                         });
 
-                        console.log(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocs.length} locations`);
-                        console.log(`[ListingEditorForm] Updated inventoryByLocation prices:`, Object.entries(updatedInv).map(([k, v]: [string, any]) => `${k}=$${v.price}`).join(', '));
+                        log.debug(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocs.length} locations`);
+                        log.debug(`[ListingEditorForm] Updated inventoryByLocation prices:`, Object.entries(updatedInv).map(([k, v]: [string, any]) => `${k}=$${v.price}`).join(', '));
                         return {
                           ...v,
                           price: value,

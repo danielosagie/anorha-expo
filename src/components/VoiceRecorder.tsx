@@ -11,6 +11,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
+import { createLogger } from '../utils/logger';
+const log = createLogger('VoiceRecorder');
+
 
 interface VoiceRecorderProps {
     apiBaseUrl?: string;
@@ -111,7 +114,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
             );
             pulseLoop.current.start();
         } catch (err) {
-            console.error('[VoiceRecorder] Failed to start:', err);
+            log.error('[VoiceRecorder] Failed to start:', err);
             setError('Unable to start recording. Please try again.');
         }
     }, [audioRecorder, maxDuration]);
@@ -168,7 +171,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
                 setError('Transcription service unavailable');
             }
         } catch (err) {
-            console.error('[VoiceRecorder] Transcription error:', err);
+            log.error('[VoiceRecorder] Transcription error:', err);
             setIsTranscribing(false);
             setError('Sorry, we didn\'t catch that. Please make sure your microphone is working.');
         }

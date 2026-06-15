@@ -3,6 +3,9 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TextInput, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('VariantInventoryRow');
+
 
 interface VariantInventoryRowProps {
     variantName: string;
@@ -56,7 +59,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
     }, [quantity]);
 
     useEffect(() => {
-        console.log(`[VariantInventoryRow] Price prop changed for variant ${variantId}: prop=${price}, localPrice=${localPrice}, willUpdate=${String(price) !== localPrice}`);
+        log.debug(`[VariantInventoryRow] Price prop changed for variant ${variantId}: prop=${price}, localPrice=${localPrice}, willUpdate=${String(price) !== localPrice}`);
         if (String(price) !== localPrice) {
             setLocalPrice(String(price));
         }

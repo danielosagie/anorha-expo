@@ -10,6 +10,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSignIn, useSignUp, useSSO } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ErrorModal from '../components/ErrorModal';
+import { createLogger } from '../utils/logger';
+const log = createLogger('AuthScreen');
+
 
 // Flag to use static gradient for better performance
 const USE_STATIC_GRADIENT = true;
@@ -471,7 +474,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     //   return;
     // }
 
-    console.log('[AuthScreen] handleAuth called. isLogin:', isLogin);
+    log.debug('[AuthScreen] handleAuth called. isLogin:', isLogin);
 
 
     // Validate all fields first
@@ -487,13 +490,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
           setLoading(false);
           return;
         }
-        console.log('[AuthScreen] Attempting signIn.create with email:', email);
+        log.debug('[AuthScreen] Attempting signIn.create with email:', email);
         const res = await signIn.create({ identifier: email, password });
 
         if (res.status === 'complete' && res.createdSessionId) {
-          console.log('[AuthScreen] Calling setActive with session:', res.createdSessionId);
+          log.debug('[AuthScreen] Calling setActive with session:', res.createdSessionId);
           await signInSetActive({ session: res.createdSessionId });
-          console.log('[AuthScreen] ✓ Login successful, session activated');
+          log.debug('[AuthScreen] ✓ Login successful, session activated');
 
           // Prompt for Biometrics if supported and not yet enabled
           const compatible = await LocalAuthentication.hasHardwareAsync();
@@ -521,9 +524,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         } else if ((res as any)?.status === 'needs_first_factor') {
           const r2 = await signIn.attemptFirstFactor({ strategy: 'password', password });
           if (r2.status === 'complete' && r2.createdSessionId) {
-            console.log('[AuthScreen] First factor complete, calling setActive');
+            log.debug('[AuthScreen] First factor complete, calling setActive');
             await signInSetActive({ session: r2.createdSessionId });
-            console.log('[AuthScreen] ✓ First factor login successful');
+            log.debug('[AuthScreen] ✓ First factor login successful');
             return;
           } else {
             showErrorModal('Additional Verification Required', 'Please complete the additional verification step to sign in.', 'warning');
@@ -570,7 +573,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
           );
         }
       } else if (error.message?.includes('already signed in')) {
-        console.log('Already signed in');
+        log.debug('Already signed in');
       } else {
         showErrorModal(
           'Something Went Wrong',

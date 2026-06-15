@@ -15,6 +15,9 @@ import type {
   ProductImagesRow,
   PlatformConnectionsRow,
 } from '../types/database.types';
+import { createLogger } from './logger';
+const log = createLogger('SupaLegend');
+
 
 // ============================================================================
 // Data model — derived from the generated DB schema (src/types/database.types.ts),
@@ -72,24 +75,24 @@ export async function initializeLegendState(
     options: { force?: boolean } = {} // NEW: Add options with force flag
 ): Promise<LegendStateObservables> {
 
-    console.log(`[SupaLegend] Attempting to initialize Legend State for userIdToInitialize: ${userIdToInitialize}`);
+    log.debug(`[SupaLegend] Attempting to initialize Legend State for userIdToInitialize: ${userIdToInitialize}`);
 
     // If already initialized for the same user, return the existing instance UNLESS forcing
     if (legendStateObservablesSingleton && legendStateObservablesSingleton.userId === userIdToInitialize && !options.force) {
-        console.warn(`[SupaLegend] Legend State already initialized for user ${userIdToInitialize}. Use force:true to re-initialize.`);
+        log.warn(`[SupaLegend] Legend State already initialized for user ${userIdToInitialize}. Use force:true to re-initialize.`);
         return legendStateObservablesSingleton;
     }
 
     // If switching users, or first time init for this user, or forcing, proceed
     if (options.force) {
-        console.log(`[SupaLegend] Forcing re-initialization for user ${userIdToInitialize}...`);
+        log.debug(`[SupaLegend] Forcing re-initialization for user ${userIdToInitialize}...`);
     } else {
-        console.log(`[SupaLegend] Initializing Legend State for user ${userIdToInitialize}...`);
+        log.debug(`[SupaLegend] Initializing Legend State for user ${userIdToInitialize}...`);
     }
     legendStateObservablesSingleton = null; // Clear previous instance if user is different
 
     const currentUserId = userIdToInitialize;
-    console.log(`[SupaLegend] currentUserId set to: ${currentUserId}`);
+    log.debug(`[SupaLegend] currentUserId set to: ${currentUserId}`);
 
     // --- DIAGNOSTIC CACHE CLEAR DISABLED ---
     // Commenting out aggressive cache clearing as it forces Legend to re-fetch from Supabase
@@ -149,16 +152,16 @@ export async function initializeLegendState(
             },
         })
     );
-    console.log(`[SupaLegend] productVariants$ observable configured for UserId: ${currentUserId}`);
+    log.debug(`[SupaLegend] productVariants$ observable configured for UserId: ${currentUserId}`);
 
     // Add onChange listener for diagnostics
     productVariants$.onChange(syncedData => {
         const dataCount = Object.keys(syncedData || {}).length;
-        console.log(`[SupaLegend - productVariants$.onChange] Data changed. Count: ${dataCount}`);
+        log.debug(`[SupaLegend - productVariants$.onChange] Data changed. Count: ${dataCount}`);
         if (dataCount > 0 && dataCount < 5) { // Log first few items if count is small
-            console.log('[SupaLegend - productVariants$.onChange] Sample data:', JSON.stringify(Object.values(syncedData || {}).slice(0, 5), null, 2));
+            log.debug('[SupaLegend - productVariants$.onChange] Sample data:', JSON.stringify(Object.values(syncedData || {}).slice(0, 5), null, 2));
         } else if (dataCount === 0) {
-            console.log('[SupaLegend - productVariants$.onChange] Data is empty.');
+            log.debug('[SupaLegend - productVariants$.onChange] Data is empty.');
         }
     }, { immediate: true }); // true for immediate initial call with current value
 
@@ -183,7 +186,7 @@ export async function initializeLegendState(
             },
         })
     );
-    console.log(`[SupaLegend] platformProductMappings$ configured (filtered by RLS)`);
+    log.debug(`[SupaLegend] platformProductMappings$ configured (filtered by RLS)`);
 
     // OPTIMIZED: Only fetch essential image columns, disable realtime
     const productImages$ = observable<Record<string, ProductImage>>(
@@ -199,7 +202,7 @@ export async function initializeLegendState(
             },
         })
     );
-    console.log(`[SupaLegend] productImages$ configured (realtime disabled to reduce egress)`);
+    log.debug(`[SupaLegend] productImages$ configured (realtime disabled to reduce egress)`);
 
     // OPTIMIZED: Essential columns only, relies on RLS to filter via ProductVariantId join
     const inventoryLevels$ = observable<Record<string, InventoryLevel>>(
@@ -219,7 +222,7 @@ export async function initializeLegendState(
             },
         })
     );
-    console.log(`[SupaLegend] inventoryLevels$ configured with live updates (filtered by RLS)`);
+    log.debug(`[SupaLegend] inventoryLevels$ configured with live updates (filtered by RLS)`);
 
     const marketplaceListings$ = observable<Record<string, MarketplaceListing>>(
         customSynced({
@@ -235,21 +238,21 @@ export async function initializeLegendState(
             },
         })
     );
-    console.log(`[SupaLegend] marketplaceListings$ configured with user filter`);
+    log.debug(`[SupaLegend] marketplaceListings$ configured with user filter`);
 
     // Placeholder for PlatformLocations observable - to be implemented with actual data fetching
     const platformLocations$ = observable<Record<string, PlatformLocation>>({});
-    console.log(`[SupaLegend] platformLocations$ observable initialized (placeholder).`);
+    log.debug(`[SupaLegend] platformLocations$ observable initialized (placeholder).`);
 
     // --- Activate observables to potentially kickstart sync --- 
-    console.log("[SupaLegend] Activating productVariants$...");
+    log.debug("[SupaLegend] Activating productVariants$...");
     productVariants$.get(); // Call get() to activate and start syncing
-    console.log(`[SupaLegend] productVariants$ activated. Current local count: ${Object.keys(productVariants$.get() || {}).length}`);
+    log.debug(`[SupaLegend] productVariants$ activated. Current local count: ${Object.keys(productVariants$.get() || {}).length}`);
 
     // Optionally activate others if needed, but productVariants is primary for now
     // console.log("[SupaLegend] Activating platformProductMappings$...");
     // platformProductMappings$.get();
-    console.log("[SupaLegend] Activating productImages$...");
+    log.debug("[SupaLegend] Activating productImages$...");
     productImages$.get();
     // console.log("[SupaLegend] Activating inventoryLevels$...");
     // inventoryLevels$.get();
@@ -264,7 +267,7 @@ export async function initializeLegendState(
         userId: currentUserId, // Store the userId with the initialized observables
     };
 
-    console.log("[SupaLegend] Observables configured for user:", currentUserId);
+    log.debug("[SupaLegend] Observables configured for user:", currentUserId);
     return legendStateObservablesSingleton;
 }
 
@@ -273,7 +276,7 @@ export function initializeFallbackLegendState(userId: string): LegendStateObserv
         return legendStateObservablesSingleton;
     }
 
-    console.warn(`[SupaLegend] Falling back to local-only Legend State for user ${userId}`);
+    log.warn(`[SupaLegend] Falling back to local-only Legend State for user ${userId}`);
     legendStateObservablesSingleton = buildFallbackLegendState(userId);
     return legendStateObservablesSingleton;
 }
@@ -292,7 +295,7 @@ export function getLegendStateObservables(): LegendStateObservables {
 
 export function addProductVariant(variantData: Omit<ProductVariant, 'Id' | 'CreatedAt' | 'UpdatedAt' | 'UserId'>) {
     if (!legendStateObservablesSingleton?.productVariants$ || !legendStateObservablesSingleton?.userId) {
-        console.error("[SupaLegend] Cannot add product variant: Observables or user context not ready.");
+        log.error("[SupaLegend] Cannot add product variant: Observables or user context not ready.");
         return;
     }
     const obs = legendStateObservablesSingleton.productVariants$;
@@ -312,7 +315,7 @@ export function updateProductVariant(id: string, updates: Partial<ProductVariant
     if (!legendStateObservablesSingleton?.productVariants$) return;
     const obs = legendStateObservablesSingleton.productVariants$;
     if (!obs[id].get()) {
-        console.warn(`ProductVariant with id ${id} not found for update.`);
+        log.warn(`ProductVariant with id ${id} not found for update.`);
         return;
     }
     obs[id].assign({
@@ -325,7 +328,7 @@ export function deleteProductVariant(id: string) {
     if (!legendStateObservablesSingleton?.productVariants$) return;
     const obs = legendStateObservablesSingleton.productVariants$;
     if (!obs[id].get()) {
-        console.warn(`ProductVariant with id ${id} not found for hard deletion.`);
+        log.warn(`ProductVariant with id ${id} not found for hard deletion.`);
         return;
     }
     obs[id].delete();

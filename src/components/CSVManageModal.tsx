@@ -8,6 +8,9 @@ import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import BaseModal from './BaseModal';
 import { useOrg } from '../context/OrgContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('CSVManageModal');
+
 
 interface CSVManageModalProps {
     visible: boolean;
@@ -58,7 +61,7 @@ export default function CSVManageModal({ visible, onClose, onSettings }: CSVMana
             onClose();
 
         } catch (err: any) {
-            console.error('Export Error:', err);
+            log.error('Export Error:', err);
             Alert.alert('Export Failed', err.message || 'Unknown error occurred');
         } finally {
             setIsExporting(false);

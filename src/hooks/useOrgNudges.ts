@@ -3,6 +3,9 @@ import { supabase } from '../../lib/supabase';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../../lib/supabase';
 import { SessionContext } from '../context/SessionContext';
 import { API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useOrgNudges');
+
 
 export type InsightUrgency = 'now' | 'today' | 'this-week';
 
@@ -254,7 +257,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
       if (!token) {
         const jwtState = getSupabaseJwtState().state;
-        console.error(`[useOrgNudges] ❌ No token available from bridge (${jwtState})`);
+        log.error(`[useOrgNudges] ❌ No token available from bridge (${jwtState})`);
         throw new Error(
           isSupabaseBridgeWarmingUp(jwtState)
             ? 'Refreshing your live session before loading insights.'
@@ -277,11 +280,11 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         const errorText = await response.text();
         const isForbidden = response.status === 403;
         if (isForbidden) {
-          console.warn(`[useOrgNudges] 403 for org ${orgId} (org context may be syncing)`);
+          log.warn(`[useOrgNudges] 403 for org ${orgId} (org context may be syncing)`);
           throw new Error('Insights are syncing for this workspace.');
         }
-        console.error(`[useOrgNudges] ❌ Fetch failed: ${response.status} ${response.statusText}`);
-        console.error(`[useOrgNudges] ❌ Error body: ${errorText.substring(0, 200)}`);
+        log.error(`[useOrgNudges] ❌ Fetch failed: ${response.status} ${response.statusText}`);
+        log.error(`[useOrgNudges] ❌ Error body: ${errorText.substring(0, 200)}`);
         throw new Error(`Failed to fetch insights: ${response.status} - ${errorText.substring(0, 100)}`);
       }
 
@@ -289,7 +292,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       const normalizedInsight = normalizeInsight(data?.insight);
 
       if (!normalizedInsight) {
-        console.warn('[useOrgNudges] ⚠️ Response missing or invalid insight data');
+        log.warn('[useOrgNudges] ⚠️ Response missing or invalid insight data');
         throw new Error('Invalid response: missing insight');
       }
 
@@ -302,7 +305,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       const errorMessage = e instanceof Error ? e.message : 'Failed to fetch insights';
       const isSoftError = errorMessage.includes('syncing for this workspace');
       if (!isSoftError) {
-        console.error('[useOrgNudges] ❌ Fetch error:', errorMessage);
+        log.error('[useOrgNudges] ❌ Fetch error:', errorMessage);
       }
       setError(errorMessage);
       setInsight(null);
@@ -349,13 +352,13 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       });
 
       if (!clearResponse.ok) {
-        console.warn(`[useOrgNudges] Failed to clear cache: ${clearResponse.status}`);
+        log.warn(`[useOrgNudges] Failed to clear cache: ${clearResponse.status}`);
       }
 
       // Then fetch new insight
       await fetchNudges();
     } catch (e) {
-      console.error('[useOrgNudges] Force refresh error:', e);
+      log.error('[useOrgNudges] Force refresh error:', e);
       // Still try to fetch
       await fetchNudges();
     }
@@ -393,9 +396,9 @@ export async function trackInsightAction(
       },
     });
 
-    console.log(`[trackInsightAction] Tracked action: ${insightTitle}`);
+    log.debug(`[trackInsightAction] Tracked action: ${insightTitle}`);
   } catch (e) {
-    console.error('[trackInsightAction] Failed to track action:', e);
+    log.error('[trackInsightAction] Failed to track action:', e);
     // Don't throw - telemetry failures shouldn't break the app
   }
 }

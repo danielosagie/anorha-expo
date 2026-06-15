@@ -19,6 +19,9 @@ import { X } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('TierSelectorModal');
+
 
 const API_BASE_URL = `${ENV_API_BASE_URL}/api`;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -115,7 +118,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
         try {
             const token = await ensureSupabaseJwt();
             if (!token) {
-                console.error('[TierSelector] No auth token');
+                log.error('[TierSelector] No auth token');
                 Alert.alert('Error', 'Please sign in to continue');
                 return;
             }
@@ -148,7 +151,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                 onSuccess?.();
             }
         } catch (error: any) {
-            console.error('[TierSelector] Checkout error:', error);
+            log.error('[TierSelector] Checkout error:', error);
             Alert.alert('Checkout Error', 'Failed to start checkout. Please try again.');
         } finally {
             setIsLoading(false);
@@ -160,7 +163,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
         try {
             const token = await ensureSupabaseJwt();
             if (!token) {
-                console.error('[TierSelector] No auth token');
+                log.error('[TierSelector] No auth token');
                 Alert.alert('Error', 'Please sign in to continue');
                 return;
             }
@@ -188,7 +191,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                 }
             }
         } catch (error: any) {
-            console.error('[TierSelector] Manage account error:', error);
+            log.error('[TierSelector] Manage account error:', error);
             Alert.alert('Error', 'Failed to open billing portal. Please try again.');
         } finally {
             setIsLoading(false);

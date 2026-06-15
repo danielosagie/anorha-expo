@@ -1,6 +1,9 @@
 import React, { useEffect, useState, useCallback, useContext } from 'react';
 import { ProcessPersistence, ProcessState, ProcessType, ProcessStatus } from '../utils/ProcessPersistence';
 import { SessionContext } from '../context/SessionContext';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useProcessState');
+
 
 export function useProcessState<T extends ProcessState>(processId?: string) {
   const [process, setProcess] = useState<T | null>(null);
@@ -92,7 +95,7 @@ export function useProcessResumption() {
     if (!sessionContext?.user?.id) return;
     
     await processPersistence.initialize(sessionContext.user.id);
-    console.log('[useProcessResumption] Process system initialized');
+    log.debug('[useProcessResumption] Process system initialized');
   }, [sessionContext?.user?.id]);
 
   return {

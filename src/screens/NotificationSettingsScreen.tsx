@@ -6,6 +6,9 @@ import { CheckCircle2, Package, Sprout, AlertTriangle, Megaphone } from 'lucide-
 import { useAuth } from '@clerk/clerk-expo';
 import { API_BASE_URL } from '../config/env';
 import PageHeader from '../components/ui/PageHeader';
+import { createLogger } from '../utils/logger';
+const log = createLogger('NotificationSettingsScreen');
+
 
 export default function NotificationSettingsScreen() {
     const navigation = useNavigation();
@@ -32,7 +35,7 @@ export default function NotificationSettingsScreen() {
             const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
             const apiBaseUrl = API_BASE_URL;
             if (!apiBaseUrl) {
-                console.warn('API Base URL not found');
+                log.warn('API Base URL not found');
                 setLoading(false);
                 return;
             }
@@ -52,7 +55,7 @@ export default function NotificationSettingsScreen() {
                 });
             }
         } catch (err) {
-            console.error('Failed to load notification preferences:', err);
+            log.error('Failed to load notification preferences:', err);
         } finally {
             setLoading(false);
         }
@@ -78,7 +81,7 @@ export default function NotificationSettingsScreen() {
                 body: JSON.stringify({ [backendKey]: newValue })
             });
         } catch (err) {
-            console.error('Failed to update preference:', err);
+            log.error('Failed to update preference:', err);
             // Revert on error
             setPreferences(prev => ({ ...prev, [key]: !newValue }));
             Alert.alert('Error', 'Failed to save setting');
@@ -103,10 +106,10 @@ export default function NotificationSettingsScreen() {
             } else {
                 const body = await res.text();
                 Alert.alert('Request failed', `Server returned ${res.status}. Check that your device is registered (open the app and stay on the main tabs).`);
-                console.warn('[NotificationSettings] Test failed:', res.status, body);
+                log.warn('[NotificationSettings] Test failed:', res.status, body);
             }
         } catch (err: any) {
-            console.error('Test notification error:', err);
+            log.error('Test notification error:', err);
             Alert.alert('Error', err?.message || 'Failed to send test notification');
         } finally {
             setTestSending(false);

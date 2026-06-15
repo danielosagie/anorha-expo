@@ -6,6 +6,9 @@ import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
 import { ProcessPersistence } from '../utils/ProcessPersistence';
+import { createLogger } from '../utils/logger';
+const log = createLogger('EnhancedSessionProvider');
+
 
 interface EnhancedSessionProviderProps {
   children: React.ReactNode;
@@ -44,7 +47,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       const stored = await AsyncStorage.getItem(ENTITLEMENTS_CACHE_KEY);
       return stored ? JSON.parse(stored) : null;
     } catch (error) {
-      console.warn('[EnhancedSessionProvider] Failed to load cached entitlements:', error);
+      log.warn('[EnhancedSessionProvider] Failed to load cached entitlements:', error);
       return null;
     }
   }, []);
@@ -58,7 +61,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       await AsyncStorage.setItem(ENTITLEMENTS_CACHE_KEY, JSON.stringify(nextEntitlements));
     } catch (error) {
-      console.warn('[EnhancedSessionProvider] Failed to persist entitlements:', error);
+      log.warn('[EnhancedSessionProvider] Failed to persist entitlements:', error);
     }
   }, []);
 
@@ -120,11 +123,11 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     const shouldValidate = needsBridgeSetup || shouldRevalidateAccount;
     
     if (!shouldValidate) {
-      console.log('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
+      log.debug('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
       return;
     }
 
-    console.log('[EnhancedSessionProvider] Performing auth validation, attempt:', retryCount + 1);
+    log.debug('[EnhancedSessionProvider] Performing auth validation, attempt:', retryCount + 1);
     
     try {
       const token = await getClerkToken();
@@ -149,7 +152,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       }
 
       if (!configuredRef.current) {
-        console.log('[EnhancedSessionProvider] Configuring Supabase bridge...');
+        log.debug('[EnhancedSessionProvider] Configuring Supabase bridge...');
         // Refresh cadence is derived from the token's expires_in inside the bridge.
         await configureClerkSupabaseBridge({ getClerkToken });
         configuredRef.current = true;
@@ -162,7 +165,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       if (!shouldRevalidateAccount) {
         setBootstrapError(null);
-        console.log('[EnhancedSessionProvider] Bridge is ready; skipping account revalidation within auth window');
+        log.debug('[EnhancedSessionProvider] Bridge is ready; skipping account revalidation within auth window');
         // Still refresh user from me so session.user.id matches JWT sub (fixes onboarding identity mismatch)
         try {
           const { user: me } = await getUserLike();
@@ -176,15 +179,15 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
             setUser(me);
           }
         } catch (refreshErr) {
-          console.warn('[EnhancedSessionProvider] Could not refresh user from me (within auth window):', refreshErr);
+          log.warn('[EnhancedSessionProvider] Could not refresh user from me (within auth window):', refreshErr);
         }
         return;
       }
 
-      console.log('[EnhancedSessionProvider] Bridge configured. Loading user data...');
+      log.debug('[EnhancedSessionProvider] Bridge configured. Loading user data...');
       const { user: me } = await getUserLike();
       const ents = await fetchUserEntitlements().catch(async (error) => {
-        console.warn('[EnhancedSessionProvider] Falling back to cached entitlements:', error);
+        log.warn('[EnhancedSessionProvider] Falling back to cached entitlements:', error);
         return loadCachedEntitlements();
       });
 
@@ -202,7 +205,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       if (resolvedUser?.id) {
         await processPersistence.current.initialize(resolvedUser.id);
-        console.log('[EnhancedSessionProvider] Process persistence initialized');
+        log.debug('[EnhancedSessionProvider] Process persistence initialized');
       }
 
       setReady(true);
@@ -212,20 +215,20 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setBootstrapError(null);
       setLastReadyAt(Date.now());
 
-      console.log('[EnhancedSessionProvider] Session ready for user:', resolvedUser?.id);
+      log.debug('[EnhancedSessionProvider] Session ready for user:', resolvedUser?.id);
     } catch (e) {
-      console.error('[EnhancedSessionProvider] Auth validation failed:', e);
+      log.error('[EnhancedSessionProvider] Auth validation failed:', e);
       
       // Auto-retry with exponential backoff (max 3 attempts)
       if (retryCount < 2) {
         const retryDelay = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
-        console.log(`[EnhancedSessionProvider] Auto-retrying in ${retryDelay}ms...`);
+        log.debug(`[EnhancedSessionProvider] Auto-retrying in ${retryDelay}ms...`);
         
         setTimeout(() => {
-          validateAuthIfNeeded(force, retryCount + 1).catch(console.error);
+          validateAuthIfNeeded(force, retryCount + 1).catch(log.error);
         }, retryDelay);
       } else {
-        console.error('[EnhancedSessionProvider] Max retries reached, entering degraded mode if cache is available');
+        log.error('[EnhancedSessionProvider] Max retries reached, entering degraded mode if cache is available');
         configuredRef.current = false;
         setBridgeReady(false);
         setSessionMode('cached');
@@ -244,13 +247,13 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
-    console.log('[EnhancedSessionProvider] Checking persisted auth state...');
+    log.debug('[EnhancedSessionProvider] Checking persisted auth state...');
     
     const persistedState = await authPersistence.current.getAuthState();
     const cachedEntitlements = await loadCachedEntitlements();
     
     if (persistedState?.isAuthenticated && persistedState.userId) {
-      console.log('[EnhancedSessionProvider] Found valid persisted state for user:', persistedState.userId);
+      log.debug('[EnhancedSessionProvider] Found valid persisted state for user:', persistedState.userId);
       
       // Set user immediately from cache for better UX
       setUser((currentUser) => {
@@ -278,9 +281,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setReady(true);
       
       // Always attempt to establish the live bridge in background for cached sessions.
-      validateAuthIfNeeded(false).catch(console.error);
+      validateAuthIfNeeded(false).catch(log.error);
     } else {
-      console.log('[EnhancedSessionProvider] No valid persisted state found');
+      log.debug('[EnhancedSessionProvider] No valid persisted state found');
       // Force validation for new sessions
       await validateAuthIfNeeded(true);
     }
@@ -291,21 +294,21 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   useEffect(() => {
     let cancelled = false;
     
-    console.log('[EnhancedSessionProvider] Initializing...');
+    log.debug('[EnhancedSessionProvider] Initializing...');
     
     // Initialize app state manager
     appStateManager.current.initialize(() => {
-      console.log('[EnhancedSessionProvider] App state manager requested auth validation');
-      validateAuthIfNeeded(true).catch(console.error);
+      log.debug('[EnhancedSessionProvider] App state manager requested auth validation');
+      validateAuthIfNeeded(true).catch(log.error);
     });
     
     // Initialize from persisted state
-    initializeFromPersistedState().catch(console.error);
+    initializeFromPersistedState().catch(log.error);
     
     // Set up periodic validation (every 10 minutes, but actual validation only happens every 30 minutes)
     timerRef.current = setInterval(() => {
       if (!cancelled) {
-        validateAuthIfNeeded().catch(console.error);
+        validateAuthIfNeeded().catch(log.error);
       }
     }, 10 * 60 * 1000); // Check every 10 minutes
     
@@ -320,7 +323,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   }, [initializeFromPersistedState, validateAuthIfNeeded]);
 
   const refresh = useCallback(async () => {
-    console.log('[EnhancedSessionProvider] Manual refresh requested');
+    log.debug('[EnhancedSessionProvider] Manual refresh requested');
     try {
       if (!bridgeReady) {
         await validateAuthIfNeeded(true);
@@ -345,7 +348,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setBootstrapError(null);
       setLastReadyAt(Date.now());
     } catch (error) {
-      console.error('[EnhancedSessionProvider] Refresh failed:', error);
+      log.error('[EnhancedSessionProvider] Refresh failed:', error);
       // Don't clear state on refresh failures - might be network issue
       setBridgeReady(false);
       setSessionMode('cached');

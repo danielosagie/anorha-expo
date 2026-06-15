@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ensureSupabaseJwt, supabase } from '../lib/supabase';
+import { createLogger } from '../utils/logger';
+const log = createLogger('useOptimizerQueues');
+
 
 // Canonical thresholds (shared across ImportOverview, BackfillOptimizer, sub-views)
 export const OPTIMIZER_THRESHOLDS = {
@@ -94,7 +97,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
         total: classified.length,
       });
     } catch (e) {
-      console.error('[useOptimizerQueues] Error:', e);
+      log.error('[useOptimizerQueues] Error:', e);
       setProducts([]);
       setCounts({ photoNeeded: 0, dataNeeded: 0, manualQueue: 0, total: 0 });
     } finally {

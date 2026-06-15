@@ -1,6 +1,9 @@
 import React, { useEffect } from 'react';
 import { setPostHogInstance } from '../lib/analytics';
 import { getSessionId } from '../lib/mobileFlowLogger';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PostHogProvider');
+
 
 /**
  * Fail-open analytics wrapper.
@@ -44,7 +47,7 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
         });
       }
     } catch (e) {
-      console.warn('[PostHog] init failed, analytics disabled:', e);
+      log.warn('[PostHog] init failed, analytics disabled:', e);
       setPostHogInstance(null);
     }
 

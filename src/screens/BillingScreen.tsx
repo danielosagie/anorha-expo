@@ -25,6 +25,9 @@ import TierSelectorModal from '../components/TierSelectorModal';
 import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { createLogger } from '../utils/logger';
+const log = createLogger('BillingScreen');
+
 
 const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
@@ -125,7 +128,7 @@ export default function BillingScreen() {
     try {
       const token = await getToken();
       if (!token) {
-        console.error('No auth token available');
+        log.error('No auth token available');
         return;
       }
       const headers = {
@@ -158,7 +161,7 @@ export default function BillingScreen() {
         setPartnerPaymentMethod(data);
       }
     } catch (error) {
-      console.error('Failed to refresh billing data:', error);
+      log.error('Failed to refresh billing data:', error);
     } finally {
       setIsRefreshing(false);
     }
@@ -257,7 +260,7 @@ export default function BillingScreen() {
         setActionError('Unable to open subscription portal.');
       }
     } catch (error) {
-      console.error('Failed to open portal:', error);
+      log.error('Failed to open portal:', error);
       setActionError('Unable to open subscription portal.');
     }
   };
@@ -276,7 +279,7 @@ export default function BillingScreen() {
         if (data.checkoutUrl) await Linking.openURL(data.checkoutUrl);
       }
     } catch (error) {
-      console.error('Failed to add payment method:', error);
+      log.error('Failed to add payment method:', error);
     } finally {
       setIsAddingPaymentMethod(false);
     }
@@ -301,7 +304,7 @@ export default function BillingScreen() {
         }
       }
     } catch (error) {
-      console.error('Top-up error:', error);
+      log.error('Top-up error:', error);
     } finally {
       setIsTopUpLoading(false);
     }

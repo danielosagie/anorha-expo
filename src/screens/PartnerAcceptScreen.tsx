@@ -14,6 +14,9 @@ import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { createLogger } from '../utils/logger';
+const log = createLogger('PartnerAcceptScreen');
+
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
@@ -87,7 +90,7 @@ const PartnerAcceptScreen: React.FC = () => {
       setInviteDetails(data);
       setStatus('ready');
     } catch (err: any) {
-      console.error('[PartnerAcceptScreen] Error loading invite:', err);
+      log.error('[PartnerAcceptScreen] Error loading invite:', err);
       setError(err.message || 'Failed to load invite');
       setStatus('error');
     }
@@ -126,7 +129,7 @@ const PartnerAcceptScreen: React.FC = () => {
         navigation.navigate('Partners');
       }, 2000);
     } catch (err: any) {
-      console.error('[PartnerAcceptScreen] Error accepting invite:', err);
+      log.error('[PartnerAcceptScreen] Error accepting invite:', err);
       setError(err.message || 'Failed to accept invite');
       setStatus('error');
     }

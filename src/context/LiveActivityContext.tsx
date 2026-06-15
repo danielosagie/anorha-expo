@@ -4,6 +4,9 @@ import Constants from 'expo-constants';
 import type { BulkJobActivityProps } from '../live-activities/BulkJobActivity';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { createLogger } from '../utils/logger';
+const log = createLogger('LiveActivityContext');
+
 
 type LiveActivityJobType = 'match' | 'generate';
 
@@ -43,7 +46,7 @@ export const LiveActivityProvider: React.FC<{ children: React.ReactNode }> = ({ 
         return module.default;
       })
       .catch((error) => {
-        console.warn('[LiveActivity] Expo Widgets unavailable:', error);
+        log.warn('[LiveActivity] Expo Widgets unavailable:', error);
         return null;
       })
       .finally(() => {
@@ -77,7 +80,7 @@ export const LiveActivityProvider: React.FC<{ children: React.ReactNode }> = ({ 
           pushToken,
         }),
       }).catch((error) => {
-        console.warn('[LiveActivity] Failed to register push token:', error);
+        log.warn('[LiveActivity] Failed to register push token:', error);
       });
     },
     [],
@@ -110,7 +113,7 @@ export const LiveActivityProvider: React.FC<{ children: React.ReactNode }> = ({ 
           });
           lastSignatureRef.current = signature;
         } catch (error) {
-          console.warn('[LiveActivity] Failed to start activity:', error);
+          log.warn('[LiveActivity] Failed to start activity:', error);
         }
         return;
       }
@@ -120,7 +123,7 @@ export const LiveActivityProvider: React.FC<{ children: React.ReactNode }> = ({ 
         try {
           activityRef.current.update(props);
         } catch (error) {
-          console.warn('[LiveActivity] Failed to update activity:', error);
+          log.warn('[LiveActivity] Failed to update activity:', error);
         }
       }
     },

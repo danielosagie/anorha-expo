@@ -16,6 +16,9 @@ import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
 import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('BulkItemsSheet');
+
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MAX_BATCH_ITEMS = 100;
@@ -193,7 +196,7 @@ export const BulkItemsSheet: React.FC<{
   // Keep a tall, consistent sheet so actions never get clipped on smaller devices.
   const sheetMaxHeight = SCREEN_HEIGHT * 0.88;
 
-  console.log('[SHEET LAYOUT] Heights calculated:', {
+  log.debug('[SHEET LAYOUT] Heights calculated:', {
     screenHeight: SCREEN_HEIGHT,
     sheetMaxHeight,
   });
@@ -466,7 +469,7 @@ export const BulkItemsSheet: React.FC<{
         Alert.alert('Error', 'Failed to start analysis. Please try again.');
       }
     } catch (error) {
-      console.error('[ANALYZE] Error:', error);
+      log.error('[ANALYZE] Error:', error);
       Alert.alert('Error', 'Failed to start analysis. Please try again.');
     } finally {
       isAnalyzeInFlightRef.current = false;
