@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, ensureSupabaseJwt, getSupabaseUserId } from '../../lib/supabase';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import { subscribePlatformConnectionChanges } from '../lib/platformConnectionsRealtime';
 import { API_BASE_URL } from '../config/env';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
-import { TABLES } from '../constants/tableNames';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PlatformConnectionsContext');
 
@@ -130,68 +130,12 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
 
   useEffect(() => {
     fetchConnections();
-
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    let retryCount = 0;
-    const maxRetries = 3;
-    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const setupSubscription = () => {
-      // Defense-in-depth: scope the channel to the current user when their id is
-      // known (decoded from the Supabase JWT — this provider mounts above the
-      // session provider, so we read the id from the token, not context). RLS
-      // already enforces row scoping; if the JWT hasn't minted yet we fall back to
-      // an unfiltered channel (the previous behaviour), still RLS-protected.
-      const currentUserId = getSupabaseUserId();
-      // Subscribe to realtime updates for PlatformConnections table
-      channel = supabase
-        // Stable channel name: a `Date.now()` suffix produced a new, distinctly-named
-        // channel on every (re)subscribe, risking orphaned channels on the server.
-        .channel('platform-connections-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*', // Listen for INSERT, UPDATE, DELETE
-            schema: 'public',
-            table: TABLES.PlatformConnections,
-            ...(currentUserId ? { filter: `UserId=eq.${currentUserId}` } : {}),
-          },
-          (payload) => {
-            log.debug('[PlatformConnectionsContext] Realtime update received:', payload.eventType);
-            // Refetch all connections on any change
-            scheduleRefresh('realtime');
-          }
-        )
-        .subscribe((status) => {
-          log.debug('[PlatformConnectionsContext] Realtime subscription status:', status);
-          if (status === 'SUBSCRIBED') {
-            retryCount = 0; // Reset on success
-          } else if (status === 'CHANNEL_ERROR') {
-            // Auto-retry with exponential backoff
-            if (retryCount < maxRetries) {
-              const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-              log.debug(`[PlatformConnectionsContext] Retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
-              retryTimeout = setTimeout(() => {
-                retryCount++;
-                if (channel) supabase.removeChannel(channel);
-                setupSubscription();
-              }, delay);
-            } else {
-              log.error('[PlatformConnectionsContext] Max retries reached for realtime subscription');
-            }
-          }
-        });
-    };
-
-    setupSubscription();
-
-    // Cleanup subscription on unmount
-    return () => {
-      log.debug('[PlatformConnectionsContext] Unsubscribing from realtime updates');
-      if (retryTimeout) clearTimeout(retryTimeout);
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [fetchConnections]);
+    // Realtime change-signal now lives in the data layer (src/lib) per the
+    // no-raw-channel-in-contexts rule; on any PlatformConnections change we refetch
+    // (the API enriches the rows beyond what a raw table row provides).
+    const unsubscribe = subscribePlatformConnectionChanges(() => scheduleRefresh('realtime'));
+    return unsubscribe;
+  }, [fetchConnections, scheduleRefresh]);
 
   useEffect(() => {
     if (!authReady) return;
