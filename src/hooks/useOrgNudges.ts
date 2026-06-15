@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useContext } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../../lib/supabase';
 import { SessionContext } from '../context/SessionContext';
+import { API_BASE_URL } from '../config/env';
 
 export type InsightUrgency = 'now' | 'today' | 'this-week';
 
@@ -261,7 +262,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         );
       }
 
-      const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+      const base = API_BASE_URL;
       const url = `${base}/api/insights/orgs/${orgId}/nudges`;
 
       const response = await fetch(url, {
@@ -335,7 +336,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         throw new Error('No JWT token available');
       }
 
-      const apiBase = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+      const apiBase = API_BASE_URL;
       const url = `${apiBase}/api/insights/orgs/${orgId}/nudges`;
 
       // Clear cache on backend
@@ -381,7 +382,7 @@ export async function trackInsightAction(
 ): Promise<void> {
   try {
     const token = await ensureSupabaseJwt();
-    const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+    const base = API_BASE_URL;
     const url = `${base}/api/insights/orgs/${orgId}/nudges/action?link=${encodeURIComponent(actionLink)}&title=${encodeURIComponent(insightTitle)}`;
 
     await fetch(url, {

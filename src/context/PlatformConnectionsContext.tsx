@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import { io, Socket } from 'socket.io-client';
 
 export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot' | 'etsy';
@@ -41,7 +42,7 @@ type ContextValue = {
 
 const PlatformConnectionsContext = createContext<ContextValue | undefined>(undefined);
 
-const API_BASE = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE = API_BASE_URL;
 const SOCKET_BASE = API_BASE.endsWith('/api') ? API_BASE.replace(/\/api$/, '') : API_BASE;
 const CONNECTION_STATUS_SET = new Set(['active', 'inactive', 'pending', 'review', 'ready_to_sync', 'scanning', 'syncing', 'reconciling', 'error']);
 const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error']);

@@ -3,9 +3,7 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BaseModal } from './BaseModal';
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
+import PlatformLogo from './PlatformLogo';
 
 interface PartnerWelcomeModalProps {
     visible: boolean;
@@ -55,9 +53,9 @@ export const PartnerWelcomeModal: React.FC<PartnerWelcomeModalProps> = ({
             </TouchableOpacity>
 
             <View style={styles.platformIcons}>
-                <ShopifySvg width={24} height={24} />
-                <SquareSvg width={24} height={24} />
-                <CloverSvg width={24} height={24} />
+                <PlatformLogo type="shopify" size={24} />
+                <PlatformLogo type="square" size={24} />
+                <PlatformLogo type="clover" size={24} />
             </View>
         </BaseModal>
     );

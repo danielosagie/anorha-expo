@@ -6,18 +6,16 @@ import BaseModal from '../components/BaseModal';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from '../components/PlatformLogo';
+import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import BottomActionBar from '../components/BottomActionBar';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
+import { API_BASE_URL } from '../config/env';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
@@ -29,6 +27,7 @@ import {
 } from '../utils/SupaLegend';
 import { observer } from '@legendapp/state/react';
 import * as ImagePicker from 'expo-image-picker';
+import { captureOrPickImageAssets } from '../utils/imageCapture';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { useOrg } from '../context/OrgContext';
@@ -42,7 +41,7 @@ const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
 // Base URL for API
-const SSSYNC_API_BASE_URL = 'https://api.sssync.app';
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 // Debounced autosave keeps listing/inventory changes live without manual refresh.
 const ENABLE_AUTOSAVE = true;
@@ -107,21 +106,6 @@ interface GroupedInventoryLocations {
   };
 }
 
-// SVG logo helpers
-const platformSvgMap: Record<string, React.FC<any>> = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-  amazon: AmazonSvg,
-  ebay: EbaySvg,
-  facebook: FacebookSvg,
-};
-
-function getPlatformLogoComponent(platformType?: string) {
-  const type = (platformType || '').toLowerCase();
-  const found = Object.entries(platformSvgMap).find(([key]) => type.includes(key));
-  return found ? found[1] : null;
-}
 
 /**
  * CRITICAL FIX: Clean displayedPlatforms data before save to prevent cross-platform location contamination.
@@ -266,6 +250,12 @@ const ProductDetailScreen = observer(
       } catch { /* Legend may not be ready */ }
       return detailedItem?.PrimaryImageUrl ? [detailedItem.PrimaryImageUrl] : [];
     }, [detailedItem?.Id, detailedItem?.PrimaryImageUrl]);
+    // Optimistic layer: edits (add/delete/reorder) show instantly, then we re-follow the
+    // synced observable once productImages$ catches up (so it never feels broken).
+    const [optimisticImages, setOptimisticImages] = useState<string[] | null>(null);
+    const displayImagesKey = displayImages.join('|');
+    useEffect(() => { setOptimisticImages(null); }, [displayImagesKey]);
+    const editorImages = optimisticImages ?? displayImages;
     const [mappings, setMappings] = useState<PlatformProductMapping[]>([]);
     const [groupedInventory, setGroupedInventory] = useState<GroupedInventoryLocations>({});
     const [connections, setConnections] = useState<PlatformConnection[]>([]);
@@ -505,6 +495,63 @@ const ProductDetailScreen = observer(
     // Custom Action Menu State
     const [actionMenuVisible, setActionMenuVisible] = useState(false);
     const [draftVersions, setDraftVersions] = useState<Array<{ id: string; createdAt: string; platforms: any; publishedPlatforms?: string[] }>>([]);
+
+    // Add-to-clearout (campaign) state — publish this product into a clearout
+    const [clearoutVisible, setClearoutVisible] = useState(false);
+    const [clearoutCampaigns, setClearoutCampaigns] = useState<any[]>([]);
+    const [clearoutLoading, setClearoutLoading] = useState(false);
+    const [clearoutBusy, setClearoutBusy] = useState<string | null>(null);
+    const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
+
+    const openClearout = useCallback(async () => {
+      setActionMenuVisible(false);
+      setClearoutVisible(true);
+      setClearoutLoading(true);
+      try {
+        const list = await campaignAdapter.listCampaigns();
+        setClearoutCampaigns((list || []).filter((c: any) => c.status === 'active' || c.status === 'waiting_user' || c.status === 'paused'));
+      } catch {
+        setClearoutCampaigns([]);
+      } finally {
+        setClearoutLoading(false);
+      }
+    }, [campaignAdapter]);
+
+    const addToClearout = useCallback(async (campaignId: string, title: string) => {
+      if (!detailedItem?.Id || clearoutBusy) return;
+      setClearoutBusy(campaignId);
+      try {
+        await campaignAdapter.addCampaignItems(campaignId, [detailedItem.Id]);
+        setClearoutVisible(false);
+        Alert.alert('Added to clearout', `This product is now in "${title}".`);
+      } catch (e: any) {
+        Alert.alert('Could not add', e?.message || 'Please try again.');
+      } finally {
+        setClearoutBusy(null);
+      }
+    }, [campaignAdapter, detailedItem?.Id, clearoutBusy]);
+
+    const createClearoutWithProduct = useCallback(async () => {
+      if (!detailedItem?.Id || clearoutBusy) return;
+      setClearoutBusy('__new__');
+      try {
+        const name = detailedItem?.Title ? `Clearout · ${String(detailedItem.Title).slice(0, 24)}` : 'New clearout';
+        const camp = await campaignAdapter.createCampaign({
+          title: name,
+          targetRevenue: Math.max(50, Math.round(Number(detailedItem?.Price) || 100)),
+          timeframeDays: 14,
+          aggressiveness: 'balanced',
+          inventoryScope: 'all',
+        });
+        await campaignAdapter.addCampaignItems(camp.id, [detailedItem.Id]);
+        setClearoutVisible(false);
+        (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: camp.id, entryPoint: 'detail' });
+      } catch (e: any) {
+        Alert.alert('Could not create clearout', e?.message || 'Please try again.');
+      } finally {
+        setClearoutBusy(null);
+      }
+    }, [campaignAdapter, detailedItem?.Id, detailedItem?.Title, detailedItem?.Price, clearoutBusy, navigation]);
 
     // Current form data (now live)
     const [formData, setFormData] = useState<EditFormData>({
@@ -1768,7 +1815,7 @@ const ProductDetailScreen = observer(
               {
                 text: 'Add Platform',
                 style: 'default',
-                onPress: () => navigation.navigate('Profile')
+                onPress: () => navigation.navigate('AccountSettings')
               }
             ]
           );
@@ -3030,7 +3077,7 @@ const ProductDetailScreen = observer(
       (async () => {
         try {
           const token = await ensureSupabaseJwt();
-          const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || SSSYNC_API_BASE_URL;
+          const baseUrl = API_BASE_URL;
 
           if (!token) {
             console.log('[ProductDetail] No auth token for draft loading');
@@ -3698,7 +3745,7 @@ const ProductDetailScreen = observer(
             <ListingEditorForm
               ref={listingEditorRef}
               platforms={displayedPlatforms}
-              images={displayImages}
+              images={editorImages}
               platformLocations={buildPlatformLocations()}
               onChangePlatforms={(next) => {
                 console.log('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
@@ -3768,7 +3815,7 @@ const ProductDetailScreen = observer(
                   return merged;
                 });
               }}
-              onChangeImages={(next) => { reorderImages(next); }}
+              onChangeImages={(next) => { setOptimisticImages(next); reorderImages(next); }}
               onOpenFieldPanel={undefined}
               pendingImages={pendingImages}
               onOpenBarcodeScanner={(onResult) => {
@@ -3776,34 +3823,25 @@ const ProductDetailScreen = observer(
               }}
               onOpenImageCapture={async (onResult) => {
                 try {
-                  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                  if (status !== 'granted') {
-                    Alert.alert('Permission Required', 'Please grant camera roll permissions to add images.');
-                    return;
-                  }
-                  const result = await ImagePicker.launchImageLibraryAsync({
-                    mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                    allowsMultipleSelection: true,
-                    quality: 0.8,
-                  });
-                  if (!result.canceled && result.assets) {
-                    setIsUploadingImages(true);
-                    const localUris = result.assets.map(a => a.uri);
-                    setPendingImages(prev => [...prev, ...localUris]);
-
-                    try {
-                      const uploadedUrls = await uploadImagesToSupabase(result.assets);
-                      onResult(uploadedUrls);  // Call the callback with uploaded URLs
-                      await addImagesToProduct(uploadedUrls);
-                    } finally {
-                      setPendingImages(prev => prev.filter(uri => !localUris.includes(uri)));
-                      setIsUploadingImages(false);
-                    }
+                  const assets = await captureOrPickImageAssets({ multiple: true });
+                  if (!assets.length) return;
+                  setIsUploadingImages(true);
+                  const localUris = assets.map(a => a.uri);
+                  setPendingImages(prev => [...prev, ...localUris]);
+                  try {
+                    const uploadedUrls = await uploadImagesToSupabase(assets);
+                    // onResult appends to the editor's images → onChangeImages → reorderImages
+                    // persists the full ImageUrls array. (No separate addImagesToProduct call —
+                    // that double-PUT raced and popped a redundant success Alert.)
+                    if (uploadedUrls.length > 0) onResult(uploadedUrls);
+                  } finally {
+                    setPendingImages(prev => prev.filter(uri => !localUris.includes(uri)));
+                    setIsUploadingImages(false);
                   }
                 } catch (error) {
                   console.error('Error picking images:', error);
                   setIsUploadingImages(false);
-                  Alert.alert('Error', 'Failed to pick images. Please try again.');
+                  Alert.alert('Error', 'Failed to add images. Please try again.');
                 }
               }}
               // 🟢 EXTERNAL UPDATES: Pass field changes for green border highlighting
@@ -3834,7 +3872,6 @@ const ProductDetailScreen = observer(
 
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
                     const platformType = rawType;
-                    const Logo = getPlatformLogoComponent(platformType);
                     const lastSyncedAt = mapping.LastSyncedAt || null;
                     const parsedSyncMs = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
                     const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
@@ -3842,11 +3879,7 @@ const ProductDetailScreen = observer(
                       <View key={mapping.Id} style={styles.platformRow}>
                         <View style={styles.platformInfo}>
                           <View style={styles.platformLogoContainer}>
-                            {Logo ? (
-                              <Logo width={18} height={18} />
-                            ) : (
-                              <Icon name="store" size={18} color={'#666'} />
-                            )}
+                            <PlatformLogo type={platformType} size={18} fallbackIcon="store" />
                           </View>
                           <View style={styles.platformDetails}>
                             <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
@@ -3875,7 +3908,6 @@ const ProductDetailScreen = observer(
                         Ready to publish:
                       </Text>
                       {unpublishedPlatforms.map((platform) => {
-                        const Logo = getPlatformLogoComponent(platform);
                         const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
                         const isCurrentlyPublishing = isPublishing === platform;
 
@@ -3883,8 +3915,8 @@ const ProductDetailScreen = observer(
                           <View key={platform} style={[styles.platformRow, { backgroundColor: '#FFFDF4', borderRadius: 8, marginBottom: 4 }]}>
                             <View style={styles.platformInfo}>
                               <View style={[styles.platformLogoContainer, { backgroundColor: '#ffffffff' }]}>
-                                {Logo ? (
-                                  <Logo width={18} height={18} />
+                                {getPlatform(platform) ? (
+                                  <PlatformLogo type={platform} size={18} />
                                 ) : (
                                   <Icon name="store" size={18} color={BRAND_PRIMARY} />
                                 )}
@@ -4026,6 +4058,14 @@ const ProductDetailScreen = observer(
 
             <TouchableOpacity
               style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+              onPress={openClearout}
+            >
+              <Icon name="sprout-outline" size={20} color="#5D7E16" style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '600', color: '#5D7E16' }}>Add to clearout</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
               onPress={() => {
                 setActionMenuVisible(false);
                 loadPlatformData();
@@ -4065,6 +4105,68 @@ const ProductDetailScreen = observer(
               <Icon name="delete-outline" size={20} color={theme.colors.error} style={{ marginRight: 10 }} />
               <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.error }}>Delete Product</Text>
             </TouchableOpacity>
+          </View>
+        </BaseModal>
+
+        {/* Add-to-clearout picker */}
+        <BaseModal
+          onClose={() => setClearoutVisible(false)}
+          visible={clearoutVisible}
+          showCloseButton={false}
+          containerStyle={{ width: '88%', maxWidth: 380 }}
+        >
+          <View style={{ width: '100%' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ width: 24 }} />
+              <Text style={{ fontSize: 18, fontWeight: '700', flex: 1, textAlign: 'center' }}>Add to clearout</Text>
+              <TouchableOpacity onPress={() => setClearoutVisible(false)}>
+                <Icon name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            {clearoutLoading ? (
+              <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                <ActivityIndicator color="#93C822" />
+              </View>
+            ) : (
+              <>
+                {clearoutCampaigns.map((c: any) => (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}
+                    onPress={() => addToClearout(c.id, c.title)}
+                    disabled={!!clearoutBusy}
+                  >
+                    <View style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                      <Icon name="leaf" size={18} color="#5D7E16" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }} numberOfLines={1}>{c.title}</Text>
+                      <Text style={{ fontSize: 12, color: '#71717A', marginTop: 1 }}>
+                        {(c.stats?.soldCount ?? 0)}/{(c.stats?.totalCount ?? 0)} sold
+                      </Text>
+                    </View>
+                    {clearoutBusy === c.id ? <ActivityIndicator size="small" color="#93C822" /> : <Icon name="chevron-right" size={20} color="#D4D4D8" />}
+                  </TouchableOpacity>
+                ))}
+                {clearoutCampaigns.length === 0 ? (
+                  <Text style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13, paddingVertical: 16 }}>No active clearouts yet.</Text>
+                ) : null}
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, marginTop: 10, backgroundColor: '#93C822', borderRadius: 14 }}
+                  onPress={createClearoutWithProduct}
+                  disabled={!!clearoutBusy}
+                >
+                  {clearoutBusy === '__new__' ? <ActivityIndicator color="#FFFFFF" /> : (
+                    <>
+                      <Icon name="plus" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                      <Text style={{ fontSize: 15, fontWeight: '700', color: '#FFFFFF' }}>New clearout with this product</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </BaseModal>
 

@@ -29,6 +29,7 @@ import { JobsProvider } from './src/context/JobsContext';
 import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
+import { ConvexProvider } from './src/providers/ConvexProvider';
 import * as Sentry from '@sentry/react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
@@ -677,13 +678,17 @@ const App: React.FC = () => {
 
   return (
     <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
-      <PostHogProvider>
-        <SafeAreaProvider>
-          <SystemNotificationProvider>
-            <DebugClerkState />
-          </SystemNotificationProvider>
-        </SafeAreaProvider>
-      </PostHogProvider>
+      {/* Convex (Clerk-authed) wraps the app so the chat can subscribe to live
+          messages via useQuery. Inside ClerkProvider so it can read the session. */}
+      <ConvexProvider>
+        <PostHogProvider>
+          <SafeAreaProvider>
+            <SystemNotificationProvider>
+              <DebugClerkState />
+            </SystemNotificationProvider>
+          </SafeAreaProvider>
+        </PostHogProvider>
+      </ConvexProvider>
     </ClerkProvider>
   );
 };

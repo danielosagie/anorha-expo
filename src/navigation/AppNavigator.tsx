@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { CardStyleInterpolators, createStackNavigator, StackScreenProps } from '@react-navigation/stack';
+import { withSwipeBack } from '../components/withSwipeBack';
+import { SwipeBackProvider } from '../components/SwipeBackContext';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import TabBar from '../components/TabBar';
@@ -15,12 +17,12 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import AppStartupShell from '../components/AppStartupShell';
 import {
-  PlusJakartaSans_400Regular,
-  PlusJakartaSans_500Medium,
-  PlusJakartaSans_600SemiBold,
-  PlusJakartaSans_700Bold,
-  PlusJakartaSans_800ExtraBold,
-} from '@expo-google-fonts/plus-jakarta-sans';
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from '@expo-google-fonts/inter';
 // import { CirclePlus } from 'lucide-react-native';
 import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
 import { usePushNotifications } from '../hooks/usePushNotifications';
@@ -39,6 +41,11 @@ import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import ImportProgressBanner from '../components/ImportProgressBanner';
 import ProfileScreen from '../screens/ProfileScreen';
+import SettingsScreen from '../screens/SettingsScreen';
+import ConnectionsScreen from '../screens/ConnectionsScreen';
+import PrivacySecurityScreen from '../screens/PrivacySecurityScreen';
+import AccountLoginScreen from '../screens/AccountLoginScreen';
+import PoolDetailScreen from '../screens/PoolDetailScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import ProductDetailScreen from '../screens/ProductDetail';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
@@ -63,6 +70,8 @@ import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import ImportOverviewScreen from '../screens/ImportOverviewScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
+import CampaignSettingsScreen from '../screens/CampaignSettingsScreen';
+import CampaignInventorySelectScreen from '../screens/CampaignInventorySelectScreen';
 import SproutHomeScreen from '../screens/SproutHomeScreen';
 import CampaignThreadScreen from '../screens/CampaignThreadScreen';
 import BackupsScreen from '../screens/BackupsScreen';
@@ -111,6 +120,12 @@ export type AppStackParamList = {
     payload: {
       jobId?: string;
       firstPhotos: any[];
+      /**
+       * ID-BASED handoff (canonical going forward): cart$ item ids this run covers.
+       * Prefer resolving item data from the cart store by id over the index-coupled
+       * bulkItems/resultIndexMap fields below (kept for un-migrated consumers).
+       */
+      itemIds?: string[];
       bulkItems?: any[];
       confirmedQuickMatchByItemId?: Record<string, {
         serpApiData: any[];
@@ -146,6 +161,11 @@ export type AppStackParamList = {
   MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; scanStartTime?: number; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number };
+  AccountSettings: { refresh?: number } | undefined;
+  Connections: undefined;
+  PrivacySecurity: undefined;
+  AccountLogin: undefined;
+  PoolDetail: { poolId: string; name?: string; isPartnerPool?: boolean };
   DeleteAccountInfo: undefined;
   NotificationSettings: undefined;
   Team: undefined;
@@ -286,17 +306,24 @@ export type AppStackParamList = {
   GenerateDetailsScreen: {
     jobId: string,
     status: string,
-    results: Array<{
+    /** ID-BASED handoff (canonical): the screen resolves items/jobs from cart$ by id. */
+    itemIds?: string[],
+    focusItemId?: string,
+    /** Optional pre-fetched results (the screen also polls by jobId). */
+    results?: Array<{
       productIndex: number,
       platforms: any[],
       scrapedData: any[],
       originalSelection: any[],
     }>,
-    summary: any[],
-    completedAt: string,
+    summary?: any[],
+    completedAt?: string,
     initialData?: Array<{}>,
+    /** Legacy index-shaped fallbacks — emitted by buildGenerateDetailsLaunch (src/features/cart/flowPayloads.ts). */
     items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>,
+    /** Missing index = no generate job for that item. */
     jobMap?: Record<number, { jobId: string; status?: string }>,
+    userImagesByIndex?: Record<number, string[]>,
     matchJobId?: string,
     focusIndex?: number,
   };
@@ -333,6 +360,8 @@ export type AppStackParamList = {
   };
   Backups: undefined;
   LiquidationCampaignScreen: { campaignId: string; entryPoint?: 'tab' | 'detail' } | undefined;
+  CampaignSettings: { campaignId: string; title?: string } | undefined;
+  CampaignInventorySelect: { campaignId: string; title?: string } | undefined;
   CampaignThreadScreen: { campaignId: string; title?: string } | undefined;
   SproutHomeScreen: undefined;
   Partners: undefined;
@@ -365,6 +394,12 @@ const TabNavigator = () => {
         // We use a small timeout to ensure navigation is ready if coming from cold start
         setTimeout(() => {
           navigation.navigate('Partners');
+        }, 500);
+      } else if ((data?.type === 'sprout_insight' || data?.type === 'sprout_reply') && data?.campaignId) {
+        // A Sprout ping (a reply, sale, needs-you, or digest) → open that campaign's
+        // thread so the freshly posted message is right there.
+        setTimeout(() => {
+          navigation.navigate('CampaignThreadScreen', { campaignId: String(data.campaignId) });
         }, 500);
       } else if (data?.type === 'job_complete') {
         // Import / sync finished — deep-link the user to their inventory so
@@ -405,50 +440,71 @@ const TabNavigator = () => {
         tabBarStyle: tabBarContainerStyle,
       }}
 
-      tabBar={(props: any) => (
-        <TabBar
-          {...props}
-          containerStyle={tabBarContainerStyle}
-          surfaceStyle={tabBarSurfaceStyle}
-          bottomInset={tabBarBottom}
-          rowHeight={TAB_ROW_HEIGHT}
-        />
-      )}
-      initialRouteName="Inventory"
+      tabBar={(props: any) => {
+        // Capture screen is full-bleed camera chrome (Shop-style): no navigator row.
+        // Its own bottom controls carry Back / shutter / mode + the cart CTA.
+        const focusedRouteName = props.state?.routes?.[props.state?.index]?.name;
+        if (focusedRouteName === 'AddProduct') return null;
+        return (
+          <TabBar
+            {...props}
+            containerStyle={tabBarContainerStyle}
+            surfaceStyle={tabBarSurfaceStyle}
+            bottomInset={tabBarBottom}
+            rowHeight={TAB_ROW_HEIGHT}
+          />
+        );
+      }}
+      initialRouteName="Clearouts"
     >
+      {/* Sprout home is the leftmost tab and the landing screen. */}
+      <Tab.Screen
+        name="Clearouts"
+        component={SproutHomeScreen}
+        options={{
+          tabBarLabel: 'Home',
+          tabBarAccessibilityLabel: 'Home',
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
+            <Icon name="home-variant-outline" color={color} size={size} />
+          ),
+        }}
+      />
       <Tab.Screen
         name="Inventory"
         component={InventoryOrdersScreen}
         options={{
           tabBarLabel: 'Inventory',
+          tabBarAccessibilityLabel: 'Inventory',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Icon name="package-variant" color={color} size={size} />
           ),
         }}
       />
       <Tab.Screen
-        name="Clearouts"
-        component={SproutHomeScreen}
-        options={{
-          tabBarLabel: 'Sprout',
-          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="emoticon-outline" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tab.Screen
         name="Profile"
-        component={ProfileScreen}
+        component={SettingsScreen}
         options={{
-          tabBarLabel: 'Settings',
+          tabBarLabel: 'Profile',
+          tabBarAccessibilityLabel: 'Profile',
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
-            <Icon name="cog-outline" color={color} size={size} />
+            <Icon name="account-outline" color={color} size={size} />
           ),
         }}
       />
       <Tab.Screen
         name="AddProduct"
-        component={AddProductScreen}
+        // Black camera screen with its own sheet/vertical gestures: PIN mode (no page
+        // translate — that was eating the sheets' swipe-down) draws the ring around the real
+        // 44×44 back button. It also calls useSuppressSwipeBackWhen(isAnySheetVisible).
+        // The ring anchors to the back button's MEASURED window rect (publishBackButtonRect
+        // in AddProductScreen), so it tracks the real 44×44 button on any device. pinTop/
+        // pinLeft are only a pre-measure fallback, never seen (the ring is invisible at rest).
+        // onBack mirrors the real back button exactly (goBack, else Inventory) so the swipe
+        // works on every revisit, not just the first.
+        component={sb(AddProductScreen, {
+          mode: 'pin', size: 44, pinLeft: 16, accent: '#FFFFFF',
+          onBack: (nav: any) => { if (nav.canGoBack?.()) nav.goBack(); else nav.navigate('Inventory'); },
+        })}
         options={{
           tabBarButton: () => null,
           tabBarItemStyle: { display: 'none' },
@@ -460,9 +516,9 @@ const TabNavigator = () => {
   );
 };
 
-const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boolean, devForceOnboarding: boolean }) => (
+const AuthStack = ({ showOnboarding }: { showOnboarding: boolean }) => (
   <AuthStackNav.Navigator screenOptions={{ headerShown: false, animationEnabled: false }}>
-    {(isFirstLaunch || devForceOnboarding) ? (
+    {showOnboarding ? (
       <>
         <AuthStackNav.Screen name="InitialScreen" component={InitialScreen} />
         <AuthStackNav.Screen name="OnboardingSlides" component={OnboardingSlides} />
@@ -474,29 +530,50 @@ const AuthStack = ({ isFirstLaunch, devForceOnboarding }: { isFirstLaunch: boole
   </AuthStackNav.Navigator>
 );
 
+// Apply the left-swipe-back ring to every app-stack screen by default. Cache by component
+// so each screen wraps exactly once (stable identity → no remount on AppStack re-render).
+const sbCache = new Map<React.ComponentType<any>, React.ComponentType<any>>();
+const sb = (C: React.ComponentType<any>, opts?: { surface?: string; mode?: 'slide' | 'pin'; size?: number; pinTop?: number; pinLeft?: number; accent?: string; armed?: string; onBack?: (navigation: any) => void }) => {
+  let w = sbCache.get(C);
+  if (!w) { w = withSwipeBack(C, opts); sbCache.set(C, w); }
+  return w;
+};
+
 const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScreen' | 'AccountSyncIssueScreen' | 'TabNavigator' }) => (
   <AppStackNav.Navigator
-    screenOptions={{ headerShown: false }}
+    // gestureEnabled:false kills react-navigation's native edge-swipe (the peek). SwipeBackRing
+    // (via sb()/withSwipeBack on each screen) owns the back gesture now. Per-screen options can
+    // still re-enable it (e.g. GlobalSearch's vertical dismiss).
+    screenOptions={{ headerShown: false, gestureEnabled: false }}
     initialRouteName={initialScreenName}
   >
-    <AppStackNav.Screen name="PendingOrgInvitesScreen" component={PendingOrgInvitesScreen} />
-    <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
-    <AppStackNav.Screen name="AccountSyncIssueScreen" component={AccountSyncIssueScreen} />
-    <AppStackNav.Screen name="Partners" component={PartnersScreen} />
-    <AppStackNav.Screen name="LiquidationCampaignScreen" component={LiquidationCampaignScreen} options={{ headerTitle: 'Campaign Items', animationEnabled: false }} />
-    <AppStackNav.Screen name="SproutHomeScreen" component={SproutHomeScreen} options={{ headerTitle: 'Sprout' }} />
+    <AppStackNav.Screen name="PendingOrgInvitesScreen" component={sb(PendingOrgInvitesScreen)} />
+    <AppStackNav.Screen name="CreateAccountScreen" component={sb(CreateAccountScreen)} />
+    <AppStackNav.Screen name="AccountSyncIssueScreen" component={sb(AccountSyncIssueScreen)} />
+    <AppStackNav.Screen name="Partners" component={sb(PartnersScreen)} />
+    <AppStackNav.Screen name="LiquidationCampaignScreen" component={sb(LiquidationCampaignScreen)} options={{ headerTitle: 'Inventory', animationEnabled: false }} />
+    <AppStackNav.Screen name="CampaignSettings" component={sb(CampaignSettingsScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="CampaignInventorySelect" component={sb(CampaignInventorySelectScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="SproutHomeScreen" component={sb(SproutHomeScreen)} options={{ headerTitle: 'Sprout' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
-    <AppStackNav.Screen name="ProductDetail" component={ProductDetailScreen} />
-    <AppStackNav.Screen name="PastScans" component={PastScansScreen} />
-    <AppStackNav.Screen name="MappingReview" component={MappingReviewScreen} />
-    <AppStackNav.Screen name="SyncRules" component={SyncRulesScreen} />
-    <AppStackNav.Screen name="Profile" component={ProfileScreen} />
-    <AppStackNav.Screen name="DeleteAccountInfo" component={DeleteAccountInfoScreen} />
-    <AppStackNav.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
-    <AppStackNav.Screen name="Team" component={TeamScreen} />
-    <AppStackNav.Screen name="Billing" component={BillingScreen} />
-    <AppStackNav.Screen name="BillingSupport" component={BillingSupportScreen} />
-    <AppStackNav.Screen name="Dashboard" component={DashboardScreen} />
+    <AppStackNav.Screen name="ProductDetail" component={sb(ProductDetailScreen)} />
+    <AppStackNav.Screen name="PastScans" component={sb(PastScansScreen)} />
+    <AppStackNav.Screen name="MappingReview" component={sb(MappingReviewScreen)} />
+    <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
+    {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
+        a stack route also named 'Profile' collided with the Profile TAB and made
+        navigate('Profile') push this legacy screen over the tabs. */}
+    <AppStackNav.Screen name="AccountSettings" component={sb(ProfileScreen)} />
+    <AppStackNav.Screen name="Connections" component={sb(ConnectionsScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="PrivacySecurity" component={sb(PrivacySecurityScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="AccountLogin" component={sb(AccountLoginScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="PoolDetail" component={sb(PoolDetailScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="DeleteAccountInfo" component={sb(DeleteAccountInfoScreen)} />
+    <AppStackNav.Screen name="NotificationSettings" component={sb(NotificationSettingsScreen)} />
+    <AppStackNav.Screen name="Team" component={sb(TeamScreen)} />
+    <AppStackNav.Screen name="Billing" component={sb(BillingScreen)} />
+    <AppStackNav.Screen name="BillingSupport" component={sb(BillingSupportScreen)} />
+    <AppStackNav.Screen name="Dashboard" component={sb(DashboardScreen)} />
     <AppStackNav.Screen
       name="GlobalSearch"
       component={GlobalSearchScreen}
@@ -511,21 +588,32 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
     <AppStackNav.Screen
       name="MatchSelectionScreen"
-      component={MatchSelectionScreen}
+      component={sb(MatchSelectionScreen)}
       options={{
         cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
       }}
     />
-    <AppStackNav.Screen name="GenerateDetailsScreen" component={GenerateDetailsScreen} />
-    <AppStackNav.Screen name="PublishConfirmation" component={PublishConfirmationScreen} />
-    <AppStackNav.Screen name="OnboardConnectionScreen" component={OnboardConnectionScreen} />
-    <AppStackNav.Screen name="PartnerAccept" component={PartnerAcceptScreen} />
-    <AppStackNav.Screen name="PartnershipDetail" component={PartnershipDetailScreen} />
-    <AppStackNav.Screen name="BackfillOptimizer" component={BackfillOptimizerScreen} />
-    <AppStackNav.Screen name="ImportOverview" component={ImportOverviewScreen} />
-    <AppStackNav.Screen name="CSVColumnMapping" component={CSVColumnMappingScreen} />
-    <AppStackNav.Screen name="ActivityFeed" component={ActivityFeedScreen} />
-    <AppStackNav.Screen name="Backups" component={BackupsScreen} />
+    <AppStackNav.Screen
+      name="GenerateDetailsScreen"
+      component={sb(GenerateDetailsScreen)}
+      options={{
+        // Kill react-navigation's interactive swipe-back (the card-slide that peeks the
+        // screen below). The in-screen SwipeBackRing owns the back gesture now; fade the
+        // pop so goBack() never reveals the previous screen horizontally either.
+        gestureEnabled: false,
+        cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
+      }}
+    />
+    <AppStackNav.Screen name="PublishConfirmation" component={sb(PublishConfirmationScreen)} />
+    <AppStackNav.Screen name="OnboardConnectionScreen" component={sb(OnboardConnectionScreen)} />
+    <AppStackNav.Screen name="PartnerAccept" component={sb(PartnerAcceptScreen)} />
+    <AppStackNav.Screen name="PartnershipDetail" component={sb(PartnershipDetailScreen)} />
+    <AppStackNav.Screen name="BackfillOptimizer" component={sb(BackfillOptimizerScreen)} />
+    <AppStackNav.Screen name="ImportOverview" component={sb(ImportOverviewScreen)} />
+    <AppStackNav.Screen name="CSVColumnMapping" component={sb(CSVColumnMappingScreen)} />
+    <AppStackNav.Screen name="ActivityFeed" component={sb(ActivityFeedScreen)} />
+    <AppStackNav.Screen name="Backups" component={sb(BackupsScreen)} />
+    {/* NOT wrapped: the chat uses the left swipe for its thread list. */}
     <AppStackNav.Screen name="CampaignThreadScreen" component={CampaignThreadScreen} options={{ headerTitle: 'Campaign Thread', animationEnabled: false }} />
   </AppStackNav.Navigator>
 );
@@ -546,15 +634,18 @@ const AppNavigator = () => {
   const [lastOnboardingDebugInfo, setLastOnboardingDebugInfo] = useState('');
 
   // Dev tools to test onboarding flow
-  const [devForceOnboarding] = useState(false); // Set this to true only when testing onboarding - FTUX
+  // ── FTUX / session dev toggles ─────────────────────────────────────────────
+  // Master switch for the onboarding slide deck. FALSE = every user (new + returning)
+  // goes straight to login, no slides. Flip to TRUE when the onboarding deck is ready.
+  const [devShowOnboarding] = useState(false);
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({
-    PlusJakartaSans_400Regular,
-    PlusJakartaSans_500Medium,
-    PlusJakartaSans_600SemiBold,
-    PlusJakartaSans_700Bold,
-    PlusJakartaSans_800ExtraBold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
   });
 
   // Preload images
@@ -789,6 +880,7 @@ const AppNavigator = () => {
   }
   return (
     <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+      <SwipeBackProvider>
       <AuthContext.Provider value={authContext}>
         <OnboardingCheckContext.Provider value={onboardingCheckContextValue}>
         <Stack.Navigator
@@ -802,7 +894,7 @@ const AppNavigator = () => {
           }}
         >
           <Stack.Screen name="AuthStack">
-            {(props: any) => <AuthStack {...props} isFirstLaunch={isFirstLaunch ?? true} devForceOnboarding={devForceOnboarding} />}
+            {(props: any) => <AuthStack {...props} showOnboarding={devShowOnboarding} />}
           </Stack.Screen>
 
           <Stack.Screen name="AppStack">
@@ -817,6 +909,7 @@ const AppNavigator = () => {
         </Stack.Navigator>
         </OnboardingCheckContext.Provider>
       </AuthContext.Provider>
+      </SwipeBackProvider>
     </View>
   );
 };

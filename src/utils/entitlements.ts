@@ -120,11 +120,11 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
     maxConnections, 
     aiScanLimit, 
     isPaid,
-    inTrial,
+    inTrial: inTrial ?? false,
     trialEndsAt,
     trialDaysLeft,
     subscriptionStatus,
-    hasAccess,
+    hasAccess: hasAccess ?? false,
   };
 }
 

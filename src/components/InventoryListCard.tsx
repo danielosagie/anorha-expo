@@ -124,7 +124,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   };
 
   return (
-    <ShadowSurface shadow="sm" radius={16} style={styles.cardOuter} innerStyle={styles.cardSurface}>
+    <ShadowSurface shadow="sm" radius={20} style={styles.cardOuter} innerStyle={styles.cardSurface}>
       <TouchableOpacity
         style={[
           styles.cardContent,
@@ -168,10 +168,11 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
           ) : (
             <PlaceholderImage
               size={90}
-              borderRadius={8}
+              borderRadius={16}
               type="gradient"
               icon="cube"
               color={getRandomColor(id)}
+              style={{ width: '100%', height: '100%', borderRadius: 16 }}
             />
           )}
         </View>
@@ -278,7 +279,9 @@ const styles = StyleSheet.create({
   },
   cardSurface: {
     backgroundColor: 'rgba(228, 228, 228, 0.07)',
-    borderRadius: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#9999995f',
   },
   cardContent: {
     flexDirection: 'row',
@@ -289,13 +292,13 @@ const styles = StyleSheet.create({
     height: 120,
     backgroundColor: '#F5F5F5',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 16,
     alignItems: 'center',
     marginRight: 12,
-
+    overflow: 'hidden',
   },
   productImage: {
-    borderRadius: 12,
+    borderRadius: 16,
     width: "100%",
     height: "100%",
   },
@@ -334,7 +337,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
     backgroundColor: '#FAFAFA',
   },

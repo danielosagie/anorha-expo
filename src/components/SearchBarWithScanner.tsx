@@ -20,6 +20,8 @@ interface SearchBarWithScannerProps {
   onVoicePress?: () => void;
   scannerDisabled?: boolean;
   onScannerDisabledPress?: () => void;
+  /** Drop the built-in bottom margin (e.g. when inline on a row with other buttons). */
+  noBottomMargin?: boolean;
 }
 
 const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
@@ -32,11 +34,12 @@ const SearchBarWithScanner: React.FC<SearchBarWithScannerProps> = ({
   onVoicePress,
   scannerDisabled = false,
   onScannerDisabledPress,
+  noBottomMargin = false,
 }) => {
   const theme = useTheme();
 
   return (
-    <ShadowSurface shadow="xs" style={styles.searchBarWrapper} innerStyle={[styles.searchBar, { backgroundColor: "#FFF" }]}>
+    <ShadowSurface shadow="xs" style={[styles.searchBarWrapper, noBottomMargin && { marginBottom: 0 }]} innerStyle={[styles.searchBar, { backgroundColor: "#FFF" }]}>
       <Icon name="magnify" size={20} color="#999" style={styles.searchIcon} />
       <TextInput
         style={[styles.searchInput, { color: theme.colors.text }]}
@@ -78,9 +81,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
-    borderRadius: 8,
+    borderRadius: 24,
     borderColor: "rgba(102,102,102,0.26)",
     borderWidth: 1,
+    paddingVertical: 6,
     paddingHorizontal: 12,
     minHeight: 48,
   },

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
     View,
     Text,
@@ -16,7 +17,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { Partnership } from './PartnersScreen';
 
-const SSSYNC_API_BASE_URL = "https://api.sssync.app";
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 interface LinkedProduct {
     id: string; // This is the Link ID

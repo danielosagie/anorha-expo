@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 
 // Shared key so the in-progress import survives leaving the flow and can be
 // picked back up (status polling / progress banner) when the user returns.
@@ -14,12 +15,61 @@ import {
   ImportDraft,
   DraftDecision,
 } from '../types/importSession';
+import type { MappingSuggestion as BackendMappingSuggestion } from '../contracts';
 
-const SSSYNC_API_BASE_URL = (
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app'
-).replace(/\/+$/, '');
+const SSSYNC_API_BASE_URL = API_BASE_URL;
+
+/** Pull the v2 matching signals off a raw backend suggestion item so the
+ *  resolver classifier can route precisely (these were being dropped before).
+ *  Input is contract-typed: if the backend renames a signal, this stops compiling
+ *  instead of silently dropping it again. */
+function extractV2Signals(item: Partial<BackendMappingSuggestion> & Record<string, any>): Partial<MappingSuggestion> {
+  const out: Partial<MappingSuggestion> = {};
+  if (item.productShape) out.productShape = item.productShape;
+  if (item.requiresFamilyDecision === true) out.requiresFamilyDecision = true;
+  if (item.familyDecisionReason) out.familyDecisionReason = item.familyDecisionReason;
+  if (item.isDuplicateSuggestedCanonical === true || item.isDuplicatePlatformProduct === true) out.isDuplicate = true;
+  if (typeof item.duplicateCount === 'number') out.duplicateCount = item.duplicateCount;
+  if (Array.isArray(item.fieldConflicts) && item.fieldConflicts.length) {
+    out.fieldConflicts = item.fieldConflicts.map((c: any) => ({
+      field: c.field,
+      platformValue: c.platformValue ?? null,
+      canonicalValue: c.canonicalValue ?? null,
+      severity: c.severity,
+    }));
+  }
+  if (Array.isArray(item.candidateVariants) && item.candidateVariants.length) {
+    out.candidateVariants = item.candidateVariants.map((c: any) => ({
+      id: c.Id || c.id,
+      sku: c.Sku ?? c.sku ?? null,
+      title: c.Title ?? c.title ?? null,
+      price: c.Price ?? c.price ?? null,
+      imageUrl: c.ImageUrl ?? c.imageUrl ?? null,
+    }));
+  }
+  // Composition + lifecycle signals (bundle/kit, stale links, idempotency).
+  if (item.compositionType === 'bundle' || item.compositionType === 'kit') out.compositionType = item.compositionType;
+  if (Array.isArray(item.bundleParts) && item.bundleParts.length) {
+    out.bundleParts = item.bundleParts.map((p: any) => ({ sku: p.sku ?? null, title: p.title ?? null, quantity: p.quantity }));
+  }
+  if (Array.isArray(item.kitComponents) && item.kitComponents.length) {
+    out.kitComponents = item.kitComponents.map((c: any) => ({
+      id: c.id,
+      sku: c.sku ?? null,
+      title: c.title ?? null,
+      price: c.price ?? null,
+      imageUrl: c.imageUrl ?? null,
+    }));
+  }
+  if (item.isStaleLink === true) {
+    out.isStaleLink = true;
+    if (item.staleReason) out.staleReason = item.staleReason;
+  }
+  if (item.alreadyMapped === true) out.alreadyMapped = true;
+  if (item.priorResolution) out.priorResolution = item.priorResolution;
+  if (typeof item.sourceHash === 'string') out.sourceHash = item.sourceHash;
+  return out;
+}
 
 export interface UseImportSessionOptions {
   connectionId: string | undefined;
@@ -385,12 +435,11 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   }
                   // Don't drop the server's decision signals for known rows: a
                   // re-scan can newly flag a broken link or a value conflict.
+                  // extractV2Signals normalizes both naming conventions (the
+                  // resolver kit reads the v2 names); layer the server's draft
+                  // ids on top so the queue can still address the row.
+                  Object.assign(existing, extractV2Signals(item));
                   existing.suggestionId = item.suggestionId ?? existing.suggestionId;
-                  existing.sourceHash = item.sourceHash ?? existing.sourceHash;
-                  existing.fieldConflicts = item.fieldConflicts ?? existing.fieldConflicts;
-                  existing.isStaleLink = item.isStaleLink ?? existing.isStaleLink;
-                  existing.staleReason = item.staleReason ?? existing.staleReason;
-                  existing.compositionType = item.compositionType ?? existing.compositionType;
                   // A newly-surfaced conflict or broken link must re-open the row.
                   if ((item.fieldConflicts && item.fieldConflicts.length > 0) || item.isStaleLink) {
                     existing.resolved = false;
@@ -430,6 +479,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   isSelected: false,
                   matchType: (item.matchType as any) || 'NONE',
                   confidence: 0,
+                  ...extractV2Signals(item),
                 });
               } else {
                 let action: MappingSuggestion['action'] = 'UNMATCHED';
@@ -461,24 +511,16 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                   isSelected,
                   matchType: item.matchType,
                   confidence: typeof item.confidence === 'number' ? item.confidence : undefined,
-                  // ── Carry through the server's decision signals (was dropped) ──
+                  // Normalize the v2 resolver-kit signals (classifyMatch reads
+                  // these) and carry through the server's draft-queue fields that
+                  // extractV2Signals doesn't cover.
+                  ...extractV2Signals(item),
                   suggestionId: item.suggestionId,
-                  sourceHash: item.sourceHash,
-                  productShape: item.productShape,
-                  compositionType: item.compositionType,
-                  bundleParts: item.bundleParts,
-                  kitComponents: item.kitComponents,
-                  candidateVariants: item.candidateVariants,
-                  familyDecisionReason: item.familyDecisionReason,
                   familyMemberCount: item.familyMemberCount,
                   familyResolvedCount: item.familyResolvedCount,
                   familyUnmatchedCount: item.familyUnmatchedCount,
                   isDuplicateSuggestedCanonical: item.isDuplicateSuggestedCanonical,
                   duplicateSuggestedCanonicalSuggestionIds: item.duplicateSuggestedCanonicalSuggestionIds,
-                  fieldConflicts: item.fieldConflicts,
-                  isStaleLink: item.isStaleLink,
-                  staleReason: item.staleReason,
-                  alreadyMapped: item.alreadyMapped,
                 });
               }
             }

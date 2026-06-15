@@ -21,6 +21,8 @@
     "gpu"
   ],
   "repository": "https://github.com/MatthewSRC/native-springs-shaders",
+  "author": "MatthewSRC",
+  "homepage": "https://github.com/MatthewSRC/native-springs-shaders",
   "license": "MIT",
   "dependencies": {},
   "peerDependencies": {

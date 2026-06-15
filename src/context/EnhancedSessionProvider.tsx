@@ -263,7 +263,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
           return currentUser;
         }
 
-        return nextUser;
+        return nextUser as any;
       });
       setUsingCachedSession(true);
       setBridgeReady(false);

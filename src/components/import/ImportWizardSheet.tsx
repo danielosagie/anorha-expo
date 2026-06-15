@@ -18,12 +18,8 @@ import { Sparkles, Link, Unlink, Hammer } from 'lucide-react-native';
 
 import { useTheme } from '../../context/ThemeContext';
 import Button from '../Button';
-import ShopifySvg from '../../assets/shopify.svg';
-import SquareSvg from '../../assets/square.svg';
-import CloverSvg from '../../assets/clover.svg';
-import EbaySvg from '../../assets/ebay.svg';
-import FacebookSvg from '../../assets/facebook.svg';
-import AmazonSvg from '../../assets/amazon.svg';
+import PlatformLogo from '../PlatformLogo';
+import { getPlatformColor } from '../../config/platforms';
 import type { UseImportSessionResult } from '../../hooks/useImportSession';
 import type { ImportSessionCounts } from '../../types/importSession';
 
@@ -39,16 +35,6 @@ const WIZARD_STEP_CONFIG: Record<number, { title: string; description?: string }
   6: { title: 'Review & Complete', description: 'Confirm mappings and start the import sync.' },
 };
 
-function getPlatformColor(platformType: string): string {
-  const t = (platformType || '').toLowerCase();
-  if (t.includes('shopify')) return '#96C93F';
-  if (t.includes('square')) return '#3E4348';
-  if (t.includes('clover')) return '#28A745';
-  if (t.includes('amazon')) return '#FF9900';
-  if (t.includes('ebay')) return '#0064D2';
-  if (t.includes('facebook')) return '#1877F2';
-  return '#6B7280';
-}
 
 export interface ImportWizardSheetProps {
   visible: boolean;
@@ -157,13 +143,7 @@ export function ImportWizardSheet({
                     >
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 10, height: 52, gap: 2 }}>
                         <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 1.5, borderColor: '#E5E7EB' }}>
-                          {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
-                          {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color="#9CA3AF" />}
+                          <PlatformLogo type={platformName ?? ''} size={32} fallbackIcon="store" />
                         </View>
                         <Icon name="arrow-right" size={20} color={theme.colors.primary} />
                         <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
@@ -220,13 +200,7 @@ export function ImportWizardSheet({
                                   ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } }, android: { elevation: 2 } }),
                                 }}
                               >
-                                {pt.includes('shopify') && <ShopifySvg width={32} height={32} />}
-                                {pt.includes('square') && <SquareSvg width={32} height={32} />}
-                                {pt.includes('clover') && <CloverSvg width={32} height={32} />}
-                                {pt.includes('ebay') && <EbaySvg width={32} height={32} />}
-                                {pt.includes('facebook') && <FacebookSvg width={32} height={32} />}
-                                {pt.includes('amazon') && <AmazonSvg width={32} height={32} />}
-                                {!pt.match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color={getPlatformColor(pt)} />}
+                                <PlatformLogo type={pt} size={32} fallbackIcon="store" />
                               </View>
                             );
                           })}
@@ -256,13 +230,7 @@ export function ImportWizardSheet({
                         </View>
                         <Icon name="arrow-right" size={20} color={theme.colors.primary} />
                         <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 3, borderWidth: 2, borderColor: theme.colors.primary }}>
-                          {platformName?.toLowerCase().includes('shopify') && <ShopifySvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('square') && <SquareSvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('clover') && <CloverSvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('ebay') && <EbaySvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('facebook') && <FacebookSvg width={32} height={32} />}
-                          {platformName?.toLowerCase().includes('amazon') && <AmazonSvg width={32} height={32} />}
-                          {!platformName?.toLowerCase().match(/shopify|square|clover|ebay|facebook|amazon/) && <Icon name="store" size={32} color={theme.colors.primary} />}
+                          <PlatformLogo type={platformName ?? ''} size={32} fallbackIcon="store" />
                         </View>
                       </View>
                       <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, textAlign: 'center' }}>Push to {platformName || 'Platform'}</Text>

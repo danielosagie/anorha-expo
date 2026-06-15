@@ -1,4 +1,5 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
+import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -10,12 +11,7 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
 import OrgSwitcher from '../components/OrgSwitcher';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from '../components/PlatformLogo';
 import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -46,6 +42,7 @@ import LocationsManagerV2 from '../components/LocationsManagerV2';
 import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import { PLATFORM_CONFIG, PlatformKey } from '../config/platforms';
 import BaseModal from '../components/BaseModal';
+import ConnectDisclosureModal from '../components/ConnectDisclosureModal';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
@@ -58,10 +55,7 @@ const TAB_BAR_BOTTOM_OFFSET = 18;
 
 
 
-const SSSYNC_API_BASE_URL =
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app';
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 // --- Constants for Feature Flags / Testing ---
 const USE_EXTERNAL_BROWSER_FOR_FACEBOOK = true; // Set to true to use Chrome/Safari instead of in-app session
 // --- END Re-inlined Constants ---
@@ -75,19 +69,7 @@ type ProfileScreenRouteParams = {
 type ProfileScreenNavigationProp = StackNavigationProp<AppStackParamList>;
 
 // Define available platforms centrally (or import if moved)
-const AVAILABLE_PLATFORMS = [
-  { key: 'shopify', name: 'Shopify', icon: 'shopping' },
-  { key: 'amazon', name: 'Amazon', icon: 'package' },
-  { key: 'clover', name: 'Clover', icon: 'leaf' },
-  { key: 'square', name: 'Square', icon: 'square-outline' },
-  { key: 'ebay', name: 'eBay', icon: 'shopping' },
-  { key: 'facebook', name: 'Facebook', icon: 'facebook' },
-  { key: 'depop', name: 'Depop', icon: 'alpha-d' },
-  { key: 'whatnot', name: 'Whatnot', icon: 'chat-processing' },
-  { key: 'etsy', name: 'Etsy', icon: 'alpha-e' },
-];
-
-type PlatformId = typeof AVAILABLE_PLATFORMS[number]['key'];
+type PlatformId = PlatformKey | 'etsy';
 
 // --- Backend Connection Type (ASSUMPTION - Adjust as needed) ---
 interface PlatformConnection {
@@ -136,18 +118,6 @@ const SQUARE_SCOPES = [
 //   // Convert byte array to hex string
 //   return Array.from(byteArray, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
 // };
-
-const getPlatformIcon = (platformId: PlatformId): React.ComponentType<any> | null => {
-  const iconMap: { [key: string]: React.ComponentType<any> } = {
-    shopify: ShopifySvg,
-    amazon: AmazonSvg,
-    facebook: FacebookSvg,
-    ebay: EbaySvg,
-    clover: CloverSvg,
-    square: SquareSvg,
-  };
-  return iconMap[platformId] || null;
-};
 
 // Connection status types
 const CONNECTION_STATUS = {
@@ -479,6 +449,11 @@ const ProfileScreen = () => {
   const [csvConnectionName, setCsvConnectionName] = useState('');
   const [isCsvPicking, setIsCsvPicking] = useState(false);
 
+  // Disclosure modal (Whatnot, Depop, and future platforms)
+  const [disclosureTarget, setDisclosureTarget] = useState<{ platform: string } | null>(null);
+  const [disclosureBusy, setDisclosureBusy] = useState(false);
+  const [disclosureError, setDisclosureError] = useState<string | null>(null);
+
 
 
 
@@ -635,8 +610,13 @@ const ProfileScreen = () => {
       const data = await response.json();
       let list = Array.isArray(data) ? data : [];
 
-      // If not admin, restrict to assigned pools
-      if (currentOrg.role !== 'org:admin' && Array.isArray(currentOrg.assignedPoolIds)) {
+      // Non-admins with EXPLICIT pool assignments only see those. An empty list
+      // means unrestricted — filtering on it hid every pool (even self-created ones).
+      if (
+        currentOrg.role !== 'org:admin' &&
+        Array.isArray(currentOrg.assignedPoolIds) &&
+        currentOrg.assignedPoolIds.length > 0
+      ) {
         const allowed = new Set(currentOrg.assignedPoolIds);
         list = list.filter((p) => allowed.has(p.id));
       }
@@ -701,6 +681,9 @@ const ProfileScreen = () => {
           refreshConnections(); // Refresh connections on success
         }
       })();
+    } else if (platform === 'depop' || platform === 'whatnot') {
+      setDisclosureError(null);
+      setDisclosureTarget({ platform });
     } else {
       const label = PLATFORM_CONFIG[platform as PlatformKey]?.label || platform;
       Alert.alert(`${label} coming soon`, `Connecting ${label} isn't available yet. We'll let you know when it's ready.`);
@@ -1014,7 +997,7 @@ const ProfileScreen = () => {
     // This URL still initiates the backend picker, which will eventually lead the user
     // to their Shopify dashboard after login/selection if needed.
     // The user just needs to copy the URL *from* that dashboard.
-    const backendInitiationUrlBase = 'https://api.sssync.app/api/auth/shopify/initiate-store-picker';
+    const backendInitiationUrlBase = `${API_BASE_URL}/api/auth/shopify/initiate-store-picker`;
     // Define and encode the final redirect URI needed by the backend
     const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
@@ -1054,7 +1037,7 @@ const ProfileScreen = () => {
     const userId = user.id;
 
     // Backend endpoint for direct login/authorization with shop name
-    const directLoginUrlBase = 'https://api.sssync.app/api/auth/shopify/login';
+    const directLoginUrlBase = `${API_BASE_URL}/api/auth/shopify/login`;
     const finalRedirectUri = 'anorhaapp://auth-callback';
     const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
 
@@ -1194,6 +1177,68 @@ const ProfileScreen = () => {
     })();
   };
   // --- END Function to start platform scan ---
+
+  // --- Disclosure modal continue handler (Whatnot OAuth + Depop API key) ---
+  const handleDisclosureContinue = useCallback(async (apiKey?: string) => {
+    if (!disclosureTarget) return;
+    const { platform } = disclosureTarget;
+    setDisclosureError(null);
+
+    const { data: { user: sbUser } } = await supabase.auth.getUser();
+    if (!sbUser) {
+      setDisclosureError('Not signed in. Please restart the app.');
+      return;
+    }
+
+    if (platform === 'depop') {
+      if (!apiKey) {
+        setDisclosureError('API key is required.');
+        return;
+      }
+      setDisclosureBusy(true);
+      try {
+        const token = await ensureSupabaseJwt();
+        const res = await fetch(`${SSSYNC_API_BASE_URL}/api/auth/depop/connect`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            apiKey,
+            ...(currentOrg?.id ? { orgId: currentOrg.id } : {}),
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.message ?? `Connect failed (${res.status})`);
+        }
+        setDisclosureTarget(null);
+        refreshConnections();
+      } catch (e: any) {
+        setDisclosureError(e?.message ?? 'Connection failed. Check your API key and try again.');
+      } finally {
+        setDisclosureBusy(false);
+      }
+      return;
+    }
+
+    // OAuth platforms (Whatnot, and future additions)
+    const finalRedirectUri = `anorhaapp://auth-callback?platform=${platform}`;
+    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
+    const url = `${SSSYNC_API_BASE_URL}/api/auth/${platform}/login?userId=${sbUser.id}&finalRedirectUri=${encodeURIComponent(finalRedirectUri)}${orgIdParam}`;
+
+    setDisclosureTarget(null);
+
+    const result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri);
+    const parsed = parseOAuthResult(result, platform);
+    if (!parsed.success && parsed.errorMessage) {
+      showAlert({ title: 'Connection Failed', message: parsed.errorMessage, type: 'error' });
+    } else if (parsed.success) {
+      refreshConnections();
+    }
+  }, [disclosureTarget, currentOrg?.id, refreshConnections, showAlert]);
+  // --- END Disclosure modal handler ---
 
   // --- NEW: Clover Connection Logic ---
   const handleCloverConnect = async () => {
@@ -1893,7 +1938,7 @@ const ProfileScreen = () => {
                 } else {
                   return (
                     <ConnectedPlatformList
-                      connections={filteredConnections}
+                      connections={filteredConnections as any}
                       isEditMode={isEditMode}
                       onStartScan={startPlatformScan}
                       onReview={handleReviewAndSync}
@@ -2065,6 +2110,16 @@ const ProfileScreen = () => {
         </View>
       </BaseModal>
 
+      {/* --- Disclosure modal for Whatnot, Depop, etc. --- */}
+      <ConnectDisclosureModal
+        visible={!!disclosureTarget}
+        platform={disclosureTarget?.platform ?? ''}
+        busy={disclosureBusy}
+        error={disclosureError}
+        onContinue={handleDisclosureContinue}
+        onCancel={() => { setDisclosureTarget(null); setDisclosureError(null); }}
+      />
+
       {/* --- Platform Picker Bottom Bar Overlay (no modal) --- */}
       {isAddConnectionModalVisible && (
         <View style={styles.overlayContainer}>
@@ -2111,7 +2166,7 @@ const ProfileScreen = () => {
             {/* Header with Icon */}
             <View style={styles.shopifyModalHeader}>
               <View style={styles.shopifyIconContainer}>
-                <ShopifySvg width={40} height={40} />
+                <PlatformLogo type="shopify" size={40} />
               </View>
               <Text style={styles.shopifyModalTitle}>Connect Shopify</Text>
               <TouchableOpacity

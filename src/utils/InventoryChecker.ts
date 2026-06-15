@@ -61,7 +61,7 @@ export async function checkInventoryByBarcode(barcode: string): Promise<Inventor
     const matches: InventoryMatch[] = variants?.map(variant => ({
       productId: variant.ProductId,
       variantId: variant.Id,
-      title: variant.Title || variant.Products.Title,
+      title: variant.Title || (variant.Products as any)?.Title,
       sku: variant.Sku,
       barcode: variant.Barcode,
       price: variant.Price || 0,
@@ -140,7 +140,7 @@ export async function checkInventoryBySku(sku: string): Promise<InventoryCheckRe
     const matches: InventoryMatch[] = variants?.map(variant => ({
       productId: variant.ProductId,
       variantId: variant.Id,
-      title: variant.Title || variant.Products.Title,
+      title: variant.Title || (variant.Products as any)?.Title,
       sku: variant.Sku,
       barcode: variant.Barcode,
       price: variant.Price || 0,
@@ -208,7 +208,7 @@ export async function searchInventoryByTitle(title: string): Promise<InventoryCh
     const matches: InventoryMatch[] = variants?.map(variant => ({
       productId: variant.ProductId,
       variantId: variant.Id,
-      title: variant.Title || variant.Products.Title,
+      title: variant.Title || (variant.Products as any)?.Title,
       sku: variant.Sku,
       barcode: variant.Barcode,
       price: variant.Price || 0,
@@ -275,7 +275,7 @@ export async function getRecentProducts(limit: number = 10): Promise<InventoryMa
     return variants?.map(variant => ({
       productId: variant.ProductId,
       variantId: variant.Id,
-      title: variant.Title || variant.Products.Title,
+      title: variant.Title || (variant.Products as any)?.Title,
       sku: variant.Sku,
       barcode: variant.Barcode,
       price: variant.Price || 0,

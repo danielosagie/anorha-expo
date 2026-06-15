@@ -14,24 +14,24 @@ import {
   Alert,
   Animated,
   AppState,
+  StatusBar,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { useNavigation } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useTheme } from '../context/ThemeContext';
+import { ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@clerk/clerk-expo';
-import Card from '../components/Card';
+import PageHeader from '../components/ui/PageHeader';
 import TierSelectorModal from '../components/TierSelectorModal';
+import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 
-const API_BASE_RAW = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
   ? API_BASE_RAW.replace(/\/$/, '')
   : `${API_BASE_RAW.replace(/\/$/, '')}/api`;
 
 const ANORHA_GREEN = BRAND_PRIMARY;
-const CREAM_BG = '#FEF4DD'; // Deprecated, using #ffffff natively
 const WHITE_BG = '#FFFFFF';
 
 function safeNumber(value: any, fallback = 0): number {
@@ -93,7 +93,6 @@ const HealthBar = ({ used, limit, fillColor }: { used: number, limit: number, fi
 };
 
 export default function BillingScreen() {
-  const theme = useTheme();
   const navigation = useNavigation();
   const { getToken } = useAuth();
   const insets = useSafeAreaInsets();
@@ -321,22 +320,21 @@ export default function BillingScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Icon name="chevron-left" size={32} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: theme.colors.text }]}>My Subscription</Text>
-      </View>
-
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <PageHeader title="Billing" onBack={() => navigation.goBack()} />
 
         {/* Subscription Info Card */}
         <View style={styles.cardGroup}>
           <View style={styles.listItem}>
             <View>
               <Text style={styles.listLabel}>Current Plan</Text>
-              <Text style={[styles.listValue, { color: theme.colors.text }]}>{planTitle.split('·')[0].trim() || 'Free Trial'}</Text>
+              <Text style={styles.listValue}>{planTitle.split('·')[0].trim() || 'Free Trial'}</Text>
               <Text style={styles.listSubValue}>{subscriptionStatus === 'active' ? 'Subscribed' : 'Inactive'}</Text>
             </View>
           </View>
@@ -344,7 +342,7 @@ export default function BillingScreen() {
           <View style={styles.listItem}>
             <View>
               <Text style={styles.listLabel}>Expiration Date</Text>
-              <Text style={[styles.listValue, { color: theme.colors.text }]}>
+              <Text style={styles.listValue}>
                 {summary?.subscription?.CurrentPeriodEnd
                   ? new Date(summary.subscription.CurrentPeriodEnd).toLocaleDateString('en-US', {
                     month: 'long',
@@ -358,13 +356,13 @@ export default function BillingScreen() {
           <View style={styles.separator} />
           {hasActiveSubscription ? (
             <TouchableOpacity style={styles.listItemAction} onPress={handleManageSubscription}>
-              <Text style={[styles.listValue, { color: theme.colors.text }]}>Manage Subscription</Text>
-              <Icon name="chevron-right" size={24} color="#C7C7CC" />
+              <Text style={styles.listValue}>Manage Subscription</Text>
+              <ChevronRight size={20} color="#D4D4D8" />
             </TouchableOpacity>
           ) : (
             <TouchableOpacity style={styles.listItemAction} onPress={() => setShowTierSelector(true)}>
-              <Text style={[styles.listValue, { color: theme.colors.text }]}>Upgrade</Text>
-              <Icon name="chevron-right" size={24} color="#C7C7CC" />
+              <Text style={styles.listValue}>Upgrade</Text>
+              <ChevronRight size={20} color="#D4D4D8" />
             </TouchableOpacity>
           )}
         </View>
@@ -375,22 +373,22 @@ export default function BillingScreen() {
             <View style={styles.cardGroup}>
               <View style={styles.usageItem}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={[styles.listValue, { color: theme.colors.text, fontWeight: '600' }]}>AI Credits</Text>
+                  <Text style={styles.listValue}>AI Credits</Text>
                   <Text style={styles.listSubValue}>
                     {formatCurrency(aiUsedDollars)} of {formatCurrency(aiAllowanceDollars)}
                   </Text>
                 </View>
                 <HealthBar used={aiUsedCents} limit={aiAllowanceCents} fillColor={ANORHA_GREEN} />
-                {aiOverageDollars > 0 && <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontWeight: '500' }}>+ {formatCurrency(aiOverageDollars)} overage</Text>}
+                {aiOverageDollars > 0 && <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {formatCurrency(aiOverageDollars)} overage</Text>}
               </View>
               <View style={styles.separator} />
               <View style={styles.usageItem}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={[styles.listValue, { color: theme.colors.text, fontWeight: '600' }]}>Team Members</Text>
+                  <Text style={styles.listValue}>Team Members</Text>
                   <Text style={styles.listSubValue}>{teamMembersCount} / {teamMembersIncluded} spots</Text>
                 </View>
                 <HealthBar used={teamMembersCount} limit={teamMembersIncluded} fillColor={'#3B82F6'} />
-                {teamMembersExtra > 0 && <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 8, fontWeight: '500' }}>+ {teamMembersExtra} extra member(s) ({formatCurrency(teamMembersCost)})</Text>}
+                {teamMembersExtra > 0 && <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {teamMembersExtra} extra member(s) ({formatCurrency(teamMembersCost)})</Text>}
               </View>
             </View>
 
@@ -404,7 +402,7 @@ export default function BillingScreen() {
                       <View style={styles.listItem}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                           <Text style={styles.listValue}>{entry.displayName}</Text>
-                          <Text style={[styles.listValue, { fontWeight: '600' }]}>
+                          <Text style={styles.listValue}>
                             {formatCurrency(entry.totalCostCents / 100)}
                           </Text>
                         </View>
@@ -441,10 +439,10 @@ export default function BillingScreen() {
                     <Text style={styles.listValue}>{formatCurrency(aiOverageDollars)}</Text>
                   </View>
                 )}
-                <View style={{ height: 1, backgroundColor: '#E5E5EA', marginVertical: 8 }} />
+                <View style={{ height: 1, backgroundColor: '#F1F1EE', marginVertical: 8 }} />
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={[styles.listValue, { fontWeight: '700' }]}>Estimated Total</Text>
-                  <Text style={[styles.listValue, { fontWeight: '700' }]}>{formatCurrency(totalCostEstimate)}</Text>
+                  <Text style={styles.listValueBold}>Estimated Total</Text>
+                  <Text style={styles.listValueBold}>{formatCurrency(totalCostEstimate)}</Text>
                 </View>
               </View>
             </View>
@@ -465,7 +463,7 @@ export default function BillingScreen() {
                 <View style={styles.listItem}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={styles.listValue}>Amount Due</Text>
-                    <Text style={[styles.listValue, { fontWeight: '600' }]}>{formatCurrency(amt / 100)}</Text>
+                    <Text style={styles.listValue}>{formatCurrency(amt / 100)}</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={styles.listSubValue}>Next Payment</Text>
@@ -494,16 +492,16 @@ export default function BillingScreen() {
                       {idx > 0 && <View style={styles.separator} />}
                       <TouchableOpacity style={styles.listItemAction} onPress={() => openInvoiceUrl(inv)}>
                         <View>
-                          <Text style={[styles.listValue, { color: theme.colors.text }]}>
+                          <Text style={styles.listValue}>
                             {d.toLocaleDateString()}
                           </Text>
                           <Text style={styles.listSubValue}>{(inv.status || 'paid').toUpperCase()}</Text>
                         </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Text style={[styles.listValue, { color: theme.colors.text, marginRight: 8, fontWeight: '500' }]}>
+                          <Text style={[styles.listValue, { marginRight: 8 }]}>
                             {formatCurrency(amt / 100)}
                           </Text>
-                          <Icon name="chevron-right" size={24} color="#C7C7CC" />
+                          <ChevronRight size={20} color="#D4D4D8" />
                         </View>
                       </TouchableOpacity>
                     </React.Fragment>
@@ -520,11 +518,11 @@ export default function BillingScreen() {
             style={styles.listItemAction}
             onPress={() => (navigation as any).navigate('BillingSupport', { context: supportContext })}
           >
-            <View>
-              <Text style={[styles.listValue, { color: theme.colors.text }]}>Report Subscription Issue</Text>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.listValue}>Report Subscription Issue</Text>
               <Text style={[styles.listSubValue, { marginTop: 4 }]}>Send details and an optional screenshot to our support team.</Text>
             </View>
-            <Icon name="chevron-right" size={24} color="#C7C7CC" />
+            <ChevronRight size={20} color="#D4D4D8" />
           </TouchableOpacity>
         </View>
 
@@ -544,69 +542,67 @@ export default function BillingScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F7' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 12,
-  },
-  backBtn: { padding: 4, marginRight: 8 },
-  headerTitle: { fontSize: 18, fontWeight: '600', marginLeft: -8 },
+  container: { flex: 1, backgroundColor: '#F6F7F4' },
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: 32 },
   cardGroup: {
-    backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#E5E5EA',
+    backgroundColor: WHITE_BG,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
     marginBottom: 24,
   },
   listItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
   },
   listItemAction: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   usageItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 14,
   },
   listLabel: {
     fontSize: 13,
-    color: '#8E8E93',
-    fontWeight: '600',
+    color: '#71717A',
+    fontFamily: 'Inter_400Regular',
     marginBottom: 4,
   },
   listValue: {
-    fontSize: 17,
+    fontSize: 16,
+    color: '#18181B',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  listValueBold: {
+    fontSize: 16,
+    color: '#18181B',
+    fontFamily: 'Inter_700Bold',
   },
   listSubValue: {
-    fontSize: 14,
-    color: '#8E8E93',
+    fontSize: 13,
+    color: '#71717A',
+    fontFamily: 'Inter_400Regular',
     marginTop: 2,
   },
   separator: {
     height: 1,
-    backgroundColor: '#E5E5EA',
-    marginLeft: 16,
+    backgroundColor: '#F1F1EE',
   },
   sectionHeader: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-    paddingHorizontal: 16,
-    marginBottom: 8,
+    fontSize: 13,
+    color: '#71717A',
+    fontFamily: 'Inter_600SemiBold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    marginLeft: 4,
   },
   progressTrack: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: '#F1F1EE',
     overflow: 'hidden',
   },
   progressFill: {

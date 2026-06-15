@@ -3,11 +3,8 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, PackagePlus } from 'lucide-react-native';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from '../components/PlatformLogo';
+import { normalizeDisplayName } from '../config/platforms';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 
@@ -225,14 +222,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 };
 
 function platformLabel(key: string): string {
-  switch (key) {
-    case 'ebay': return 'eBay';
-    case 'clover': return 'Clover';
-    case 'shopify': return 'Shopify';
-    case 'amazon': return 'Amazon';
-    case 'square': return 'Square';
-    default: return key.charAt(0).toUpperCase() + key.slice(1);
-  }
+  return normalizeDisplayName(key);
 }
 
 function platformIconName(key: string): string {
@@ -248,15 +238,7 @@ function platformIconName(key: string): string {
 }
 
 function renderPlatformSvg(key: string, size: number = 16) {
-  const map: Record<string, React.FC<any>> = {
-    ebay: EbaySvg as any,
-    clover: CloverSvg as any,
-    shopify: ShopifySvg as any,
-    amazon: AmazonSvg as any,
-    square: SquareSvg as any,
-  };
-  const Svg = map[key];
-  return Svg ? <Svg width={size} height={size} /> : <Icon name={platformIconName(key)} size={size} color={'#111'} />;
+  return <PlatformLogo type={key} size={size} fallbackIcon={platformIconName(key)} />;
 }
 
 const styles = StyleSheet.create({

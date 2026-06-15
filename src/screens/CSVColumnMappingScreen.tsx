@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
@@ -83,7 +84,7 @@ export function CSVColumnMappingScreen() {
                     return;
                 }
 
-                const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/api/products/csv-column-mapping`, {
+                const response = await fetch(`${API_BASE_URL}/api/products/csv-column-mapping`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -161,17 +162,20 @@ export function CSVColumnMappingScreen() {
                 return transformed;
             });
 
-            // Create persistent CSV connection record in UserPlatforms
+            // Create a persistent CSV pseudo-connection in PlatformConnections.
+            // ('UserPlatforms' never existed — this insert always failed and CSV
+            // connections were silently never saved; the fallback below masked it.)
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Not authenticated');
 
             const { data: newConnection, error: insertError } = await supabase
-                .from('UserPlatforms')
+                .from('PlatformConnections')
                 .insert({
                     UserId: user.id,
                     OrgId: currentOrg?.id, // Add OrgId from context
                     PlatformType: 'csv',
                     DisplayName: connectionName,
+                    Credentials: {}, // NOT NULL column; CSV pseudo-connections have no creds
                     Status: 'active',
                     IsEnabled: true,
                 })

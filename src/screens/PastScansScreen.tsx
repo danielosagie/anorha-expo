@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
-import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { ChevronLeft } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Card from '../components/Card';
 import Button from '../components/Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
-import BackButton from '../components/BackButton';
+import { API_BASE_URL } from '../config/env';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { JobResponse } from './MatchSelectionScreen';
+import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 
 // --- Interfaces for Data Types ---
 
@@ -75,9 +77,19 @@ interface DraftScan {
 
 type PastScansScreenNavigationProp = StackNavigationProp<AppStackParamList, 'PastScans'>;
 
+// Job status → chat-palette dot + label
+const statusMeta = (status: string): { label: string; color: string } => {
+  if (status === 'completed') return { label: 'Completed', color: CHAT_COLORS.success };
+  if (status === 'failed' || status === 'cancelled') {
+    return { label: status === 'failed' ? 'Failed' : 'Cancelled', color: CHAT_COLORS.error };
+  }
+  return { label: status === 'queued' ? 'Queued' : 'Processing', color: CHAT_COLORS.warning };
+};
+
 const PastScansScreen = () => {
-  const theme = useTheme();
   const navigation = useNavigation<PastScansScreenNavigationProp>();
+  const insets = useSafeAreaInsets();
+  const [headerH, setHeaderH] = useState(140);
 
   const [activeTab, setActiveTab] = useState<'drafts' | 'matches' | 'listings'>('listings');
   const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
@@ -252,7 +264,7 @@ const PastScansScreen = () => {
       setError(null);
       const token = await ensureSupabaseJwt();
       if (!token) throw new Error('Not authenticated');
-      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = API_BASE_URL;
       const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -295,7 +307,7 @@ const PastScansScreen = () => {
   }, [activeTab, fetchMatchJobs, fetchPastGenerations, fetchDraftScans]);
 
   const handleLoadMatchJob = (job: MatchJob) => {
-    // Always navigate to selection; the screen will poll status and hydrate when ready
+    // Legacy surface: only unfinished/historical match jobs still open the selection screen.
     navigation.navigate('MatchSelectionScreen', {
       response: { jobId: job.id }
     });
@@ -328,229 +340,113 @@ const PastScansScreen = () => {
     }
   };
 
-  const renderMatchJobItem = ({ item }: { item: MatchJob }) => (
-    <Card style={styles.scanCard}>
-      <TouchableOpacity
-        style={styles.scanItem}
-        onPress={() => handleLoadMatchJob(item)}
-      >
-        <View style={styles.thumbRow}>
-          {(() => {
-            const results = (item as any)?.results || [];
-            // Robust image finding logic
-            const images = results
-              .map((r: any) => {
-                // Try multiple paths for the image
-                return r?.serpApiData?.[0]?.image ||
-                  r?.serpApiData?.[0]?.thumbnail ||
-                  r?.images?.[0]?.url ||
-                  r?.sourceImageUrl ||
-                  r?.coverImage ||
-                  '';
-              })
-              .filter((uri: string) => !!uri);
-
-            const firstImage = images[0];
-            const itemCount = results.length;
-
-            if (!firstImage) {
-              return (
-                <View style={[styles.thumb, { justifyContent: 'center', alignItems: 'center' }]}>
-                  <Icon name="image-off" size={24} color="#94a3b8" />
-                </View>
-              );
-            }
-
-            return (
-              <View style={{ width: 80, height: 80, marginRight: 12 }}>
-                <Image
-                  source={{ uri: firstImage }}
-                  style={{
-                    width: 80,
-                    height: 80,
-                    borderRadius: 10,
-                    backgroundColor: '#f1f5f9',
-                  }}
-                />
-                {itemCount > 1 && (
-                  <View style={{
-                    position: 'absolute',
-                    bottom: -4,
-                    right: -4,
-                    backgroundColor: '#1e293b',
-                    borderRadius: 12,
-                    paddingHorizontal: 8,
-                    paddingVertical: 3,
-                    borderWidth: 2,
-                    borderColor: '#fff',
-                  }}>
-                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>
-                      {itemCount} items
-                    </Text>
-                  </View>
-                )}
-              </View>
-            );
-          })()}
+  // Shared row chrome: thumb + count badge
+  const renderThumb = (uri: string | undefined, itemCount: number, fallbackIcon: string) => (
+    <View style={styles.thumbWrap}>
+      {uri ? (
+        <Image source={{ uri }} style={styles.thumb} />
+      ) : (
+        <View style={[styles.thumb, styles.thumbEmpty]}>
+          <Icon name={fallbackIcon} size={22} color={CHAT_COLORS.faint} />
         </View>
-        <View style={styles.scanInfo}>
+      )}
+      {itemCount > 1 ? (
+        <View style={styles.thumbBadge}>
+          <Text style={styles.thumbBadgeText}>{itemCount}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
 
-          <Text style={styles.scanTitle}>Match Job</Text>
-          <Text style={styles.scanDate}>
-            {new Date(item.created_at).toLocaleString()}
-          </Text>
-          <View style={styles.scanStatus}>
-            <Icon
-              name={item.status === 'completed' ? 'check-circle' : 'cogs'}
-              size={16}
-              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary}
-            />
-            <Text style={[
-              styles.statusText,
-              { color: item.status === 'completed' ? theme.colors.success : theme.colors.primary }
-            ]}>
-              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+  const renderMatchJobItem = ({ item }: { item: MatchJob }) => {
+    const results = (item as any)?.results || [];
+    const images = results
+      .map((r: any) => (
+        r?.serpApiData?.[0]?.image ||
+        r?.serpApiData?.[0]?.thumbnail ||
+        r?.images?.[0]?.url ||
+        r?.sourceImageUrl ||
+        r?.coverImage ||
+        ''
+      ))
+      .filter((uri: string) => !!uri);
+    const meta = statusMeta(item.status);
+    return (
+      <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => handleLoadMatchJob(item)}>
+        {renderThumb(images[0], results.length, 'image-off')}
+        <View style={styles.rowInfo}>
+          <Text style={styles.rowTitle} numberOfLines={1}>Match job</Text>
+          <Text style={styles.rowMeta} numberOfLines={1}>{new Date(item.created_at).toLocaleString()}</Text>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, { backgroundColor: meta.color }]} />
+            <Text style={[styles.statusText, { color: meta.color === CHAT_COLORS.success ? CHAT_COLORS.brandDeep : meta.color }]}>
+              {meta.label}
             </Text>
           </View>
         </View>
-        <Icon name="chevron-right" size={24} color={item.status === 'completed' ? theme.colors.textSecondary : '#ccc'} />
+        <Icon name="chevron-right" size={22} color={CHAT_COLORS.faint} />
       </TouchableOpacity>
-    </Card>
-  );
+    );
+  };
 
-  const renderScanItem = ({ item }: { item: GenerationJob }) => (
-    <Card style={styles.scanCard}>
-      <TouchableOpacity
-        style={styles.scanItem}
-        onPress={() => handleLoadGeneration(item)}
-      >
-        <View style={styles.scanDetails}>
-          {(() => {
-            const results = item.results || [];
-            // Robust image finding logic
-            const images = results
-              .map((r: any) => {
-                return r?.sourceImageUrl ||
-                  r?.images?.[0] || // If array of strings
-                  r?.images?.[0]?.url || // If array of objects
-                  r?.platforms?.shopify?.images?.[0] || // Try platform specific
-                  '';
-              })
-              .filter((uri: string) => !!uri);
-
-            const firstImage = images[0] || (item as any)?.summary?.firstThumb;
-            const itemCount = results.length;
-
-            if (!firstImage) {
-              return (
-                <View style={[styles.thumb, { justifyContent: 'center', alignItems: 'center' }]}>
-                  <Icon name="image-off" size={24} color="#94a3b8" />
-                </View>
-              );
-            }
-
-            return (
-              <View style={{ width: 80, height: 80, marginRight: 12 }}>
-                <Image
-                  source={{ uri: firstImage }}
-                  style={{
-                    width: 80,
-                    height: 80,
-                    borderRadius: 10,
-                    backgroundColor: '#f1f5f9',
-                  }}
-                />
-                {itemCount > 1 && (
-                  <View style={{
-                    position: 'absolute',
-                    bottom: -4,
-                    right: -4,
-                    backgroundColor: '#1e293b',
-                    borderRadius: 12,
-                    paddingHorizontal: 8,
-                    paddingVertical: 3,
-                    borderWidth: 2,
-                    borderColor: '#fff',
-                  }}>
-                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>
-                      {itemCount} items
-                    </Text>
-                  </View>
-                )}
-              </View>
-            );
-          })()}
-        </View>
-        <View style={styles.scanInfo}>
-          <Text style={styles.scanTitle}>{(item as any)?.summary?.firstTitle || 'Generated Listing'}</Text>
-          <Text style={styles.scanDate}>
+  const renderScanItem = ({ item }: { item: GenerationJob }) => {
+    const results = item.results || [];
+    const images = results
+      .map((r: any) => (
+        r?.sourceImageUrl ||
+        r?.images?.[0] || // If array of strings
+        r?.images?.[0]?.url || // If array of objects
+        r?.platforms?.shopify?.images?.[0] || // Try platform specific
+        ''
+      ))
+      .filter((uri: string) => !!uri);
+    const firstImage = images[0] || (item as any)?.summary?.firstThumb;
+    const meta = statusMeta(item.status);
+    return (
+      <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => handleLoadGeneration(item)}>
+        {renderThumb(firstImage, results.length, 'image-off')}
+        <View style={styles.rowInfo}>
+          <Text style={styles.rowTitle} numberOfLines={1}>{(item as any)?.summary?.firstTitle || 'Generated Listing'}</Text>
+          <Text style={styles.rowMeta} numberOfLines={1}>
             {new Date(item.created_at).toLocaleDateString()}
+            {item.workflowJobCount && item.workflowJobCount > 1 ? ` · ${item.workflowJobCount} runs` : ''}
           </Text>
-          {item.workflowJobCount && item.workflowJobCount > 1 && (
-            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 4 }}>
-              Grouped workflow ({item.workflowJobCount} runs)
-            </Text>
-          )}
-
-          <View style={styles.scanStatus}>
-            <Icon
-              name={item.status === 'completed' ? 'check-circle' : 'cogs'}
-              size={16}
-              color={item.status === 'completed' ? theme.colors.success : theme.colors.primary}
-            />
-            <Text style={[
-              styles.statusText,
-              { color: item.status === 'completed' ? theme.colors.success : theme.colors.primary }
-            ]}>
-              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, { backgroundColor: meta.color }]} />
+            <Text style={[styles.statusText, { color: meta.color === CHAT_COLORS.success ? CHAT_COLORS.brandDeep : meta.color }]}>
+              {item.status === 'completed' ? 'Ready to review' : meta.label}
             </Text>
           </View>
-
         </View>
-        <Icon name="chevron-right" size={24} color={theme.colors.textSecondary} />
+        <Icon name="chevron-right" size={22} color={CHAT_COLORS.faint} />
       </TouchableOpacity>
-    </Card>
-  );
+    );
+  };
 
   const renderDraftItem = ({ item }: { item: DraftScan }) => {
     const items = item.ScannedItems ?? item.scannedItems ?? [];
     const count = items.length;
     const thumb = item.ShelfPhotoUri ?? item.shelfPhotoUri ?? items[0]?.photos?.[0]?.uri ?? '';
     return (
-      <Card style={styles.scanCard}>
-        <TouchableOpacity
-          style={styles.scanItem}
-          onPress={() => handleLoadDraft(item)}
-        >
-          <View style={styles.thumbRow}>
-            {thumb ? (
-              <Image source={{ uri: thumb }} style={styles.thumb} />
-            ) : (
-              <View style={[styles.thumb, { justifyContent: 'center', alignItems: 'center' }]}>
-                <Icon name="file-document-outline" size={24} color="#94a3b8" />
-              </View>
-            )}
-          </View>
-          <View style={styles.scanInfo}>
-            <Text style={styles.scanTitle}>Draft Scan</Text>
-            <Text style={styles.scanDate}>
-              {new Date(item.UpdatedAt ?? item.CreatedAt ?? 0).toLocaleString()}
-            </Text>
-            <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 4 }}>
-              {count} item{count !== 1 ? 's' : ''}
-            </Text>
-          </View>
-          <Icon name="chevron-right" size={24} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
-      </Card>
+      <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => handleLoadDraft(item)}>
+        {renderThumb(thumb, count, 'file-document-outline')}
+        <View style={styles.rowInfo}>
+          <Text style={styles.rowTitle} numberOfLines={1}>Draft scan</Text>
+          <Text style={styles.rowMeta} numberOfLines={1}>{new Date(item.UpdatedAt ?? item.CreatedAt ?? 0).toLocaleString()}</Text>
+          <Text style={styles.rowSub} numberOfLines={1}>{count} item{count !== 1 ? 's' : ''} · Tap to resume</Text>
+        </View>
+        <Icon name="chevron-right" size={22} color={CHAT_COLORS.faint} />
+      </TouchableOpacity>
     );
   };
+
+  const listTopPadding = { paddingTop: headerH + 8 };
 
   const renderContent = () => {
     if (loading) {
       return (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <ActivityIndicator size="large" color={CHAT_COLORS.brand} />
         </View>
       );
     }
@@ -571,10 +467,10 @@ const PastScansScreen = () => {
           data={matchJobs}
           renderItem={renderMatchJobItem}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, listTopPadding]}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Icon name="history" size={48} color={theme.colors.textSecondary} />
+              <Icon name="history" size={44} color={CHAT_COLORS.faint} />
               <Text style={styles.emptyText}>No match jobs found</Text>
             </View>
           }
@@ -588,10 +484,10 @@ const PastScansScreen = () => {
           data={generationJobs}
           renderItem={renderScanItem}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, listTopPadding]}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Icon name="history" size={48} color={theme.colors.textSecondary} />
+              <Icon name="history" size={44} color={CHAT_COLORS.faint} />
               <Text style={styles.emptyText}>No generated listings found</Text>
             </View>
           }
@@ -604,10 +500,10 @@ const PastScansScreen = () => {
         data={draftScans}
         renderItem={renderDraftItem}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, listTopPadding]}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Icon name="history" size={48} color={theme.colors.textSecondary} />
+            <Icon name="history" size={44} color={CHAT_COLORS.faint} />
             <Text style={styles.emptyText}>No draft scans</Text>
           </View>
         }
@@ -615,39 +511,55 @@ const PastScansScreen = () => {
     );
   };
 
+  const TABS: Array<{ key: 'drafts' | 'matches' | 'listings'; label: string }> = [
+    { key: 'drafts', label: 'Scan drafts' },
+    { key: 'matches', label: 'Matches' },
+    { key: 'listings', label: 'Listings' },
+  ];
+
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <BackButton style={styles.backButton} onPress={() => navigation.goBack()}/>
-        
-        <Text style={styles.headerTitle}>History</Text>
-        <View>
-          <TouchableOpacity style={{width: 80, marginRight: 16, borderColor: "#FFF"}}/>
+      {renderContent()}
+
+      {/* ── Floating glass header (chat-style): back · title pill · tab chips ── */}
+      <View
+        style={[styles.glassHeader, { paddingTop: insets.top + 6 }]}
+        onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+      >
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <BlurView intensity={GLASS.blurIntensity} tint="light" style={StyleSheet.absoluteFill} />
+          <LinearGradient
+            colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+            locations={[0, 0.55, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        <View style={styles.glassHeaderRow}>
+          <TouchableOpacity style={styles.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+            <ChevronLeft size={22} color={CHAT_COLORS.ink} />
+          </TouchableOpacity>
+          <View style={styles.titlePill}>
+            <Text style={styles.pillTitle}>History</Text>
+          </View>
+          <View style={{ width: 40 }} />
+        </View>
+
+        <View style={styles.tabChips}>
+          {TABS.map(t => {
+            const active = activeTab === t.key;
+            return (
+              <TouchableOpacity
+                key={t.key}
+                style={[styles.tabChip, active && styles.tabChipActive]}
+                onPress={() => setActiveTab(t.key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.tabChipText, active && styles.tabChipTextActive]}>{t.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
-
-      <View style={styles.tabContainer}>
-         <TouchableOpacity
-          style={[styles.tab, styles.tabThird, activeTab === 'drafts' && styles.activeTab]}
-          onPress={() => setActiveTab('drafts')}
-        >
-          <Text style={[styles.tabText, activeTab === 'drafts' && styles.activeTabText]}>Scan Drafts</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, styles.tabThird, activeTab === 'matches' && styles.activeTab]}
-          onPress={() => setActiveTab('matches')}
-        >
-          <Text style={[styles.tabText, activeTab === 'matches' && styles.activeTabText]}>Matches</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, styles.tabThird, activeTab === 'listings' && styles.activeTab]}
-          onPress={() => setActiveTab('listings')}
-        >
-          <Text style={[styles.tabText, activeTab === 'listings' && styles.activeTabText]}>Listings</Text>
-        </TouchableOpacity>
-      </View>
-
-      {renderContent()}
     </View>
   );
 };
@@ -655,98 +567,68 @@ const PastScansScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: CHAT_COLORS.white,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: "space-around",
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    paddingTop: 60, // Adjust for status bar
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  backButton: {
-    marginRight: 16,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  tabContainer: {
-    paddingLeft: 5,
-    paddingRight: 5,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    backgroundColor: '#f8f8f8',
+
+  // Chat-style floating glass header
+  glassHeader: { ...GLASS_HEADER_STYLES.header },
+  glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
+  navCircle: { ...GLASS_HEADER_STYLES.navCircle },
+  titlePill: { ...GLASS_HEADER_STYLES.titlePill },
+  pillTitle: { ...GLASS_HEADER_STYLES.pillTitle },
+
+  // Segmented chips (chat quick-chip styling)
+  tabChips: { flexDirection: 'row', gap: 8, marginTop: 10, justifyContent: 'center' },
+  tabChip: {
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderRadius: 16,
+    backgroundColor: CHAT_COLORS.surface,
+    marginHorizontal: 12,
   },
-  tab: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    width: '40%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tabThird: {
-    width: '31%',
-  },
-  activeTab: {
-    backgroundColor: BRAND_PRIMARY, // theme.colors.primary
-  },
-  tabText: {
-    fontWeight: '600',
-    color: '#333',
-  },
-  activeTabText: {
-    color: '#fff',
-  },
-  listContent: {
-    padding: 16,
-  },
-  scanCard: {
-    marginBottom: 12,
-  },
-  scanItem: {
+  tabChipActive: { backgroundColor: CHAT_COLORS.ink },
+  tabChipText: { fontSize: 13, color: '#52525B', fontFamily: CHAT_FONT.medium },
+  tabChipTextActive: { color: CHAT_COLORS.white, fontFamily: CHAT_FONT.semibold },
+
+  // List rows (chat card language: white, rounded 18, glass shadow)
+  listContent: { padding: 16, paddingBottom: 32 },
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: CHAT_COLORS.white,
+    borderRadius: 18,
     padding: 12,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
-  scanInfo: {
-    flex: 1,
+  rowInfo: { flex: 1, marginRight: 8 },
+  rowTitle: { fontSize: 15, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold },
+  rowMeta: { fontSize: 12, color: CHAT_COLORS.faint, fontFamily: CHAT_FONT.medium, marginTop: 2 },
+  rowSub: { fontSize: 12, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium, marginTop: 6 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: { fontSize: 12, fontFamily: CHAT_FONT.medium },
+
+  thumbWrap: { width: 64, height: 64, marginRight: 12 },
+  thumb: { width: 64, height: 64, borderRadius: 14, backgroundColor: CHAT_COLORS.bubble },
+  thumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  thumbBadge: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    backgroundColor: CHAT_COLORS.ink,
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderWidth: 2,
+    borderColor: CHAT_COLORS.white,
   },
-  scanTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  scanDate: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 8,
-  },
-  scanDetails: {
-    flexDirection: 'row',
-    marginBottom: 8,
-  },
-  scanDetail: {
-    fontSize: 12,
-    color: '#666',
-    marginRight: 16,
-  },
-  scanStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusText: {
-    fontSize: 12,
-    marginLeft: 4,
-    textTransform: 'capitalize',
-  },
+  thumbBadgeText: { color: CHAT_COLORS.white, fontSize: 11, fontFamily: CHAT_FONT.bold },
+
   centered: {
     flex: 1,
     justifyContent: 'center',
@@ -754,7 +636,8 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   errorText: {
-    color: '#ff3b30',
+    color: CHAT_COLORS.error,
+    fontFamily: CHAT_FONT.medium,
     marginBottom: 16,
     textAlign: 'center',
   },
@@ -769,22 +652,11 @@ const styles = StyleSheet.create({
     marginTop: 50,
   },
   emptyText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666',
+    marginTop: 14,
+    fontSize: 15,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.medium,
     textAlign: 'center',
-  },
-  thumbRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  thumb: {
-    width: 80,
-    height: 80,
-    borderRadius: 10,
-    marginRight: 12,
-    backgroundColor: '#f1f5f9',
   },
 });
 

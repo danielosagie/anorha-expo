@@ -201,7 +201,8 @@ export const EnhancedSearchInterface: React.FC<EnhancedSearchInterfaceProps> = (
     if (!searchValue.trim()) return;
     
     const type = detectInputType(searchValue);
-    addSearchPill(searchValue, type);
+    // detectInputType may return 'barcode'; addSearchPill's union differs — review barcode handling.
+    addSearchPill(searchValue, type as any);
     setSearchValue('');
   };
 

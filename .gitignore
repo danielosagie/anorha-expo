@@ -1,39 +1,76 @@
-# Dependencies
+# ───────────────────────────── Dependencies ─────────────────────────────
 node_modules/
+# package-lock.json is committed on purpose. EAS strips gitignored files from
+# its upload archive, so ignoring the lockfile made EAS fall back to yarn +
+# "latest" resolution — which silently pulled a Node-22-only transitive dep
+# (@wallet-standard/base) and broke the build. Keep it tracked → reproducible
+# `npm ci`.
 
-# Native build dirs (managed by Expo prebuild / EAS)
-android/
-ios/
-
-# Web / build output (do not commit — bloats the repo permanently)
+# ───────────────────────────── Expo / build ─────────────────────────────
+.expo/
 dist/
+web-build/
+expo-env.d.ts
+*.tsbuildinfo
+
+# Native projects (managed/prebuild — regenerated, not source of truth)
+/ios
+/android
+
+# Metro
+.metro-health-check*
+
+# ──────────────────── Secrets — NEVER commit (rotate if leaked) ──────────
+.env
+.env.*
+*.local
+!.env.example
+*.pem
+*.p12
+*.p8
+*.key
+*.jks
+*.keystore
+*.mobileprovision
+# Cloud service-account / Firebase credential files
+*-service-account*.json
+*serviceAccount*.json
+anorha-*.json
+google-services.json
+GoogleService-Info.plist
+
+# ──────────────────── Build artifacts (use EAS, not git) ─────────────────
 *.ipa
 *.aab
 *.apk
+*.app
 
-# Env / secrets — never commit
-.env
-.env.local
-*.local
-env.local
+# ───────────────────────────── Logs & dumps ─────────────────────────────
+*.log
+logs/
+logs*.json
+ts_errors.txt
+diff.txt
 
-# Service-account / credential files
-anorha-*.json
-*-service-account*.json
-*.keystore
-*.p8
-*.p12
-*.mobileprovision
+# ─────────────────────── Scratch / debug scripts ────────────────────────
+test-braces*.js
+test-jsx*.js
+test-platform-filtering.js
+formatting.js
+cleanup_*.sql
 
-# OS / editor cruft
+# Root-level scratch markdown (keep real docs in docs/ ; README/CONTRIBUTING tracked)
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+
+# ───────────────────────────── OS / editor ──────────────────────────────
 .DS_Store
 **/.DS_Store
-
-# Generated diagnostics (regenerate locally, do not commit)
-ts_errors.txt
-
-# Scratch / sample data (kept local, not source)
-formatting.js
+*.orig.*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
 
 # Historical review docs — intentionally kept out of the repo (do not un-hide silently)
 ANTI_PATTERNS_FOUND.md

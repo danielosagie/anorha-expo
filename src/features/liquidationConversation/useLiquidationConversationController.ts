@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConversationDataAdapter } from './ConversationDataAdapter';
 import { loadThreadState, persistThreadState } from './LocalConversationStore';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
+import { uploadProductImage } from '../../utils/uploadProductImage';
 import {
   HOME_DRAFT_SCOPE,
   acknowledgeMessage,
   appendAssistantDelta,
+  appendAssistantReasoning,
+  appendAssistantToolStep,
+  appendMessage,
   completeActionMessage,
   completeAssistantMessage,
   createActionMessage,
@@ -21,12 +27,14 @@ import {
 import type {
   CampaignConfig,
   CampaignOverview,
+  CampaignStatus,
   CampaignSummary,
   CampaignThreadSummary,
   ConversationMessage,
   ConversationSurfaceState,
   ConversationThreadState,
   DecisionPrompt,
+  QuestionPrompt,
 } from './types';
 
 type DispatchActionInput = {
@@ -48,6 +56,8 @@ export const useLiquidationConversationController = ({
 }: ControllerOptions) => {
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [threads, setThreads] = useState<CampaignThreadSummary[]>([]);
+  const [pendingQuestion, setPendingQuestion] = useState<QuestionPrompt | null>(null);
+  const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [campaignOverview, setCampaignOverview] = useState<CampaignOverview | null>(null);
   const [campaignConfig, setCampaignConfig] = useState<CampaignConfig | null>(null);
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(initialCampaignId || null);
@@ -65,8 +75,13 @@ export const useLiquidationConversationController = ({
 
   const activeCampaignIdRef = useRef<string | null>(activeCampaignId);
   const activeThreadIdRef = useRef<string | null>(activeThreadId);
+  const surfaceStateRef = useRef<ConversationSurfaceState>(surfaceState);
   const threadStatesRef = useRef<ThreadStateMap>(threadStates);
   const processingByThreadRef = useRef<Record<string, boolean>>({});
+
+  useEffect(() => {
+    surfaceStateRef.current = surfaceState;
+  }, [surfaceState]);
 
   useEffect(() => {
     activeCampaignIdRef.current = activeCampaignId;
@@ -95,14 +110,39 @@ export const useLiquidationConversationController = ({
     return activeThreadState?.draft || '';
   }, [activeCampaignId, activeThreadState?.draft, homeDrafts, surfaceState]);
 
+  // Reference-keyed cache of the {...message, time} view objects. The reducers keep
+  // unchanged messages referentially identical (only the streaming bubble gets a new
+  // object per token), so caching by source reference means settled bubbles keep a
+  // stable identity across token updates — letting React.memo on StreamingMessageBubble
+  // skip re-rendering every bubble on every delta. WeakMap → entries GC themselves.
+  const messageViewCacheRef = useRef<WeakMap<ConversationMessage, ConversationMessage & { time: string }>>(new WeakMap());
+
   const activeMessages = useMemo(
-    () => (activeThreadState?.messages || []).map(message => ({
-      ...message,
-      time: new Date(message.createdAt).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
+    () => (activeThreadState?.messages || [])
+      .filter(message => {
+        // Keep user + still-streaming bubbles always. Drop phantom EMPTY agent
+        // bubbles (no text, no tool steps, no decision, not an action) — those were
+        // rendering as blank space and leaving a gap above the real reply.
+        if (message.role === 'user' || message.deliveryState === 'streaming') return true;
+        const hasText = !!(message.content && message.content.trim());
+        const steps = (message.metadata as any)?.toolSteps;
+        const hasSteps = Array.isArray(steps) && steps.length > 0;
+        const hasJobCard = !!(message.metadata as any)?.jobCard?.sessionId;
+        return hasText || hasSteps || hasJobCard || !!message.decisionPrompt || message.kind === 'action';
+      })
+      .map(message => {
+        const cached = messageViewCacheRef.current.get(message);
+        if (cached) return cached;
+        const view = {
+          ...message,
+          time: new Date(message.createdAt).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+        messageViewCacheRef.current.set(message, view);
+        return view;
       }),
-    })),
     [activeThreadState?.messages],
   );
 
@@ -126,7 +166,15 @@ export const useLiquidationConversationController = ({
       [threadId]: next,
     }));
     if (next.campaignId) {
-      void persistThreadState(next, { immediate: !!options?.immediate });
+      // A streaming turn calls this once PER TOKEN. Persisting every delta to local
+      // storage hammers AsyncStorage on the JS thread and makes the stream stutter.
+      // Skip the per-delta writes mid-turn — the completion path passes
+      // { immediate: true } to flush the finished message, and the server is the
+      // source of truth if the app dies mid-stream.
+      const midTurn = processingByThreadRef.current[threadId];
+      if (options?.immediate || !midTurn) {
+        void persistThreadState(next, { immediate: !!options?.immediate });
+      }
     }
     return next;
   }, []);
@@ -208,17 +256,17 @@ export const useLiquidationConversationController = ({
       .finally(() => setIsLoadingMessages(false));
   }, [adapter, setThreadStateFor]);
 
-  const loadThreads = useCallback(async (campaignId: string) => {
+  const loadThreads = useCallback(async (campaignId: string): Promise<string | null> => {
     setIsLoadingThreads(true);
     try {
       const list = await adapter.listThreads(campaignId);
       setThreads(list);
-      setActiveThreadId(prev => {
-        if (prev && list.some(thread => thread.id === prev)) {
-          return prev;
-        }
-        return list.find(thread => thread.isPrimary)?.id || list[0]?.id || null;
-      });
+      const prev = activeThreadIdRef.current;
+      const resolved = (prev && list.some(thread => thread.id === prev))
+        ? prev
+        : (list.find(thread => thread.isPrimary)?.id || list[0]?.id || null);
+      setActiveThreadId(resolved);
+      return resolved;
     } finally {
       setIsLoadingThreads(false);
     }
@@ -252,10 +300,25 @@ export const useLiquidationConversationController = ({
 
   useEffect(() => {
     if (!activeCampaignId) return;
-    setSurfaceState('home_overview');
-    loadThreads(activeCampaignId)
-      .then(() => loadCampaignDetails(activeCampaignId))
-      .catch((loadError: any) => setError(loadError?.message || 'Failed to load campaign'));
+    let cancelled = false;
+    (async () => {
+      try {
+        // Open straight into the campaign's primary feed (with history) rather than
+        // the overview — the seller lands in the one continuous thread.
+        const primaryId = await loadThreads(activeCampaignId);
+        if (cancelled) return;
+        await loadCampaignDetails(activeCampaignId);
+        if (cancelled) return;
+        if (primaryId) {
+          setSurfaceState('chat_active');
+          await loadThreadIntoMemory(activeCampaignId, primaryId);
+        } else {
+          setSurfaceState('home_overview');
+        }
+      } catch (loadError: any) {
+        if (!cancelled) setError(loadError?.message || 'Failed to load campaign');
+      }
+    })();
     loadThreadState(activeCampaignId, HOME_DRAFT_SCOPE)
       .then(homeState => {
         setHomeDrafts(prev => ({
@@ -264,14 +327,23 @@ export const useLiquidationConversationController = ({
         }));
       })
       .catch(() => undefined);
-  }, [activeCampaignId, loadCampaignDetails, loadThreads]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCampaignId, loadCampaignDetails, loadThreads, loadThreadIntoMemory]);
 
+  // Load a thread ONLY when the campaign/thread identity changes — never when
+  // surfaceState flips chat_active⇄chat_streaming. surfaceState used to be a dep,
+  // so every stream start/stop re-ran loadThreadIntoMemory, which sets
+  // isLoadingMessages=true and makes ConversationList blank to its spinner — the
+  // "whole page goes white then re-renders" on stream completion. The home_overview
+  // guard reads a ref so it stays correct without forcing a reload on surface change.
   useEffect(() => {
-    if (!activeCampaignId || !activeThreadId || surfaceState === 'home_overview') return;
+    if (!activeCampaignId || !activeThreadId || surfaceStateRef.current === 'home_overview') return;
     loadThreadIntoMemory(activeCampaignId, activeThreadId).catch((loadError: any) => {
       setError(loadError?.message || 'Failed to load thread');
     });
-  }, [activeCampaignId, activeThreadId, loadThreadIntoMemory, surfaceState]);
+  }, [activeCampaignId, activeThreadId, loadThreadIntoMemory]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -315,6 +387,12 @@ export const useLiquidationConversationController = ({
     setThreadStateFor(threadId, current => markQueueItemSending(current, item.clientMessageId));
     setError(null);
 
+    // One stable assistant-message id PER TURN. The backend doesn't send a message
+    // id in the stream, so we derive it from this turn's clientMessageId. Every
+    // delta / reasoning / tool step / completion for THIS run targets this id, so a
+    // new run always opens its own bubble + activity card.
+    const assistantId = `assistant-${item.clientMessageId}`;
+
     try {
       await adapter.streamTurn(
         {
@@ -325,6 +403,7 @@ export const useLiquidationConversationController = ({
           content: item.content,
           actionType: item.actionType,
           actionPayload: item.actionPayload,
+          imageUrls: item.imageUrls,
         },
         {
           onMessageAck: ({ clientMessageId, serverMessageId }) => {
@@ -335,7 +414,7 @@ export const useLiquidationConversationController = ({
               current,
               item.campaignId,
               threadId,
-              messageId,
+              messageId || assistantId,
             ).state);
           },
           onAssistantDelta: ({ delta, messageId }) => {
@@ -344,11 +423,31 @@ export const useLiquidationConversationController = ({
               item.campaignId,
               threadId,
               delta,
-              messageId,
+              messageId || assistantId,
+            ));
+          },
+          onReasoning: ({ reasoning, messageId }) => {
+            setThreadStateFor(threadId, current => appendAssistantReasoning(
+              current,
+              item.campaignId,
+              threadId,
+              reasoning,
+              messageId || assistantId,
             ));
           },
           onAssistantCompleted: ({ content, messageId }) => {
-            setThreadStateFor(threadId, current => completeAssistantMessage(current, content, messageId), { immediate: true });
+            setThreadStateFor(threadId, current => completeAssistantMessage(current, content, messageId || assistantId), { immediate: true });
+          },
+          // Completed tool steps attach to THIS run's assistant bubble as compact
+          // items (label + status only; arguments never reach the client).
+          onToolCompleted: ({ tool, label, status, durationMs }) => {
+            setThreadStateFor(threadId, current => appendAssistantToolStep(
+              current,
+              item.campaignId,
+              threadId,
+              { tool, label, status, durationMs },
+              assistantId,
+            ));
           },
           onActionCompleted: ({ clientMessageId, summary }) => {
             setThreadStateFor(
@@ -361,13 +460,28 @@ export const useLiquidationConversationController = ({
       );
 
       setThreadStateFor(threadId, current => dequeueTurn(current, item.clientMessageId), { immediate: true });
-      const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
-      if (remoteMessages) {
-        setThreadStateFor(threadId, current => ({
-          ...current,
-          messages: remoteMessages,
-        }), { immediate: true });
+      // A text turn's assistant message is already complete from the stream (content
+      // + tool steps). Re-fetching and replacing it swaps in a server-id copy with a
+      // different React key, which unmounts/remounts the bubble — that's the activity
+      // card "flash". Only ACTION turns refetch, since they can surface approval
+      // prompts that the stream doesn't carry. (Server already persists everything;
+      // it reconciles on the next natural thread load.)
+      // Action turns can surface approval prompts the stream doesn't carry; PHOTO turns
+      // post a separate job-card message mid-turn (skipped by the live bridge while the
+      // turn is in flight). Both need a one-shot server reconcile so the card / prompt
+      // actually lands instead of waiting for the next natural thread load.
+      if (item.kind === 'action' || (item.imageUrls && item.imageUrls.length > 0)) {
+        const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
+        if (remoteMessages) {
+          setThreadStateFor(threadId, current => ({
+            ...current,
+            messages: remoteMessages,
+          }), { immediate: true });
+        }
       }
+      // Pull fresh thread metadata so the backend's topic auto-title replaces
+      // "New chat" in the drawer once the first turn lands.
+      void loadThreads(item.campaignId).catch(() => undefined);
     } catch (streamError: any) {
       setThreadStateFor(
         threadId,
@@ -387,7 +501,7 @@ export const useLiquidationConversationController = ({
         }
       }
     }
-  }, [adapter, setThreadStateFor]);
+  }, [adapter, loadThreads, setThreadStateFor]);
 
   const ensureChatThread = useCallback(async (forceFreshThread: boolean) => {
     const campaignId = activeCampaignIdRef.current;
@@ -395,18 +509,36 @@ export const useLiquidationConversationController = ({
       throw new Error('Select a campaign first');
     }
 
-    if (!forceFreshThread && activeThreadIdRef.current) {
-      return activeThreadIdRef.current;
+    // Default to the one feed: reuse the active thread, else the campaign's primary
+    // thread. forceFreshThread is the explicit, rare "new side-thread" escape hatch
+    // (createNewThread) — the seller no longer spawns a chat just by messaging.
+    if (!forceFreshThread) {
+      if (activeThreadIdRef.current) {
+        return activeThreadIdRef.current;
+      }
+      const primary = threads.find(thread => thread.isPrimary);
+      if (primary) {
+        setActiveThreadId(primary.id);
+        setThreadStateFor(primary.id, current => current ?? createEmptyThreadState(campaignId, primary.id), { immediate: true });
+        // Pull history so a home->send lands in the full feed, not an empty one.
+        const existing = threadStatesRef.current[primary.id];
+        if (!existing || !existing.messages?.length) {
+          void loadThreadIntoMemory(campaignId, primary.id).catch(() => undefined);
+        }
+        return primary.id;
+      }
     }
 
+    // No primary yet (brand-new campaign) or an explicit side-thread: create one.
+    // "New chat" lets the backend auto-title it from the first message's topic.
     const created = await adapter.createThread(campaignId, {
-      title: `Chat ${threads.length + 1}`,
+      title: 'New chat',
     });
     setThreads(prev => [created, ...prev.filter(thread => thread.id !== created.id)]);
     setActiveThreadId(created.id);
     setThreadStateFor(created.id, () => createEmptyThreadState(campaignId, created.id), { immediate: true });
     return created.id;
-  }, [adapter, setThreadStateFor, threads.length]);
+  }, [adapter, setThreadStateFor, threads, loadThreadIntoMemory]);
 
   const setComposerValue = useCallback((value: string) => {
     const campaignId = activeCampaignIdRef.current;
@@ -424,13 +556,14 @@ export const useLiquidationConversationController = ({
     void adapter.persistDraft(campaignId, threadId, value).catch(() => undefined);
   }, [adapter, setHomeDraft, setThreadStateFor, surfaceState]);
 
-  const queueTextMessage = useCallback(async (content: string) => {
+  const queueTextMessage = useCallback(async (content: string, imageUrls?: string[]) => {
     const campaignId = activeCampaignIdRef.current;
     if (!campaignId) {
       throw new Error('Select a campaign first');
     }
     const fromHome = surfaceState === 'home_overview';
-    const threadId = await ensureChatThread(fromHome);
+    // Messaging from home lands in the primary feed, not a brand-new thread.
+    const threadId = await ensureChatThread(false);
     const clientMessageId = createClientId('msg');
     const message = createTextMessage({
       campaignId,
@@ -446,6 +579,7 @@ export const useLiquidationConversationController = ({
       clientMessageId,
       kind: 'message',
       content,
+      imageUrls,
     });
 
     setThreadStateFor(threadId, current => enqueueTurn(current, queueItem, message), { immediate: true });
@@ -469,7 +603,8 @@ export const useLiquidationConversationController = ({
       throw new Error('Select a campaign first');
     }
     const fromHome = surfaceState === 'home_overview';
-    const threadId = await ensureChatThread(fromHome);
+    // Messaging from home lands in the primary feed, not a brand-new thread.
+    const threadId = await ensureChatThread(false);
     const clientMessageId = createClientId('action');
     const message = createActionMessage({
       campaignId,
@@ -571,16 +706,98 @@ export const useLiquidationConversationController = ({
     });
   }, [adapter]);
 
-  const sendComposer = useCallback(async () => {
+  // Pause/resume a campaign (e.g. from the home long-press selection). Optimistic;
+  // reloads from the server if the write fails so the card never lies.
+  const setCampaignStatus = useCallback(async (campaignId: string, status: CampaignStatus) => {
+    setCampaigns(prev => prev.map(campaign => (campaign.id === campaignId ? { ...campaign, status } : campaign)));
+    try {
+      await adapter.setCampaignStatus(campaignId, status);
+    } catch (statusError) {
+      await loadCampaigns().catch(() => undefined);
+      throw statusError;
+    }
+  }, [adapter, loadCampaigns]);
+
+  const sendComposer = useCallback(async (photos?: string[]) => {
     const content = composerText.trim();
+    if (photos && photos.length) {
+      // Hand the photos to the AGENT and let it decide what to do (identify + price,
+      // or build draft listings via analyze_photos / analyze_shelf). We just upload
+      // them and send a normal turn carrying the urls — no more fork to /analyze.
+      setComposerValue('');
+      setNotice(`Adding ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
+      try {
+        const urls = (await Promise.all(
+          photos.slice(0, 8).map(uri => uploadProductImage(uri, createClientId('photo')).catch(() => null)),
+        )).filter((u): u is string => !!u);
+        setNotice(null);
+        if (!urls.length) {
+          setNotice('Could not upload those photos. Try again.');
+          return;
+        }
+        const displayText = content || `added ${urls.length} photo${urls.length === 1 ? '' : 's'}`;
+        await queueTextMessage(displayText, urls);
+      } catch {
+        setNotice('Could not process photos. Please try again.');
+      }
+      return;
+    }
     if (!content) return;
     await queueTextMessage(content);
-  }, [composerText, queueTextMessage]);
+  }, [composerText, queueTextMessage, setComposerValue, setNotice]);
+
+  // Pull the open ask_seller_question (if any) for the active thread. Sprout sets
+  // one when it needs a choice; cleared once answered.
+  const refreshPendingQuestion = useCallback(async (campaignId: string, threadId: string) => {
+    if (!campaignId || !threadId) return;
+    try {
+      setPendingQuestion(await adapter.getPendingQuestion(campaignId, threadId));
+    } catch {
+      /* non-fatal — the card just won't show */
+    }
+  }, [adapter]);
+
+  // Refresh on thread switch and whenever a turn finishes streaming (Sprout may
+  // have just asked, or the answer may have closed the question).
+  useEffect(() => {
+    const cid = activeCampaignIdRef.current;
+    if (!cid || !activeThreadId || isStreaming) return;
+    void refreshPendingQuestion(cid, activeThreadId);
+  }, [activeThreadId, isStreaming, refreshPendingQuestion]);
+
+  const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {
+    const campaignId = activeCampaignIdRef.current;
+    if (!campaignId || answeringQuestion) return;
+    setAnsweringQuestion(true);
+    try {
+      await adapter.answerQuestion(campaignId, prompt.pendingActionId, { answers, other });
+      setPendingQuestion(null);
+      // Resume Sprout by sending the chosen option(s) as a normal user message.
+      const picked = Object.values(answers).flat();
+      const text = [picked.join(', '), other?.trim()].filter(Boolean).join(' — ');
+      if (text) await queueTextMessage(text);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to send your answer');
+    } finally {
+      setAnsweringQuestion(false);
+    }
+  }, [adapter, answeringQuestion, queueTextMessage]);
 
   const submitDecision = useCallback(async (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => {
     const campaignId = activeCampaignIdRef.current;
     const threadId = activeThreadIdRef.current;
     if (!campaignId || !threadId) return;
+    // Local photo-ingest decision card → send a follow-up instruction to Sprout.
+    if (prompt.id.startsWith('photo-')) {
+      const instr =
+        action === 'approve'
+          ? 'Research current resale pricing for the items I just added from photos and suggest a start and floor price for each.'
+          : action === 'revise'
+            ? 'List the items I just added from photos aggressively to move them fast — set competitive prices and a tight deadline.'
+            : 'Hold the items I just added from photos in this clearout for now; I will decide later.';
+      await queueTextMessage(instr);
+      return;
+    }
     try {
       await adapter.submitDecision(campaignId, threadId, {
         decisionId: prompt.id,
@@ -596,7 +813,50 @@ export const useLiquidationConversationController = ({
     } catch (decisionError: any) {
       setError(decisionError?.message || 'Failed to submit decision');
     }
-  }, [adapter, loadCampaignDetails, setThreadStateFor]);
+  }, [adapter, loadCampaignDetails, setThreadStateFor, queueTextMessage]);
+
+  // Live Convex messages (fed by the ConvexLiveMessages bridge). Agent-INITIATED
+  // posts (digests, proactive updates) appear in the open thread the moment the
+  // backend writes them — no tap, no poll. Append-by-id only, and skipped while
+  // the thread is mid-turn (the send flow + refetch own that). Convex carries no
+  // clientMessageId, so we never reconcile the seller's optimistic message here.
+  const ingestLiveMessages = useCallback((rawMessages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    createdAt: string;
+    metadata?: Record<string, unknown>;
+  }>) => {
+    const campaignId = activeCampaignIdRef.current;
+    const threadId = activeThreadIdRef.current;
+    if (!campaignId || !threadId) return;
+    if (processingByThreadRef.current[threadId]) return;
+    setThreadStateFor(threadId, current => {
+      let next = current;
+      let changed = false;
+      for (const rm of rawMessages) {
+        const rmThread = rm.metadata?.threadId;
+        if (typeof rmThread === 'string' && rmThread && rmThread !== threadId) continue;
+        const role = rm.role === 'tool' ? 'assistant' : rm.role;
+        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+        if (next.messages.some(m => m.id === rm.id || m.serverMessageId === rm.id)) continue;
+        next = appendMessage(next, {
+          id: rm.id,
+          serverMessageId: rm.id,
+          campaignId,
+          threadId,
+          role: role as ConversationMessage['role'],
+          content: rm.content || '',
+          createdAt: rm.createdAt,
+          deliveryState: 'sent',
+          kind: (rm.metadata as any)?.type === 'action' ? 'action' : 'text',
+          metadata: rm.metadata || {},
+        });
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [setThreadStateFor]);
 
   return {
     campaigns,
@@ -628,6 +888,7 @@ export const useLiquidationConversationController = ({
     deleteThread,
     renameCampaign,
     deleteCampaign,
+    setCampaignStatus,
     sendComposer,
     dispatchAction,
     retryMessage,
@@ -636,5 +897,9 @@ export const useLiquidationConversationController = ({
     loadThreads,
     queueTextMessage,
     submitDecision,
+    pendingQuestion,
+    answeringQuestion,
+    submitAnswer,
+    ingestLiveMessages,
   };
 };

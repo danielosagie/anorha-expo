@@ -12,11 +12,12 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { showMessage } from 'react-native-flash-message';
 import Button from './Button';
 import Card from './Card';
 
-const API_BASE_URL = "https://api.sssync.app";
+const API_BASE_URL = ENV_API_BASE_URL;
 
 interface Organization {
   Id: string;

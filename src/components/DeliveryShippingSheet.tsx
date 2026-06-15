@@ -32,7 +32,7 @@ import {
 } from 'react-native';
 import { X, Truck, Car, Package, MapPin, Scale, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { AppDropdown } from './ui/AppDropdown';
+import { AppMenuSelect } from './ui/AppMenuSelect';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Enable LayoutAnimation on Android
@@ -40,25 +40,14 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
     UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-/* ── SVG logos ──────────────────────────────────────────────── */
-import ShopifySvg from '../assets/shopify.svg';
-import EbaySvg from '../assets/ebay.svg';
-import FacebookSvg from '../assets/facebook.svg';
+/* ── Platform brand logos ───────────────────────────────────── */
+import PlatformLogo from './PlatformLogo';
+import { listPlatforms, getPlatform } from '../config/platforms';
 
-const PLATFORM_LOGOS: Record<string, any> = {
-    shopify: ShopifySvg,
-    ebay: EbaySvg,
-    facebook: FacebookSvg,
-};
-
-const PLATFORM_LABELS: Record<string, string> = {
-    shopify: 'Shopify',
-    ebay: 'eBay',
-    facebook: 'Facebook',
-};
-
-/* Platforms that support shipping / delivery settings */
-const SHIPPING_PLATFORMS = new Set(['ebay', 'facebook', 'shopify']);
+/* Platforms that support shipping / delivery settings (from the registry). */
+const SHIPPING_PLATFORMS = new Set<string>(
+    listPlatforms().filter((d) => d.capabilities.shipping).map((d) => d.key),
+);
 
 const STORAGE_KEY = '@anorha/shipping_prefs';
 
@@ -221,15 +210,21 @@ export default function DeliveryShippingSheet({
             : shippingCapablePlatforms[0] || '',
     );
 
-    // Sync selectedTab when the sheet opens
+    // Wizard step (0 method → 1 dimensions → 2 weight → 3 estimate)
+    const [step, setStep] = useState(0);
+
+    // Sync selectedTab + reset to first step when the sheet opens
     useEffect(() => {
         if (visible) {
             const preferred = shippingCapablePlatforms.includes(activePlatformKey.toLowerCase())
                 ? activePlatformKey.toLowerCase()
                 : shippingCapablePlatforms[0] || '';
             setSelectedTab(preferred);
+            setStep(0);
         }
     }, [visible, activePlatformKey, shippingCapablePlatforms]);
+
+    const STEP_TITLES = ['Fulfillment Method', 'Package Dimensions', 'Weight', 'Estimated Rates'];
 
     /* ── Preference persistence ────────────────────────────────── */
     // Load persisted shipping prefs on mount
@@ -405,7 +400,6 @@ export default function DeliveryShippingSheet({
                             <View style={s.tabRow}>
                                 {shippingCapablePlatforms.map((pk) => {
                                     const isActive = pk.toLowerCase() === selectedTab.toLowerCase();
-                                    const Logo = PLATFORM_LOGOS[pk.toLowerCase()];
                                     return (
                                         <TouchableOpacity
                                             key={pk}
@@ -413,9 +407,9 @@ export default function DeliveryShippingSheet({
                                             activeOpacity={0.75}
                                             style={[s.tab, isActive && s.tabActive]}
                                         >
-                                            {Logo && <Logo width={18} height={18} />}
+                                            <PlatformLogo type={pk} size={18} />
                                             <Text style={[s.tabText, isActive && s.tabTextActive]}>
-                                                {PLATFORM_LABELS[pk.toLowerCase()] || pk}
+                                                {getPlatform(pk)?.label || pk}
                                             </Text>
                                         </TouchableOpacity>
                                     );
@@ -423,7 +417,16 @@ export default function DeliveryShippingSheet({
                             </View>
                         )}
 
-                        {/* ── Delivery Method Selector ──────────────────── */}
+                        {/* Step progress (green pills) */}
+                        <View style={s.stepRow}>
+                            {[0, 1, 2, 3].map((i) => (
+                                <View key={i} style={[s.stepPill, i < step && s.stepPillDone, i === step && s.stepPillActive]} />
+                            ))}
+                        </View>
+                        <Text style={s.stepTitle}>{STEP_TITLES[step]}</Text>
+
+                        {/* ── Step 0: Delivery Method ──────────────────── */}
+                        {step === 0 && (<View>
                         <Text style={s.sectionLabel}>
                             {tabKeyLower === 'facebook' ? 'Handoff Method' : 'Fulfillment Method'}
                         </Text>
@@ -512,147 +515,120 @@ export default function DeliveryShippingSheet({
                             </AccordionSection>
                         )}
 
-                        {/* ── Package Dimensions & Weight (accordion) ───── */}
-                        {(showsShipping || tabKeyLower === 'shopify') && (
-                            <>
-                                {/* Tier info — always visible */}
-                                {tabData?.shippingTierReason && (
-                                    <View style={[s.tierInfoBox, { marginTop: 16 }]}>
+                        </View>)}
+
+                        {/* ── Step 1: Package Dimensions ──────────────── */}
+                        {step === 1 && (
+                            <View>
+                                {tabData?.shippingTierReason ? (
+                                    <View style={[s.tierInfoBox, { marginBottom: 14 }]}>
                                         <Scale size={16} color="#6B7280" />
                                         <Text style={{ fontSize: 13, color: '#374151', flex: 1 }}>{tabData.shippingTierReason}</Text>
                                     </View>
-                                )}
-
-                                <AccordionSection
-                                    title="Package Dimensions & Weight"
-                                    summaryText={dimsSummary}
-                                >
-                                    <Text style={[s.sectionLabel, { marginBottom: 6 }]}>Dimensions (in)</Text>
-                                    <View style={s.dimsRow}>
-                                        {(['length', 'width', 'height'] as const).map((dim) => (
-                                            <View key={dim} style={{ flex: 1 }}>
-                                                <Text style={s.dimLabel}>{dim.charAt(0).toUpperCase()}</Text>
-                                                <TextInput
-                                                    style={s.dimInput}
-                                                    value={editableDimensions[dim]}
-                                                    onChangeText={(t) => setEditableDimensions((prev) => ({ ...prev, [dim]: t }))}
-                                                    keyboardType="decimal-pad"
-                                                    placeholder="0"
-                                                    placeholderTextColor="#C0C0C0"
-                                                />
-                                            </View>
-                                        ))}
-                                    </View>
-
-                                    <Text style={[s.sectionLabel, { marginTop: 14, marginBottom: 6 }]}>Weight</Text>
-                                    <View style={s.weightRow}>
-                                        <TextInput
-                                            style={[s.inputField, { flex: 1 }]}
-                                            value={editableWeight}
-                                            onChangeText={setEditableWeight}
-                                            keyboardType="decimal-pad"
-                                            placeholder="0.0"
-                                            placeholderTextColor="#C0C0C0"
-                                        />
-                                        <View style={{ width: 80 }}>
-                                            <AppDropdown
-                                                style={[s.inputField, { paddingHorizontal: 10 }]}
-                                                data={['oz', 'lb', 'g', 'kg'].map((u) => ({ label: u, value: u }))}
-                                                placeholder="lb"
-                                                value={editableWeightUnit}
-                                                onChange={(item: any) => setEditableWeightUnit(item.value)}
+                                ) : null}
+                                <Text style={[s.sectionLabel, { marginBottom: 6 }]}>Dimensions (in)</Text>
+                                <View style={s.dimsRow}>
+                                    {(['length', 'width', 'height'] as const).map((dim) => (
+                                        <View key={dim} style={{ flex: 1 }}>
+                                            <Text style={s.dimLabel}>{dim.charAt(0).toUpperCase()}</Text>
+                                            <TextInput
+                                                style={s.dimInput}
+                                                value={editableDimensions[dim]}
+                                                onChangeText={(t) => setEditableDimensions((prev) => ({ ...prev, [dim]: t }))}
+                                                keyboardType="decimal-pad"
+                                                placeholder="0"
+                                                placeholderTextColor="#C0C0C0"
                                             />
                                         </View>
-                                    </View>
-
-                                    {/* Calculate / Recalculate button inside accordion */}
-                                    <TouchableOpacity style={[s.recalcBtn, { marginTop: 12 }]} onPress={handleRecalculate}>
-                                        <RefreshCw size={14} color="#374151" />
-                                        <Text style={s.recalcText}>
-                                            {shippingEstimateResult && !shippingEstimateResult.error ? 'Recalculate' : 'Calculate'}
-                                        </Text>
-                                    </TouchableOpacity>
-                                </AccordionSection>
-
-                                {/* ── Shipping Rate Estimates (accordion) ────── */}
-                                <AccordionSection
-                                    title="Estimated Shipping Rates"
-                                    summaryText={rateSummary}
-                                    defaultOpen={!!shippingEstimateResult && !shippingEstimateResult.error}
-                                >
-                                    {shippingEstimateLoading ? (
-                                        <View style={s.loadingRow}>
-                                            <ActivityIndicator size="small" color={BRAND_PRIMARY} />
-                                            <Text style={{ fontSize: 13, color: '#6B7280' }}>Calculating rates…</Text>
-                                        </View>
-                                    ) : shippingEstimateResult &&
-                                        typeof shippingEstimateResult.estimatedMin === 'number' &&
-                                        !shippingEstimateResult.error ? (
-                                        <View style={s.ratesContainer}>
-                                            {/* USPS Ground - show typical + range */}
-                                            <View style={[s.rateCard, s.rateCardActive]}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                                    <Truck size={18} color={BRAND_PRIMARY} />
-                                                    <View>
-                                                        <Text style={s.rateCarrier}>USPS Ground</Text>
-                                                        <Text style={s.rateSpeed}>3–7 business days</Text>
-                                                    </View>
-                                                </View>
-                                                <View style={{ alignItems: 'flex-end' }}>
-                                                    {typeof shippingEstimateResult.expectedCost === 'number' ? (
-                                                        <>
-                                                            <Text style={s.ratePrice}>~${shippingEstimateResult.expectedCost.toFixed(2)} typical</Text>
-                                                            <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                                                                Range: ${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)}
-                                                            </Text>
-                                                        </>
-                                                    ) : (
-                                                        <Text style={s.ratePrice}>
-                                                            ${shippingEstimateResult.estimatedMin.toFixed(2)}–$
-                                                            {shippingEstimateResult.estimatedMax.toFixed(2)}
-                                                        </Text>
-                                                    )}
-                                                </View>
-                                            </View>
-
-                                            {/* USPS Priority (placeholder) */}
-                                            <View style={[s.rateCard, s.rateCardDisabled]}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                                    <Package size={18} color="#6B7280" />
-                                                    <View>
-                                                        <Text style={s.rateCarrier}>USPS Priority</Text>
-                                                        <Text style={s.rateSpeed}>1–3 business days</Text>
-                                                    </View>
-                                                </View>
-                                                <Text style={{ fontSize: 13, color: '#9CA3AF' }}>Coming soon</Text>
-                                            </View>
-
-                                            {/* UPS Ground (placeholder) */}
-                                            <View style={[s.rateCard, s.rateCardDisabled]}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                                    <Package size={18} color="#6B7280" />
-                                                    <View>
-                                                        <Text style={s.rateCarrier}>UPS Ground</Text>
-                                                        <Text style={s.rateSpeed}>5–7 business days</Text>
-                                                    </View>
-                                                </View>
-                                                <Text style={{ fontSize: 13, color: '#9CA3AF' }}>Coming soon</Text>
-                                            </View>
-                                        </View>
-                                    ) : (
-                                        <Text style={{ fontSize: 13, color: '#9CA3AF', paddingVertical: 8 }}>
-                                            Set package dimensions and weight, then calculate to see rates.
-                                        </Text>
-                                    )}
-                                </AccordionSection>
-                            </>
+                                    ))}
+                                </View>
+                            </View>
                         )}
 
-                        {/* ── Done Button ──────────────────────────────── */}
-                        <View style={s.actionRow}>
-                            <TouchableOpacity style={s.doneBtn} onPress={onClose}>
-                                <Text style={s.doneText}>Done</Text>
-                            </TouchableOpacity>
+                        {/* ── Step 2: Weight ──────────────────────────── */}
+                        {step === 2 && (
+                            <View>
+                                <Text style={[s.sectionLabel, { marginBottom: 6 }]}>Weight</Text>
+                                <View style={s.weightRow}>
+                                    <TextInput
+                                        style={[s.inputField, { flex: 1 }]}
+                                        value={editableWeight}
+                                        onChangeText={setEditableWeight}
+                                        keyboardType="decimal-pad"
+                                        placeholder="0.0"
+                                        placeholderTextColor="#C0C0C0"
+                                    />
+                                    <View style={{ width: 96 }}>
+                                        <AppMenuSelect
+                                            options={['oz', 'lb', 'g', 'kg'].map((u) => ({ label: u, value: u }))}
+                                            placeholder="lb"
+                                            value={editableWeightUnit}
+                                            onChange={(value) => setEditableWeightUnit(value)}
+                                            menuWidth={120}
+                                        />
+                                    </View>
+                                </View>
+                            </View>
+                        )}
+
+                        {/* ── Step 3: Estimated Rates ─────────────────── */}
+                        {step === 3 && (
+                            <View>
+                                {shippingEstimateLoading ? (
+                                    <View style={s.loadingRow}>
+                                        <ActivityIndicator size="small" color="#93C822" />
+                                        <Text style={{ fontSize: 13, color: '#6B7280' }}>Calculating rates…</Text>
+                                    </View>
+                                ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
+                                    <View style={s.ratesContainer}>
+                                        <View style={[s.rateCard, s.rateCardActive]}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                                <Truck size={18} color="#93C822" />
+                                                <View>
+                                                    <Text style={s.rateCarrier}>USPS Ground</Text>
+                                                    <Text style={s.rateSpeed}>3–7 business days</Text>
+                                                </View>
+                                            </View>
+                                            <View style={{ alignItems: 'flex-end' }}>
+                                                {typeof shippingEstimateResult.expectedCost === 'number' ? (
+                                                    <>
+                                                        <Text style={s.ratePrice}>~${shippingEstimateResult.expectedCost.toFixed(2)} typical</Text>
+                                                        <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>Range: ${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)}</Text>
+                                                    </>
+                                                ) : (
+                                                    <Text style={s.ratePrice}>${shippingEstimateResult.estimatedMin.toFixed(2)}–${shippingEstimateResult.estimatedMax.toFixed(2)}</Text>
+                                                )}
+                                            </View>
+                                        </View>
+                                    </View>
+                                ) : (
+                                    <Text style={{ fontSize: 13, color: '#9CA3AF', paddingVertical: 8 }}>Set dimensions & weight, then tap Calculate.</Text>
+                                )}
+                                <TouchableOpacity style={[s.recalcBtn, { marginTop: 12 }]} onPress={handleRecalculate}>
+                                    <RefreshCw size={14} color="#374151" />
+                                    <Text style={s.recalcText}>{shippingEstimateResult && !shippingEstimateResult.error ? 'Recalculate' : 'Calculate'}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {/* ── Wizard nav ──────────────────────────────── */}
+                        <View style={s.navRow}>
+                            {step > 0 ? (
+                                <TouchableOpacity style={s.backBtn} onPress={() => setStep((v) => Math.max(0, v - 1))}>
+                                    <Text style={s.backText}>Back</Text>
+                                </TouchableOpacity>
+                            ) : (
+                                <View style={{ flex: 1 }} />
+                            )}
+                            {step < 3 ? (
+                                <TouchableOpacity style={s.nextBtn} onPress={() => { if (step === 2) handleRecalculate(); setStep((v) => Math.min(3, v + 1)); }}>
+                                    <Text style={s.nextText}>Next</Text>
+                                </TouchableOpacity>
+                            ) : (
+                                <TouchableOpacity style={s.nextBtn} onPress={onClose}>
+                                    <Text style={s.nextText}>Done</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
                     </ScrollView>
                 </Pressable>
@@ -873,4 +849,28 @@ const s = StyleSheet.create({
         alignItems: 'center',
     },
     doneText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+
+    /* Wizard stepper */
+    stepRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+    stepPill: { flex: 1, height: 7, borderRadius: 4, backgroundColor: '#E5E7EB' },
+    stepPillDone: { backgroundColor: '#93C822' },
+    stepPillActive: { backgroundColor: '#C7E58A' },
+    stepTitle: { fontSize: 19, fontWeight: '700', color: '#111827', marginBottom: 16 },
+    navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 24 },
+    backBtn: {
+        flex: 1,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        paddingVertical: 14,
+        alignItems: 'center',
+    },
+    backText: { fontSize: 14, fontWeight: '600', color: '#374151' },
+    nextBtn: {
+        flex: 2,
+        backgroundColor: '#93C822',
+        borderRadius: 12,
+        paddingVertical: 14,
+        alignItems: 'center',
+    },
+    nextText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 });

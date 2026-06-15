@@ -1,12 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import { SessionContext } from './SessionContext';
 import { useOrg } from './OrgContext';
 import { capture } from '../lib/analytics';
 import { BillingGateResponse, normalizeBillingGateResponse } from '../types/billingGate';
 import { DEFAULT_FREEMIUM_STATUS, FreemiumStatus } from '../types/freemium';
 
-const API_BASE_RAW = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
   ? API_BASE_RAW.replace(/\/$/, '')
   : `${API_BASE_RAW.replace(/\/$/, '')}/api`;

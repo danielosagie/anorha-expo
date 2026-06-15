@@ -4,16 +4,37 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { useAuth, useUser } from '@clerk/clerk-expo';
+import { API_BASE_URL } from '../config/env';
+import { getActiveThread } from '../lib/activeThread';
 
 // Configure how notifications appear when app is in foreground
 Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-        shouldShowBanner: true,
-        shouldShowList: true,
-    }),
+    handleNotification: async (notification) => {
+        const data = (notification?.request?.content?.data || {}) as any;
+        // Suppress the in-app banner for a Sprout reply when the seller is already in
+        // that exact campaign thread (they're watching it land). Backgrounded pushes
+        // bypass this handler entirely, so they still show; replies seen from Home or
+        // any other screen still banner normally.
+        if (data?.type === 'sprout_reply' && data?.campaignId) {
+            const { activeCampaignId } = getActiveThread();
+            if (activeCampaignId && String(activeCampaignId) === String(data.campaignId)) {
+                return {
+                    shouldShowAlert: false,
+                    shouldPlaySound: false,
+                    shouldSetBadge: false,
+                    shouldShowBanner: false,
+                    shouldShowList: false,
+                };
+            }
+        }
+        return {
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: true,
+            shouldShowBanner: true,
+            shouldShowList: true,
+        };
+    },
 });
 
 interface PushNotificationState {
@@ -77,7 +98,7 @@ export function usePushNotifications() {
 
         try {
             const authToken = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
-            const base = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+            const base = API_BASE_URL;
             if (!base) {
                 console.warn('[PushNotifications] No API base URL found');
                 return;

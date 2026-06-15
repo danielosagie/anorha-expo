@@ -2,8 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BRAND_PRIMARY } from '../../../design/tokens';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSharedValue, withTiming } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StreamingMessageBubble } from './StreamingMessageBubble';
+import { TimestampRevealContext } from './timestampReveal';
 import type { ConversationMessage, DecisionPrompt } from '../types';
 
 type MessageWithTime = ConversationMessage & { time: string };
@@ -13,7 +16,11 @@ type Props = {
   loading: boolean;
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
+  onOpenCart?: (sessionId: string) => void;
   ListHeaderComponent?: React.ReactElement | null;
+  /** Padding so the feed clears the floating glass header/footer. */
+  contentTopInset?: number;
+  contentBottomInset?: number;
 };
 
 export const ConversationList = ({
@@ -21,16 +28,44 @@ export const ConversationList = ({
   loading,
   onDecision,
   onRetry,
+  onOpenCart,
   ListHeaderComponent = null,
+  contentTopInset,
+  contentBottomInset,
 }: Props) => {
   const listRef = useRef<any>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canJump = useMemo(() => messages.length > 2, [messages.length]);
 
+  // iMessage-style swipe-left to reveal timestamps on the right.
+  const dragX = useSharedValue(0);
+  const revealPan = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-14, 14])
+        .failOffsetY([-12, 12])
+        .onChange(e => {
+          'worklet';
+          dragX.value = Math.max(-64, Math.min(0, dragX.value + e.changeX));
+        })
+        .onFinalize(() => {
+          'worklet';
+          dragX.value = withTiming(0, { duration: 180 });
+        }),
+    [dragX],
+  );
+
+  // Keep pinned to the bottom without flicker: stream deltas pin instantly
+  // (animated:false), only a brand-new message gets a gentle animated scroll.
+  const prevLenRef = useRef(0);
   useEffect(() => {
-    if (!showJumpToLatest) {
-      listRef.current?.scrollToEnd({ animated: true });
+    if (showJumpToLatest) {
+      prevLenRef.current = messages.length;
+      return;
     }
+    const grew = messages.length > prevLenRef.current;
+    prevLenRef.current = messages.length;
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
   }, [messages, showJumpToLatest]);
 
   if (loading) {
@@ -44,14 +79,20 @@ export const ConversationList = ({
 
   return (
     <View style={styles.container}>
+      <TimestampRevealContext.Provider value={dragX}>
+      <GestureDetector gesture={revealPan}>
       <FlashList
         ref={listRef}
         data={messages}
         keyExtractor={item => item.clientMessageId || item.serverMessageId || item.id}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={{
+          paddingHorizontal: 12,
+          paddingTop: contentTopInset ?? 10,
+          paddingBottom: contentBottomInset ?? 18,
+        }}
         ListHeaderComponent={ListHeaderComponent}
         renderItem={({ item }) => (
-          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} />
+          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} />
         )}
         ListEmptyComponent={(
           <View style={styles.emptyState}>
@@ -68,6 +109,8 @@ export const ConversationList = ({
           setShowJumpToLatest(!nearBottom);
         }}
       />
+      </GestureDetector>
+      </TimestampRevealContext.Provider>
 
       {showJumpToLatest && canJump ? (
         <TouchableOpacity style={styles.jumpButton} onPress={() => listRef.current?.scrollToEnd({ animated: true })}>
@@ -96,7 +139,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: '#71717A',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     fontSize: 13,
   },
   emptyState: {
@@ -107,14 +150,14 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     color: '#111827',
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     fontSize: 15,
   },
   emptyText: {
     maxWidth: 260,
     textAlign: 'center',
     color: '#6B7280',
-    fontFamily: 'PlusJakartaSans_400Regular',
+    fontFamily: 'Inter_400Regular',
     fontSize: 13,
     lineHeight: 19,
   },
@@ -132,7 +175,7 @@ const styles = StyleSheet.create({
   },
   jumpButtonText: {
     color: '#FFFFFF',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
 });

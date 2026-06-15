@@ -1,29 +1,28 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
-import { ScrollView as ScrollViewHorizontal } from 'react-native-gesture-handler';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
 import BaseModal from './BaseModal';
 import DeliveryShippingSheet from './DeliveryShippingSheet';
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
+import PlatformLogo from './PlatformLogo';
+import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw } from 'lucide-react-native';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
+import { AppMenuSelect } from './ui/AppMenuSelect';
+import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, Field, ChipsField, LocationDropdown } from './ListingEditor';
 import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
-import { LineChart, BarChart } from 'react-native-chart-kit';
+import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
+import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
@@ -33,7 +32,7 @@ const ACTION_BAR_BOTTOM_OFFSET = 24;
 
 export type PlatformsData = Record<string, any>;
 
-const API_BASE_URL = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
+const API_BASE_URL = ENV_API_BASE_URL;
 
 type Props = {
   platforms: PlatformsData;
@@ -64,6 +63,8 @@ type Props = {
   highlightedField?: string;
   highlightedPlatform?: string;
   onScrollToOffset?: (y: number) => void;
+  /** Total deduped required-missing fields across platforms — shown as a badge on the All pill. */
+  allMissingCount?: number;
 };
 
 export type ListingEditorFormRef = { openPlatformPicker: () => void };
@@ -198,176 +199,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-// --- MODERN UI COMPONENTS ---
-
-const CollapsibleSection = ({
-  title,
-  icon,
-  children,
-  defaultOpen = true,
-  rightAction,
-  errorCount = 0
-}: {
-  title: string,
-  icon?: any,
-  children: React.ReactNode,
-  defaultOpen?: boolean,
-  rightAction?: React.ReactNode,
-  errorCount?: number
-}) => {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-
-  return (
-    <View style={[styles.card, { padding: 0, overflow: 'hidden' }]}>
-      <TouchableOpacity
-        activeOpacity={0.7}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          padding: 16,
-          backgroundColor: '#fff',
-          justifyContent: 'space-between'
-        }}
-        onPress={() => setIsOpen(v => !v)}
-      >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <SectionHeader title={title} icon={icon} />
-          {errorCount > 0 && (
-            <View style={{ backgroundColor: '#FECACA', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-              <Text style={{ color: '#DC2626', fontSize: 10, fontWeight: '700' }}>{errorCount} MISSING</Text>
-            </View>
-          )}
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {rightAction}
-          <Icon name={isOpen ? 'chevron-up' : 'chevron-down'} size={20} color="#9CA3AF" />
-        </View>
-      </TouchableOpacity>
-
-      {isOpen && (
-        <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-          <View style={{ height: 1, backgroundColor: '#F3F4F6', marginBottom: 16 }} />
-          {children}
-        </View>
-      )}
-    </View>
-  );
-};
-
-/* Sticky Bottom Action Bar Component */
-const StickyActionBar = ({ onSave, onPublish }: { onSave?: () => void, onPublish?: () => void }) => {
-  return (
-    <View style={{
-      position: 'absolute',
-      bottom: 20,
-      left: 16,
-      right: 16,
-      backgroundColor: '#fff',
-      borderRadius: 100,
-      padding: 8,
-      paddingHorizontal: 12,
-      flexDirection: 'row',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.15,
-      shadowRadius: 12,
-      elevation: 8,
-      borderWidth: 1,
-      borderColor: '#E5E7EB',
-      justifyContent: 'space-between',
-      alignItems: 'center'
-    }}>
-      <TouchableOpacity onPress={onSave} style={{ padding: 10 }}>
-        <Text style={{ fontWeight: '600', color: '#4B5563' }}>Save Draft</Text>
-      </TouchableOpacity>
-      <View style={{ height: 20, width: 1, backgroundColor: '#E5E7EB' }} />
-      <TouchableOpacity onPress={onPublish} style={{ padding: 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Text style={{ fontWeight: '700', color: BRAND_PRIMARY }}>Publish Now</Text>
-        <Icon name="arrow-right" size={16} color={BRAND_PRIMARY} />
-      </TouchableOpacity>
-    </View>
-  )
-}
-
-const ModernInput = ({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  multiline,
-  keyboardType,
-  icon,
-  rightRight, // Element to render on right
-  disabled
-}: {
-  label: string;
-  value: string;
-  onChangeText: (t: string) => void;
-  placeholder?: string;
-  multiline?: boolean;
-  keyboardType?: any;
-  icon?: any;
-  rightRight?: React.ReactNode;
-  disabled?: boolean;
-}) => {
-  const [isFocused, setIsFocused] = useState(false);
-  const IconComp = icon;
-
-  return (
-    <View style={{ marginBottom: 16 }}>
-      <Text style={[
-        styles.fieldLabel,
-        isFocused && { color: BRAND_PRIMARY } // Brand color on focus
-      ]}>
-        {label}
-      </Text>
-      <View style={[
-        styles.modernInputWrapper,
-        isFocused && styles.modernInputFocused,
-        disabled && styles.modernInputDisabled,
-        multiline && { height: 'auto', minHeight: 100 }
-      ]}>
-        {IconComp && (
-          <View style={{ marginRight: 10 }}>
-            <IconComp size={18} color={isFocused ? BRAND_PRIMARY : '#9CA3AF'} />
-          </View>
-        )}
-        <TextInput
-          style={[styles.modernTextInput, multiline && { height: 100, textAlignVertical: 'top', paddingTop: 8 }]}
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor="#9CA3AF"
-          multiline={multiline}
-          keyboardType={keyboardType}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          editable={!disabled}
-        />
-        {rightRight}
-      </View>
-    </View>
-  );
-};
-
-const SectionHeader = ({ title, icon, rightAction }: { title: string, icon?: any, rightAction?: React.ReactNode }) => {
-  const IconComp = icon;
-  return (
-    <View style={styles.sectionHeaderContainer}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        {IconComp && (
-          <View style={styles.sectionIconBg}>
-            <IconComp size={16} color="#4B5563" />
-          </View>
-        )}
-        <Text style={styles.sectionHeaderTitle}>{title}</Text>
-      </View>
-      {rightAction}
-    </View>
-  );
-};
-
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const isFocused = useIsFocused();
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
@@ -420,9 +252,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [ebayConditionsLoading, setEbayConditionsLoading] = useState<boolean>(false);
   const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
   const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
-  const [pricingSourcesSheetVisible, setPricingSourcesSheetVisible] = useState<boolean>(false);
-  const [pricingHistoryRange, setPricingHistoryRange] = useState<'1W' | '1M' | '3M'>('1M');
-  const [selectedPricingPointIdx, setSelectedPricingPointIdx] = useState<number | null>(null);
+  // Suggested-price pills only appear once the price field is focused (not always-on).
+  const [priceFocused, setPriceFocused] = useState<boolean>(false);
   const [pricingResearchResult, setPricingResearchResult] = useState<{
     low?: number; median?: number; high?: number; recommended?: number;
     samples?: Array<{ title: string; price: number; url?: string; quantitySold?: number; watchers?: number; estimatedDaysToSell?: number }>;
@@ -829,14 +660,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       });
       const data = await res.json();
       setPricingResearchResult(data);
-      setPricingSourcesSheetVisible(false);
-      setSelectedPricingPointIdx(null);
       setPricingResearchModalVisible(true);
     } catch (e) {
       console.error('[ListingEditorForm] Pricing research error:', e);
       setPricingResearchResult({ error: (e as Error)?.message || 'Failed to research pricing' });
-      setPricingSourcesSheetVisible(false);
-      setSelectedPricingPointIdx(null);
       setPricingResearchModalVisible(true);
     } finally {
       setPricingResearchLoading(false);
@@ -1722,9 +1549,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               <TouchableOpacity
                 key={key}
                 onPress={() => setActiveTab(key)}
-                style={[styles.pill, activeTab === key && styles.pillActive]}
+                style={[styles.pill, activeTab === key && styles.pillActive, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
               >
                 <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
+                {allMissingCount && allMissingCount > 0 ? (
+                  <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{allMissingCount}</Text>
+                  </View>
+                ) : null}
               </TouchableOpacity>
             );
           }
@@ -1763,29 +1595,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   <Icon name="loading" size={12} color="#6B7280" />
                 </View>
               ) : (
-                (() => {
-                  const map: Record<string, any> = { shopify: ShopifySvg, amazon: AmazonSvg, facebook: FacebookSvg, ebay: EbaySvg, clover: CloverSvg, square: SquareSvg };
-                  const SVG = map[key];
-                  return SVG ? <SVG width={12} height={12} /> : null;
-                })()
+                getPlatform(key) ? <PlatformLogo type={key} size={12} /> : null
               )}
               <Text style={[styles.pillText, activeTab === key && styles.pillTextActive, generatingPlatforms.has(key) && styles.pillTextGenerating]}>
                 {PLATFORM_META[key]?.label || key}
                 {generatingPlatforms.has(key) && ' (Generating...)'}
               </Text>
               
-              {/* Readiness Indicator */}
-              {!generatingPlatforms.has(key) && (
-                isReady ? (
-                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#dcfce7', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
-                    <Icon name="check" size={10} color={BRAND_PRIMARY} />
-                  </View>
-                ) : missingCount > 0 ? (
-                  <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{missingCount}</Text>
-                  </View>
-                ) : null
-              )}
+              {/* Only a needs-attention badge — no "complete" checkmark when done. */}
+              {!generatingPlatforms.has(key) && missingCount > 0 ? (
+                <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginLeft: 2 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{missingCount}</Text>
+                </View>
+              ) : null}
             </TouchableOpacity>
           );
         })}
@@ -1873,7 +1695,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             </View>
 
             <AppDropdown
-              style={[styles.input, { height: 50, paddingHorizontal: 12, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
+              style={[styles.input, { height: 54, paddingHorizontal: 14, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
               data={taxonomyDropdownData.slice(0, 12)}
               maxHeight={280}
               value={selectedCategoryId}
@@ -1985,61 +1807,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </View>
         )}
 
-        {/* AI Price with Confidence Bands - 3 pills: low (fast sale), recommended, high (max profit) */}
-        {(() => {
-          const apr = (activeData as any).aiPriceRecommendation;
-          const legacy = (activeData as any).aiRecommendedPrice;
-          const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
-            ? { low: apr.low, recommended: apr.recommended, high: apr.high }
-            : (typeof legacy === 'number' && legacy > 0
-              ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
-              : null);
-          const currentPrice = Number((activeData as any).price) || 0;
-          if (!band || band.recommended <= 0) return null;
-
-          const applyPrice = (p: number) => {
-            patchField('price', String(p.toFixed(2)));
-          };
-
-          const pillStyle = (isSelected: boolean) => ({
-            flex: 1,
-            paddingVertical: 10,
-            paddingHorizontal: 12,
-            borderRadius: 8,
-            borderWidth: 1,
-            borderColor: isSelected ? BRAND_PRIMARY : '#E5E7EB',
-            backgroundColor: isSelected ? '#F0FFF4' : '#FFF',
-            alignItems: 'center' as const,
-          });
-
-          return (
-            <View style={{ backgroundColor: '#F0FFF4', borderRadius: 8, padding: 10, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: BRAND_PRIMARY }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Sparkles size={16} color={BRAND_PRIMARY} />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#3f6212' }}>Suggested Price</Text>
-                  <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
-                    ${band.low.toFixed(0)} – ${band.high.toFixed(0)} (recommended ${band.recommended.toFixed(0)})
-                  </Text>
-                </View>
-              </View>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.low) < 0.02)} onPress={() => applyPrice(band.low)}>
-                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Fast sale</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.low.toFixed(2)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.recommended) < 0.02)} onPress={() => applyPrice(band.recommended)}>
-                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Recommended</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.recommended.toFixed(2)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={pillStyle(Math.abs(currentPrice - band.high) < 0.02)} onPress={() => applyPrice(band.high)}>
-                  <Text style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Max profit</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937' }}>${band.high.toFixed(2)}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          );
-        })()}
+        {/* Suggested-price pills moved BELOW the price field and gated on focus — see below. */}
 
         {/* Price field - custom row so Research Pricing sits on same line as label + (i) */}
         {(() => {
@@ -2093,10 +1861,53 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 ]}
                 value={String((activeData as any).price ?? '')}
                 onChangeText={(t) => patchField('price', t)}
+                onFocus={() => setPriceFocused(true)}
+                onBlur={() => setTimeout(() => setPriceFocused(false), 200)}
                 placeholder=""
                 placeholderTextColor="#999999"
                 keyboardType="decimal-pad"
               />
+
+              {/* Suggested-price pills — only while the price field is focused. */}
+              {priceFocused && (() => {
+                const apr = (activeData as any).aiPriceRecommendation;
+                const legacy = (activeData as any).aiRecommendedPrice;
+                const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
+                  ? { low: apr.low, recommended: apr.recommended, high: apr.high }
+                  : (typeof legacy === 'number' && legacy > 0
+                    ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
+                    : null);
+                const currentPrice = Number((activeData as any).price) || 0;
+                if (!band || band.recommended <= 0) {
+                  return showResearchPricing ? (
+                    <Text style={styles.priceHint}>Tap “Research Pricing” above for sold comps & a suggested range.</Text>
+                  ) : null;
+                }
+                const applyPrice = (p: number) => patchField('price', String(p.toFixed(2)));
+                const opts = [
+                  { label: 'Fast sale', price: band.low },
+                  { label: 'Recommended', price: band.recommended, hi: true },
+                  { label: 'Max profit', price: band.high },
+                ];
+                return (
+                  <View style={styles.suggestRow}>
+                    {opts.map((o) => {
+                      const sel = Math.abs(currentPrice - o.price) < 0.02;
+                      return (
+                        <TouchableOpacity
+                          key={o.label}
+                          style={[styles.suggestChip, (sel || o.hi) && styles.suggestChipHi]}
+                          activeOpacity={0.8}
+                          onPress={() => applyPrice(o.price)}
+                        >
+                          <Text style={styles.suggestChipLabel}>{o.label}</Text>
+                          <Text style={styles.suggestChipPrice}>${o.price.toFixed(2)}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
             </View>
           );
         })()}
@@ -2106,12 +1917,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
           </View>
           <View style={{ width: 140, marginBottom: 12 }}>
-            <AppDropdown
-              style={[styles.input, { height: 50, paddingHorizontal: 12 }]}
-              data={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
+            <AppMenuSelect
+              options={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
               placeholder="oz"
               value={activeData.weightUnit || 'oz'}
-              onChange={(item) => patchField('weightUnit', item.value)}
+              onChange={(value) => patchField('weightUnit', value)}
+              menuWidth={160}
             />
           </View>
         </View>
@@ -2142,14 +1953,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         <View style={{ marginBottom: 16 }}>
           <Text style={styles.fieldLabel}>Condition</Text>
           {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
-            <AppDropdown
-              style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
-              data={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
+            <AppMenuSelect
+              options={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
               placeholder={ebayConditionsLoading ? "Loading conditions..." : "Select condition..."}
               value={activeData.conditionID ? String(activeData.conditionID) : (ebayConditions[0]?.conditionId ?? '')}
-              onChange={(item) => {
-                const condId = parseInt(item.value, 10);
-                const generic = mapEbayConditionIdToGeneric(item.value) as PlatformState['condition'];
+              onChange={(value) => {
+                const condId = parseInt(value, 10);
+                const generic = mapEbayConditionIdToGeneric(value) as PlatformState['condition'];
                 patchPlatform(prev => ({
                   ...prev,
                   conditionID: Number.isFinite(condId) ? condId : undefined,
@@ -2158,9 +1968,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               }}
             />
           ) : (
-            <AppDropdown
-              style={[styles.modernInputWrapper, { paddingHorizontal: 12, height: 48, borderWidth: 1 }]}
-              data={[
+            <AppMenuSelect
+              options={[
                 { label: 'New', value: 'new' },
                 { label: 'Like New', value: 'like_new' },
                 { label: 'Good', value: 'good' },
@@ -2171,7 +1980,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               ]}
               placeholder="Select condition..."
               value={activeData.condition || 'good'}
-              onChange={item => patchField('condition', item.value)}
+              onChange={(value) => patchField('condition', value)}
             />
           )}
         </View>
@@ -2181,9 +1990,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy */}
       <Modal visible={pricingResearchModalVisible} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
+          <Pressable style={{ backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>eBay Sold Prices</Text>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
               <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
                 <Icon name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
@@ -2193,263 +2002,20 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
               </View>
             ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <ScrollView style={{ maxHeight: 580 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}>
-                {/* Accuracy / recency + Sources toggle (expands section below) */}
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                  <Text style={{ fontSize: 13, color: '#6B7280' }}>
-                    Based on {(pricingResearchResult.sampleCount ?? pricingResearchResult.samples?.length ?? 0)} sold listings
-                    {pricingResearchResult.cachedAt
-                      ? ` · Cached ${(() => {
-                        const d = new Date(pricingResearchResult.cachedAt);
-                        const mins = Math.round((Date.now() - d.getTime()) / 60000);
-                        if (mins < 60) return `${mins}m ago`;
-                        const h = Math.floor(mins / 60);
-                        return `${h}h ago`;
-                      })()}`
-                      : ''}
-                  </Text>
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 12 }}
-                    onPress={() => setPricingSourcesSheetVisible((v) => !v)}
-                  >
-                    <Icon name="web" size={14} color="#4B5563" />
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#4B5563', marginLeft: 4 }}>{pricingSourcesSheetVisible ? 'Hide sources' : 'Sources'}</Text>
-                  </TouchableOpacity>
-                </View>
-                {/* Expandable Sources section (toggled by button above) */}
-                {pricingSourcesSheetVisible && (
-                  <View style={{ marginBottom: 16, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#1F2937', marginBottom: 8 }}>Sources</Text>
-                    {Array.isArray(pricingResearchResult?.samples) && pricingResearchResult.samples.length > 0 && (
-                      <View style={{ marginTop: 4 }}>
-                        {pricingResearchResult.samples.slice(0, 8).map((sample, idx) => (
-                          <View key={`inline-sample-${idx}`} style={{ marginBottom: 8 }}>
-                            <Text style={{ fontSize: 12, color: '#111827' }} numberOfLines={1}>
-                              {sample.title || 'Listing'} • ${typeof sample.price === 'number' ? sample.price.toFixed(2) : sample.price}
-                              {typeof sample.estimatedDaysToSell === 'number' ? ` • ~${Math.round(sample.estimatedDaysToSell)}d` : ''}
-                            </Text>
-                            {sample.url ? (
-                              <TouchableOpacity onPress={() => Linking.openURL(sample.url!)}>
-                                <Text style={{ fontSize: 12, color: '#2563EB', marginTop: 1 }}>View listing</Text>
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                {/* Three options */}
-                {(() => {
-                  // Calculate timeToSell from samples to match chart data (same logic as backend)
-                  const averageDaysNearTarget = (
-                    targetPrice: number,
-                    samples: Array<{ price: number; estimatedDaysToSell?: number }>,
-                  ): number | undefined => {
-                    const withDays = samples.filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell));
-                    if (!withDays.length) return undefined;
-                    const sorted = withDays
-                      .map((s) => ({ ...s, dist: Math.abs(Number(s.price) - targetPrice) }))
-                      .sort((a, b) => a.dist - b.dist)
-                      .slice(0, Math.min(5, withDays.length));
-                    if (!sorted.length) return undefined;
-                    console.log("Sorted: " + sorted)
-                    const avg = sorted.reduce((sum, s) => sum + Number(s.estimatedDaysToSell || 0), 0) / sorted.length;
-                    return Math.round(avg);
-                  };
-                  const samples = pricingResearchResult?.samples || [];
-                  const low = pricingResearchResult?.low ?? 0;
-                  const median = pricingResearchResult?.median ?? 0;
-                  const recommended = pricingResearchResult?.recommended ?? median;
-                  const high = pricingResearchResult?.high ?? 0;
-                  const fastSaleDays = averageDaysNearTarget(low, samples);
-                  const recommendedDays = averageDaysNearTarget(recommended, samples);
-                  const maxProfitDays = averageDaysNearTarget(high, samples);
-                  return (
-                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-                      <TouchableOpacity
-                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
-                        onPress={() => {
-                          patchField('price', String(low.toFixed(2)));
-                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
-                          setPricingResearchModalVisible(false);
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, color: '#6B7280' }}>Fast sale</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700' }}>${low.toFixed(2)}</Text>
-                        <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>
-                          ~{fastSaleDays ?? '—'}d avg
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3B82F6', backgroundColor: '#EFF6FF', alignItems: 'center' }}
-                        onPress={() => {
-                          patchField('price', String(recommended.toFixed(2)));
-                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
-                          setPricingResearchModalVisible(false);
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, color: '#1E40AF' }}>Recommended</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#1E40AF' }}>${recommended.toFixed(2)}</Text>
-                        <Text style={{ fontSize: 10, color: '#1E40AF', marginTop: 2 }}>
-                          ~{recommendedDays ?? '—'}d avg
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' }}
-                        onPress={() => {
-                          patchField('price', String(high.toFixed(2)));
-                          patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
-                          setPricingResearchModalVisible(false);
-                        }}
-                      >
-                        <Text style={{ fontSize: 10, color: '#6B7280' }}>Max profit</Text>
-                        <Text style={{ fontSize: 14, fontWeight: '700' }}>${high.toFixed(2)}</Text>
-                        <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 2 }}>
-                          ~{maxProfitDays ?? '—'}d avg
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })()}
-
-                {/* Interactive chart: Sold price vs estimated time on market */}
-                {(() => {
-                  const marketPoints = (pricingResearchResult.samples || [])
-                    .filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell) && typeof s.price === 'number')
-                    .sort((a, b) => Number(a.price) - Number(b.price));
-                  const windowWidth = Dimensions.get('window').width;
-                  const chartWidth = Math.max(marketPoints.length * 60, windowWidth + 60, 320);
-                  if (marketPoints.length >= 2) {
-                    const maxLabels = 10;
-                    const step = Math.max(1, Math.floor(marketPoints.length / maxLabels));
-                    const labels = marketPoints.map((p, i) =>
-                      (i % step === 0 || i === marketPoints.length - 1) ? `$${Number(p.price).toFixed(1)}` : ''
-                    );
-                    const data = marketPoints.map((p) => Math.round(Number(p.estimatedDaysToSell)));
-                    const selected = selectedPricingPointIdx != null && selectedPricingPointIdx < marketPoints.length ? marketPoints[selectedPricingPointIdx] : null;
-                    return (
-                      <View style={{ marginBottom: 16 }}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 4 }}>Time to sell at each price</Text>
-                        <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Y: Time (days to sell) · X: Price ($)</Text>
-                        <ScrollViewHorizontal
-                          horizontal
-                          showsHorizontalScrollIndicator={true}
-                          scrollEventThrottle={16}
-                          nestedScrollEnabled={Platform.OS === 'android'}
-                          style={{ marginHorizontal: -8, width: windowWidth - 40 }}
-                          contentContainerStyle={{ paddingHorizontal: 8 }}
-                        >
-                          <View style={{ width: chartWidth }}>
-                          <BarChart
-                            data={{
-                              labels,
-                              datasets: [{ data }],
-                            }}
-                            width={chartWidth}
-                            height={200}
-                            yAxisLabel=""
-                            yAxisSuffix="d"
-                            chartConfig={{
-                              backgroundColor: '#ffffff',
-                              backgroundGradientFrom: '#ffffff',
-                              backgroundGradientTo: '#ffffff',
-                              decimalPlaces: 0,
-                              color: (opacity = 1) => `rgba(234, 179, 8, ${opacity})`,
-                              labelColor: () => '#6B7280',
-                              style: { borderRadius: 12 },
-                              barPercentage: 0.6,
-                            }}
-                            style={{ borderRadius: 12, backgroundColor: '#ffffff' }}
-                            withInnerLines={true}
-                            fromZero
-                          />
-                          </View>
-                        </ScrollViewHorizontal>
-                        <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4, textAlign: 'center' }}>Price ($) →  Swipe to see more</Text>
-                        {selected != null && (
-                          <View style={{ marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: '#F9FAFB' }}>
-                            <Text style={{ fontSize: 13, fontWeight: '600', color: '#111827' }} numberOfLines={1}>{selected.title || 'Listing'}</Text>
-                            <Text style={{ fontSize: 12, color: '#4B5563', marginTop: 2 }}>
-                              ${Number(selected.price).toFixed(2)} • ~{Math.round(Number(selected.estimatedDaysToSell))}d to sell
-                            </Text>
-                            {selected.url ? (
-                              <TouchableOpacity onPress={() => Linking.openURL(selected.url!)}>
-                                <Text style={{ fontSize: 12, color: '#2563EB', marginTop: 4, fontWeight: '600' }}>View listing</Text>
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        )}
-                      </View>
-                    );
-                  }
-
-                  const points = pricingResearchResult.history?.dataPoints ?? [];
-                  const rangeMs = pricingHistoryRange === '1W' ? 7 * 24 * 60 * 60 * 1000 : pricingHistoryRange === '1M' ? 30 * 24 * 60 * 60 * 1000 : 90 * 24 * 60 * 60 * 1000;
-                  const cutoff = Date.now() - rangeMs;
-                  const filtered = points.filter(p => new Date(p.date).getTime() >= cutoff);
-                  if (filtered.length < 2) {
-                    return (
-                      <View style={{ marginBottom: 16, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: '#F9FAFB', borderRadius: 12 }}>
-                        <Text style={{ fontSize: 13, color: '#6B7280' }}>Not enough points yet for trend. Tap Sources to inspect sold listing links.</Text>
-                      </View>
-                    );
-                  }
-                  const labels = filtered.map(p => {
-                    const d = new Date(p.date);
-                    return `${d.getMonth() + 1}/${d.getDate()}`;
-                  });
-                  const data = filtered.map(p => p.median);
-                  const trendChartWidth = Math.max(filtered.length * 60, Dimensions.get('window').width + 60, 320);
-                  return (
-                    <View style={{ marginBottom: 16 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>Price trend (cached runs)</Text>
-                        <View style={{ flexDirection: 'row', gap: 6 }}>
-                          {(['1W', '1M', '3M'] as const).map(r => (
-                            <TouchableOpacity
-                              key={r}
-                              onPress={() => setPricingHistoryRange(r)}
-                              style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: pricingHistoryRange === r ? '#EFF6FF' : '#F3F4F6' }}
-                            >
-                              <Text style={{ fontSize: 12, fontWeight: '600', color: pricingHistoryRange === r ? '#1E40AF' : '#6B7280' }}>{r}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </View>
-                      </View>
-                      <ScrollViewHorizontal
-                        horizontal
-                        showsHorizontalScrollIndicator={true}
-                        scrollEventThrottle={16}
-                        nestedScrollEnabled={Platform.OS === 'android'}
-                        style={{ width: Dimensions.get('window').width - 40 }}
-                      >
-                        <View style={{ width: trendChartWidth }}>
-                      <LineChart
-                        data={{ labels, datasets: [{ data: data.length ? data : [0] }] }}
-                        width={trendChartWidth}
-                        height={160}
-                        chartConfig={{
-                          backgroundColor: '#ffffff',
-                          backgroundGradientFrom: '#ffffff',
-                          backgroundGradientTo: '#ffffff',
-                          decimalPlaces: 0,
-                          color: (opacity = 1) => `rgba(234, 179, 8, ${opacity})`,
-                          labelColor: () => '#6B7280',
-                          style: { borderRadius: 12 },
-                        }}
-                        style={{ borderRadius: 12, backgroundColor: '#ffffff' }}
-                        withInnerLines={false}
-                        withOuterLines={true}
-                      />
-                        </View>
-                      </ScrollViewHorizontal>
-                    </View>
-                  );
-                })()}
-
+              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 28 }}>
+                {/* The one shared pricing overview (same card as the add-product preview). */}
+                <PricingGuidanceCard
+                  headers="none"
+                  pricing={pricingResearchResult}
+                  onApplyPrice={(price) => {
+                    const low = pricingResearchResult.low ?? 0;
+                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
+                    const high = pricingResearchResult.high ?? 0;
+                    patchField('price', price.toFixed(2));
+                    patchPlatform(prev => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
+                    setPricingResearchModalVisible(false);
+                  }}
+                />
               </ScrollView>
             ) : (
               <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
@@ -2686,16 +2252,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* ── Delivery & Shipping – Trigger card + unified bottom sheet ── */}
       {platformKeys.some(k => ['facebook', 'ebay', 'shopify'].includes(k.toLowerCase())) && (
         <View style={{ marginTop: 16 }}>
-          <Text style={styles.fieldLabel}>Listing Options</Text>
+          <Text style={styles.fieldLabel}>Shipping</Text>
           <TouchableOpacity
             activeOpacity={0.8}
             style={{
               marginTop: 8,
-              padding: 16,
-              backgroundColor: '#fff',
-              borderWidth: 1,
-              borderColor: shippingEstimateResult && !shippingEstimateResult.error ? BRAND_PRIMARY : '#E5E7EB',
-              borderRadius: 12,
+              padding: 14,
+              backgroundColor: '#F7F8FA',
+              borderRadius: 14,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 12,
             }}
             onPress={() => {
               const dims = (activeData as any).estimatedDimensions;
@@ -2709,74 +2276,30 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               setDeliverySheetVisible(true);
             }}
           >
-            {/* Top row: icon + title + chevron */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(147,200,34,0.08)', alignItems: 'center', justifyContent: 'center' }}>
-                  <Truck size={20} color={BRAND_PRIMARY} />
-                </View>
-                <View>
-                  <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }}>Delivery & Shipping</Text>
-                  <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
-                    {activePlatformKeyLower === 'facebook'
-                      ? `Handoff: ${activeData.pickupLocation?.deliveryMethod === 'both' ? 'Pickup & Shipping' : activeData.pickupLocation?.deliveryMethod === 'in_person' ? 'Local pickup' : activeData.pickupLocation?.deliveryMethod === 'shipping' ? 'Shipping' : 'Not set'}`
-                      : `Fulfillment: ${activeData.deliveryMethod === 'both' ? 'Pickup & Shipping' : activeData.deliveryMethod === 'in_person' ? 'Local pickup' : activeData.deliveryMethod === 'shipping' ? 'Shipping' : 'Not set'}`
-                    }
-                  </Text>
-                </View>
-              </View>
-              <Icon name="chevron-right" size={20} color="#9CA3AF" />
+            <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(147,200,34,0.10)', alignItems: 'center', justifyContent: 'center' }}>
+              <Truck size={20} color="#5C9A1B" />
             </View>
-
-            {/* Shipping estimate summary row */}
-            {(shippingEstimateLoading || shippingEstimateResult || (activeData.weight != null && Number(activeData.weight) > 0) || (activeData as any).estimatedDimensions) && (
-              <View style={{
-                marginTop: 12,
-                paddingTop: 12,
-                borderTopWidth: 1,
-                borderTopColor: '#F3F4F6',
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 10,
-              }}>
-                <View style={{
-                  width: 32, height: 32, borderRadius: 8,
-                  backgroundColor: shippingEstimateResult && !shippingEstimateResult.error ? 'rgba(147,200,34,0.12)' : '#F3F4F6',
-                  alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <Package size={16} color={shippingEstimateResult && !shippingEstimateResult.error ? BRAND_PRIMARY : '#6B7280'} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  {shippingEstimateLoading ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <ActivityIndicator size="small" color={BRAND_PRIMARY} />
-                      <Text style={{ fontSize: 12, color: '#6B7280' }}>Estimating rates…</Text>
-                    </View>
-                  ) : shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error ? (
-                    <>
-                      <Text style={{ fontSize: 13, fontWeight: '600', color: '#111827' }}>
-                        {typeof shippingEstimateResult.expectedCost === 'number'
-                          ? `Usually ~$${shippingEstimateResult.expectedCost.toFixed(1)} · Range $${shippingEstimateResult.estimatedMin.toFixed(1)}–$${shippingEstimateResult.estimatedMax.toFixed(1)}`
-                          : `USPS Ground · $${shippingEstimateResult.estimatedMin.toFixed(2)}–$${shippingEstimateResult.estimatedMax.toFixed(2)}`}
-                      </Text>
-                      <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>
-                        {(activeData as any).estimatedDimensions
-                          ? `${(activeData as any).estimatedDimensions.length}×${(activeData as any).estimatedDimensions.width}×${(activeData as any).estimatedDimensions.height} in`
-                          : ''}
-                        {(activeData as any).estimatedDimensions && activeData.weight ? ' · ' : ''}
-                        {activeData.weight ? `${activeData.weight} ${activeData.weightUnit || 'lb'}` : ''}
-                      </Text>
-                    </>
-                  ) : (
-                    <Text style={{ fontSize: 12, color: '#9CA3AF' }}>
-                      {!(activeData.weight != null && Number(activeData.weight) > 0)
-                        ? 'Set weight & dimensions to estimate rates'
-                        : (activeData as any).shippingTierReason || 'Tap to configure shipping'}
-                    </Text>
-                  )}
-                </View>
-              </View>
-            )}
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }} numberOfLines={1}>
+                {(() => {
+                  const dims = (activeData as any).estimatedDimensions;
+                  const dimsStr = dims ? `${dims.length}×${dims.width}×${dims.height} in` : '';
+                  const wStr = activeData.weight ? `${activeData.weight} ${activeData.weightUnit || 'lb'}` : '';
+                  const detail = [dimsStr, wStr].filter(Boolean).join(' · ');
+                  return detail ? `Shipping (${detail})` : 'Shipping';
+                })()}
+              </Text>
+              <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }} numberOfLines={1}>
+                {shippingEstimateLoading
+                  ? 'Estimating rates…'
+                  : (shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error)
+                    ? (typeof shippingEstimateResult.expectedCost === 'number'
+                        ? `Usually ~$${shippingEstimateResult.expectedCost.toFixed(1)} · Range $${shippingEstimateResult.estimatedMin.toFixed(1)}–$${shippingEstimateResult.estimatedMax.toFixed(1)}`
+                        : `USPS Ground · $${shippingEstimateResult.estimatedMin.toFixed(2)}–$${shippingEstimateResult.estimatedMax.toFixed(2)}`)
+                    : (activeData.deliveryMethod === 'in_person' ? 'Local pickup' : 'Tap to set up shipping')}
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={20} color="#9CA3AF" />
           </TouchableOpacity>
 
           <DeliveryShippingSheet
@@ -3605,239 +3128,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
 export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
 
-function SimpleQuantityInput({ quantity, onChangeQuantity }: { quantity: number; onChangeQuantity: (qty: number) => void }) {
-  const [localQty, setLocalQty] = useState(String(quantity));
-  const timeoutRef = React.useRef<any>(null);
-  const isEditingRef = React.useRef(false);
-
-  useEffect(() => {
-    // Only sync from prop if user is NOT actively editing
-    if (!isEditingRef.current) {
-      console.log('[SimpleQuantityInput] Syncing from prop:', quantity);
-      setLocalQty(String(quantity));
-    } else {
-      console.log('[SimpleQuantityInput] User is editing, not syncing from prop:', quantity);
-    }
-  }, [quantity]);
-
-  const handleChange = (text: string) => {
-    console.log('[SimpleQuantityInput] handleChange:', text);
-    isEditingRef.current = true;
-    const num = text.replace(/[^0-9]/g, '');
-    setLocalQty(num);
-
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      console.log('[SimpleQuantityInput] Calling onChangeQuantity with:', Number(num || '0'));
-      onChangeQuantity(Number(num || '0'));
-      isEditingRef.current = false;
-    }, 300);
-  };
-
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <Text style={{ color: '#000' }}>Quantity:</Text>
-      <TextInput
-        style={styles.qtyInput}
-        value={localQty}
-        onChangeText={handleChange}
-        onBlur={() => {
-          isEditingRef.current = false;
-          // Sync to prop value on blur to ensure consistency
-          setLocalQty(String(quantity));
-        }}
-        placeholder="0"
-        keyboardType="numeric"
-      />
-    </View>
-  );
-}
-
-
-
-function Field({ label, value, onChangeText, multiline, keyboardType, onInfo, required, onRegenerate, refilled, error, externalUpdate }: { label: string; value?: string; onChangeText?: (t: string) => void; multiline?: boolean; keyboardType?: any; onInfo?: () => void; required?: boolean; onRegenerate?: () => void; refilled?: boolean; error?: boolean; externalUpdate?: boolean }) {
-  // Use local state with uncontrolled input to prevent re-render issues
-  const [localValue, setLocalValue] = useState(value ?? '');
-  const timeoutRef = React.useRef<any>(null);
-
-
-  const externalUpdateStyle = externalUpdate ? {
-    borderColor: BRAND_PRIMARY, // iOS green
-    borderWidth: 2,
-  } : null;
-
-  // Sync from parent when value changes externally (but not from our own typing)
-  useEffect(() => {
-    if (value !== localValue && value !== undefined) {
-      setLocalValue(value);
-    }
-  }, [value]);
-
-  const handleChange = (text: string) => {
-    setLocalValue(text);
-
-    // Debounce the callback to parent
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      onChangeText?.(text);
-    }, 300);
-  };
-
-  return (
-    <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
-          <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-          {externalUpdate ? (
-            <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
-            </View>
-          ) : refilled ? (
-            <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
-            </View>
-          ) : null}
-          {!!onRegenerate && (
-            <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-              <Sparkles size={14} color={'#000'} />
-            </TouchableOpacity>
-          )}
-        </View>
-        {!!onInfo && (
-          <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
-        )}
-      </View>
-      <TextInput
-        style={[
-          styles.input,
-          multiline && { minHeight: 100, textAlignVertical: 'top' },
-          error ? { borderColor: '#ef4444' } : null,
-          externalUpdateStyle, // 🟢 Green border for external updates (overrides error if both present)
-        ]}
-        value={localValue}
-        onChangeText={handleChange}
-        placeholder=''
-        placeholderTextColor={"#999999"}
-        multiline={multiline}
-        keyboardType={keyboardType}
-      />
-    </View>
-  );
-}
-
-function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, refilled }: { label: string; valueArray?: string[]; onChangeArray: (arr: string[]) => void; onInfo?: () => void; onRegenerate?: () => void; refilled?: boolean }) {
-  const [text, setText] = useState('');
-  const arr = Array.isArray(valueArray) ? valueArray : [];
-  return (
-    <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, }}>
-          <Text style={styles.fieldLabel}>{label}</Text>
-          {refilled ? (
-            <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
-            </View>
-          ) : null}
-          {!!onRegenerate && (
-
-            <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-              <Sparkles size={14} color={'#000'} />
-            </TouchableOpacity>
-
-
-          )}
-        </View>
-        {!!onInfo && (
-          <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
-        )}
-      </View>
-
-      <View style={{ flexDirection: 'row', gap: 10, }}>
-        <TextInput style={{ flex: 1, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' }} value={text} onChangeText={setText} placeholder="Add tag and press + Add" placeholderTextColor={"#999999"} />
-        <TouchableOpacity style={styles.addTagBtn} onPress={() => { if (text.trim().length) { onChangeArray([...arr, text.trim()]); setText(''); } }}>
-          <Icon name="plus" size={16} color="#000" /><Text style={{ color: '#000', marginLeft: 6 }}>Add</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>
-        {arr.map((t, i) => (
-          <View key={`${t}-${i}`} style={[styles.tagChip, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
-            <TouchableOpacity onPress={() => onChangeArray(arr.filter((_, idx) => idx !== i))}>
-              <Icon name="close" size={10} color="#6B7280" />
-            </TouchableOpacity>
-            {/* Small platform logo placeholder space for tags (if needed in future) */}
-            <Text style={{ color: '#000' }}>{t}</Text>
-          </View>
-        ))}
-      </View>
-
-    </View>
-  );
-}
-
-// Logo map for platform types
-const platformLogoMap: Record<string, any> = {
-  shopify: ShopifySvg,
-  amazon: AmazonSvg,
-  facebook: FacebookSvg,
-  ebay: EbaySvg,
-  clover: CloverSvg,
-  square: SquareSvg
-};
-
-// Enhanced dropdown with platform logos for locations
-function LocationDropdown({
-  locations,
-  selectedId,
-  onChange
-}: {
-  locations: Array<{ id: string; name: string; platformType: string }>;
-  selectedId: string;
-  onChange: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = locations.find(l => l.id === selectedId) || locations[0];
-  const Logo = selected ? platformLogoMap[selected.platformType] : null;
-
-  console.log(`[LocationDropdown RENDER] selectedId=${selectedId}, selected=${selected?.name}, locCount=${locations.length}, hasLogo=${!!Logo}, items=${locations.map(l => l.name).join(', ')}`);
-
-  return (
-    <View style={{ position: 'relative', zIndex: open ? 1000 : 1, minWidth: 160 }}>
-      <TouchableOpacity
-        style={[styles.dropdown, { minWidth: 150, maxWidth: 200 }]}
-        onPress={() => setOpen(o => !o)}
-      >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
-          {Logo && <Logo width={16} height={16} />}
-          <Text style={{ color: '#000', fontSize: 13, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
-            {selected?.name || 'Select Location'}
-          </Text>
-        </View>
-        <Icon name="chevron-down" size={18} color="#000" style={{ marginLeft: 4 }} />
-      </TouchableOpacity>
-      {open && (
-        <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0, maxHeight: 200 }]}>
-          <ScrollView nestedScrollEnabled>
-            {locations.map(loc => {
-              const LocLogo = platformLogoMap[loc.platformType];
-              return (
-                <TouchableOpacity
-                  key={loc.id}
-                  style={[styles.dropdownItem, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}
-                  onPress={() => { onChange(loc.id); setOpen(false); }}
-                >
-                  {LocLogo && <LocLogo width={16} height={16} />}
-                  <Text style={{ color: '#000', flex: 1 }} numberOfLines={1}>{loc.name}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      )}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   mediaRow: { paddingVertical: 10, borderBottomColor: '#E5E5E5', borderBottomWidth: 1, paddingBottom: 10, marginBottom: 10, gap: 8 },
   thumbWrap: { width: 86, height: 86, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
@@ -3851,13 +3141,14 @@ const styles = StyleSheet.create({
   pillText: { color: '#000' },
   pillTextActive: { fontWeight: '700' },
   pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
-  card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  darkerCard: { borderWidth: 1, backgroundColor: '#F8F9FB', borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
+  // Flattened: sections are borderless now (stripped-down look).
+  card: { marginTop: 16 },
+  darkerCard: { marginTop: 16 },
   // --- STYLES REFACTOR ---
   fieldLabel: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
+    fontFamily: CHAT_FONT.semibold,
+    color: CHAT_COLORS.dim,
     marginBottom: 6,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -3865,12 +3156,12 @@ const styles = StyleSheet.create({
   modernInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffffff',
+    backgroundColor: CHAT_COLORS.white,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    minHeight: 48,
+    borderColor: CHAT_COLORS.border,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    minHeight: 58,
   },
   modernInputFocused: {
     borderColor: BRAND_PRIMARY,
@@ -3888,8 +3179,9 @@ const styles = StyleSheet.create({
   modernTextInput: {
     flex: 1,
     fontSize: 15,
-    color: '#111827',
-    paddingVertical: 12, // Ensure good touch target
+    fontFamily: CHAT_FONT.regular,
+    color: CHAT_COLORS.ink,
+    paddingVertical: 14, // Ensure good touch target
     height: '100%',
   },
   sectionHeaderContainer: {
@@ -3909,28 +3201,39 @@ const styles = StyleSheet.create({
   },
   sectionHeaderTitle: {
     fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
+    fontFamily: CHAT_FONT.bold,
+    color: CHAT_COLORS.ink,
   },
   // Keep existing styles but update where needed
   input: {
-    // Deprecated in favor of modernInputWrapper but keeping for legacy
+    // Shared input/dropdown surface — chat-input feel (rounded, roomy).
     borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    borderRadius: 8,
-    fontSize: 14,
-    backgroundColor: '#fff',
-    color: '#000',
+    borderColor: CHAT_COLORS.border,
+    paddingVertical: 19,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    fontSize: 15,
+    fontFamily: CHAT_FONT.regular,
+    backgroundColor: CHAT_COLORS.white,
+    color: CHAT_COLORS.ink,
   },
+  // Suggested-price pills (focus-gated, below the price field).
+  priceHint: { color: CHAT_COLORS.dim, fontSize: 12, fontFamily: CHAT_FONT.regular, marginTop: 8 },
+  suggestRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  suggestChip: { flex: 1, paddingVertical: 9, paddingHorizontal: 8, borderRadius: 12, borderWidth: 1, borderColor: CHAT_COLORS.border, backgroundColor: CHAT_COLORS.white, alignItems: 'center' },
+  suggestChipHi: { borderColor: CHAT_COLORS.brand, backgroundColor: CHAT_COLORS.brandSoft },
+  suggestChipLabel: { fontSize: 10.5, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.semibold },
+  suggestChipPrice: { fontSize: 14, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold, marginTop: 2 },
   addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
   tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
   optionChip: { backgroundColor: '#E5E5E5', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },
-  dropdown: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dropdownMenu: { backgroundColor: 'white', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
-  dropdownItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  scanBtn: { backgroundColor: BRAND_PRIMARY, width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
-  sectionTitle: { color: '#000', fontWeight: '700' },
+  dropdown: { backgroundColor: CHAT_COLORS.white, borderWidth: 1, borderColor: CHAT_COLORS.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dropdownMenu: { backgroundColor: CHAT_COLORS.white, borderWidth: 1, borderColor: CHAT_COLORS.border, borderRadius: 16, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
+  dropdownItem: { paddingVertical: 14, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  scanBtn: { backgroundColor: CHAT_COLORS.brand, width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
+  // Unified with fieldLabel so section headers (Variants / Inventory) match the
+  // rest of the field labels — one consistent size.
+  sectionTitle: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim, textTransform: 'uppercase', letterSpacing: 0.5 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 18 },
   subtle: { color: '#71717A', marginTop: 4 },
   addOption: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 12, alignSelf: 'stretch', marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },

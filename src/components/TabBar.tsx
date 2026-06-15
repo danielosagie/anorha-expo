@@ -13,19 +13,25 @@ import {
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../context/ThemeContext';
+import { useIsNight } from '../hooks/useIsNight';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ShadowSurface from './ui/ShadowSurface';
 
+// Order here only gates which routes render; display order follows the navigator.
 const TAB_ICON: Record<string, string> = {
+  Clearouts: 'home-variant-outline',
   Inventory: 'package-variant',
-  Clearouts: 'emoticon-outline',
-  Profile: 'cog-outline',
+  Profile: 'account-outline',
 };
 
 const ACTIVE_GREEN = '#84CC16';
 const ACTIVE_BG = 'rgba(132, 204, 22, 0.18)';
 const ADD_GREEN = '#84CC16';
 const INACTIVE_GRAY = '#9CA3AF';
+// Night glass (mockup: rgba(0,0,0,0.3) over rgba(44,44,44,0.6) + backdrop blur);
+// flattened since RN views can't backdrop-blur.
+const NIGHT_SURFACE = 'rgba(28, 30, 24, 0.94)';
+const NIGHT_INACTIVE = 'rgba(255, 255, 255, 0.85)';
 const SIDE_BUTTON_SIZE = 56;
 const ADD_BUTTON_SIZE = 60;
 
@@ -49,6 +55,7 @@ const TabBar: React.FC<TabBarProps> = ({
   rowHeight = 64,
 }) => {
   const theme = useTheme();
+  const isNight = useIsNight();
 
   const handleSearch = () => {
     navigation.navigate('GlobalSearch');
@@ -81,23 +88,35 @@ const TabBar: React.FC<TabBarProps> = ({
 
   const focusedRouteName = state.routes[state.index]?.name;
   const isTransparentBgRoute = focusedRouteName === 'AddProduct';
+  // Dark glass only on the home (Clearouts) screen — and only at night, so it
+  // matches home's own day/night theme. Every other route stays light.
+  const dark = isNight && focusedRouteName === 'Clearouts';
 
   return (
     <View style={[styles.container, containerStyle]}>
-      {!isTransparentBgRoute && (
+      {!isTransparentBgRoute && !dark && (
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
           <BlurView
             intensity={Platform.OS === 'ios' ? 2 : 1}
-            tint="light"
+            tint={dark ? 'dark' : 'light'}
             style={StyleSheet.absoluteFill}
           />
           <LinearGradient
-            colors={[
-              'rgba(255, 255, 255, 0)',
-              'rgba(255, 255, 255, 0.25)',
-              'rgba(255, 255, 255, 0.4)',
-              'rgba(255, 255, 255, 0.5)',
-            ]}
+            colors={
+              dark
+                ? [
+                    'rgba(0, 0, 0, 0)',
+                    'rgba(0, 0, 0, 0.35)',
+                    'rgba(0, 0, 0, 0.6)',
+                    'rgba(0, 0, 0, 0.8)',
+                  ]
+                : [
+                    'rgba(255, 255, 255, 0)',
+                    'rgba(255, 255, 255, 0.25)',
+                    'rgba(255, 255, 255, 0.4)',
+                    'rgba(255, 255, 255, 0.5)',
+                  ]
+            }
             locations={[0, 0.35, 0.7, 1]}
             style={StyleSheet.absoluteFill}
           />
@@ -110,23 +129,26 @@ const TabBar: React.FC<TabBarProps> = ({
           { paddingBottom: bottomInset, height: rowHeight + bottomInset },
         ]}
       >
+        {/* Search Button
         <TouchableOpacity
           onPress={handleSearch}
           accessibilityRole="button"
           accessibilityLabel="Search"
-          activeOpacity={0.85}
+          activeOpacity={0.9}
         >
-          <ShadowSurface shadow="md" radius={SIDE_BUTTON_SIZE / 2} innerStyle={styles.sideButton}>
-            <Icon name="magnify" size={22} color="#6B7280" />
-          </ShadowSurface>
+          
+          <View style={[styles.sideButton, dark && styles.sideButtonNight]}>
+            <Icon name="magnify" size={22} color={dark ? NIGHT_INACTIVE : '#6B7280'} />
+          </View>
         </TouchableOpacity>
+        */}
 
         <ShadowSurface
           shadow="lg"
           clip={false}
           radius={32}
           style={styles.pillOuter}
-          innerStyle={[styles.surface, surfaceStyle]}
+          innerStyle={[styles.surface, surfaceStyle, dark && styles.surfaceNight]}
         >
           {state.routes
             .filter((route: any) => TAB_ICON[route.name])
@@ -149,31 +171,23 @@ const TabBar: React.FC<TabBarProps> = ({
               }
             };
 
-            const tint = isFocused ? ACTIVE_GREEN : INACTIVE_GRAY;
+            const tint = isFocused ? (dark ? '#FFFFFF' : ACTIVE_GREEN) : dark ? NIGHT_INACTIVE : INACTIVE_GRAY;
 
             return (
               <TouchableOpacity
                 key={route.key}
                 accessibilityRole="button"
                 accessibilityState={isFocused ? { selected: true } : {}}
-                accessibilityLabel={options.tabBarAccessibilityLabel}
+                accessibilityLabel={options.tabBarAccessibilityLabel ?? label}
                 testID={options.tabBarTestID}
                 onPress={onPress}
                 style={styles.tabItem}
                 activeOpacity={0.85}
               >
-                <View style={[styles.tabInner, isFocused && styles.tabInnerActive]}>
-                  <Icon name={iconName} size={22} color={tint} />
-                  <Text
-                    numberOfLines={1}
-                    allowFontScaling={false}
-                    style={[
-                      styles.tabLabel,
-                      { color: tint, fontWeight: isFocused ? '600' : '500' },
-                    ]}
-                  >
-                    {label}
-                  </Text>
+                {/* Icon-only tabs (labels intentionally disabled); the label still
+                    feeds accessibility above. */}
+                <View style={[styles.tabInner, isFocused && (dark ? styles.tabInnerActiveDark : styles.tabInnerActive)]}>
+                  <Icon name={iconName} size={24} color={tint} />
                 </View>
               </TouchableOpacity>
             );
@@ -186,7 +200,12 @@ const TabBar: React.FC<TabBarProps> = ({
           accessibilityLabel="Add product"
           activeOpacity={0.85}
         >
-          <ShadowSurface shadow="md" radius={ADD_BUTTON_SIZE / 2} innerStyle={styles.addButton}>
+          <ShadowSurface
+            shadow="md"
+            clip={false}
+            radius={ADD_BUTTON_SIZE / 2}
+            innerStyle={[styles.addButton, dark && styles.addButtonNight]}
+          >
             <Animated.View style={{ transform: [{ rotate: addRotate }] }}>
               <Icon name="plus" size={28} color="#FFFFFF" />
             </Animated.View>
@@ -209,7 +228,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 64,
   },
   sideButton: {
     height: SIDE_BUTTON_SIZE,
@@ -220,6 +239,10 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0, 0, 0, 0.07)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  sideButtonNight: {
+    backgroundColor: NIGHT_SURFACE,
+    borderColor: 'rgba(255, 255, 255, 0.10)',
   },
   pillOuter: {
     flex: 1,
@@ -232,6 +255,11 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 6,
   },
+  // Wins over the navigator-provided white surfaceStyle after dark (mockup glass pill).
+  surfaceNight: {
+    backgroundColor: NIGHT_SURFACE,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
   tabItem: {
     flex: 1,
     minWidth: 0,
@@ -243,12 +271,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 11,
     borderRadius: 16,
     minWidth: 64,
   },
   tabInnerActive: {
     backgroundColor: ACTIVE_BG,
+  },
+  // Home/night selection: translucent white pill + white icon (per design).
+  tabInnerActiveDark: {
+    backgroundColor: 'rgba(255, 255, 255, 0.4)',
   },
   tabLabel: {
     fontSize: 12,
@@ -266,6 +298,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(0, 0, 0, 0.18)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  // On home/night the + becomes dark glass like the search button (per design).
+  addButtonNight: {
+    backgroundColor: NIGHT_SURFACE,
+    borderColor: 'rgba(255, 255, 255, 0.10)',
   },
 });
 

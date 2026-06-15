@@ -1,595 +1,553 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-    View,
-    Text,
-    StyleSheet,
-    TouchableOpacity,
-    ScrollView,
-    Alert,
-    ActivityIndicator,
-    Platform,
-    Dimensions,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+  TouchableOpacity,
+  Image,
+  useWindowDimensions,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Store } from 'lucide-react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { useImportSession } from '../hooks/useImportSession';
 import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
-import { ArrowRight, Boxes, Check, CheckCircle2, ChevronLeft, Settings2, Sparkles, Store, type LucideIcon } from 'lucide-react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
-import EbaySvg from '../assets/ebay.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import AmazonSvg from '../assets/amazon.svg';
+import { RC } from '../components/resolve/ResolveKit';
+import { classifyMatch } from '../components/resolve/classifyMatch';
+import {
+  LobbyHeader,
+  HeaderPill,
+  UpNextRow,
+  swatchFor,
+} from '../components/quest/LobbyKit';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+import PlatformLogo from '../components/PlatformLogo';
+import { getPlatform, getPlatformColor } from '../config/platforms';
 
 type ImportOverviewRouteProp = RouteProp<AppStackParamList, 'ImportOverview'>;
 type ImportOverviewNavProp = StackNavigationProp<AppStackParamList, 'ImportOverview'>;
 
-const platformSvgMap: Record<string, React.ComponentType<any>> = {
-    shopify: ShopifySvg,
-    square: SquareSvg,
-    clover: CloverSvg,
-    ebay: EbaySvg,
-    facebook: FacebookSvg,
-    amazon: AmazonSvg,
-};
-
-const getPlatformLogoComponent = (name: string): React.ComponentType<any> | null => {
-    const n = (name || '').toLowerCase();
-    const match = Object.entries(platformSvgMap).find(([key]) => n.includes(key));
-    return match?.[1] || null;
-};
-
-const formatCount = (count: number, singular: string, plural?: string) => {
-    const label = count === 1 ? singular : (plural || `${singular}s`);
-    return `${count} ${label}`;
-};
-
-// ---------------------------------------------------------------------------
-// Checklist Row — rounded action card
-// ---------------------------------------------------------------------------
-interface ChecklistRowProps {
-    icon: LucideIcon;
-    iconTint: string;
-    title: string;
-    subtitle: string;
-    statusText?: string;
-    statusColor?: string;
-    details?: string;
-    done?: boolean;
-    onPress: () => void;
-}
-
-const ChecklistRow: React.FC<ChecklistRowProps> = ({
-    icon,
-    iconTint,
-    title,
-    subtitle,
-    statusText,
-    statusColor,
-    details,
-    done,
-    onPress,
-}) => {
-    const theme = useTheme();
-    const IconComponent = icon;
-
-    return (
-        <TouchableOpacity
-            style={[
-                rowStyles.row,
-                {
-                    backgroundColor: theme.colors.surface || '#FFFFFF',
-                    borderColor: done ? `${theme.colors.text}14` : '#E5E7EB',
-                    opacity: done ? 0.5 : 1,
-                },
-            ]}
-            onPress={onPress}
-            activeOpacity={0.85}
-        >
-            <View
-                style={[
-                    rowStyles.iconCircle,
-                    { backgroundColor: done ? theme.colors.text : `${iconTint}14` },
-                ]}
-            >
-                {done ? (
-                    <Check size={20} color="#fff" strokeWidth={2.5} />
-                ) : (
-                    <IconComponent size={20} color={iconTint} strokeWidth={2.2} />
-                )}
-            </View>
-            <View style={rowStyles.copyWrap}>
-                <Text style={[rowStyles.title, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-                    {title}
-                </Text>
-                <Text style={[rowStyles.subtitle, { color: theme.colors.text }]} numberOfLines={2}>
-                    {subtitle}
-                    {!done && statusText ? (
-                        <Text style={[rowStyles.statusText, { color: statusColor || theme.colors.textSecondary }]}>
-                            {statusText}
-                        </Text>
-                    ) : null}
-                </Text>
-                {details ? (
-                    <Text style={[rowStyles.details, { color: theme.colors.textSecondary }]} numberOfLines={2}>
-                        {details}
-                    </Text>
-                ) : null}
-            </View>
-            <View
-                style={[
-                    rowStyles.trailingBadge,
-                    {
-                        backgroundColor: done ? `${theme.colors.text}10` : '#F8FAFC',
-                        borderColor: done ? `${theme.colors.text}12` : '#E5E7EB',
-                    },
-                ]}
-            >
-                {done ? (
-                    <CheckCircle2 size={18} color={theme.colors.text} strokeWidth={2.4} />
-                ) : (
-                    <ArrowRight size={18} color={theme.colors.textSecondary} strokeWidth={2.2} />
-                )}
-            </View>
-        </TouchableOpacity>
-    );
-};
-
-const rowStyles = StyleSheet.create({
-    row: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginHorizontal: 24,
-        marginBottom: 14,
-        paddingVertical: 18,
-        paddingHorizontal: 18,
-        borderWidth: 1,
-        borderRadius: 28,
-    },
-    iconCircle: {
-        width: 52,
-        height: 52,
-        borderRadius: 18,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 16,
-    },
-    copyWrap: {
-        flex: 1,
-        paddingRight: 12,
-    },
-    title: {
-        fontSize: 12,
-        lineHeight: 16,
-        fontFamily: 'PlusJakartaSans_500Medium',
-        textTransform: 'uppercase',
-        letterSpacing: 0.4,
-    },
-    subtitle: {
-        marginTop: 6,
-        fontSize: 16,
-        lineHeight: 22,
-        fontFamily: 'PlusJakartaSans_700Bold',
-    },
-    statusText: {
-        fontSize: 16,
-        lineHeight: 22,
-        fontFamily: 'PlusJakartaSans_700Bold',
-    },
-    details: {
-        marginTop: 6,
-        fontSize: 14,
-        lineHeight: 20,
-        fontFamily: 'PlusJakartaSans_500Medium',
-    },
-    trailingBadge: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        borderWidth: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-});
-
-
-
-// ---------------------------------------------------------------------------
-// Platform hero helpers
-// ---------------------------------------------------------------------------
-const getPlatformColor = (name: string): string => {
-    const n = (name || '').toLowerCase();
-    if (n.includes('shopify')) return '#96BF47';
-    if (n.includes('square')) return '#3E4348';
-    if (n.includes('clover')) return '#27AE60';
-    if (n.includes('ebay')) return '#0064D2';
-    if (n.includes('amazon')) return '#FF9900';
-    if (n.includes('facebook')) return '#1877F2';
-    return '#6B7280';
-};
 
 const ImportOverviewScreen = () => {
-    const theme = useTheme();
-    const route = useRoute<ImportOverviewRouteProp>();
-    const navigation = useNavigation<ImportOverviewNavProp>();
-    const insets = useSafeAreaInsets();
+  const route = useRoute<ImportOverviewRouteProp>();
+  const navigation = useNavigation<ImportOverviewNavProp>();
+  const insets = useSafeAreaInsets();
 
-    const { connectionId, platformName } = route.params as any;
-    const platformColor = getPlatformColor(platformName);
+  const { connectionId, platformName } = route.params as any;
+  const platformColor = getPlatformColor(platformName);
 
-    const session = useImportSession({
-        connectionId,
-        platformName,
-        onNavigate: (screen, params) => navigation.navigate(screen as any, params),
-    });
+  const session = useImportSession({
+    connectionId,
+    platformName,
+    onNavigate: (screen, params) => navigation.navigate(screen as any, params),
+  });
 
-    const {
-        loading,
-        totalScanned,
-        matchedCount,
-        reviewCount,
-        mappingDone,
-        settingsDone,
-        syncDirection,
-        poolName,
-        setWizardVisible,
-        submitImport,
-        isSubmitting,
-        counts,
-        connection,
-        refreshSuggestions,
-    } = session;
+  const {
+    loading,
+    suggestions,
+    totalScanned,
+    reviewCount,
+    mappingDone,
+    settingsDone,
+    syncDirection,
+    poolName,
+    setWizardVisible,
+    submitImport,
+    isSubmitting,
+    counts,
+    connection,
+    refreshSuggestions,
+  } = session;
 
-    // Optimizer counts (separate from mapping - ProductVariants quality)
-    const [optimizeCount, setOptimizeCount] = useState(0);
-    const [missingPhotoCount, setMissingPhotoCount] = useState(0);
-    const [missingDataCount, setMissingDataCount] = useState(0);
+  const [optimizeCount, setOptimizeCount] = useState(0);
+  const [missingPhotoCount, setMissingPhotoCount] = useState(0);
+  const [missingDataCount, setMissingDataCount] = useState(0);
 
-    const fetchOptimizerCounts = useCallback(async () => {
-        const { data: variants, error } = await supabase
-            .from('ProductVariants')
-            .select('Id, Sku, Title, Description, ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)')
-            .limit(200);
-        if (!error && variants) {
-            let needsOptimize = 0;
-            let photosNeeded = 0;
-            let productDataNeeded = 0;
-            for (const v of variants) {
-                const noImages = !v.ProductImages || (v.ProductImages as any[]).length === 0;
-                const noSku = !v.Sku || v.Sku.trim() === '';
-                const weakDescription = !v.Description || v.Description.length < 30;
-                if (noImages) photosNeeded += 1;
-                if (noSku || weakDescription) productDataNeeded += 1;
-                if (noImages || noSku || weakDescription) needsOptimize += 1;
-            }
-            setOptimizeCount(needsOptimize);
-            setMissingPhotoCount(photosNeeded);
-            setMissingDataCount(productDataNeeded);
-        }
-    }, []);
-
-    useEffect(() => {
-        fetchOptimizerCounts();
-    }, [fetchOptimizerCounts]);
-
-    useEffect(() => {
-        const unsub = navigation.addListener('focus', () => {
-            session.refreshSuggestions();
-            fetchOptimizerCounts();
-        });
-        return unsub;
-    }, [navigation, refreshSuggestions, fetchOptimizerCounts]);
-
-    const optimizerDone = optimizeCount === 0;
-    const canComplete = mappingDone && settingsDone && optimizerDone;
-    const PlatformLogo = getPlatformLogoComponent(platformName);
-
-    const handleCompleteImport = () => {
-        if (!canComplete) return;
-        Alert.alert(
-            'Complete Import',
-            `Start syncing ${totalScanned} products with ${platformName}?`,
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Confirm', style: 'default', onPress: () => submitImport() },
-            ]
-        );
-    };
-
-    // ---------------------------------------------------------------------------
-    // Render
-    // ---------------------------------------------------------------------------
-    if (loading) {
-        return (
-            <View style={[s.container, { backgroundColor: theme.colors.background, justifyContent: 'center', alignItems: 'center' }]}>
-                <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={[s.backBtnOverlay, { top: insets.top + 8, position: 'absolute', zIndex: 10 }]}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                >
-                    <ChevronLeft size={18} color={theme.colors.text} strokeWidth={2.4} />
-                    <Text style={[s.backBtnText, { color: theme.colors.text }]}>Back</Text>
-                </TouchableOpacity>
-                <ActivityIndicator size="large" color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.textSecondary, marginTop: 12 }}>Loading import data…</Text>
-            </View>
-        );
+  const fetchOptimizerCounts = useCallback(async () => {
+    const { data: variants, error } = await supabase
+      .from('ProductVariants')
+      .select('Id, Sku, Title, Description, ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)')
+      .limit(200);
+    if (!error && variants) {
+      let needsOptimize = 0;
+      let photosNeeded = 0;
+      let productDataNeeded = 0;
+      for (const v of variants) {
+        const noImages = !v.ProductImages || (v.ProductImages as any[]).length === 0;
+        const noSku = !v.Sku || v.Sku.trim() === '';
+        const weakDescription = !v.Description || v.Description.length < 30;
+        if (noImages) photosNeeded += 1;
+        if (noSku || weakDescription) productDataNeeded += 1;
+        if (noImages || noSku || weakDescription) needsOptimize += 1;
+      }
+      setOptimizeCount(needsOptimize);
+      setMissingPhotoCount(photosNeeded);
+      setMissingDataCount(productDataNeeded);
     }
+  }, []);
 
+  useEffect(() => {
+    fetchOptimizerCounts();
+  }, [fetchOptimizerCounts]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', () => {
+      session.refreshSuggestions();
+      fetchOptimizerCounts();
+    });
+    return unsub;
+  }, [navigation, refreshSuggestions, fetchOptimizerCounts]);
+
+  const optimizerDone = optimizeCount === 0;
+  const canComplete = mappingDone && settingsDone && optimizerDone;
+
+  const handleCompleteImport = () => {
+    if (!canComplete) return;
+    Alert.alert('Complete Import', `Start syncing ${totalScanned} products with ${platformName}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Confirm', style: 'default', onPress: () => submitImport() },
+    ]);
+  };
+
+  // Stage model — Match → Optimize → Preferences → Finish (the winding path).
+  // Each step unlocks the next; "finish" is the terminal sync action, so it is
+  // only ever locked or active — never "done" from inside the lobby.
+  type StageId = 'match' | 'optimize' | 'preferences' | 'finish';
+  const stageOrder: StageId[] = ['match', 'optimize', 'preferences', 'finish'];
+  const stageDone: Record<StageId, boolean> = {
+    match: mappingDone,
+    optimize: optimizerDone,
+    preferences: settingsDone,
+    finish: false,
+  };
+  const activeStage: StageId = stageOrder.find((st) => !stageDone[st]) || 'finish';
+
+  const onStagePress = (st: StageId) => {
+    if (st === 'match') {
+      navigation.navigate('MappingReview' as any, { connectionId, platformName });
+    } else if (st === 'optimize') {
+      navigation.navigate('BackfillOptimizer' as any, { source: 'import' });
+    } else if (st === 'preferences') {
+      setWizardVisible(true);
+    } else {
+      handleCompleteImport();
+    }
+  };
+
+  // Hero preview strip — the items the active "match" stage will act on.
+  const reviewItems = (suggestions || [])
+    .filter((s) => s.action !== 'IGNORE' && !s.resolved)
+    .slice(0, 8)
+    .map((s) => ({ id: s.platformProduct.id, imageUrl: s.platformProduct.imageUrl }));
+
+  // ── The receipt — a ONE-TIME splash after the first scan completes ───────
+  // Nothing else on screen: the count-up headline and the wall of everything
+  // that just came in, pouring in row by row. When the pour finishes (or the
+  // user taps anywhere) it drops into the regular overview and never replays.
+  const { width: winW, height: winH } = useWindowDimensions();
+  const WALL_COLS = 14;
+  const wallCell = Math.max(16, Math.floor((winW - 44 - (WALL_COLS - 1) * 4) / WALL_COLS));
+  // The wall is a moment, not a browse surface — render only what fits on ONE
+  // screen so the animation stays cheap and every visible image is prefetched.
+  const wallMaxRows = Math.max(6, Math.floor((winH - insets.top - 190) / (wallCell + 4)));
+  const [countN, setCountN] = useState(0);
+  const [receiptSeen, setReceiptSeen] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(`import_receipt_seen_${connectionId}`)
+      .then((v) => setReceiptSeen(!!v))
+      .catch(() => setReceiptSeen(true));
+  }, [connectionId]);
+
+  const dismissReceipt = useCallback(
+    (source: string = 'tap') => {
+      setReceiptSeen(true);
+      AsyncStorage.setItem(`import_receipt_seen_${connectionId}`, source).catch(() => {});
+    },
+    [connectionId],
+  );
+
+  const receiptCases = useMemo(
+    () => classifyMatch((suggestions || []) as any, platformName).cases,
+    [suggestions, platformName],
+  );
+  const flaggedIds = useMemo(
+    () => new Set(receiptCases.flatMap((c) => c.itemIds || [])),
+    [receiptCases],
+  );
+  const wallItems = useMemo(
+    () =>
+      (suggestions || []).map((s) => ({
+        id: s.platformProduct.id,
+        uri: s.platformProduct.imageUrl,
+        flagged: flaggedIds.has(s.platformProduct.id),
+      })),
+    [suggestions, flaggedIds],
+  );
+  const flaggedCount = useMemo(() => wallItems.filter((w) => w.flagged).length, [wallItems]);
+  const selfMatched = wallItems.length - flaggedCount;
+  const wallRows = useMemo(() => {
+    const capped = wallItems.slice(0, wallMaxRows * WALL_COLS);
+    const rows: (typeof wallItems)[] = [];
+    for (let i = 0; i < capped.length; i += WALL_COLS) rows.push(capped.slice(i, i + WALL_COLS));
+    return rows;
+  }, [wallItems, wallMaxRows]);
+
+  // The splash must not fire while suggestions are still streaming in (it
+  // would count to 0 over a half-empty wall and burn its one showing). Wait
+  // for the count to hold still, then PRE-RENDER: warm every visible image
+  // into cache (capped wait) so the pour plays over loaded art, not gray boxes.
+  const [wallReady, setWallReady] = useState(false);
+  useEffect(() => {
+    if (loading || wallItems.length === 0) {
+      setWallReady(false);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      const uris = wallRows.flat().map((w) => w.uri).filter((u): u is string => !!u);
+      const warm = Promise.allSettled(uris.map((u) => Image.prefetch(u)));
+      const cap = new Promise((r) => setTimeout(r, 1500));
+      Promise.race([warm, cap]).then(() => {
+        if (alive) setWallReady(true);
+      });
+    }, 500);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, wallItems.length]);
+
+  const showReceipt = wallReady && receiptSeen === false && activeStage === 'match';
+
+  // Headline counts what matched itself — or, when nothing did, what came in.
+  const countTarget = selfMatched > 0 ? selfMatched : wallItems.length;
+  useEffect(() => {
+    if (!showReceipt) return;
+    setCountN(0);
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const p = Math.min(1, (Date.now() - t0) / 900);
+      setCountN(Math.round(p * countTarget));
+      if (p >= 1) clearInterval(iv);
+    }, 40);
+    return () => clearInterval(iv);
+  }, [countTarget, showReceipt]);
+
+  // Auto-drop into the overview once the pour settles.
+  useEffect(() => {
+    if (!showReceipt) return;
+    const total = 900 + wallRows.length * 45 + 220 + 1100;
+    const t = setTimeout(() => dismissReceipt('auto'), total);
+    return () => clearTimeout(t);
+  }, [showReceipt, wallRows.length, dismissReceipt]);
+
+  // Per-stage presentation: the hero (when active), the up-next row, and the
+  // sticky bottom CTA all read from one source so they never drift apart.
+  type StageView = {
+    icon: IconName;
+    glyph: IconName;
+    title: string;
+    upSub: string;
+    count: number | null;
+    heroSub: string;
+    ctaSub: string;
+    cta: string;
+    items?: { id?: string; imageUrl?: string | null }[];
+    color?: string;
+    dark?: string;
+  };
+  const stageView = (st: StageId): StageView => {
+    switch (st) {
+      case 'optimize':
+        return {
+          icon: 'star-four-points',
+          glyph: 'star-four-points-outline',
+          title: 'Optimize',
+          upSub: 'photos & details',
+          count: optimizeCount > 0 ? optimizeCount : null,
+          heroSub: '',
+          ctaSub: '',
+          cta: 'Start · Optimize',
+        };
+      case 'preferences':
+        return {
+          icon: 'tune-variant',
+          glyph: 'tune-variant',
+          title: 'Preferences',
+          upSub: 'how syncing behaves',
+          count: null,
+          heroSub: '',
+          ctaSub: '',
+          cta: 'Set up · Preferences',
+        };
+      case 'finish':
+        return {
+          icon: 'flag-variant',
+          glyph: 'flag-variant-outline',
+          title: 'Sync',
+          upSub: 'goes live everywhere',
+          count: null,
+          heroSub: '',
+          ctaSub: '',
+          cta: canComplete ? 'Sync now' : 'Finish the steps above',
+          color: RC.green,
+          dark: RC.greenDark,
+        };
+      case 'match':
+      default:
+        return {
+          icon: 'puzzle',
+          glyph: 'puzzle-outline',
+          title: 'Match',
+          upSub: `${reviewCount} quick question${reviewCount === 1 ? '' : 's'}`,
+          count: null,
+          heroSub: '',
+          ctaSub: '',
+          cta: 'Start · Match',
+          items: reviewItems,
+        };
+    }
+  };
+
+  const av = stageView(activeStage);
+  const upcoming = stageOrder.filter((st) => st !== activeStage && !stageDone[st]);
+  const completed = stageOrder.filter((st) => stageDone[st]);
+
+  const platformPill = (
+    <HeaderPill
+      label={platformName}
+      leading={
+        getPlatform(platformName) ? (
+          <PlatformLogo type={platformName} size={16} />
+        ) : (
+          <Store size={14} color={platformColor} />
+        )
+      }
+    />
+  );
+
+  if (loading) {
     return (
-        <View style={[s.container, { backgroundColor: theme.colors.background }]}>
-            <ScrollView
-                contentContainerStyle={{ flexGrow: 1 }}
-                showsVerticalScrollIndicator={false}
-                bounces={false}
-                style={{ borderTopLeftRadius: 32, borderTopRightRadius: 32, overflow: 'hidden' }}
-            >
-                {/* ── Hero Banner ── */}
-                <View style={[s.heroBanner, { paddingTop: insets.top, marginBottom: 0 }]}>
-                    {/* Oversized background circle for soft curved bottom */}
-                    <View style={[s.curvedBg, { backgroundColor: `${platformColor}1A` }]}>
-                        <LinearGradient
-                            colors={[`#ffffff00`, `${platformColor}0F`, `${platformColor}20`]}
-                            style={StyleSheet.absoluteFillObject}
-                        />
-                    </View>
-
-                    {/* Back button — overlaid top-left */}
-                    <TouchableOpacity
-                        onPress={() => navigation.goBack()}
-                        style={[s.backBtnOverlay, { top: insets.top + 8 }]}
-                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    >
-                        <ChevronLeft size={18} color={theme.colors.text} strokeWidth={2.4} />
-                        <Text style={[s.backBtnText, { color: theme.colors.text }]}>Back</Text>
-                    </TouchableOpacity>
-
-                    {/* Hero content — platform logo and total items */}
-                    <View style={s.heroContent}>
-                        <View style={[s.heroPlatformBadge, { backgroundColor: platformColor, shadowColor: platformColor }]}>
-                            <View style={s.heroPlatformBadgeInner}>
-                                {PlatformLogo ? (
-                                    <PlatformLogo width={42} height={42} />
-                                ) : (
-                                    <Store size={36} color={platformColor} strokeWidth={2.2} />
-                                )}
-                            </View>
-                        </View>
-
-                        <Text style={s.heroTotalItems}>
-                            {totalScanned} Total Items
-                        </Text>
-                    </View>
-                </View>
-                
-                <View style={{ backgroundColor: "#FFF", borderTopLeftRadius: 32, borderTopRightRadius: 32, overflow: 'hidden', marginTop: -20 }}>
-
-                    {/* ── Welcome Title ── */}
-                    <View style={s.titleSection}>
-                        <Text style={[s.welcomeTitle, { color: theme.colors.text }]}>
-                            Import from {platformName}
-                        </Text>
-                    </View>
-
-                    {/* ── Checklist Rows ── */}
-                    <View style={s.checklistSection}>
-                        <ChecklistRow
-                            icon={Boxes}
-                            iconTint={theme.colors.primary}
-                            title="Mapping Review"
-                            subtitle="Link each imported item to the right catalog product."
-                            statusText={reviewCount > 0 ? ` (Need to map ${formatCount(reviewCount, 'item')})` : undefined}
-                            statusColor="#EF4444"
-                            details={
-                                mappingDone
-                                    ? `${formatCount(totalScanned, 'item')} ready to sync`
-                                    : `${formatCount(matchedCount, 'item')} already matched`
-                            }
-                            done={mappingDone}
-                            onPress={() =>
-                                navigation.navigate('MappingReview', {
-                                    connectionId,
-                                    platformName,
-                                })
-                            }
-                        />
-
-                        <ChecklistRow
-                            icon={Sparkles}
-                            iconTint="#F59E0B"
-                            title="Listing Optimization"
-                            subtitle="Fill in missing photos and product data before this import goes live."
-                            statusText={optimizeCount > 0 ? ` (Optimize ${formatCount(optimizeCount, 'item')})` : undefined}
-                            statusColor="#F59E0B"
-                            details={
-                                optimizerDone
-                                    ? 'All listings have the photos and product data they need'
-                                    : `${formatCount(missingPhotoCount, 'photo')} needed, data for ${formatCount(missingDataCount, 'item')} needed`
-                            }
-                            done={optimizerDone}
-                            onPress={() => navigation.navigate('BackfillOptimizer', { source: 'import' })}
-                        />
-
-                        <ChecklistRow
-                            icon={Settings2}
-                            iconTint={platformColor}
-                            title="Import Settings"
-                            subtitle="Choose the import direction, pool assignment, and sync behavior."
-                            statusText={!settingsDone ? ' (Finish setup)' : undefined}
-                            statusColor={platformColor}
-                            details={
-                                settingsDone
-                                    ? `${syncDirection} • ${poolName}`
-                                    : 'Open the setup wizard to finish your import configuration'
-                            }
-                            done={settingsDone}
-                            onPress={() => {
-                                session.setWizardStep(0);
-                                setWizardVisible(true);
-                            }}
-                            />
-                        </View>
-
-                        {/* Spacer */}
-                        <View style={{ flex: 1 }} />
-                    </View>
-            </ScrollView>
-
-            {/* ── Bottom CTA ── */}
-            <View style={[s.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
-                <TouchableOpacity
-                    style={[
-                        s.completeBtn,
-                        { backgroundColor: canComplete ? theme.colors.text : theme.colors.text },
-                        !canComplete && { opacity: 0.35 },
-                    ]}
-                    onPress={handleCompleteImport}
-                    disabled={!canComplete || isSubmitting}
-                    activeOpacity={0.8}
-                >
-                    {isSubmitting ? (
-                        <ActivityIndicator color="#fff" />
-                    ) : (
-                        <Text style={s.completeBtnText}>
-                            {canComplete ? 'Complete Import' : 'Complete Import'}
-                        </Text>
-                    )}
-                </TouchableOpacity>
-            
-            </View>
-
-            <ImportWizardSheet
-                visible={session.wizardVisible}
-                onClose={() => session.setWizardVisible(false)}
-                platformName={platformName}
-                connection={connection}
-                counts={counts}
-                session={session}
-                showReselectMatches={false}
-            />
+      <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
+        <LobbyHeader title="Import Inventory" onBack={() => navigation.goBack()} right={platformPill} />
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={RC.orange} />
+          <Text style={styles.centerText}>Loading import…</Text>
         </View>
+      </View>
     );
+  }
+
+  // ── One-time receipt splash — the whole screen, nothing else ─────────────
+  if (showReceipt) {
+    return (
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => dismissReceipt('tap')}
+        style={[styles.screen, { paddingTop: insets.top + 34, overflow: 'hidden' }]}
+      >
+        <View style={styles.receiptHead}>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+            <Text style={styles.receiptBig}>{countN}</Text>
+            <Text style={styles.receiptBigSub}>
+              {selfMatched > 0 ? 'matched themselves' : 'items came in'}
+            </Text>
+          </View>
+          <Animated.View entering={FadeIn.duration(300).delay(900)} style={styles.receiptFlagRow}>
+            <View style={styles.receiptDot} />
+            <Text style={styles.receiptFlagText}>
+              {selfMatched > 0
+                ? `${flaggedCount} flagged for you — they glow below`
+                : `${flaggedCount} need a quick look — let’s sort them`}
+            </Text>
+          </Animated.View>
+        </View>
+        <View pointerEvents="none" style={{ paddingHorizontal: 22 }}>
+          {wallRows.map((row, ri) => (
+            <Animated.View
+              key={ri}
+              entering={FadeIn.duration(220).delay(ri * 45)}
+              style={styles.wallRow}
+            >
+              {row.map((it) => {
+                // Glow/dim only carries meaning when SOME items matched
+                // themselves — all-flagged renders as a calm uniform wall.
+                const contrast = selfMatched > 0;
+                return (
+                  <View
+                    key={it.id}
+                    style={[
+                      { width: wallCell, height: wallCell, borderRadius: 6, overflow: 'hidden', opacity: !contrast || it.flagged ? 1 : 0.25 },
+                      contrast && it.flagged && styles.wallGlow,
+                    ]}
+                  >
+                    {it.uri ? (
+                      <Image source={{ uri: it.uri }} style={{ width: '100%', height: '100%' }} />
+                    ) : (
+                      <View style={{ flex: 1, backgroundColor: swatchFor(it.id) }} />
+                    )}
+                  </View>
+                );
+              })}
+            </Animated.View>
+          ))}
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
+      <LobbyHeader title="Import Inventory" onBack={() => navigation.goBack()} right={platformPill} />
+
+      {/* V7 · list-first — no hero. The step list IS the screen: the active
+          step is one green-tinted row, everything else waits its turn. */}
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionLabel}>START HERE</Text>
+        <UpNextRow
+          icon={av.icon}
+          title={av.title}
+          sub={av.upSub}
+          count={av.count}
+          state="active"
+          onPress={() => onStagePress(activeStage)}
+        />
+
+        {upcoming.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>THEN</Text>
+            {upcoming.map((st) => {
+              const v = stageView(st);
+              return (
+                <UpNextRow
+                  key={st}
+                  icon={v.icon}
+                  title={v.title}
+                  sub={v.upSub}
+                  count={v.count}
+                  onPress={() => onStagePress(st)}
+                />
+              );
+            })}
+          </>
+        )}
+
+        {completed.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>DONE</Text>
+            {completed.map((st) => {
+              const v = stageView(st);
+              return (
+                <UpNextRow
+                  key={st}
+                  icon={v.icon}
+                  title={v.title}
+                  sub="Done"
+                  state="done"
+                  onPress={() => onStagePress(st)}
+                />
+              );
+            })}
+          </>
+        )}
+      </ScrollView>
+
+      <LinearGradient
+        colors={['rgba(255,255,255,0)', '#FFFFFF', '#FFFFFF']}
+        style={[styles.sticky, { paddingBottom: insets.bottom + 18 }]}
+        pointerEvents="box-none"
+      >
+        <TouchableOpacity
+          activeOpacity={0.88}
+          disabled={activeStage === 'finish' && (!canComplete || isSubmitting)}
+          onPress={() => onStagePress(activeStage)}
+          style={[
+            styles.ctaBtn,
+            activeStage === 'finish' && (!canComplete || isSubmitting) && styles.ctaBtnDim,
+          ]}
+        >
+          <Text
+            style={[
+              styles.ctaBtnText,
+              activeStage === 'finish' && (!canComplete || isSubmitting) && { color: RC.faint },
+            ]}
+          >
+            {av.cta}
+          </Text>
+        </TouchableOpacity>
+      </LinearGradient>
+
+      <ImportWizardSheet
+        visible={session.wizardVisible}
+        onClose={() => session.setWizardVisible(false)}
+        platformName={platformName}
+        connection={connection}
+        counts={counts}
+        session={session}
+        showReselectMatches={false}
+      />
+    </View>
+  );
 };
 
-const s = StyleSheet.create({
-    container: { flex: 1 },
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  centerText: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 12 },
 
-    // ── Hero ──
-    heroBanner: {
-        width: '100%',
-        minHeight: 200,
-        position: 'relative',
-    },
-    curvedBg: {
-        position: 'absolute',
-        top: -(SCREEN_WIDTH * 1.5) + 230,
-        left: -(SCREEN_WIDTH * 0.25),
-        width: SCREEN_WIDTH * 1.5,
-        height: SCREEN_WIDTH * 1.65,
-        overflow: 'hidden',
-    },
-    backBtnOverlay: {
-        position: 'absolute',
-        left: 16,
-        zIndex: 99,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 14,
-        height: 42,
-        borderRadius: 21,
-        backgroundColor: 'rgba(255,255,255,0.95)',
-        ...Platform.select({
-            ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 6 },
-            android: { elevation: 10 },
-        }),
-    },
-    backBtnText: {
-        fontSize: 14,
-        lineHeight: 18,
-        fontFamily: 'PlusJakartaSans_500Medium',
-    },
-    heroContent: {
-        alignItems: 'center',
-        paddingTop: 40,
-        paddingHorizontal: 24,
-        paddingBottom: 36,
-    },
-    heroPlatformBadge: {
-        width: 92,
-        height: 92,
-        borderRadius: 46,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 16,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.3,
-        shadowRadius: 16,
-        elevation: 8,
-    },
-    heroPlatformBadgeInner: {
-        width: 72,
-        height: 72,
-        borderRadius: 42,
-        backgroundColor: '#FFFFFF',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    heroTotalItems: {
-        fontSize: 16,
-        fontFamily: 'PlusJakartaSans_500Medium',
-        color: '#6B7280',
-        letterSpacing: 0.5,
-        marginBottom: 20,
-    },
+  scroll: { paddingHorizontal: 18, paddingBottom: 190, paddingTop: 6 },
+  sectionLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#666666',
+    letterSpacing: 0.2,
+    marginTop: 20,
+    marginBottom: 12,
+    marginLeft: 2,
+  },
 
-    // ── Title ──
-    titleSection: {
-        minWidth: "90%",
-        paddingHorizontal: 24,
-        paddingTop: 32,
-        paddingBottom: 8,
-        justifyContent: 'center',
-    },
-    welcomeTitle: {
-        fontSize: 28,
-        fontFamily: 'PlusJakartaSans_700Bold',
-        letterSpacing: -0.3,
-        lineHeight: 36,
-        textAlign: "center"
-    },
+  sticky: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingTop: 30,
+  },
+  ctaBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: RC.green,
+  },
+  ctaBtnDim: { backgroundColor: RC.surface2 },
+  ctaBtnText: { fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: -0.2 },
 
-    // ── Checklist ──
-    checklistSection: {
-        paddingTop: 12,
-        paddingBottom: 8,
-    },
+  // ── one-time receipt splash ──────────────────────────────────────────────
+  receiptHead: { paddingTop: 4, paddingBottom: 16, paddingHorizontal: 24 },
+  receiptBig: { fontSize: 40, fontWeight: '800', color: RC.ink, letterSpacing: -1.2, lineHeight: 42, fontVariant: ['tabular-nums'] },
+  receiptBigSub: { fontSize: 17, fontWeight: '700', color: RC.greenDark },
+  receiptFlagRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  receiptDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: RC.orange },
+  receiptFlagText: { fontSize: 13.5, fontWeight: '600', color: RC.muted },
 
-    // ── Bottom ──
-    bottomBar: {
-        paddingHorizontal: 24,
-        paddingTop: 12,
-    },
-    completeBtn: {
-        height: 54,
-        borderRadius: 100,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    completeBtnText: {
-        color: '#fff',
-        fontSize: 17,
-        fontFamily: 'PlusJakartaSans_700Bold',
-        letterSpacing: 0.2,
-    },
+  wallRow: { flexDirection: 'row', gap: 4, marginBottom: 4 },
+  wallGlow: { borderWidth: 2, borderColor: RC.orange },
 });
 
 export default ImportOverviewScreen;

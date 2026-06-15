@@ -25,6 +25,17 @@ export interface CanonicalRef {
   imageUrl?: string | null;
 }
 
+/** Like CanonicalRef but with a numeric-only price — the resolver kit
+ *  (components/resolve/classifyMatch) formats these prices with money(),
+ *  which does not accept string. Used for candidateVariants/kitComponents. */
+export interface CandidateVariant {
+  id: string;
+  sku?: string | null;
+  title?: string | null;
+  price?: number | null;
+  imageUrl?: string | null;
+}
+
 export interface FieldConflict {
   field: 'title' | 'price' | 'stock' | 'barcode' | 'tags' | 'photos' | string;
   platformValue: string | number | null;
@@ -61,7 +72,7 @@ export interface MappingSuggestion {
   } | null;
   direction?: 'platform_to_anorha' | 'anorha_to_platform' | 'bidirectional';
   isSelected: boolean;
-  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE';
+  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE' | 'AI_SEMANTIC';
   confidence?: number;
   resolved?: boolean;
   prevTab?: 'all' | 'needs_review' | 'matched' | 'ignored';
@@ -74,9 +85,9 @@ export interface MappingSuggestion {
   /** bundle = one row hides several SKUs (Split) · kit = set whose pieces are canonical singles. */
   compositionType?: CompositionType;
   bundleParts?: { sku: string | null; title?: string | null; quantity?: number }[];
-  kitComponents?: CanonicalRef[];
+  kitComponents?: CandidateVariant[];
   /** One SKU string matched >1 different canonical → pick-one. */
-  candidateVariants?: CanonicalRef[];
+  candidateVariants?: CandidateVariant[];
   familyDecisionReason?: FamilyDecisionReason;
   familyMemberCount?: number;
   familyResolvedCount?: number;
@@ -89,6 +100,17 @@ export interface MappingSuggestion {
   isStaleLink?: boolean;
   staleReason?: 'missing_from_import' | 'link_changed';
   alreadyMapped?: boolean;
+
+  // ── v2 resolver-kit signals (consumed by components/resolve/classifyMatch) ──
+  // The resolver kit (Backfill/ImportOverview screens) still reads these; the
+  // backend emits them and useImportSession.extractV2Signals normalizes them.
+  /** the two sides' variant structures disagree — route to a family resolver */
+  requiresFamilyDecision?: boolean;
+  /** several incoming rows resolve to the same canonical (many:1) */
+  isDuplicate?: boolean;
+  duplicateCount?: number;
+  /** persisted decision from a previous session (hash-checked server-side) */
+  priorResolution?: 'CREATE_NEW' | 'LINK_EXISTING' | 'IGNORE' | 'PUSH_TO_PLATFORM' | null;
 
   // ── Client-derived (decisions.ts) ──────────────────────────────────────────
   /** Which of the three questions this row raises (undefined once resolved/auto). */

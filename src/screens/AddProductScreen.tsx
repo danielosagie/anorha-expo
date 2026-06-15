@@ -1,5 +1,48 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
+import type {
+  UnicodeSpinnerDefinition,
+  CameraMode,
+  MatchCandidate,
+  MatchResponse,
+  JobResponse,
+  QuickMatchSelection,
+  ItemLoadingState,
+} from './AddProduct/types';
+import type { MatchJobStatus } from '../contracts';
+import { readQuickScanClientState, writeQuickScanClientState } from '../contracts';
+import { cleanMatchText } from './AddProduct/utils';
+import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
+import { CenterOverlay } from './AddProduct/CenterOverlay';
+import { BottomControls } from './AddProduct/BottomControls';
+import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
+import { NotificationBar } from './AddProduct/NotificationBar';
+import { MatchResultsSheet } from './AddProduct/MatchResultsSheet';
+import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
+import { useBulkItems } from './AddProduct/hooks/useBulkItems';
+import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
+import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
+import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
+import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
+import { observable } from '@legendapp/state';
+import { use$ } from '@legendapp/state/react';
+import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem } from '../features/cart/cartStore';
+import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
+
+// DEV: set true to force-render the pricing-research preview page for visual QA.
+// Normal flow restored when false; the page is still reachable via __ds === 'matchPreview'.
+const DEV_FORCE_MATCH_PREVIEW = false;
+// DEV: set true to seed a shelf folder + open its page for visual QA (remove after).
+const DEV_FORCE_FOLDER_PAGE = false;
+
+// One spring for the cart open/close + screen lift so every entry point feels identical
+// (settles quickly, slight give — "made by Shopify" smooth, no bounce-on-bounce).
+const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as const;
+
+// Active generation jobs, module-level so they SURVIVE AddProductScreen unmount (navigate-away):
+// the in-place poller re-attaches and resumes on remount instead of orphaning in-flight jobs.
+const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>>([]);
 import {
   View,
   Text,
@@ -17,6 +60,7 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  PanResponder,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -52,7 +96,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
-import PhotoStack, { CapturedPhoto } from '../components/camera/PhotoStack';
+import { useSuppressSwipeBackWhen, publishBackButtonRect } from '../components/SwipeBackContext';
+import { CapturedPhoto } from '../components/camera/PhotoStack';
 import ViewPhotosModal from '../components/camera/ViewPhotosModal';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
@@ -61,7 +106,6 @@ import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
 import ManifestReviewSheet from '../components/ManifestReviewSheet';
 import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
 import TierSelectorModal from '../components/TierSelectorModal';
-import UsageCounter from '../components/UsageCounter';
 import BillingGateSheet from '../components/BillingGateSheet';
 import useFreemiumUsage from '../hooks/useFreemiumUsage';
 import useBillingGate from '../hooks/useBillingGate';
@@ -95,152 +139,44 @@ const MAX_BATCH_ITEMS = 100;
 const QUICK_SCAN_QUEUE_LIMIT = 100;
 const QUICK_MATCH_AUTO_SELECT_CONFIDENCE = 0.72;
 
-// Types
+// Shop-style capture chrome: the photo strip rides the top black bar and the camera
+// is a cropped, rounded viewfinder between it and the bottom controls.
+const TOP_PHOTO_BAR_HEIGHT = 92;
+// Lower edge of the camera card at REST: clears the shutter controls. As the cart
+// opens, the card slides DOWN by (GAP - 12) so its rounded bottom meets the rising
+// sheet's top edge (Shop-style bleed) while the controls fade out beneath it.
+const CAMERA_BOTTOM_GAP = 220;
 
-export interface Analysis {
-  jobId: string;
-  userId: string;
-  status: string;
-  currentStage: string;
-  progress: {
-    totalProducts: number;
-    completedProducts: number;
-    currentProductIndex: number;
-    failedProducts: number;
-    stagePercentage: number;
-  };
-  results: Array<{
-    productIndex: number;
-    productId: string;
-    variantId: string;
-    serpApiData: Array<{
-      position?: number;
-      title?: string;
-      link?: string;
-      source?: string;
-      source_icon?: string;
-      thumbnail?: string;
-      thumbnail_width?: number;
-      thumbnail_height?: number;
-      image?: string;
-      image_width?: number;
-      image_height?: number;
-      rating?: number;
-      reviews?: number;
-      price?: {
-        value?: string;
-        extracted_value?: number;
-        currency?: string;
-      };
-      condition?: string;
-      in_stock?: boolean;
-    }>;
-    rerankedResults: Array<{
-      position?: number;
-      title?: string;
-      link?: string;
-      source?: string;
-      source_icon?: string;
-      thumbnail?: string;
-      thumbnail_width?: number;
-      thumbnail_height?: number;
-      image?: string;
-      image_width?: number;
-      image_height?: number;
-      rank?: number;
-      score?: number;
-      rating?: number;
-      reviews?: number;
-      price?: {
-        value?: string;
-        extracted_value?: number;
-        currency?: string;
-      };
-      condition?: string;
-      in_stock?: boolean;
-    }>;
-    confidence: string; // Changed from number to string based on the JSON example
-    vectorSearchFoundResults: boolean;
-    originalTargetImage: string;
-    timing: {
-      quickScanMs: number;
-      serpApiMs: number;
-      embeddingMs: number;
-      vectorSearchMs: number;
-      rerankingMs: number;
-      totalMs: number;
-    };
-  }>;
-  startedAt: string;
-  updatedAt: string;
-  summary: {
-    highConfidenceCount: number;
-    mediumConfidenceCount: number;
-    lowConfidenceCount: number;
-    totalEmbeddingsStored: number | null;
-    averageProcessingTimeMs: number | null;
-  };
-  completedAt: string;
-}
+// Types — the match/job seam is typed by the shared backend contract (src/contracts);
+// client-side quick-scan shapes come from ./AddProduct/types.
 
-interface MatchCandidate {
-  id: string;
-  title: string;
-  description: string;
-  price: number;
-  imageUrl: string;
-  matchPercentage: number;
-  sourceUrl: string;
-  productId?: string;
-  variantId?: string;
-  productUrl?: string;
-  isLocalMatch?: boolean;
-  queryKey?: string;
-  estimatedShippingMin?: number;
-  estimatedShippingMax?: number;
-  estimatedShippingMidpoint?: number;
-  estimatedShippingLabel?: string;
-  pricingResearch?: any;
-}
-
-interface JobResponse {
-  jobId: string;
-  status: string;
-  estimatedTimeMinutes: number,
-  totalProducts: number,
-  message: string,
-}
-
-interface MatchResponse {
-  systemAction: 'show_single_match' | 'show_multiple_matches' | 'show_multiple_candidates' | 'fallback_to_manual';
-  confidence: 'high' | 'medium' | 'low';
-  rankedCandidates: MatchCandidate[];
-  totalMatches: number;
-  reranker?: {
-    type: 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none';
-    rankingMethod?: 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback';
-    confidence?: number;
-    reasoning?: string;
-    processingTimeMs?: number;
-    alternatives?: any[];
-  };
-}
-
-type QuickMatchSelection = {
-  serpApiData: any[];
-  preSelectedIndices: number[];
-  source?: 'quick_scan_auto' | 'quick_scan_confirmed';
-  confidence?: number;
-  reasoning?: string;
-};
-
-type ItemLoadingState = {
-  isLoading: boolean;
-  stage: string;
-  error?: string;
-};
+/** Match job status as served by GET /products/match/jobs/:jobId/status. */
+export type Analysis = MatchJobStatus;
 
 type ItemStage = 'submitted_for_match' | 'awaiting_user_input' | 'generating' | 'generated' | 'existing_inventory';
+
+/**
+ * Serialize a draft-session payload to what the backend actually accepts (the four
+ * UpsertQuickScanSession fields). Client flow state (itemStageById/processedItemIds)
+ * rides inside matchContext.clientState — the backend has no columns for it and used
+ * to silently drop it when sent top-level, which broke stage restore on draft resume.
+ */
+const toQuickScanSessionBody = (p: {
+  scannedItems: any[];
+  matchContext: Record<string, any>;
+  shelfPhotoUri?: string | null;
+  activeItemId?: string | null;
+  itemStageById?: Record<string, ItemStage>;
+  processedItemIds?: string[];
+}) => ({
+  scannedItems: p.scannedItems,
+  matchContext: writeQuickScanClientState(p.matchContext, {
+    itemStageById: p.itemStageById,
+    processedItemIds: p.processedItemIds,
+  }),
+  shelfPhotoUri: p.shelfPhotoUri ?? undefined,
+  activeItemId: p.activeItemId ?? undefined,
+});
 
 type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
 
@@ -262,8 +198,6 @@ type CameraInstruction =
   | 'recognizing'
   | 'matched'
   | 'needs_review';
-
-type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
 type ShelfProgressStatus = 'idle' | 'streaming' | 'completed' | 'no_items' | 'timeout' | 'error';
 
 type ShelfProgressState = {
@@ -287,6 +221,32 @@ const initialShelfProgressState = (): ShelfProgressState => ({
   stalled: false,
   status: 'idle',
 });
+
+// --- Design-export seed data (used only when route.params.designState is set on web) ---
+const DS_SHELF_URI = 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=800&q=70';
+const dsPhoto = (seed: string, isCover = false): CapturedPhoto => ({
+  id: seed, uri: `https://picsum.photos/seed/${seed}/600/800`, width: 600, height: 800, timestamp: Date.now(), isCover,
+});
+const dsBuildItems = () => ([
+  { id: 'ds-1', title: 'Organic Coconut Oil', isActive: true, photos: [dsPhoto('dsa', true), dsPhoto('dsb'), dsPhoto('dsc')] },
+  { id: 'ds-2', title: 'African Spice Set', photos: [dsPhoto('dsd', true), dsPhoto('dse')] },
+  { id: 'ds-3', title: 'Jamaican Coffee Beans', photos: [dsPhoto('dsf', true)] },
+]);
+const DS_MATCH: MatchResponse = {
+  systemAction: 'show_multiple_matches',
+  confidence: 'high',
+  totalMatches: 3,
+  rankedCandidates: [
+    { id: 'm1', title: 'Organic Coconut Oil — 32oz', description: 'Cold-pressed, unrefined', price: 24.99, imageUrl: 'https://picsum.photos/seed/m1/240', productUrl: '', sourceUrl: 'https://amazon.com', isLocalMatch: false } as any,
+    { id: 'm2', title: 'Virgin Coconut Oil Jar', description: 'Organic, 32oz', price: 21.5, imageUrl: 'https://picsum.photos/seed/m2/240', productUrl: '', sourceUrl: 'https://walmart.com', isLocalMatch: false } as any,
+    { id: 'm3', title: 'Cold Pressed Coconut Oil', description: 'Fair trade', price: 27.0, imageUrl: 'https://picsum.photos/seed/m3/240', productUrl: '', sourceUrl: 'https://ebay.com', isLocalMatch: true } as any,
+  ],
+};
+const dsShelfProgress = (status: ShelfProgressStatus): ShelfProgressState => (
+  status === 'completed'
+    ? { phase: 'inspecting_shelf', progress: 1, elapsedMs: 14000, totalItems: 12, completedItems: 12, stalled: false, status: 'completed' }
+    : { phase: 'inspecting_shelf', progress: 0.6, elapsedMs: 8000, totalItems: 12, completedItems: 7, stalled: false, status: 'streaming' }
+);
 
 const parseShelfScanErrorMessage = (rawMessage?: string) => {
   if (!rawMessage) {
@@ -496,7 +456,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const theme = useTheme();
+
+  // Left-edge swipe → go back to wherever we came from. AddProduct is a hidden TAB
+  // screen, so it has no native back gesture; a thin left-edge strip gives one
+  // without touching the camera or the sheets' own gestures. Created once.
+  // (Left-edge back is now the global SwipeBackRing, applied via the navigator HOC.)
   const rawParams = (route.params ?? {}) as any;
+  const __ds = rawParams?.designState as string | undefined; // design-export state seed (web only)
+  const __dsHasItems = !!__ds && ['withItems', 'loading', 'shelfComplete', 'matchSheet'].includes(__ds);
   const params = ((rawParams?.params && typeof rawParams.params === 'object') ? rawParams.params : rawParams) as {
     sessionId?: string;
     firstPhotos?: any[];
@@ -508,6 +475,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const sessionIdRef = useRef<string | null>(null);
   const shelfPhotoUriForDraftRef = useRef<string | null>(null);
+  // The swipe-back ring anchors to this button's real measured rect (device-independent).
+  const backButtonRef = useRef<any>(null);
+  useEffect(() => () => { publishBackButtonRect(null); }, []); // clear anchor on unmount
   const saveDraftTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
   const hasAutoOpenedFtuxRef = useRef(false);
@@ -520,7 +490,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf'>('camera');
+  const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf'>(
+    (rawParams?.initialCameraMode as any) || 'camera'
+  );
+
+  const screenInsets = useSafeAreaInsets();
+
+  // Animation values - separate for each modal (declared early to avoid a TDZ crash on web)
+  const sheetTranslateY = useSharedValue((__ds === 'shelfScanning' || __ds === 'shelfComplete') ? 0 : SCREEN_HEIGHT);
+  const matchSheetTranslateY = useSharedValue(__ds === 'matchSheet' ? 0 : SCREEN_HEIGHT);
 
   // Barcode state
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
@@ -542,9 +520,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [receiptJobId, setReceiptJobId] = useState<string | null>(null);
 
   // Shelf state
-  const [shelfPhotoUri, setShelfPhotoUri] = useState<string | null>(null);
-  const [isProcessingShelfScan, setIsProcessingShelfScan] = useState(false);
-  const [shelfProgress, setShelfProgress] = useState<ShelfProgressState>(initialShelfProgressState);
+  const [shelfPhotoUri, setShelfPhotoUri] = useState<string | null>(
+    () => (__ds === 'shelfScanning' || __ds === 'shelfComplete') ? DS_SHELF_URI : null
+  );
+  const [isProcessingShelfScan, setIsProcessingShelfScan] = useState(() => __ds === 'shelfScanning');
+  const [shelfProgress, setShelfProgress] = useState<ShelfProgressState>(
+    () => __ds === 'shelfScanning' ? dsShelfProgress('streaming')
+      : __ds === 'shelfComplete' ? dsShelfProgress('completed')
+        : initialShelfProgressState()
+  );
   const shelfScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
   const lastShelfScanPhotoRef = useRef<CapturedPhoto | null>(null);
 
@@ -580,18 +564,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     (async () => {
       try {
         const token = await ensureSupabaseJwt();
-        const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+        const API_BASE = API_BASE_URL;
         const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sessionIdParam}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok || cancelled) return;
         const session = await res.json();
         const items = session.ScannedItems ?? session.scannedItems ?? [];
-        const matchCtx = session.MatchContext ?? session.matchContext ?? {};
+        const rawMatchCtx = (session.MatchContext ?? session.matchContext ?? {}) as Record<string, any>;
+        // Client flow state rides inside MatchContext.clientState (see toQuickScanSessionBody);
+        // strip the envelope before the rest of matchContext becomes the quick-scan store.
+        const clientState = readQuickScanClientState(rawMatchCtx);
+        const { clientState: _cs, ...matchCtx } = rawMatchCtx;
         const shelfUri = session.ShelfPhotoUri ?? session.shelfPhotoUri ?? null;
         const activeId = session.ActiveItemId ?? session.activeItemId ?? null;
-        const stageById = session.ItemStageById ?? session.itemStageById ?? {};
-        const processedIds = session.ProcessedItemIds ?? session.processedItemIds ?? [];
+        const stageById = (clientState.itemStageById ?? session.ItemStageById ?? session.itemStageById ?? {}) as Record<string, ItemStage>;
+        const processedIds = clientState.processedItemIds ?? session.ProcessedItemIds ?? session.processedItemIds ?? [];
         if (items.length > 0 && !cancelled) {
           setBulkItems(items);
           setQuickScanStore(matchCtx);
@@ -601,8 +589,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setProcessedItemIds(Array.isArray(processedIds) ? processedIds : []);
           setIsBulkMode(true);
           setCameraMode('shelf');
+          if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
           setShowDeepSearchSheet(true);
-          sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
+          sheetTranslateY.value = withSpring(0, CART_SPRING);  // Fully visible, bottom aligned to screen
           sessionIdRef.current = session.Id ?? session.id ?? sessionIdParam;
           if (shelfUri) shelfPhotoUriForDraftRef.current = shelfUri;
         }
@@ -622,11 +611,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     draftSessionCreatePromiseRef.current = (async () => {
       const token = await ensureSupabaseJwt();
-      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = API_BASE_URL;
       const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(toQuickScanSessionBody(payload)),
       });
       if (!res.ok) return null;
       const data = await res.json();
@@ -648,7 +637,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (isHydratingRef.current) return;
     try {
       const token = await ensureSupabaseJwt();
-      const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+      const API_BASE = API_BASE_URL;
       let sid = sessionIdRef.current;
       if (!sid) {
         sid = await ensureDraftSessionId(payload);
@@ -658,7 +647,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ...payload }),
+        body: JSON.stringify(toQuickScanSessionBody(payload)),
       });
     } catch (e) {
       console.warn('[AddProduct] Save draft failed:', e);
@@ -666,34 +655,355 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [ensureDraftSessionId]);
 
   // UI state
-  const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>('ready');
-  const [showMatchSheet, setShowMatchSheet] = useState(false);
+  const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>(
+    () => __ds === 'loading' ? 'processing' : 'ready'
+  );
+  const [showMatchSheet, setShowMatchSheet] = useState(() => __ds === 'matchSheet');
   const [showViewPhotosModal, setShowViewPhotosModal] = useState(false);
-  const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(false);
+  const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(() => __ds === 'shelfScanning' || __ds === 'shelfComplete');
   const [hasSeenBulkModalFtux, setHasSeenBulkModalFtux] = useState<boolean | null>(null);
-  const [matchData, setMatchData] = useState<MatchResponse | null>(null);
-  // Quick scan storage per item and current sheet context
-  const [quickScanStore, setQuickScanStore] = useState<Record<string, { matchData: MatchResponse; serpApiData: any[] }>>({});
+  const [matchData, setMatchData] = useState<MatchResponse | null>(() => __ds === 'matchSheet' ? DS_MATCH : null);
+  // Quick scan / match sheet context
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
-  // Confirmed quick-match per item: when user taps "List Product" we store it so bulk Continue uses it instead of re-searching
-  const [confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId] = useState<Record<string, QuickMatchSelection>>({});
+  // Pricing-research preview: which cart item's preview is open (null = closed)
+  const [previewItemId, setPreviewItemId] = useState<string | null>(null);
+  // "Add details" page: which item we're collecting more context for (null = closed)
+  const [addDetailsItemId, setAddDetailsItemId] = useState<string | null>(null);
+  // Shelf folder page: which folder is open (null = closed)
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
+  // In-place async generation queue: active jobs being polled (replaces LoadingScreen navigation)
+  const genJobs = use$(genQueue$); // durable across unmount; poller resumes on remount
 
-  // Loading state tracking per item
+  // Loading state tracking per item (transient UI; not part of cart$)
   const [itemLoadingStates, setItemLoadingStates] = useState<Record<string, ItemLoadingState>>({});
-  const [itemStageById, setItemStageById] = useState<Record<string, ItemStage>>(() => params?.itemStageById || {});
-  const [processedItemIds, setProcessedItemIds] = useState<string[]>(() => params?.processedItemIds || []);
 
   // Bulk mode state
   const [isBulkMode, setIsBulkMode] = useState(false);
-  const [bulkItems, setBulkItems] = useState<Array<{
-    id: string;
-    photos: CapturedPhoto[];
-    title?: string;
-    isActive?: boolean;
-    preSelectedSource?: any;
-    quantity?: number;
-  }>>([]);
-  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+
+  // Cart-backed bulk-items state — single source of truth is cart$ (src/features/cart).
+  // Replaces the former useState for bulkItems / quickScanStore /
+  // confirmedQuickMatchByItemId / itemStageById / processedItemIds / activeItemId.
+  const {
+    bulkItems, setBulkItems,
+    activeItemId, setActiveItemId,
+    quickScanStore, setQuickScanStore,
+    confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId,
+    itemStageById, setItemStageById,
+    processedItemIds, setProcessedItemIds,
+    cartTree, createShelfFolder, ungroupFolder,
+    savedForLaterIds, setItemSavedForLater,
+  } = useBulkItems(() => ({
+    bulkItems: __dsHasItems ? (dsBuildItems() as any) : [],
+    activeItemId: __dsHasItems ? 'ds-1' : null,
+    itemStageById: params?.itemStageById || {},
+    processedItemIds: params?.processedItemIds || [],
+  }));
+
+  // Map the previewed cart item (photo + confirmed/quick match + pricing) into the MatchPreview shape.
+  const previewData = useMemo<MatchPreviewData | undefined>(() => {
+    if (!previewItemId) return undefined;
+    const item = bulkItems.find((b) => b.id === previewItemId);
+    const photoUri = item?.photos?.find((p) => p.isCover)?.uri || item?.photos?.[0]?.uri;
+    const qs = quickScanStore[previewItemId];
+    const confirmed = confirmedQuickMatchByItemId[previewItemId];
+    const candidates = qs?.matchData?.rankedCandidates || [];
+    const chosenIdx = confirmed?.preSelectedIndices?.[0] ?? 0;
+    const chosen: any =
+      (confirmed?.serpApiData && confirmed.serpApiData[chosenIdx]) || candidates[chosenIdx] || candidates[0];
+    const pr: any = chosen?.pricingResearch;
+    return {
+      photoUri,
+      title: chosen?.title || item?.title || 'Item',
+      description: chosen?.description,
+      pricing: pr
+        ? {
+            low: pr.low,
+            high: pr.high,
+            median: pr.median,
+            average: pr.average,
+            recommended: pr.recommended,
+            sampleCount: pr.sampleCount,
+            cachedAt: pr.cachedAt,
+            livePricing: pr.livePricing,
+            timeToSell: pr.timeToSell,
+            history: pr.history,
+            samples: Array.isArray(pr.samples)
+              ? pr.samples.map((s: any) => ({
+                  title: s.title,
+                  price: s.price,
+                  marketplace: 'Ebay',
+                  condition: s.condition,
+                  imageUrl: s.imageUrl || s.thumbnail || s.image,
+                  url: s.url,
+                }))
+              : undefined,
+          }
+        : undefined,
+    };
+  }, [previewItemId, bulkItems, quickScanStore, confirmedQuickMatchByItemId]);
+
+  // The shelf folder currently open as a page (if any).
+  const openFolder = useMemo(
+    () =>
+      openFolderId
+        ? (cartTree.find((n) => n.kind === 'folder' && n.id === openFolderId) as Extract<CartTreeNode, { kind: 'folder' }> | undefined)
+        : undefined,
+    [openFolderId, cartTree],
+  );
+
+  // DEV: seed a shelf folder + open its page for visual QA.
+  const devFolderSeededRef = useRef(false);
+  useEffect(() => {
+    if (!DEV_FORCE_FOLDER_PAGE || devFolderSeededRef.current) return;
+    devFolderSeededRef.current = true;
+    // Single items — show the cart cards (match + the new "add a detail / snap the tag" chip).
+    addItemWithId('dev-single-1', [{ id: 'p1', uri: 'https://picsum.photos/seed/sony/400/400', isCover: true } as any], { title: 'Sony WH-1000XM5 Headphones' });
+    addItemWithId('dev-single-2', [{ id: 'p2', uri: 'https://picsum.photos/seed/switch/400/400', isCover: true } as any], { title: 'Nintendo Switch OLED' });
+    // A shelf folder too (folder card sits alongside the single cards).
+    createShelfFolder({
+      sourcePhotoUri: 'https://picsum.photos/seed/shelfscan/900/520',
+      label: 'Shelf',
+      items: [
+        { id: 'dev-s1', title: 'Logitech Lift Vertical Ergonomic Mouse', quantity: 1 },
+        { id: 'dev-s2', title: 'Samsung French Door Refrigerator', quantity: 1 },
+      ],
+    });
+    setQuickScanStore((prev) => ({
+      ...prev,
+      'dev-single-1': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'h1', title: 'Sony WH-1000XM5 Wireless Headphones', price: 248, imageUrl: 'https://picsum.photos/seed/sonym/120' } as any] }, serpApiData: [] },
+      'dev-single-2': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'sw1', title: 'Nintendo Switch OLED', price: 299, imageUrl: 'https://picsum.photos/seed/switchm/120' } as any] }, serpApiData: [] },
+    }));
+    setIsBulkMode(true);
+    if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
+    setShowDeepSearchSheet(true);
+    sheetTranslateY.value = withSpring(0, CART_SPRING); // slide the sheet up (open position)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Queue items for in-place async generation (replaces navigating to LoadingScreen).
+  const handleQueueGeneration = useCallback(
+    (itemJobs: Array<{ itemId: string; jobId: string; processType: 'generate' | 'match' }>) => {
+      if (!itemJobs.length) return;
+      setItemLoadingStates((prev) => {
+        const next = { ...prev };
+        itemJobs.forEach(({ itemId }) => { next[itemId] = { isLoading: true, stage: 'Queued…' }; });
+        return next;
+      });
+      const byJob = new Map<string, { jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>();
+      for (const { itemId, jobId, processType } of itemJobs) {
+        const key = `${processType}:${jobId}`;
+        if (!byJob.has(key)) byJob.set(key, { jobId, processType, itemIds: [] });
+        byJob.get(key)!.itemIds.push(itemId);
+        // Durable per-item job id for the click → GenerateDetailsScreen handoff (match items get the generate id on chain).
+        setItemGenerate(itemId, processType === 'generate' ? { generateJobId: jobId } : { generateMatchJobId: jobId });
+      }
+      genQueue$.set([...genQueue$.get(), ...Array.from(byJob.values())]);
+    },
+    [setItemLoadingStates],
+  );
+
+  // Poll active generation jobs and reflect progress in place — no navigation. Mirrors the
+  // LoadingScreen poll loop (GET .../jobs/:id/status @1.5s) but writes into AddProductScreen state.
+  useEffect(() => {
+    if (genJobs.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      const token = await ensureSupabaseJwt();
+      if (!token || cancelled) return;
+      for (const job of genJobs) {
+        try {
+          const base = job.processType === 'generate'
+            ? `${API_BASE_URL}/api/products/generate/jobs/`
+            : `${API_BASE_URL}/api/products/match/jobs/`;
+          const res = await fetch(`${base}${encodeURIComponent(job.jobId)}/status`, {
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          });
+          if (!res.ok || cancelled) continue;
+          const snap: any = await res.json();
+          const status = snap?.status;
+          if (status === 'completed') {
+            const results = Array.isArray(snap?.results) ? snap.results : [];
+            const autoGenId =
+              job.processType === 'match'
+                ? (results.find((r: any) => r?.autoGenerateJobId)?.autoGenerateJobId as string | undefined)
+                : undefined;
+            if (autoGenId) {
+              // match → auto-generate: chain to the generate job and keep tracking in place.
+              job.itemIds.forEach((id) => {
+                setItemGenerate(id, { generateJobId: autoGenId, generateMatchJobId: job.jobId });
+                // Drive the explicit state machine: auto-matched, now generating.
+                transitionItem(id, 'matched');
+                transitionItem(id, 'generating');
+              });
+              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage: 'Generating…' }; }); return n; });
+              genQueue$.set(genQueue$.get().map((j) =>
+                j.jobId === job.jobId && j.processType === 'match'
+                  ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds }
+                  : j));
+            } else {
+              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => delete n[id]); return n; });
+              setItemStageById((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = 'generated'; }); return n; });
+              // State machine: draft generated → awaiting per-item finalize.
+              job.itemIds.forEach((id) => transitionItem(id, 'ready_to_list'));
+              genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+            }
+          } else if (status === 'failed') {
+            setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; }); return n; });
+            job.itemIds.forEach((id) => transitionItem(id, 'error', { error: snap?.error || 'Generation failed' }));
+            genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+          } else {
+            const stage = snap?.currentStage || 'Generating…';
+            setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage }; }); return n; });
+          }
+        } catch {
+          /* transient — keep polling */
+        }
+      }
+    };
+    void poll();
+    const interval = setInterval(() => { void poll(); }, 1500);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [genJobs, setItemStageById]);
+
+  // Click → GenerateDetailsScreen for a queued/generated item: per-item finalize + the built-in
+  // item/jobs switcher. ID-BASED handoff: the typed builder passes itemIds and the
+  // screen resolves items from cart$ — the legacy index fields it also emits are fallback only.
+  const openItemDetails = useCallback((itemId: string) => {
+    const launch = buildGenerateDetailsLaunch(itemId);
+    if (!launch) return;
+    (navigation as any).navigate('GenerateDetailsScreen', launch);
+  }, [navigation]);
+
+  // Route an item tap: ALWAYS the item overview/pricing page first. Generated items
+  // continue to the listing editor from the preview's CTA — a card tap must never
+  // jump straight into the job/match screens.
+  const handleOpenItem = useCallback((itemId: string) => {
+    setPreviewItemId(itemId);
+  }, []);
+
+  // --- Shared-cart surface renderers ---
+  // Rendered as opaque overlays INSIDE the cart sheet Modal (iOS can't stack Modals), so the
+  // cart list ↔ folder page ↔ item preview swap in place. Everything is AddProductScreen state.
+  const renderMatchPreview = () => (
+    <MatchPreview
+      data={previewData}
+      onBack={() => setPreviewItemId(null)}
+      onWrongItem={() => setAddDetailsItemId(previewItemId)}
+      onResearch={({ text }) => {
+        const id = previewItemId;
+        setPreviewItemId(null);
+        if (id && text) void runQuickScanTextSearch(id, text);
+      }}
+      onAddPhoto={() => {
+        const id = previewItemId;
+        setPreviewItemId(null);
+        if (id) setActiveItemId(id);
+        handleImageUpload();
+      }}
+      sellLabel="Confirm item"
+      onSell={() => {
+        const id = previewItemId;
+        setPreviewItemId(null);
+        if (!id) return;
+        if (itemStageById[id] === 'generated') {
+          // Generated item: continue to the per-item listing editor. The cart Modal
+          // must finish dismissing before the pushed screen can show (and before
+          // navigation animates — overlapping the two hits the Fabric unmount assert).
+          closeBulkItemsSheetRef.current();
+          setTimeout(() => openItemDetails(id), 400);
+          return;
+        }
+        const qs = quickScanStore[id];
+        if (qs?.matchData?.rankedCandidates?.length && !confirmedQuickMatchByItemId[id]) {
+          const candidates = rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates);
+          setConfirmedQuickMatchByItemId((prev) => ({
+            ...prev,
+            [id]: { serpApiData: candidates, preSelectedIndices: [0], source: 'quick_scan_confirmed' },
+          }));
+        }
+        showNotificationMessage('Added to cart');
+      }}
+    />
+  );
+
+  // "Add details" page — collect text + a tag photo for an item we couldn't confidently
+  // match (or the user flagged as the wrong item), then re-run the search.
+  const renderAddDetails = () => {
+    const id = addDetailsItemId;
+    if (!id) return null;
+    const item = bulkItems.find((b) => b.id === id);
+    const baseTitle = item?.title && !/^Item \d+$/.test(item.title) ? item.title : '';
+    return (
+      <AddDetailsSheet
+        itemTitle={item?.title}
+        photoUri={item?.photos?.find((p) => p.isCover)?.uri || item?.photos?.[0]?.uri}
+        photos={(item?.photos || []).map((p: any) => ({ id: String(p.id ?? p.uri), uri: p.uri }))}
+        onRemovePhoto={(photoId) => removeBulkItemPhoto(id, photoId)}
+        onBack={() => setAddDetailsItemId(null)}
+        onCaptureTag={() => {
+          // Target this item and drop back to the live camera for the tag shot.
+          // The overlay unmount must commit BEFORE the cart Modal starts closing —
+          // overlapping the two transactions hits the Fabric unmount assert.
+          setAddDetailsItemId(null);
+          setPreviewItemId(null);
+          setActiveItemId(id);
+          setTimeout(closeBulkItemsSheet, 80);
+        }}
+        onImportTag={() => {
+          setActiveItemId(id);
+          handleImageUpload();
+        }}
+        onContinue={(detail) => {
+          setAddDetailsItemId(null);
+          if (detail) {
+            const newQuery = [baseTitle, detail].filter(Boolean).join(' ');
+            setBulkItems((prev) => prev.map((b) => (b.id === id ? { ...b, title: newQuery } : b)));
+            setPreviewItemId(null); // back to the cart row so they watch the re-search land
+            void runQuickScanTextSearch(id, newQuery);
+          }
+        }}
+      />
+    );
+  };
+
+  const renderShelfFolderPage = () =>
+    openFolder ? (
+      <ShelfFolderSheet
+        label={openFolder.label}
+        sourcePhotoUri={openFolder.sourcePhotoUri}
+        items={openFolder.children}
+        quickScanStore={quickScanStore}
+        confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
+        itemLoadingStates={itemLoadingStates}
+        onBack={() => setOpenFolderId(null)}
+        onUngroup={() => {
+          if (openFolderId) ungroupFolder(openFolderId);
+          setOpenFolderId(null);
+        }}
+        onOpenItemPreview={handleOpenItem}
+        onAddAllToCart={() => {
+          const folder = openFolder;
+          setOpenFolderId(null);
+          setConfirmedQuickMatchByItemId((prev) => {
+            const next = { ...prev };
+            for (const child of folder.children) {
+              if (next[child.id]) continue;
+              const qs = quickScanStore[child.id];
+              if (qs?.matchData?.rankedCandidates?.length) {
+                next[child.id] = {
+                  serpApiData: rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates),
+                  preSelectedIndices: [0],
+                  source: 'quick_scan_confirmed',
+                };
+              }
+            }
+            return next;
+          });
+          if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
+          showNotificationMessage('Added shelf items to cart');
+        }}
+      />
+    ) : null;
 
   // Debounced auto-save when scan state changes (so drafts appear in Scan Drafts)
   useEffect(() => {
@@ -726,6 +1036,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string }>>([]);
   const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
   const hasTriggeredBulkModalFtuxRef = useRef(false);
+  // Deferred cart-Modal unmount after the close spring settles (cleared on reopen).
+  const cartCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Always-fresh handle for callbacks declared above closeBulkItemsSheet (avoids
+  // stale closures over its isProcessingShelfScan guard).
+  const closeBulkItemsSheetRef = useRef<() => void>(() => {});
+  // Same late-binding pattern for OPENING: handleCapture (declared earlier) opens
+  // the cart when the free tier is exhausted — the cart is the upgrade surface.
+  const openBulkItemsSheetRef = useRef<() => void>(() => {});
+  // Pending deferred cart-present (the dismiss-then-present staggers). MUST be cleared
+  // on blur: the tab keeps this screen mounted, so a stray reopen after navigating away
+  // presents the transparent cart Modal over the other tab and eats every touch.
+  const cartReopenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFocusedRef = useRef(true);
 
   const closeShelfScanStream = useCallback(() => {
     shelfScanStreamRef.current?.close();
@@ -766,13 +1089,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const clearShelfScanForRetake = useCallback(() => {
     closeShelfScanStream();
     setIsProcessingShelfScan(false);
-    setShowDeepSearchSheet(false);
-    setShelfPhotoUri(null);
-    shelfPhotoUriForDraftRef.current = null;
-    resetShelfScanResults();
-    resetShelfProgress();
     setCurrentInstruction('ready');
-    sheetTranslateY.value = SCREEN_HEIGHT;
+    // Standard cart-close handshake (can't call closeBulkItemsSheet here — its
+    // isProcessingShelfScan guard still reads true this tick), then clear the
+    // shelf/bulk state in a commit AFTER the Modal unmount: tearing the children
+    // down in the same commit as the visible flip is the Fabric unmount race.
+    cancelAnimation(sheetTranslateY);
+    sheetTranslateY.value = withSpring(SCREEN_HEIGHT, CART_SPRING);
+    if (cartCloseTimerRef.current) clearTimeout(cartCloseTimerRef.current);
+    cartCloseTimerRef.current = setTimeout(() => {
+      cartCloseTimerRef.current = null;
+      cancelAnimation(sheetTranslateY);
+      sheetTranslateY.value = SCREEN_HEIGHT;
+      setShowDeepSearchSheet(false);
+      setTimeout(() => {
+        setShelfPhotoUri(null);
+        shelfPhotoUriForDraftRef.current = null;
+        resetShelfScanResults();
+        resetShelfProgress();
+      }, 80);
+    }, 420);
   }, [closeShelfScanStream, resetShelfProgress, resetShelfScanResults, sheetTranslateY]);
 
   useEffect(() => {
@@ -866,7 +1202,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Notification and progress state
   const [showNotification, setShowNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
-  const [showProgressBar, setShowProgressBar] = useState(false);
+  const [showProgressBar, setShowProgressBar] = useState(() => __ds === 'loading');
 
   // Freemium / Paywall state
   const { status: freemiumStatus, refresh: refreshFreemiumStatus, incrementLocalUsage } = useFreemiumUsage();
@@ -884,6 +1220,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
   const isFocused = useIsFocused();
+  isFocusedRef.current = isFocused;
 
   // Stable item ID generator to prevent key collisions
   const itemIdCounterRef = useRef(0);
@@ -892,34 +1229,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     return `item-${Date.now()}-${itemIdCounterRef.current}`;
   }, []);
 
-  // Debug useEffects to track state changes
-  useEffect(() => {
-    console.log('[EFFECT] bulkItems changed! New value:', {
-      length: bulkItems.length,
-      items: bulkItems.map(item => ({
-        id: item.id,
-        photosCount: item.photos.length,
-        isActive: item.isActive
-      }))
-    });
-  }, [bulkItems]);
-
-  useEffect(() => {
-    console.log('[EFFECT] activeItemId changed! New value:', activeItemId);
-  }, [activeItemId]);
-
-
-  // Animation values - separate for each modal
-  const sheetTranslateY = useSharedValue(SCREEN_HEIGHT);
-  const matchSheetTranslateY = useSharedValue(SCREEN_HEIGHT);
 
   // Guard against inconsistent modal state that can leave camera paused with no visible sheet.
   useEffect(() => {
     if (showMatchSheet && !matchData) {
       setShowMatchSheet(false);
       if (bulkItems.length > 0 || cameraMode === 'shelf') {
-        setShowDeepSearchSheet(true);
-        sheetTranslateY.value = withSpring(0);
+        // Dismiss first, present second — never flip two sibling Modals in one commit.
+        const timer = setTimeout(() => {
+          if (cartCloseTimerRef.current) {
+            clearTimeout(cartCloseTimerRef.current);
+            cartCloseTimerRef.current = null;
+          }
+          setShowDeepSearchSheet(true);
+          sheetTranslateY.value = withSpring(0, CART_SPRING);
+        }, 280);
+        return () => clearTimeout(timer);
       }
     }
   }, [showMatchSheet, matchData, bulkItems.length, cameraMode, sheetTranslateY]);
@@ -1155,6 +1480,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    // Out of free scans → no blocking modal; the cart sheet opens and presents
+    // the usage limit with the upgrade stepper / add-credits options.
+    if (freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted) {
+      openBulkItemsSheetRef.current?.();
+      return;
+    }
+
     if (!cameraRef.current || isCapturing) return;
 
     try {
@@ -1281,7 +1613,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem]);
+  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, freemiumStatus]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -1334,7 +1666,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
       const response = await fetch(
-        `https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
+        `${API_BASE_URL}/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
         {
           method: 'GET',
           headers: {
@@ -1396,8 +1728,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         progress: 0.08,
       });
       // Open sheet when user takes/uploads shelf photo so they see loading
+      if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
       setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(0);
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
       resetShelfScanResults();
 
       // Compress image before converting to base64
@@ -1421,14 +1754,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       });
 
       const token = await ensureSupabaseJwt();
-      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-      const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+      const rawApiBase = API_BASE_URL;
+      const API_BASE = rawApiBase;
 
       console.log(`[SHELF MODE] Starting SSE stream with ${base64.length} bytes`);
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
       shelfScanStreamRef.current = openQuickScanStream({
         url: sseUrl,
-        token,
+        token: token!,
         body: {
           images: [{ base64 }],
           mode: 'vlm-multi',
@@ -1460,8 +1793,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
           if (parsed.type === 'START_ANALYSIS') {
             setCurrentInstruction(presentation.instruction);
+            if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
             setShowDeepSearchSheet(true);
-            sheetTranslateY.value = withSpring(0);
+            sheetTranslateY.value = withSpring(0, CART_SPRING);
             setShelfProgress((prev) => ({
               ...prev,
               phase: parsed.phase || 'inspecting_shelf',
@@ -1479,34 +1813,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
           if (parsed.type === 'EXTRACTED_ITEMS') {
             const items = (parsed.items || []) as Array<string | { query: string; quantity?: number }>;
-            const newBulkItems = items.map((item, idx) => {
+            const ts = Date.now();
+            const folderItems = items.map((item, idx) => {
               const query = typeof item === 'string' ? item : item.query;
               const quantity = typeof item === 'object' && item.quantity != null ? item.quantity : 1;
-              return {
-                id: `shelf-${Date.now()}-${idx}`,
-                photos: [],
-                title: query,
-                quantity,
-                isActive: idx === 0,
-              };
+              return { id: `shelf-${ts}-${idx}`, title: query, quantity };
             });
 
             shelfQueryToItemIdRef.current = {};
             items.forEach((item, idx) => {
               const query = typeof item === 'string' ? item : item.query;
-              shelfQueryToItemIdRef.current[query] = newBulkItems[idx].id;
+              shelfQueryToItemIdRef.current[query] = folderItems[idx].id;
             });
 
-            setBulkItems(newBulkItems);
+            // Shelf items become a folder in the SHARED cart (alongside singles), not a separate flow.
+            createShelfFolder({
+              sourcePhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri || undefined,
+              label: 'Shelf',
+              items: folderItems,
+            });
             setIsBulkMode(true);
-            setActiveItemId(newBulkItems[0]?.id || null);
+            setActiveItemId(folderItems[0]?.id || null);
             setCurrentInstruction('extracting');
             setShelfProgress((prev) => ({
               ...prev,
               phase: parsed.phase || 'separating_items',
               progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
               elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
-              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : newBulkItems.length,
+              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : folderItems.length,
               completedItems: 0,
               stalled: false,
               status: 'streaming',
@@ -1601,7 +1935,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
               completedItems: parsed.data?.results?.length || shelfProgress.completedItems,
             });
-            sheetTranslateY.value = withSpring(0);
+            sheetTranslateY.value = withSpring(0, CART_SPRING);
             return;
           }
 
@@ -1663,13 +1997,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         [itemId]: { isLoading: true, stage: 'Searching catalog...', error: undefined },
       }));
 
-      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-      const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+      const rawApiBase = API_BASE_URL;
+      const API_BASE = rawApiBase;
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
 
       const stream = openQuickScanStream({
         url: sseUrl,
-        token,
+        token: token!,
         body: {
           textQuery: newQuery,
           mode: 'ocr-vlm-search',
@@ -1786,6 +2120,34 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       hasBarcodeResult: !!barcodeSearchResult
     });
 
+    // Present the cart. When the match-sheet Modal is mounted, dismiss it FIRST and
+    // present the cart after its dismissal settles — flipping two sibling Modals in
+    // one commit races UIKit present/dismiss and asserts in Fabric
+    // (RCTViewComponentView unmountChildComponentView crash).
+    const openCart = () => {
+      if (cartCloseTimerRef.current) {
+        clearTimeout(cartCloseTimerRef.current);
+        cartCloseTimerRef.current = null;
+      }
+      cancelAnimation(sheetTranslateY);
+      setShowDeepSearchSheet(true);
+      sheetTranslateY.value = SCREEN_HEIGHT;
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
+    };
+    const dismissMatchSheetThenOpenCart = () => {
+      if (showMatchSheet) {
+        setShowMatchSheet(false);
+        matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
+        if (cartReopenTimerRef.current) clearTimeout(cartReopenTimerRef.current);
+        cartReopenTimerRef.current = setTimeout(() => {
+          cartReopenTimerRef.current = null;
+          if (isFocusedRef.current) openCart();
+        }, 280);
+      } else {
+        openCart();
+      }
+    };
+
     // SHELF MODE: identification first, then explicit one-tap transition to listing flow.
     if (cameraMode === 'shelf') {
       if (bulkItems.length === 0) {
@@ -1798,10 +2160,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       setCameraMode('camera');
       setCurrentInstruction('capturing');
-      setShowMatchSheet(false);
-      matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-      setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(0);
+      dismissMatchSheetThenOpenCart();
       showNotificationMessage('Moved to listing flow', 1800);
       return;
     }
@@ -1976,11 +2335,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     // Always open sheet - it will show empty state if no photos
-    setShowMatchSheet(false);
-    matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 150 });
-    setShowDeepSearchSheet(true);
-    sheetTranslateY.value = withSpring(0);  // Fully visible, bottom aligned to screen
-  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage]);
+    dismissMatchSheetThenOpenCart();
+  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage, showMatchSheet]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async () => {
@@ -2270,13 +2626,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const token = tokenMaybe;
 
-      // Call backend /orchestrate/quick-scan endpoint with env-safe fallback.
-      // On physical devices, localhost/127.0.0.1 will fail, so fallback to public API.
-      const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-      const deviceSafeBase = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+      // Call backend /orchestrate/quick-scan endpoint.
       const quickScanPath = '/api/products/orchestrate/quick-scan';
-      const quickScanUrlPrimary = `${deviceSafeBase}${quickScanPath}`;
-      const quickScanUrlFallback = `https://api.sssync.app${quickScanPath}`;
+      const quickScanUrlPrimary = `${API_BASE_URL}${quickScanPath}`;
+      const quickScanUrlFallback = `${API_BASE_URL}${quickScanPath}`;
 
       let response: Response;
       try {
@@ -2438,8 +2791,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // to populate price range and shipping data from real market data.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
         if (topTitle) {
-          const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-          const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
+          const rawApiBase = API_BASE_URL;
+          const API_BASE = rawApiBase;
           (async () => {
             try {
               const cleanedTitle = topTitle.replace(/\s*[|—–-]\s*(eBay|Amazon|Walmart|Etsy|Target)\s*$/i, '').trim();
@@ -2637,8 +2990,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       && store.matchData.rankedCandidates.length > 0;
     if (!hasRenderableMatchData) {
       showNotificationMessage('Quick matches are still loading for this item.', 2000);
+      if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
       setShowDeepSearchSheet(true);
-      sheetTranslateY.value = withSpring(0);
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
       return;
     }
     setMatchData(store.matchData);
@@ -2683,10 +3037,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         ? [{ ImageUrl: localMatch.imageUrl }]
         : undefined,
     } as any);
-    setShowBarcodeResultModal(true);
-    setShowDeepSearchSheet(false);
+    // Sequence the modal handoff: dismiss the cart Modal first, then present the
+    // barcode-result Modal and unmount the cart row in later commits — batching a
+    // sibling present + dismiss + child teardown into one commit races UIKit/Fabric.
     setCurrentInstruction('ready');
-    markItemsProcessed([{ id: itemId }], 'existing_inventory');
+    closeBulkItemsSheetRef.current?.();
+    setTimeout(() => {
+      setShowBarcodeResultModal(true);
+      markItemsProcessed([{ id: itemId }], 'existing_inventory');
+    }, 520);
   }, [confirmedQuickMatchByItemId, markItemsProcessed, quickScanStore, showNotificationMessage]);
 
   // Send payload of first photos for analysis/matching
@@ -2735,7 +3094,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         platform: Platform.OS,
         productsCount: finalPayload.products.length,
       });
-      const response = await fetch('https://api.sssync.app/api/products/orchestrate/match', {
+      const response = await fetch(`${API_BASE_URL}/api/products/orchestrate/match`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -3062,19 +3421,50 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (isProcessingShelfScan) {
       return;
     }
-    cancelAnimation(sheetTranslateY);
-    setShowDeepSearchSheet(false);
-    sheetTranslateY.value = SCREEN_HEIGHT;
+    // Idempotent: a close is already in flight — let its timer finish. Re-arming the
+    // spring + timer mid-close is what produced a Fabric unmount crash
+    // (RCTViewComponentView unmountChildComponentView assert).
+    if (cartCloseTimerRef.current) return;
     setCurrentInstruction('ready');
+    // Spring the cart down; the capture-screen lift unwinds in lockstep
+    // (cameraLiftStyle is derived from sheetTranslateY). The Modal unmount is deferred
+    // until the spring has visually settled, and the value is pinned (no animation
+    // running) before unmounting so Fabric tears the tree down from a quiescent state.
+    sheetTranslateY.value = withSpring(SCREEN_HEIGHT, CART_SPRING);
+    cartCloseTimerRef.current = setTimeout(() => {
+      cartCloseTimerRef.current = null;
+      cancelAnimation(sheetTranslateY);
+      sheetTranslateY.value = SCREEN_HEIGHT;
+      setShowDeepSearchSheet(false);
+    }, 420);
   }, [sheetTranslateY, isProcessingShelfScan]);
+  closeBulkItemsSheetRef.current = closeBulkItemsSheet;
 
   // Open bulk items sheet deterministically
   const openBulkItemsSheet = useCallback(() => {
+    // Never present the (transparent, touch-eating) cart Modal while another tab is
+    // focused — a deferred reopen can fire after the user navigates away.
+    if (!isFocusedRef.current) return;
+    if (cartCloseTimerRef.current) {
+      clearTimeout(cartCloseTimerRef.current);
+      cartCloseTimerRef.current = null;
+    }
     cancelAnimation(sheetTranslateY);
     setShowDeepSearchSheet(true);
     sheetTranslateY.value = SCREEN_HEIGHT;
-    sheetTranslateY.value = withSpring(0);
+    sheetTranslateY.value = withSpring(0, CART_SPRING);
   }, [sheetTranslateY]);
+  openBulkItemsSheetRef.current = openBulkItemsSheet;
+
+  // Swipe DOWN anywhere on the capture screen → open the cart with the reachability
+  // lift. The wrapping PanGestureHandler is configured (activeOffsetY) to ONLY claim
+  // downward drags past threshold, so taps to capture and other gestures pass through
+  // untouched; by the time this fires the gesture is already a deliberate down-swipe.
+  const onCameraSwipeDown = useCallback((event: PanGestureHandlerGestureEvent) => {
+    if ((event.nativeEvent as any).state !== State.ACTIVE) return;
+    if (showDeepSearchSheet || isProcessingShelfScan) return;
+    openBulkItemsSheet();
+  }, [showDeepSearchSheet, isProcessingShelfScan, openBulkItemsSheet]);
 
   // First-time walkthrough: briefly show bulk modal so users discover multi-item flow.
   useEffect(() => {
@@ -3133,10 +3523,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Close quick matches and return to bulk items sheet
   const closeMatchSheetToBulk = useCallback(() => {
     matchSheetTranslateY.value = withTiming(SCREEN_HEIGHT, { duration: 250 }, () => {
+      // Dismiss only — both runOnJS calls land in one JS task, so adding
+      // openBulkItemsSheet here would batch a sibling-Modal present into the same
+      // React commit as this dismissal (the Fabric unmountChildComponentView crash).
       runOnJS(setShowMatchSheet)(false);
-      runOnJS(openBulkItemsSheet)();
       runOnJS(setCurrentInstruction)('ready');
     });
+    // Present the cart after the match Modal's dismissal commit has gone through.
+    if (cartReopenTimerRef.current) clearTimeout(cartReopenTimerRef.current);
+    cartReopenTimerRef.current = setTimeout(() => {
+      cartReopenTimerRef.current = null;
+      openBulkItemsSheet();
+    }, 400);
   }, [matchSheetTranslateY, openBulkItemsSheet]);
 
   // Close barcode sheet
@@ -3195,9 +3593,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useFocusEffect(
     useCallback(() => {
       return () => {
-        quickScanQueueRef.current = [];
-        setShowMatchSheet(false);
-        setShowBarcodeResultModal(false);
+        // NOTE: this cleanup also fires every time the deps below change while the
+        // screen stays focused — Modal/timer teardown lives in the stable-callback
+        // focus effect right after this one, which only fires on real blur.
         // Persist scan draft when navigating away so it appears in Scan Drafts
         if (
           (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
@@ -3216,6 +3614,32 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, shelfPhotoUri, saveDraftToBackend])
   );
 
+  // Real-blur-only cleanup (stable callback → fires only on blur/unmount, never on
+  // state churn): cancel deferred cart present/unmount timers and drop EVERY Modal.
+  // This tab stays mounted on blur, and a transparent overFullScreen Modal left (or
+  // later re-presented by a stray timer) over another tab silently eats all touches.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        quickScanQueueRef.current = [];
+        if (cartReopenTimerRef.current) {
+          clearTimeout(cartReopenTimerRef.current);
+          cartReopenTimerRef.current = null;
+        }
+        if (cartCloseTimerRef.current) {
+          clearTimeout(cartCloseTimerRef.current);
+          cartCloseTimerRef.current = null;
+        }
+        setShowMatchSheet(false);
+        setShowBarcodeResultModal(false);
+        setShowDeepSearchSheet(false);
+        cancelAnimation(sheetTranslateY);
+        sheetTranslateY.value = SCREEN_HEIGHT;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+  );
+
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: captureButtonScale.value }],
@@ -3229,6 +3653,39 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     transform: [{ translateY: sheetTranslateY.value }],
   }));
 
+  // Reachability-style cart reveal: the whole capture screen lifts UP as the cart
+  // opens (sheetTranslateY 0 → lift -SCREEN_HEIGHT) and sits at rest when the cart is
+  // closed (sheetTranslateY SCREEN_HEIGHT → lift 0). Because both this lift and the
+  // cart pane's own translate are driven by the SAME sheetTranslateY, the camera and
+  // the rising full-screen cart move as one connected piece — the camera slides off
+  // the top exactly as the cart rises from below (visible through the transparent cart
+  // Modal). min(0, …) clamps so the screen never droops downward on overshoot.
+  const cameraLiftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: Math.min(0, sheetTranslateY.value - SCREEN_HEIGHT) }],
+  }));
+
+  // The lift keeps the card's bottom exactly CAMERA_BOTTOM_GAP above the sheet's
+  // top edge at every position (both ride sheetTranslateY). These two styles close
+  // that strip as the cart engages: the camera card slides down to meet the sheet
+  // (rounded bottom bleeding into the cart) while the shutter controls fade away.
+  // Progress saturates at half-travel so partial snap points still read as "open".
+  const cameraCardSlideStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, (SCREEN_HEIGHT - sheetTranslateY.value) / (SCREEN_HEIGHT * 0.5)));
+    return { transform: [{ translateY: p * (CAMERA_BOTTOM_GAP + 12) }] };
+  });
+  const controlsFadeStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, Math.max(0, (SCREEN_HEIGHT - sheetTranslateY.value) / (SCREEN_HEIGHT * 0.5)));
+    return { opacity: 1 - p };
+  });
+
+  // Swipe the match card left/right to hop between cart items without opening the cart.
+  const stepActiveItem = useCallback((dir: 1 | -1) => {
+    if (bulkItems.length < 2) return;
+    const idx = bulkItems.findIndex((b) => b.id === activeItemId);
+    const next = bulkItems[(idx + dir + bulkItems.length) % bulkItems.length];
+    if (next) setActiveItemId(next.id);
+  }, [bulkItems, activeItemId]);
+
   const matchSheetAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: matchSheetTranslateY.value }],
   }));
@@ -3236,6 +3693,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const overlayAnimatedStyle = useAnimatedStyle(() => ({
     opacity: overlayOpacity.value,
   }));
+
+  // Stand the swipe-back ring down while any sheet is open (their gestures must win).
+  // MUST be above the permission early-returns below, or the hook count changes between renders.
+  useSuppressSwipeBackWhen(showDeepSearchSheet || (!!showMatchSheet && !!matchData) || showBarcodeResultModal);
 
   // Permission check
   if (hasPermission === null) {
@@ -3288,6 +3749,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const activeMatchCount = activeQuickMatchStore?.matchData?.totalMatches || 0;
   const centerOverlayMatchPreview = activeSelectedMatch ? {
     imageUrl: activeSelectedMatch?.imageUrl || activeSelectedMatch?.image || activeSelectedMatch?.thumbnail || null,
+    price: typeof activeSelectedMatch?.price === 'number'
+      ? activeSelectedMatch.price
+      : typeof activeSelectedMatch?.price?.extracted_value === 'number'
+        ? activeSelectedMatch.price.extracted_value
+        : null,
     title: cleanMatchText(activeSelectedMatch?.title || 'Selected match'),
     label: activeMatchIsConfirmed
       ? (activeQuickMatchInfo?.source === 'quick_scan_auto' ? 'Auto-selected match' : 'Selected match')
@@ -3300,38 +3766,95 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     <GestureHandlerRootView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
 
-      {/* Freemium usage counter */}
-      {freemiumStatus && !freemiumStatus.hasSubscription && (
-        <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 50 : 10, left: 0, right: 0, zIndex: 100 }}>
-          <UsageCounter
-            usageCount={freemiumStatus.usageCount}
-            freeLimit={freemiumStatus.freeLimit}
-            onUpgradePress={() => {
-              if (freemiumStatus.isFreeTierExhausted) {
-                setBillingGate(buildFreemiumBlockedGate());
-                setBillingGateVisible(true);
-                return;
-              }
-              setShowTierSelector(true);
-            }}
-            isSubscriber={freemiumStatus.hasSubscription}
-          />
-        </View>
+      {/* DEV/design-export preview Modal only. Real flows render the preview + folder page as
+          opaque overlays INSIDE the cart sheet Modal (below) — iOS can't stack Modals. */}
+      {(DEV_FORCE_MATCH_PREVIEW || __ds === 'matchPreview') && (
+        <Modal visible animationType="slide" onRequestClose={() => setPreviewItemId(null)}>
+          {renderMatchPreview()}
+        </Modal>
       )}
 
-      {/* Camera View - key forces remount when returning to screen so camera feed resumes */}
-      <CameraView
-        key={`camera-${isFocused}`}
-        ref={cameraRef}
-        style={styles.camera}
-        facing={facing}
-        flash={flash}
-        active={isFocused && !isAnySheetVisible} // Disable camera when sheets are open
-        onBarcodeScanned={handleBarCodeScanned}
-        barcodeScannerSettings={{
-          barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
-        }}
+      {/* Capture screen — lifts UP (reachability) as the cart opens, revealing the
+          full-screen cart rising from below. Drag UP (or down) anywhere here to open
+          the cart — up matches the "cart rises from below" metaphor users reach for. */}
+      <PanGestureHandler
+        activeOffsetY={[-28, 28]}
+        failOffsetX={[-28, 28]}
+        onHandlerStateChange={onCameraSwipeDown}
       >
+        <Animated.View style={[StyleSheet.absoluteFill, cameraLiftStyle]}>
+
+      {/* Freemium usage counter */}
+      {/* No always-on upgrade banner: free users scan in peace. When they run
+          out, the shutter routes into the cart sheet, which presents the usage
+          limit + upgrade stepper / credits (see handleCapture + BulkItemsSheet). */}
+
+      {/* Top photo bar — horizontal strip in the black bar above the cropped viewfinder.
+          “+” imports from the library; tap a photo to manage it; “−” removes; long-press
+          sets the cover. */}
+      <View style={[styles.topPhotoBar, { height: screenInsets.top + TOP_PHOTO_BAR_HEIGHT }]}>
+        {(() => {
+          const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
+          const displayPhotos = activeItem?.photos || [];
+          return (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              // Keep the photo stack clear of the iOS status bar: the ScrollView
+              // stretches over the whole bar (implicit flexGrow) and centers its
+              // tiles, so without this the "+" tile drifts up under the clock.
+              style={{ marginTop: screenInsets.top + 8 }}
+              contentContainerStyle={styles.topPhotoBarContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <TouchableOpacity style={styles.addPhotoTile} onPress={handleImageUpload} activeOpacity={0.8}>
+                <MaterialIcons name="add" size={26} color="rgba(255,255,255,0.85)" />
+              </TouchableOpacity>
+              {displayPhotos.map((photo) => (
+                <View key={photo.id} style={styles.photoTileWrap}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setShowViewPhotosModal(true)}
+                    onLongPress={() => activeItemId && setBulkItemCoverPhoto(activeItemId, photo.id)}
+                    delayLongPress={220}
+                  >
+                    <Image source={{ uri: photo.uri }} style={[styles.photoTile, photo.isCover && styles.photoTileCover]} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.photoTileRemove}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    onPress={() => activeItemId && removeBulkItemPhoto(activeItemId, photo.id)}
+                  >
+                    <MaterialIcons name="remove" size={13} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+          );
+        })()}
+      </View>
+
+      {/* Camera View - key forces remount when returning to screen so camera feed resumes.
+          Cropped, rounded viewfinder (Shop-style) between the photo bar and the controls.
+          CRASH FIX: CameraView must have NO React children. expo-camera attaches/detaches
+          its native preview subview behind Fabric's back, shifting child indices; the next
+          unmount of a conditional JSX child then trips the RCTViewComponentView
+          unmountChildComponentView index assert (root cause of every Anorha-*.ips since
+          06-08 — the assert names ExpoCamera.CameraView as parent and the rgba(0,0,0,0.7)
+          paused overlay as the child). Overlays now live in a sibling wrapper View. */}
+      <Animated.View style={[styles.cameraViewfinder, { top: screenInsets.top + TOP_PHOTO_BAR_HEIGHT, bottom: CAMERA_BOTTOM_GAP }, cameraCardSlideStyle]}>
+        <CameraView
+          key={`camera-${isFocused}`}
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          facing={facing}
+          flash={flash}
+          active={isFocused && !isAnySheetVisible} // Disable camera when sheets are open
+          onBarcodeScanned={handleBarCodeScanned}
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
+          }}
+        />
         {/* Flash overlay */}
         <Animated.View style={[styles.flashOverlay, flashAnimatedStyle]} />
 
@@ -3365,39 +3888,27 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }}
         />
 
-        {/* Photo stack (top left) - vertical, stacks after 3, tap opens modal */}
-        {(() => {
-          const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
-          const displayPhotos = activeItem?.photos || [];
-          const itemIndex = activeItem ? bulkItems.findIndex(item => item.id === activeItemId) + 1 : 0;
-
-          return (
-            <View style={[styles.photoStackContainer, { zIndex: 25 }]} key={`photo-stack-${activeItemId || 'none'}`}>
-              <View style={styles.photoStackRow}>
-                {activeItemId && itemIndex > 0 && (
-                  <View style={styles.activeItemIndicator}>
-                    <Text style={styles.activeItemIndicatorText}>Item {itemIndex}</Text>
-                  </View>
-                )}
-                {displayPhotos.length >= 1 && (
-                  <PhotoStack
-                    key={`photos-${activeItemId}`}
-                    photos={displayPhotos}
-                    onSetCover={activeItemId ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId) : () => { }}
-                    onRemovePhoto={activeItemId ? (photoId: string) => removeBulkItemPhoto(activeItemId, photoId) : () => { }}
-                    onDoubleTap={activeItemId ? (photoId: string) => setBulkItemCoverPhoto(activeItemId, photoId) : undefined}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onReorder={reorderPhotos}
-                    draggedPhotoId={draggedPhotoId}
-                    onPress={() => setShowViewPhotosModal(true)}
-                    onLongPress={handleImageUpload}
-                  />
-                )}
-              </View>
-            </View>
-          );
-        })()}
+        {/* Back button — sits where the old photo stack lived (top-left over the camera) */}
+        <TouchableOpacity
+          ref={backButtonRef}
+          onLayout={() => {
+            // Publish the button's real window rect so the swipe-back ring rims it exactly,
+            // on any device/orientation (re-fires whenever it lays out / moves).
+            backButtonRef.current?.measureInWindow((x: number, y: number, width: number, height: number) => {
+              if (width && height) publishBackButtonRect({ x, y, width, height });
+            });
+          }}
+          style={styles.cameraBackButton}
+          activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={() => {
+            const nav = navigation as any;
+            if (nav.canGoBack?.()) nav.goBack();
+            else nav.navigate('Inventory');
+          }}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#FFF" />
+        </TouchableOpacity>
 
         {/* Camera controls (top right) */}
         <CameraControls
@@ -3406,43 +3917,45 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           onPastScans={() => navigation.navigate('PastScans' as never)}
         />
 
-      </CameraView>
-
-      {/* Overlays & Controls (Outside CameraView to avoid touch issues) */}
-      <CenterOverlay
-        instruction={getInstructionText(currentInstruction)}
-        isProcessing={['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'].includes(currentInstruction)}
-        cameraMode={cameraMode}
-        scannedBarcode={scannedBarcode}
-        onCopyBarcode={copyBarcodeToClipboard}
-        matchPreview={centerOverlayMatchPreview}
-        onPress={
-          cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
-            ? openBulkItemsSheet
-            : handleMatchIndicatorPress
-        }
-        totalPhotos={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
-      />
-
-      {cameraMode === 'camera' && (
-        <View style={styles.photoFrameOverlay} />
-      )}
-
-      {cameraMode === 'barcode' && (
-        <View style={styles.photoFrameOverlay}>
-          <View style={styles.scanLineContainer}>
-            <View style={styles.scanLine} />
+        {/* Framing guides — sized relative to the viewfinder, so they live inside it.
+            Camera + shelf modes show no frame: the preview gets the full area. */}
+        {cameraMode === 'barcode' && (
+          <View style={styles.photoFrameOverlay}>
+            <View style={styles.scanLineContainer}>
+              <View style={styles.scanLine} />
+            </View>
           </View>
-        </View>
-      )}
+        )}
+        {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
+          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+        )}
+        {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
+          <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
+        )}
 
-      {ENABLE_DOC_MODES && cameraMode === 'manifest' && (
-        <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
-      )}
+      </Animated.View>
 
-      {ENABLE_DOC_MODES && cameraMode === 'receipt' && (
-        <View style={[styles.photoFrameOverlay, { top: "10%", bottom: "20%", }]} />
-      )}
+      {/* Overlays & Controls (Outside CameraView to avoid touch issues).
+          The wrapper rides the same slide as the camera card so the match card
+          stays pinned to the card's bottom edge while the cart opens. */}
+      <Animated.View style={[StyleSheet.absoluteFill, cameraCardSlideStyle]} pointerEvents="box-none">
+        <CenterOverlay
+          instruction={getInstructionText(currentInstruction)}
+          isProcessing={['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'].includes(currentInstruction)}
+          cameraMode={cameraMode}
+          scannedBarcode={scannedBarcode}
+          onCopyBarcode={copyBarcodeToClipboard}
+          matchPreview={centerOverlayMatchPreview}
+          cardBottomOffset={CAMERA_BOTTOM_GAP + 44}
+          onSwipeItem={stepActiveItem}
+          onPress={
+            cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
+              ? openBulkItemsSheet
+              : handleMatchIndicatorPress
+          }
+          totalPhotos={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
+        />
+      </Animated.View>
 
       {/* Progress Bar */}
       {showProgressBar && (
@@ -3462,7 +3975,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         />
       )}
 
-      {/* Bottom controls */}
+      {/* Bottom controls — fade out as the cart rises so the strip between the
+          camera card and the sheet reads as clean black, not stranded buttons.
+          (When the cart Modal is up it owns all touches, so opacity alone is safe.)
+          absoluteFill is load-bearing: BottomControls positions itself absolutely,
+          so a collapsed (auto-height) wrapper would strand it off-screen. */}
+      <Animated.View style={[StyleSheet.absoluteFill, controlsFadeStyle]} pointerEvents="box-none">
       <BottomControls
         onCapture={handleCapture}
         isCapturing={isCapturing}
@@ -3500,6 +4018,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             : undefined
         }
       />
+      </Animated.View>
+        </Animated.View>
+      </PanGestureHandler>
 
       {/* Match results sheet (rendered above TabBar via Modal) */}
       <Modal
@@ -3510,7 +4031,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeMatchSheetToBulk}
         presentationStyle="overFullScreen"
       >
-        {showMatchSheet && matchData ? (
+        {/* Keep mounted while `visible` toggles — see the cart Modal note (Fabric unmount assert). */}
+        {matchData ? (
           <MatchResultsSheet
             matchData={matchData}
             onClose={closeMatchSheetToBulk}
@@ -3533,7 +4055,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             fetchPricingResearch={async (title: string) => {
               try {
                 const token = await getToken();
-                const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+                const API_BASE = API_BASE_URL;
                 const res = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -3563,32 +4085,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeBulkItemsSheet}
         presentationStyle="overFullScreen"
       >
-        {showDeepSearchSheet && (
+        {/* Children stay mounted while `visible` toggles — unmounting Modal children in
+            the same commit as the visible flip asserts in Fabric
+            (RCTViewComponentView unmountChildComponentView; long-standing crash class
+            in this app's reports). The Modal's own dismissal tears down the native tree. */}
+        {(
           <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            {/* Transparent — no dim. The capture screen lifting away behind this
+                transparent Modal IS the reveal. Tapping the exposed gap closes the cart. */}
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeBulkItemsSheet} />
             {(() => {
-              console.log('[SHEET CONDITIONAL] Sheet IS showing - showDeepSearchSheet is true');
-              console.log('[SHEET PROPS] ==================');
-              console.log('[SHEET PROPS] Passing to BulkItemsSheet:');
-              console.log('[SHEET PROPS] - photos (capturedPhotos):', capturedPhotos.length, 'items');
-              capturedPhotos.forEach((photo, index) => {
-                console.log(`[SHEET PROPS]   Photo ${index + 1}:`, {
-                  id: photo.id,
-                  uri: photo.uri.substring(0, 30) + '...',
-                  isCover: photo.isCover
-                });
-              });
-              console.log('[SHEET PROPS] - isBulkMode:', isBulkMode);
-              console.log('[SHEET PROPS] - bulkItems:', bulkItems.length, 'items');
-              bulkItems.forEach((item, index) => {
-                console.log(`[SHEET PROPS]   BulkItem ${index + 1}:`, {
-                  id: item.id,
-                  photosCount: item.photos.length,
-                  isActive: item.isActive
-                });
-              });
-              console.log('[SHEET PROPS] - activeItemId:', activeItemId);
-              console.log('[SHEET PROPS] ==================');
-
               return (
                 <BulkItemsSheet
                   onClose={closeBulkItemsSheet}
@@ -3612,6 +4118,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setJobResponse={setJobResponse}
                   quickScanStore={quickScanStore}
                   onOpenQuickMatches={openQuickMatchesForItem}
+                  onOpenItemPreview={handleOpenItem}
+                  cartTree={cartTree}
+                  onOpenFolder={(id) => setOpenFolderId(id)}
+                  onQueueGeneration={handleQueueGeneration}
+                  savedForLaterIds={savedForLaterIds}
+                  onToggleSavedForLater={setItemSavedForLater}
+                  onOpenAddDetails={(id) => setAddDetailsItemId(id)}
+                  freemium={freemiumStatus && !freemiumStatus.hasSubscription
+                    ? { usageCount: freemiumStatus.usageCount, freeLimit: freemiumStatus.freeLimit, exhausted: freemiumStatus.isFreeTierExhausted }
+                    : null}
+                  onUpgrade={() => setShowTierSelector(true)}
+                  onAddCredits={() => {
+                    setBillingGate(buildFreemiumBlockedGate());
+                    setBillingGateVisible(true);
+                  }}
                   onRetryItemScan={(itemId) => {
                     const targetItem = bulkItems.find(item => item.id === itemId);
                     const firstPhoto = targetItem?.photos?.[0];
@@ -3624,6 +4145,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   }}
                   itemLoadingStates={itemLoadingStates}
                   setItemLoadingStates={setItemLoadingStates}
+                  itemStageById={itemStageById}
                   confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
                   connectedPlatformKeys={connectedPlatformKeys}
                   currentInstruction={currentInstruction}
@@ -3666,6 +4188,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 />
               );
             })()}
+            {/* Add-details / folder page / item preview as opaque overlays in THIS Modal (no nested Modals) */}
+            {addDetailsItemId ? (
+              <View style={StyleSheet.absoluteFill}>{renderAddDetails()}</View>
+            ) : previewItemId ? (
+              <View style={StyleSheet.absoluteFill}>{renderMatchPreview()}</View>
+            ) : openFolder ? (
+              <View style={StyleSheet.absoluteFill}>{renderShelfFolderPage()}</View>
+            ) : null}
           </View>
         )}
       </Modal>
@@ -3714,7 +4244,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRequestClose={closeBarcodeSheet}
         presentationStyle="overFullScreen"
       >
-        {showBarcodeResultModal && barcodeSearchResult ? (
+        {/* Keep mounted while `visible` toggles — see the cart Modal note (Fabric unmount assert). */}
+        {barcodeSearchResult ? (
           <Animated.View style={[styles.matchSheet, matchSheetAnimatedStyle]}>
             <QuickProductDetailSheet
               product={barcodeSearchResult}
@@ -3745,7 +4276,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     updatesByVariant[u.variantId].push(u);
                   });
 
-                  const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+                  const API_BASE = API_BASE_URL;
 
                   // Process per variant
                   for (const [variantId, variantUpdates] of Object.entries(updatesByVariant)) {
@@ -3904,1878 +4435,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   );
 };
 
-
-
-type UnicodeSpinnerDefinition = {
-  frames: string[];
-  interval: number;
-};
-
-const UnicodeSpinner: React.FC<{
-  spinner: UnicodeSpinnerDefinition;
-  color?: string;
-  size?: number;
-  style?: any;
-}> = ({ spinner, color = '#4CAF50', size = 18, style }) => {
-  const [frameIndex, setFrameIndex] = useState(0);
-
-  useEffect(() => {
-    setFrameIndex(0);
-    const intervalId = setInterval(() => {
-      setFrameIndex((prev) => (prev + 1) % spinner.frames.length);
-    }, spinner.interval);
-    return () => clearInterval(intervalId);
-  }, [spinner]);
-
-  return (
-    <Text style={[styles.unicodeSpinnerText, { color, fontSize: size }, style]}>
-      {spinner.frames[frameIndex]}
-    </Text>
-  );
-};
-
-// Progress Bar Overlay Component
-const ProgressBarOverlay: React.FC<{
-  progressWidth: any;
-  spinRotation: any;
-}> = ({ progressWidth, spinRotation }) => {
-  const progressBarStyle = useAnimatedStyle(() => ({
-    width: `${progressWidth.value}%`,
-  }));
-
-  const spinnerStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spinRotation.value}deg` }],
-  }));
-
-  return (
-    <View style={styles.progressBarContainer}>
-      <View style={styles.progressBarBackground}>
-        <Animated.View style={[styles.progressBarFill, progressBarStyle]} />
-      </View>
-      <Animated.View style={[styles.progressSpinner, spinnerStyle]}>
-        <Icon name="loading" size={20} color="#4CAF50" />
-      </Animated.View>
-    </View>
-  );
-};
-
-// Notification Bar Component  
-const NotificationBar: React.FC<{
-  message: string;
-  opacity: any;
-  translateY: any;
-  onPress?: () => void;
-}> = ({ message, opacity, translateY, onPress }) => {
-  const notificationStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ translateY: translateY.value }],
-  }));
-
-  return (
-    <Animated.View style={[styles.notificationBar, notificationStyle]}>
-      <TouchableOpacity
-        onPress={onPress}
-        activeOpacity={0.8}
-        style={{ flexDirection: 'row', alignItems: 'center' }}
-      >
-        <Icon name="information-outline" size={20} color="white" />
-        <Text style={styles.notificationText}>{message}</Text>
-      </TouchableOpacity>
-    </Animated.View>
-  );
-};
-
-// Center Overlay Component
-const CenterOverlay: React.FC<{
-  instruction: string;
-  isProcessing: boolean;
-  cameraMode: CameraMode;
-  scannedBarcode: string | null;
-  onCopyBarcode: () => void;
-  matchPreview?: {
-    imageUrl?: string | null;
-    title: string;
-    label: string;
-    subtitle: string;
-    isConfirmed: boolean;
-  } | null;
-  onPress?: () => void;
-  totalPhotos?: number;
-}> = ({ instruction, isProcessing, cameraMode, scannedBarcode, onCopyBarcode, matchPreview, onPress, totalPhotos = 0 }) => {
-  const [showCompletionPulse, setShowCompletionPulse] = useState(false);
-  const completionPulseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wasProcessingRef = useRef(false);
-  const [showPostCaptureHold, setShowPostCaptureHold] = useState(false);
-  const postCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previousTotalPhotosRef = useRef(totalPhotos);
-
-  useEffect(() => {
-    if (completionPulseTimeoutRef.current) {
-      clearTimeout(completionPulseTimeoutRef.current);
-      completionPulseTimeoutRef.current = null;
-    }
-
-    if (isProcessing) {
-      wasProcessingRef.current = true;
-      setShowCompletionPulse(false);
-      return;
-    }
-
-    if (wasProcessingRef.current) {
-      const pulseCycles = 1;
-      const pulseExtraDelayMs = 150;
-      const pulseDuration = (spinners.pulse.frames.length * spinners.pulse.interval * pulseCycles) + pulseExtraDelayMs;
-      setShowCompletionPulse(true);
-      completionPulseTimeoutRef.current = setTimeout(() => {
-        setShowCompletionPulse(false);
-        completionPulseTimeoutRef.current = null;
-      }, pulseDuration);
-      wasProcessingRef.current = false;
-    }
-  }, [isProcessing]);
-
-  useEffect(() => {
-    return () => {
-      if (completionPulseTimeoutRef.current) {
-        clearTimeout(completionPulseTimeoutRef.current);
-        completionPulseTimeoutRef.current = null;
-      }
-      if (postCaptureTimeoutRef.current) {
-        clearTimeout(postCaptureTimeoutRef.current);
-        postCaptureTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (totalPhotos > previousTotalPhotosRef.current) {
-      if (postCaptureTimeoutRef.current) {
-        clearTimeout(postCaptureTimeoutRef.current);
-        postCaptureTimeoutRef.current = null;
-      }
-      setShowPostCaptureHold(true);
-      postCaptureTimeoutRef.current = setTimeout(() => {
-        setShowPostCaptureHold(false);
-        postCaptureTimeoutRef.current = null;
-      }, 1200);
-    }
-    previousTotalPhotosRef.current = totalPhotos;
-  }, [totalPhotos]);
-
-  // Barcode overlay at top middle
-  if (cameraMode === 'barcode' && scannedBarcode) {
-    return (
-      <View style={styles.barcodeOverlayContainer}>
-        <Animated.View style={styles.barcodeOverlay} entering={FadeIn}>
-          <Text style={styles.barcodeText}>{scannedBarcode}</Text>
-          <TouchableOpacity style={styles.copyButton} onPress={onCopyBarcode}>
-            <Icon name="content-copy" size={16} color="white" />
-            <Text style={styles.copyButtonText}>Copy</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
-    );
-  }
-
-  if (matchPreview && cameraMode !== 'barcode' && !isProcessing && !showCompletionPulse) {
-    return (
-      <View style={styles.barcodeOverlayContainer}>
-        <TouchableOpacity style={styles.centerOverlayMatchTouchable} onPress={onPress} activeOpacity={0.9}>
-          <Animated.View style={[
-            styles.centerOverlayMatchCard,
-            matchPreview.isConfirmed ? styles.centerOverlayMatchCardConfirmed : styles.centerOverlayMatchCardPending,
-          ]}>
-            {matchPreview.imageUrl ? (
-              <Image source={{ uri: matchPreview.imageUrl }} style={styles.centerOverlayMatchImage} />
-            ) : (
-              <View style={[styles.centerOverlayMatchImage, styles.centerOverlayMatchImageFallback]}>
-                <Icon name="image-outline" size={18} color="#64748B" />
-              </View>
-            )}
-            <View style={styles.centerOverlayMatchTextBlock}>
-              <Text style={styles.centerOverlayMatchLabel} numberOfLines={1}>{matchPreview.label}</Text>
-              <Text style={styles.centerOverlayMatchTitle} numberOfLines={1}>{matchPreview.title}</Text>
-              <Text style={styles.centerOverlayMatchSubtitle} numberOfLines={1}>{matchPreview.subtitle}</Text>
-            </View>
-            <View style={styles.centerOverlayChevron}>
-              <Icon name={matchPreview.isConfirmed ? 'check-circle' : 'chevron-right-circle'} size={20} color={matchPreview.isConfirmed ? BRAND_PRIMARY : '#CBD5E1'} />
-            </View>
-          </Animated.View>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (cameraMode === 'camera' && totalPhotos > 0 && !isProcessing && !showCompletionPulse && !showPostCaptureHold) {
-    return null;
-  }
-
-  const idleInstruction = cameraMode === 'shelf' ? 'Capture shelf to find items' : 'Take a photo to find a match';
-  const displayInstruction = showCompletionPulse
-    ? 'Likely Match Found'
-    : (!isProcessing && instruction === 'Capturing') ? idleInstruction : instruction;
-  const showSpinner = isProcessing || showCompletionPulse || showPostCaptureHold;
-  const spinner = showCompletionPulse ? spinners.pulse : spinners.helix;
-
-  // Regular instruction overlay - moved to top-middle like barcode
-  return (
-    <View style={styles.barcodeOverlayContainer}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-        <Animated.View style={styles.centerOverlay}>
-          <Text style={styles.centerOverlayText}>{displayInstruction}</Text>
-          {showSpinner && (
-            <View style={styles.processingIndicator}>
-              <UnicodeSpinner spinner={spinner} color="#FFFFFF" size={16} />
-            </View>
-          )}
-        </Animated.View>
-      </TouchableOpacity>
-    </View>
-  );
-};
-
-
-// Bottom Controls Component
-const BottomControls: React.FC<{
-  onCapture: () => void;
-  isCapturing: boolean;
-  captureButtonScale: any;
-  photosCount: number;
-  cameraMode: CameraMode;
-  onSetCameraMode: (mode: CameraMode) => void;
-  onImageUpload: () => void;
-  onContinue: () => void;
-  hasBarcodeResult?: boolean;
-  productName?: string;
-  // Item navigation props
-  items: Array<{ id: string; photos: any[]; title?: string }>;
-  activeItemId: string | null;
-  onSelectItem: (id: string) => void;
-  onNewItem: () => void;
-  onOpenBarcodeEntry?: () => void;
-  showDeepSearchSheet?: boolean;
-  onOpenSheet?: () => void;
-  matchedItemsCount?: number;
-  maxItems?: number;
-}> = ({
-  onCapture,
-  isCapturing,
-  captureButtonScale,
-  photosCount,
-  cameraMode,
-  onSetCameraMode,
-  onImageUpload,
-  onContinue,
-  hasBarcodeResult,
-  productName,
-  items,
-  activeItemId,
-  onSelectItem,
-  onNewItem,
-  onOpenBarcodeEntry,
-  showDeepSearchSheet = false,
-  onOpenSheet,
-  matchedItemsCount = 0,
-  maxItems = MAX_BATCH_ITEMS,
-}) => {
-    const activeIndex = items.findIndex(i => i.id === activeItemId);
-    const totalItems = items.length;
-    // Drag-to-select logic using simple state
-    const [hoveredMode, setHoveredMode] = useState<CameraMode | null>(null);
-    const [showModePopup, setShowModePopup] = useState(false);
-    const popupScale = useSharedValue(0);
-    const popupOpacity = useSharedValue(0);
-
-    const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
-      transform: [{ scale: captureButtonScale.value }],
-    }));
-
-    const popupAnimatedStyle = useAnimatedStyle(() => ({
-      transform: [{ scale: popupScale.value }],
-      opacity: popupOpacity.value,
-    }));
-
-    const toggleModePopup = useCallback(() => {
-      if (showModePopup) {
-        // Close smoothly
-        popupScale.value = withTiming(0, { duration: 150 });
-        popupOpacity.value = withTiming(0, { duration: 150 }, () => {
-          runOnJS(setShowModePopup)(false);
-        });
-      } else {
-        setShowModePopup(true);
-        popupScale.value = withTiming(1, { duration: 200 });
-        popupOpacity.value = withTiming(1, { duration: 150 });
-      }
-    }, [showModePopup, popupScale, popupOpacity]);
-
-    const selectMode = useCallback((mode: CameraMode) => {
-      onSetCameraMode(mode);
-      // Smooth close
-      popupScale.value = withTiming(0, { duration: 150 });
-      popupOpacity.value = withTiming(0, { duration: 150 }, () => {
-        runOnJS(setShowModePopup)(false);
-      });
-      setHoveredMode(null);
-    }, [onSetCameraMode, popupScale, popupOpacity]);
-
-    const modes: CameraMode[] = ENABLE_DOC_MODES
-      ? ['camera', 'barcode', 'shelf', 'manifest', 'receipt']
-      : ['camera', 'barcode', 'shelf'];
-
-    const POPUP_WIDTH = 90 * modes.length;
-    const ITEM_WIDTH = POPUP_WIDTH / modes.length;
-
-    // EXPERIMENTAL: Long press on mode button to toggle text search
-    const onLongPressMode = () => {
-      // Toggle text search from parent? We need a callback prop for this
-      // For now, we'll just log it. In real usage, pass onTextSearchToggle prop.
-      console.log('Long press mode button');
-    };
-
-    // Pan gesture handler callback (non-deprecated approach)
-    const onPanGestureEvent = useCallback((event: PanGestureHandlerGestureEvent) => {
-      const x = event.nativeEvent.x;
-      const modeIndex = Math.floor(x / ITEM_WIDTH);
-      const activeModes: CameraMode[] = ENABLE_DOC_MODES
-        ? ['camera', 'barcode', 'shelf', 'manifest', 'receipt']
-        : ['camera', 'barcode', 'shelf'];
-      let newMode: CameraMode | null = null;
-      if (modeIndex >= 0 && modeIndex < activeModes.length) {
-        newMode = activeModes[modeIndex];
-      }
-
-      if (newMode && newMode !== hoveredMode) {
-        setHoveredMode(newMode);
-        Haptics.selectionAsync();
-      }
-    }, [hoveredMode, ITEM_WIDTH, POPUP_WIDTH]);
-
-    const onPanHandlerStateChange = useCallback((event: PanGestureHandlerGestureEvent) => {
-      if (event.nativeEvent.state === State.END) {
-        if (hoveredMode) {
-          selectMode(hoveredMode);
-        }
-      }
-    }, [hoveredMode, selectMode]);
-
-    const getModeIcon = (mode: CameraMode): string => {
-      switch (mode) {
-        case 'camera': return 'camera';
-        case 'barcode': return 'barcode-scan';
-        case 'manifest': return 'file-document-outline';
-        case 'receipt': return 'receipt';
-        case 'shelf': return 'layers';
-      }
-    };
-
-    const getModeLabel = (mode: CameraMode): string => {
-      switch (mode) {
-        case 'camera': return 'Camera';
-        case 'barcode': return 'Barcode';
-        case 'manifest': return ENABLE_DOC_MODES ? 'Manifest' : '';
-        case 'receipt': return ENABLE_DOC_MODES ? 'Receipt' : '';
-        case 'shelf': return 'Shelf';
-      }
-    };
-
-    const getContinueText = () => {
-      if (cameraMode === 'barcode' && hasBarcodeResult) {
-        return 'Open scanned item';
-      }
-      if (cameraMode === 'manifest' && ENABLE_DOC_MODES) {
-        return photosCount > 0
-          ? `Parse ${photosCount} page${photosCount > 1 ? 's' : ''}`
-          : 'Capture manifest pages';
-      }
-      if (cameraMode === 'receipt' && ENABLE_DOC_MODES) {
-        return photosCount > 0
-          ? `Process ${photosCount} receipt${photosCount > 1 ? 's' : ''}`
-          : 'Capture receipt';
-      }
-      if (photosCount === 0) return 'Take a photo to get started';
-      if (totalItems > 0) return `Manage ${totalItems} Item${totalItems === 1 ? '' : 's'}`;
-      return 'Manage Items';
-    };
-
-    const activeMode = hoveredMode || cameraMode;
-
-    return (
-      <View style={styles.bottomControls}>
-        <Animated.View entering={FadeIn.delay(500)} style={styles.controlsRow}>
-          <View style={{ gap: 4, justifyContent: "center" }}>
-            <TouchableOpacity style={[styles.galleryButton, { gap: 4 }]} onPress={onImageUpload}>
-              <Icon name="image-multiple-outline" size={24} color="white" />
-            </TouchableOpacity>
-            <Text style={{ color: "#FFF", fontSize: 12, fontWeight: 500, textAlign: "center" }}>Upload</Text>
-          </View>
-
-
-
-          <Animated.View style={captureButtonAnimatedStyle}>
-            <TouchableOpacity
-              style={styles.captureButton}
-              onPress={onCapture}
-              disabled={isCapturing}
-            >
-              <View style={styles.captureButtonInner} />
-            </TouchableOpacity>
-          </Animated.View>
-
-          {/* Mode selector with popup */}
-          <View style={styles.modeSelectorWrapper}>
-            {/* Popup bubble */}
-            {showModePopup && (
-              <Animated.View style={[styles.modePopup, popupAnimatedStyle]}>
-                <PanGestureHandler
-                  onGestureEvent={onPanGestureEvent}
-                  onHandlerStateChange={onPanHandlerStateChange}
-                >
-                  <Animated.View style={[styles.modePopupContent, { width: POPUP_WIDTH }]}>
-                    {modes.map((mode, index) => (
-                      <TouchableOpacity
-                        key={mode}
-                        style={[
-                          styles.modePopupItem,
-                          activeMode === mode && styles.modePopupItemActive,
-                          //activeMode === mode && mode === 'shelf' && { backgroundColor: '#FF8A65' }
-                        ]}
-                        onPress={() => selectMode(mode)}
-                        activeOpacity={1}
-                      >
-                        <Text style={[
-                          styles.modePopupLabel,
-                          activeMode === mode && styles.modePopupLabelActive,
-                        ]}>
-                          {getModeLabel(mode)}
-                        </Text>
-                        <View style={[
-                          styles.modePopupIconContainer,
-                          activeMode === mode && styles.modePopupIconContainerActive,
-                        ]}>
-                          <Icon
-                            name={getModeIcon(mode)}
-                            size={28}
-                            color={activeMode === mode ? '#fff' : 'rgba(255,255,255,0.7)'}
-                          />
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </Animated.View>
-                </PanGestureHandler>
-                <View style={{ flex: 1, paddingRight: 25 }}>
-                  {/* Speech bubble arrow - Positioned relative to button center */}
-                  <View style={styles.modePopupArrow} />
-                </View>
-
-              </Animated.View>
-            )}
-
-            {/* Current mode button MODE (collapsed state) cameraMode === 'shelf' && { backgroundColor: '#FF8A65', borderColor: '#FF8A65' } */}
-            <TouchableOpacity
-              style={[styles.modeButton]}
-              onPress={toggleModePopup}
-            >
-              <Icon
-                name={getModeIcon(cameraMode)}
-                size={24}
-                color="white"
-              />
-            </TouchableOpacity>
-            <Text style={{ color: "#FFF", fontSize: 12, fontWeight: 500, textAlign: "center" }}>Mode</Text>
-          </View>
-        </Animated.View>
-
-        {((cameraMode === 'shelf' && !showDeepSearchSheet && items.length > 0 && onOpenSheet) || (cameraMode !== 'shelf' && (cameraMode === 'barcode' || photosCount >= 1 || items.some((i) => i.title)))) && (
-          <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
-            {cameraMode === 'shelf' && !showDeepSearchSheet && onOpenSheet ? (
-              <TouchableOpacity
-                style={styles.continueButton}
-                onPress={onOpenSheet}
-              >
-                <Text style={styles.continueButtonText} numberOfLines={1}>
-                  Move to listing flow
-                </Text>
-              </TouchableOpacity>
-            ) : cameraMode === 'barcode' ? (
-              hasBarcodeResult ? (
-                <View style={styles.barcodeActionsRow}>
-                  {onOpenBarcodeEntry && (
-                    <TouchableOpacity
-                      style={styles.barcodeSecondaryButton}
-                      onPress={onOpenBarcodeEntry}
-                    >
-                      <Text style={styles.barcodeSecondaryText}>Enter manually</Text>
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity
-                    style={styles.continueButton}
-                    onPress={onContinue}
-                  >
-                    <Text style={styles.continueButtonText} numberOfLines={1}>
-                      {getContinueText()}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <View style={styles.barcodeActionsRow}>
-                  {onOpenBarcodeEntry && (
-                    <TouchableOpacity
-                      style={styles.continueButton}
-                      onPress={onOpenBarcodeEntry}
-                    >
-                      <Text style={styles.continueButtonText} numberOfLines={1}>
-                        Enter barcode manually
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )
-            ) : (
-              <View style={styles.itemNavRow}>
-                {/* Left Arrow - Previous Item */}
-                <TouchableOpacity
-                  style={[styles.itemNavArrow, activeIndex <= 0 && styles.itemNavArrowDisabled]}
-                  onPress={() => {
-                    if (activeIndex > 0) onSelectItem(items[activeIndex - 1].id);
-                  }}
-                  disabled={activeIndex <= 0}
-                >
-                  {matchedItemsCount > 0 && (
-                    <View style={styles.itemNavArrowMatchBadge} />
-                  )}
-                  <Icon name="chevron-left" size={24} color={activeIndex > 0 ? "#FFF" : "rgba(255,255,255,0.3)"} />
-                </TouchableOpacity>
-
-                {/* Center - Continue Button with item counter */}
-                <TouchableOpacity
-                  style={styles.continueButton}
-                  onPress={onContinue}
-                >
-                  {totalItems > 0 && (
-                    <View style={styles.itemCountBadge}>
-                      <Text style={styles.itemCountBadgeText}>{totalItems}/{maxItems}</Text>
-                    </View>
-                  )}
-                  <Text style={styles.continueButtonText} numberOfLines={1}>
-                    {getContinueText()}
-                  </Text>
-                </TouchableOpacity>
-
-                {/* Right Arrow/New Item */}
-                {activeIndex < totalItems - 1 ? (
-                  <TouchableOpacity
-                    style={styles.itemNavArrow}
-                    onPress={() => onSelectItem(items[activeIndex + 1].id)}
-                  >
-                    <Icon name="chevron-right" size={24} color="#FFF" />
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    style={[styles.itemNavArrow, styles.itemNavNewButton]}
-                    onPress={onNewItem}
-                    disabled={totalItems >= maxItems}
-                  >
-                    <Icon name="plus" size={24} color={totalItems >= maxItems ? 'rgba(255,255,255,0.4)' : '#FFF'} />
-                    <Text style={[styles.continueButtonText, totalItems >= maxItems && { color: 'rgba(255,255,255,0.6)' }]}>
-                      {totalItems >= maxItems ? 'Limit reached' : 'New Item'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-          </Animated.View>
-        )}
-      </View>
-    );
-  };
-
-// Helper to clean up match text
-const cleanMatchText = (text: string) => {
-  if (!text) return '';
-  return text
-    .replace(/^(scanned product|scanned item|product scan)[:\s-]*/i, '')
-    .replace(/\s*\((quick_scan|.*dataset|custom_.*)\)/gi, '')
-    .trim();
-};
-
-const MatchResultsSheet: React.FC<{
-  matchData: MatchResponse;
-  onClose: () => void;
-  sheetStyle: any;
-  onUseForSelection?: () => void;
-  onStartBroadSearch?: () => void;
-  onConfirmMatch?: (serpApiData: any[], preSelectedIndices: number[]) => void;
-  currentMatchItemId?: string | null;
-  initialSelectedIndices?: number[];
-  fetchPricingResearch?: (title: string) => Promise<{ low?: number; median?: number; high?: number; recommended?: number; error?: string } | null>;
-  navigation?: any;
-}> = ({ matchData, onClose, sheetStyle, onUseForSelection, onStartBroadSearch, onConfirmMatch, currentMatchItemId, initialSelectedIndices, fetchPricingResearch, navigation }) => {
-  const insets = useSafeAreaInsets();
-  const bottomMargin = Math.max(insets.bottom, 20);
-  // Use index-based selection to avoid duplicate id issues
-  const effectiveInitialSelection = (Array.isArray(initialSelectedIndices) && initialSelectedIndices.length > 0)
-    ? initialSelectedIndices
-    : (matchData.totalMatches === 1 ? [0] : []);
-  const initialSelectionKey = `${currentMatchItemId ?? 'none'}:${effectiveInitialSelection.join(',')}`;
-  const [selectedMatchIndices, setSelectedMatchIndices] = React.useState<Set<number>>(() => new Set(effectiveInitialSelection));
-  const [pricingResearch, setPricingResearch] = React.useState<{ low?: number; median?: number; high?: number; recommended?: number } | null>(null);
-  const [pricingResearchLoading, setPricingResearchLoading] = React.useState(false);
-  const [pricingResearchModalVisible, setPricingResearchModalVisible] = React.useState(false);
-  const [pricingSourcesSheetVisible, setPricingSourcesSheetVisible] = React.useState(false);
-  const [pricingHistoryRange, setPricingHistoryRange] = React.useState<'1W' | '1M' | '3M'>('1M');
-
-  const [shippingModalVisible, setShippingModalVisible] = React.useState(false);
-  const [shippingModalData, setShippingModalData] = React.useState<{ min: number; max: number } | null>(null);
-
-  const firstCandidate = matchData.rankedCandidates[0];
-  const firstTitle = firstCandidate?.title;
-  // Check if candidate already has pre-fetched pricing research from quick scan enrichment
-  const preFetchedPricing = (firstCandidate as any)?.pricingResearch;
-
-  React.useEffect(() => {
-    setSelectedMatchIndices((prev) => {
-      if (prev.size === effectiveInitialSelection.length) {
-        const hasChanged = effectiveInitialSelection.some((index) => !prev.has(index));
-        if (!hasChanged) {
-          return prev;
-        }
-      }
-      return new Set(effectiveInitialSelection);
-    });
-  }, [initialSelectionKey]);
-
-  React.useEffect(() => {
-    // If pre-fetched pricing research data exists from quick scan, use it directly
-    if (preFetchedPricing && typeof preFetchedPricing.low === 'number') {
-      setPricingResearch(preFetchedPricing);
-      setPricingResearchLoading(false);
-      return;
-    }
-    if (!firstTitle || !fetchPricingResearch) return;
-    setPricingResearchLoading(true);
-    setPricingResearch(null);
-    fetchPricingResearch(firstTitle)
-      .then((res) => {
-        if (res && typeof (res as any).low === 'number') setPricingResearch(res as any);
-      })
-      .catch(() => { })
-      .finally(() => setPricingResearchLoading(false));
-  }, [firstTitle, fetchPricingResearch, preFetchedPricing]);
-
-  const toggleMatchSelection = (index: number) => {
-    setSelectedMatchIndices(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(index)) {
-        newSet.delete(index);
-      } else {
-        newSet.add(index);
-      }
-      return newSet;
-    });
-  };
-
-  const handleGenerateWithSelected = () => {
-    if (selectedMatchIndices.size > 0) {
-      // Convert matchData.rankedCandidates to serpApiData format for MatchSelectionScreen
-      const serpApiData = matchData.rankedCandidates.map((c, idx) => ({
-        position: idx + 1,
-        title: c.title || 'Unknown Product',
-        link: c.sourceUrl || '',
-        source: 'quickscan',
-        source_icon: '',
-        thumbnail: c.imageUrl || '',
-        image: c.imageUrl || '',
-        price: typeof c.price === 'number' ? { value: `$${c.price}`, extracted_value: c.price, currency: 'USD' } : undefined,
-      }));
-      const preSelected = Array.from(selectedMatchIndices);
-      if (currentMatchItemId && onConfirmMatch) {
-        onConfirmMatch(serpApiData, preSelected);
-      }
-      onClose();
-    } else if (selectedMatchIndices.size > 0) {
-      onUseForSelection?.();
-    }
-  };
-
-  return (
-    <Animated.View style={[styles.matchSheet, sheetStyle, { paddingBottom: 230 }]}>
-      <ScrollView
-        style={[
-          styles.itemsScrollContainer,
-        ]}
-        showsVerticalScrollIndicator={true}
-        contentContainerStyle={[
-          styles.scrollContent,
-          {
-            flexGrow: 1,
-            paddingBottom: 0
-          }
-        ]}
-      >
-        <View style={styles.sheetHeader}>
-          <View style={styles.sheetHeaderSpacer} />
-          <Text style={[styles.sheetTitle, { flex: 1 }]}>
-            {matchData.totalMatches} Match{matchData.totalMatches > 1 ? 'es' : ''} Found
-          </Text>
-          <TouchableOpacity onPress={onClose} style={styles.exitButton} activeOpacity={0.8} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Icon name="close" size={18} color="#64748B" />
-            <Text style={styles.exitButtonText}>Exit</Text>
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.selectionHint}>
-          {selectedMatchIndices.size > 0
-            ? 'Selected match is ready. Tap another result if you need to change it.'
-            : 'Tap the right match before continuing.'}
-        </Text>
-
-        <View style={styles.matchResults}>
-          {matchData.rankedCandidates.map((candidate, index) => {
-            const isSelected = selectedMatchIndices.has(index);
-            const hasPrice = typeof candidate.price === 'number' && candidate.price > 0;
-            // Use pricing research for price display: prefer candidate's pre-fetched data, then component-level data
-            const candidatePricing = (candidate as any)?.pricingResearch;
-            const effectivePricing = (index === 0) ? (pricingResearch || candidatePricing) : candidatePricing;
-            const usePricingResearch = !hasPrice && effectivePricing && typeof effectivePricing.low === 'number';
-            const priceText = hasPrice
-              ? `$${candidate.price}`
-              : usePricingResearch
-                ? `$${effectivePricing.low} – $${effectivePricing.high ?? effectivePricing.median ?? effectivePricing.low}${effectivePricing.median != null ? ` (avg $${effectivePricing.median})` : ''}`
-                : pricingResearchLoading && index === 0
-                  ? '…'
-                  : '—';
-
-            return (
-              <TouchableOpacity
-                key={`match-${index}`}
-                style={[
-                  styles.matchCard,
-                  isSelected && styles.matchCardSelected
-                ]}
-                onPress={() => toggleMatchSelection(index)}
-                activeOpacity={0.7}
-              >
-                <Image source={{ uri: candidate.imageUrl }} style={styles.matchImage} />
-                <View style={styles.matchInfo}>
-                  <Text style={styles.matchTitle} numberOfLines={2}>{cleanMatchText(candidate.title) || 'Unknown Product'}</Text>
-
-                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, marginBottom: 4 }}>
-                    <TouchableOpacity
-                      disabled={(index !== 0) || (!pricingResearch && !candidatePricing) || pricingResearchLoading}
-                      onPress={(index === 0 && (pricingResearch || candidatePricing) && !pricingResearchLoading) ? () => setPricingResearchModalVisible(true) : undefined}
-                      style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E5E7EB' }}
-                    >
-                      <Icon name="tag-outline" size={12} color="#4B5563" style={{ marginRight: 4 }} />
-                      <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151' }}>
-                        {priceText}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {candidate.sourceUrl && (() => {
-                    try {
-                      return (
-                        <Text style={styles.matchSource} numberOfLines={1}>
-                          {new URL(candidate.sourceUrl).hostname.replace('www.', '')}
-                        </Text>
-                      );
-                    } catch {
-                      return null;
-                    }
-                  })()}
-                </View>
-
-                {/* Selection indicator overlay */}
-                {isSelected && (
-                  <View style={styles.matchSelectionOverlay}>
-                    <View style={styles.matchCheckmark}>
-                      <Icon name="check" size={20} color="#FFFFFF" />
-                    </View>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <View style={styles.sheetActions}>
-          <View style={[styles.matchActionsRow, { justifyContent: 'center' }]}>
-            <TouchableOpacity
-              style={[
-                styles.listProductButton,
-                { flex: 1, minHeight: 52 },
-                selectedMatchIndices.size === 0 && styles.listProductButtonDisabled
-              ]}
-              onPress={handleGenerateWithSelected}
-              disabled={selectedMatchIndices.size === 0}
-            >
-              <Icon name="package-variant" size={20} color={selectedMatchIndices.size > 0 ? "#FFF" : "#999"} />
-              <Text style={[
-                styles.listProductButtonText,
-                selectedMatchIndices.size === 0 && { color: '#999' }
-              ]}>Use Selected</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </ScrollView>
-
-      {/* Pricing Research Modal */}
-      <PricingResearchModal
-        visible={pricingResearchModalVisible}
-        onClose={() => setPricingResearchModalVisible(false)}
-        pricingResearchResult={pricingResearch}
-        pricingSourcesSheetVisible={pricingSourcesSheetVisible}
-        setPricingSourcesSheetVisible={setPricingSourcesSheetVisible}
-        pricingHistoryRange={pricingHistoryRange}
-        setPricingHistoryRange={setPricingHistoryRange}
-        selectedPricingPointIdx={null}
-      />
-
-      {/* Shipping Estimate Modal */}
-      <Modal visible={shippingModalVisible} transparent animationType="fade">
-        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }} onPress={() => setShippingModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#fff', borderRadius: 16, width: '85%', maxWidth: 320, padding: 24 }} onPress={e => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#F0FDF4', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name="truck-outline" size={24} color="#16a34a" />
-              </View>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Shipping Estimate</Text>
-            </View>
-            <Text style={{ fontSize: 15, color: '#4B5563', lineHeight: 22, marginBottom: 8 }}>
-              Based on similar items, the estimated shipping cost is:
-            </Text>
-            <Text style={{ fontSize: 24, fontWeight: '700', color: '#166534', marginBottom: 20 }}>
-              ${shippingModalData?.min?.toFixed(2)} – ${shippingModalData?.max?.toFixed(2)}
-            </Text>
-            <TouchableOpacity
-              style={{ backgroundColor: '#1F2937', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
-              onPress={() => setShippingModalVisible(false)}
-            >
-              <Text style={{ color: '#fff', fontWeight: '600', fontSize: 16 }}>Close</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-    </Animated.View>
-  );
-};
-
-// Bulk Items Sheet Component
-const BulkItemsSheet: React.FC<{
-  onClose: () => void;
-  onStartBroadSearch: () => void;
-  sheetStyle: any;
-  photos: CapturedPhoto[];
-  isBulkMode: boolean;
-  bulkItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; preSelectedSource?: any; quantity?: number; }>;
-  activeItemId: string | null;
-  onAddNewItem: () => void;
-  onImageUpload: () => void;
-  setJobResponse: (jobResponse: JobResponse | null) => void;
-  onDeleteItem: (itemId: string) => void;
-  onMovePhoto: (fromItemId: string, toItemId: string, photoId: string) => void;
-  onSelectItem: (itemId: string) => void;
-  onSetCoverPhoto: (itemId: string, photoId: string) => void;
-  onRemovePhoto: (itemId: string, photoId: string) => void;
-  performAnalyze: (
-    firstPhotos: CapturedPhoto[],
-    quickMatchHintsByItemId?: Record<string, QuickMatchSelection>,
-    itemsForAnalyze?: Array<{ id: string }>,
-  ) => Promise<any>;
-  sheetTranslateY: any;
-  jobResponse: JobResponse | null;
-  navigation: any;
-  quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;
-  onOpenQuickMatches?: (itemId: string) => void;
-  onRetryItemScan?: (itemId: string) => void;
-  onOpenPhotoModal?: (itemId: string) => void;
-  itemLoadingStates: Record<string, ItemLoadingState>;
-  setItemLoadingStates: React.Dispatch<React.SetStateAction<Record<string, ItemLoadingState>>>;
-  confirmedQuickMatchByItemId?: Record<string, QuickMatchSelection>;
-  connectedPlatformKeys?: string[];
-  currentInstruction?: string | null;
-  onOpenLocalMatch?: (itemId: string) => void;
-  shelfPhotoUri?: string | null;
-  shelfProgress?: ShelfProgressState;
-  onRetryShelfScan?: () => void;
-  onRetakeShelfScan?: () => void;
-  onUpdateItemQuery?: (id: string, newQuery: string) => void;
-  onUpdateItemTitle?: (id: string, newTitle: string) => void;
-  onUpdateItemQuantity?: (id: string, quantity: number) => void;
-  onSubmitItemsForProcessing?: (items: Array<{ id: string }>) => void;
-  onSaveDraft?: () => void;
-  cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, cameraMode = 'camera' }) => {
-
-  console.log('[SHEET RENDER] ==================');
-  console.log('[SHEET RENDER] BulkItemsSheet RE-RENDERED at:', new Date().toISOString());
-  console.log('[SHEET RENDER] Props received:');
-  console.log('[SHEET RENDER] - photos.length:', photos.length);
-  console.log('[SHEET RENDER] - bulkItems.length:', bulkItems.length);
-  console.log('[SHEET RENDER] - bulkItems array:', JSON.stringify(bulkItems, null, 2));
-  console.log('[SHEET RENDER] - activeItemId:', activeItemId);
-  console.log('[SHEET RENDER] ==================');
-
-  // SIMPLIFIED: Always use bulkItems (no more virtual items)
-  let displayItems: Array<{ id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number; }>;
-
-  console.log('[DISPLAY LOGIC] ==================');
-  console.log('[DISPLAY LOGIC] Using simplified logic - always show bulkItems');
-  console.log('[DISPLAY LOGIC] bulkItems.length:', bulkItems.length);
-  console.log('[DISPLAY LOGIC] photos (capturedPhotos) length:', photos.length, '(legacy - should be same as total photos in bulkItems)');
-
-  // Always use bulkItems - much simpler!
-  displayItems = bulkItems;
-
-  console.log('[DISPLAY LOGIC] Final displayItems (same as bulkItems):');
-  displayItems.forEach((item, index) => {
-    console.log(`[DISPLAY LOGIC] Item ${index + 1}:`, {
-      id: item.id,
-      photosCount: item.photos.length,
-      photoIds: item.photos.map(p => p.id),
-      isActive: item.isActive
-    });
-  });
-  console.log('[DISPLAY LOGIC] ==================');
-
-  const totalItems = displayItems.length;
-  const [editingItemId, setEditingItemId] = React.useState<string | null>(null);
-  const [editQueryText, setEditQueryText] = React.useState("");
-  const [countDraftByItemId, setCountDraftByItemId] = React.useState<Record<string, string>>({});
-  const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    setCountDraftByItemId(prev => {
-      let changed = false;
-      const next: Record<string, string> = {};
-      for (const item of bulkItems) {
-        const existingDraft = prev[item.id];
-        let nextValue: string;
-        if (typeof existingDraft === 'string') {
-          nextValue = existingDraft;
-        } else {
-          const quantity = item.quantity ?? 1;
-          nextValue = String(quantity);
-        }
-        next[item.id] = nextValue;
-        if (prev[item.id] !== nextValue) changed = true;
-      }
-      if (Object.keys(prev).length !== Object.keys(next).length) changed = true;
-      return changed ? next : prev;
-    });
-  }, [bulkItems]);
-
-  const handleCountDraftChange = useCallback((itemId: string, rawText: string) => {
-    const sanitized = rawText
-      .replace(',', '.')
-      .replace(/[^0-9.]/g, '')
-      .replace(/(\..*?)\..*/g, '$1');
-    setCountDraftByItemId(prev => ({ ...prev, [itemId]: sanitized }));
-  }, []);
-
-  const commitCountDraft = useCallback((itemId: string) => {
-    const draft = (countDraftByItemId[itemId] ?? '').trim();
-    const parsed = Number.parseFloat(draft);
-    const quantity = Number.isFinite(parsed) && parsed > 0 ? Number(parsed.toFixed(2)) : 1;
-
-    setCountDraftByItemId(prev => ({ ...prev, [itemId]: String(quantity) }));
-    onUpdateItemQuantity?.(itemId, quantity);
-  }, [countDraftByItemId, onUpdateItemQuantity]);
-
-  console.log('[SHEET DEBUG] ==================');
-  console.log('[SHEET DEBUG] isBulkMode:', isBulkMode);
-  console.log('[SHEET DEBUG] bulkItems length:', bulkItems.length);
-  console.log('[SHEET DEBUG] photos length:', photos.length);
-  console.log('[SHEET DEBUG] photos array:', photos.map(p => ({ id: p.id, uri: p.uri.substring(0, 30) + '...' })));
-  console.log('[SHEET DEBUG] displayItems COUNT:', displayItems.length);
-  console.log('[SHEET DEBUG] totalItems:', totalItems);
-  console.log('[SHEET DEBUG] Sheet State:', totalItems === 0 ? 'EMPTY' : 'HAS_ITEMS');
-  console.log('[SHEET DEBUG] ==================');
-
-  // Keep a tall, consistent sheet so actions never get clipped on smaller devices.
-  const sheetMaxHeight = SCREEN_HEIGHT * 0.88;
-
-  console.log('[SHEET LAYOUT] Heights calculated:', {
-    screenHeight: SCREEN_HEIGHT,
-    sheetMaxHeight,
-  });
-  const dynamicSheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: sheetTranslateY.value }],
-    height: sheetMaxHeight,
-  }));
-
-  const bottomMargin = Math.max(insets.bottom, 20);
-  const shelfPresentation = shelfProgress ? getShelfProgressPresentation(shelfProgress) : null;
-  const shouldShowShelfRetryActions = Boolean(
-    shelfProgress && (shelfProgress.stalled || shelfProgress.status === 'no_items' || shelfProgress.status === 'timeout' || shelfProgress.status === 'error')
-  );
-  const activeBulkItemIds = new Set(displayItems.map((item) => item.id));
-  const hasLoadingItems = Object.entries(itemLoadingStates || {}).some(([id, state]) => {
-    const loadingState = state as ItemLoadingState;
-    return loadingState.isLoading && activeBulkItemIds.has(id);
-  });
-  const hasAnyPhotos = displayItems.some(item => item.photos.length > 0);
-  const hasAnyItems = totalItems > 0;
-  const isAnalyzeInFlightRef = React.useRef(false);
-  const shouldShowBottomActions =
-    cameraMode === 'shelf'
-      ? totalItems > 0
-      : hasAnyItems || hasAnyPhotos;
-  const shouldShowShelfFailureBar = Boolean(cameraMode === 'shelf' && totalItems === 0 && shouldShowShelfRetryActions);
-  const scrollBottomPadding = shouldShowShelfFailureBar || shouldShowBottomActions
-    ? bottomMargin + 126
-    : bottomMargin;
-
-  const submitDirectGenerateJob = React.useCallback(async (
-    products: Array<{
-      productIndex: number;
-      productId: string;
-      variantId?: string;
-      imageUrls: string[];
-      coverImageIndex: number;
-      selectedMatches?: any[];
-      quantity?: number;
-    }>
-  ) => {
-    const token = await ensureSupabaseJwt();
-    if (!token) {
-      throw new Error('No auth token available for generate request');
-    }
-
-    const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
-    const API_BASE = /localhost|127\.0\.0\.1/i.test(rawApiBase) ? 'https://api.sssync.app' : rawApiBase;
-    const response = await fetch(`${API_BASE}/api/products/generate/jobs`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        products,
-        selectedPlatforms: connectedPlatformKeys,
-        options: { useScraping: true },
-      }),
-    });
-
-    const responseText = await response.text();
-    let parsed: any = null;
-    try {
-      parsed = responseText ? JSON.parse(responseText) : null;
-    } catch {
-      parsed = null;
-    }
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText} :: ${responseText.slice(0, 200)}`);
-    }
-
-    return parsed as JobResponse | null;
-  }, [connectedPlatformKeys]);
-
-  // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections)
-  const handleAnalyzeAndNavigate = React.useCallback(async () => {
-    if (isAnalyzeInFlightRef.current) {
-      return;
-    }
-    isAnalyzeInFlightRef.current = true;
-    onSaveDraft?.();
-    onClose();
-    const firstPhotos = bulkItems.map(item => item.photos[0]).filter(Boolean);
-    if (firstPhotos.length === 0) {
-      Alert.alert('No Photos', 'Please take some photos first before searching.');
-      isAnalyzeInFlightRef.current = false;
-      return;
-    }
-
-    onStartBroadSearch();
-
-    const loadingStates: Record<string, ItemLoadingState> = {};
-    bulkItems.forEach(item => {
-      if (item.photos.length > 0) {
-        loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
-      }
-    });
-    setItemLoadingStates(loadingStates);
-
-    try {
-      const mergedConfirmedQuickMatch = { ...confirmedQuickMatchByItemId };
-      bulkItems.forEach(item => {
-        if (item.preSelectedSource) {
-          mergedConfirmedQuickMatch[item.id] = {
-            serpApiData: [item.preSelectedSource],
-            preSelectedIndices: [0],
-            source: 'quick_scan_confirmed',
-          };
-        }
-      });
-
-      const queueEntries = bulkItems.map((item, index) => {
-        const confirmedMatch = mergedConfirmedQuickMatch[item.id];
-        const selectedIndex = typeof confirmedMatch?.preSelectedIndices?.[0] === 'number'
-          ? confirmedMatch.preSelectedIndices[0]
-          : null;
-        // F2: A confirmed quick-match — whether the user picked it explicitly
-        // ('quick_scan_confirmed') or auto-pre-selected by SmartPicker and then
-        // implicitly confirmed by tapping Analyze ('quick_scan_auto') — is a
-        // valid match source. We route both to direct-generate, which skips
-        // the redundant /orchestrate/match round-trip (Tier 0/1/2/3 search +
-        // SmartPicker rerank were already done in quick-scan).
-        const isUsableSource =
-          confirmedMatch?.source === 'quick_scan_confirmed' ||
-          confirmedMatch?.source === 'quick_scan_auto';
-        const selectedCandidate = (
-          isUsableSource &&
-          selectedIndex != null &&
-          Array.isArray(confirmedMatch.serpApiData) &&
-          confirmedMatch.serpApiData[selectedIndex]
-        )
-          ? confirmedMatch.serpApiData[selectedIndex]
-          : null;
-        const imageUrls = item.photos.map((photo) => photo.uri).filter(Boolean);
-        const fallbackId = item.id || `quick-generate-${index}`;
-
-        return {
-          originalIndex: index,
-          item,
-          selectedCandidate,
-          generateProduct: selectedCandidate ? {
-            productIndex: index,
-            productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
-            variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
-            imageUrls,
-            coverImageIndex: 0,
-            selectedMatches: [selectedCandidate],
-            quantity: item.quantity,
-          } : null,
-        };
-      });
-
-      const directGenerateEntries = queueEntries.filter((entry) => (
-        entry.selectedCandidate &&
-        entry.generateProduct &&
-        Array.isArray(entry.generateProduct.imageUrls) &&
-        entry.generateProduct.imageUrls.length > 0
-      ));
-      const analyzeEntries = queueEntries.filter((entry) => !directGenerateEntries.includes(entry));
-      const userImagesByIndex = Object.fromEntries(
-        bulkItems.map((item, index) => [index, item.photos.map((photo) => photo.uri).filter(Boolean)])
-      );
-
-      if (directGenerateEntries.length > 0 && analyzeEntries.length === 0) {
-        const generateProductsPayload = directGenerateEntries.flatMap((entry) => (
-          entry.generateProduct ? [{ ...entry.generateProduct, productIndex: entry.originalIndex }] : []
-        ));
-        const directJobResponse = await submitDirectGenerateJob(generateProductsPayload);
-
-        const directJobId = directJobResponse?.jobId;
-        if (!directJobId) {
-          throw new Error('Generate job response missing jobId');
-        }
-
-        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
-        const itemsForGenerate = bulkItems.map((item, index) => {
-          const selectedCandidate = queueEntries[index]?.selectedCandidate;
-          return {
-            index,
-            title: item.title || selectedCandidate?.title || `Item ${index + 1}`,
-            thumb: item.photos?.[0]?.uri || selectedCandidate?.image || selectedCandidate?.thumbnail || '',
-            matchesCount: 1,
-            matchJobId: undefined,
-          };
-        });
-
-        navigation.navigate('LoadingScreen', {
-          processType: 'generate',
-          payload: {
-            jobId: directJobId,
-            firstPhotos,
-            bulkItems,
-          },
-          onCompleteRoute: {
-            screen: 'GenerateDetailsScreen',
-            params: {
-              jobId: directJobId,
-              matchJobId: '',
-              items: itemsForGenerate,
-              jobMap: {},
-              userImagesByIndex,
-            },
-          },
-        });
-        return;
-      }
-
-      const directJobMap = directGenerateEntries.length > 0 ? (() => {
-        const payload = directGenerateEntries.flatMap((entry) => (
-          entry.generateProduct ? [{ ...entry.generateProduct, productIndex: entry.originalIndex }] : []
-        ));
-        return payload;
-      })() : [];
-
-      let directJobResponse: JobResponse | null = null;
-      let directJobId: string | undefined;
-      if (directJobMap.length > 0) {
-        directJobResponse = await submitDirectGenerateJob(directJobMap);
-        directJobId = directJobResponse?.jobId || undefined;
-        if (!directJobId) {
-          throw new Error('Generate job response missing jobId');
-        }
-      }
-
-      const analyzeFirstPhotos = analyzeEntries.map((entry) => entry.item.photos[0]).filter(Boolean);
-      const analyzeItems = analyzeEntries.map((entry) => ({ id: entry.item.id }));
-      const analyzeQuickMatchHints = Object.fromEntries(
-        analyzeEntries.flatMap((entry) => (
-          mergedConfirmedQuickMatch[entry.item.id]
-            ? [[entry.item.id, mergedConfirmedQuickMatch[entry.item.id]]]
-            : []
-        ))
-      );
-
-      if (analyzeFirstPhotos.length === 0 && directJobId) {
-        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
-        navigation.navigate('LoadingScreen', {
-          processType: 'generate',
-          payload: {
-            jobId: directJobId,
-            firstPhotos,
-            bulkItems,
-          },
-          onCompleteRoute: {
-            screen: 'GenerateDetailsScreen',
-            params: {
-              jobId: directJobId,
-              matchJobId: '',
-              items: bulkItems.map((item, index) => ({
-                index,
-                title: item.title || queueEntries[index]?.selectedCandidate?.title || `Item ${index + 1}`,
-                thumb: item.photos?.[0]?.uri || queueEntries[index]?.selectedCandidate?.image || queueEntries[index]?.selectedCandidate?.thumbnail || '',
-                matchesCount: 1,
-                matchJobId: undefined,
-              })),
-              jobMap: {},
-              userImagesByIndex,
-            },
-          },
-        });
-        return;
-      }
-
-      const jobResponseData: JobResponse = await performAnalyze(
-        analyzeFirstPhotos,
-        analyzeQuickMatchHints,
-        analyzeItems,
-      );
-      console.log('[ANALYZE] Job Response:', jobResponseData);
-      setJobResponse(jobResponseData);
-      const jobId = jobResponseData?.jobId;
-
-      if (jobId) {
-        onSubmitItemsForProcessing?.(bulkItems.map((item) => ({ id: item.id })));
-        const itemsForGenerate = bulkItems.map((item, index) => ({
-          index,
-          title: item.title || queueEntries[index]?.selectedCandidate?.title || `Item ${index + 1}`,
-          thumb: item.photos?.[0]?.uri || queueEntries[index]?.selectedCandidate?.image || queueEntries[index]?.selectedCandidate?.thumbnail || '',
-          matchesCount: directGenerateEntries.some((entry) => entry.originalIndex === index) ? 1 : 0,
-          matchJobId: analyzeEntries.some((entry) => entry.originalIndex === index) ? jobId : undefined,
-        }));
-        const jobMap = directJobId
-          ? Object.fromEntries(
-              directGenerateEntries.map((entry) => [
-                entry.originalIndex,
-                { jobId: directJobId as string, status: directJobResponse?.status },
-              ])
-            )
-          : {};
-        const resultIndexMap = Object.fromEntries(
-          analyzeEntries.map((entry, analyzeIndex) => [analyzeIndex, entry.originalIndex])
-        );
-
-        navigation.navigate('LoadingScreen', {
-          processType: 'match',
-          payload: {
-            jobId,
-            bulkItems: analyzeEntries.map((entry) => entry.item),
-            firstPhotos: analyzeFirstPhotos,
-            confirmedQuickMatchByItemId: analyzeQuickMatchHints,
-            skipMatchSelection: true,
-            autoGenerateAllPlatforms: true,
-            resultIndexMap,
-          },
-          onCompleteRoute: {
-            screen: 'GenerateDetailsScreen',
-            params: {
-              jobId: '',
-              status: 'processing',
-              results: [],
-              summary: [],
-              completedAt: '',
-              matchJobId: jobId,
-              items: itemsForGenerate,
-              jobMap,
-              userImagesByIndex,
-            },
-          },
-        });
-      } else {
-        Alert.alert('Error', 'Failed to start analysis. Please try again.');
-      }
-    } catch (error) {
-      console.error('[ANALYZE] Error:', error);
-      Alert.alert('Error', 'Failed to start analysis. Please try again.');
-    } finally {
-      isAnalyzeInFlightRef.current = false;
-    }
-  }, [
-    bulkItems,
-    confirmedQuickMatchByItemId,
-    connectedPlatformKeys,
-    performAnalyze,
-    onStartBroadSearch,
-    setJobResponse,
-    setItemLoadingStates,
-    navigation,
-    onSubmitItemsForProcessing,
-    onSaveDraft,
-    onClose,
-    submitDirectGenerateJob,
-  ]);
-
-  return (
-    <Animated.View style={[styles.bulkItemsSheet, dynamicSheetStyle]}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 84 : 0}
-      >
-        {/* Drag Handle */}
-        <PanGestureHandler
-          onGestureEvent={(event) => {
-            const { translationY } = event.nativeEvent;
-            const minY = 0; // Fully visible
-            const maxY = SCREEN_HEIGHT * 0.5; // Drag down before close
-            const currentY = sheetTranslateY.value;
-
-            // Calculate new position based on drag
-            const newY = Math.max(minY, Math.min(maxY, currentY + translationY * 0.5));
-            sheetTranslateY.value = newY;
-          }}
-          onHandlerStateChange={(event) => {
-            if (event.nativeEvent.state === State.END) {
-              const { velocityY } = event.nativeEvent;
-
-              // Snap to positions based on velocity
-              if (velocityY > 500) {
-                // Prevent accidental auto-close from gesture noise; explicit Exit handles closing.
-                sheetTranslateY.value = withSpring(0);
-              } else if (velocityY < -500) {
-                // Fast upward swipe - expand to fully visible
-                sheetTranslateY.value = withSpring(0);
-              } else {
-                // Snap to nearest position
-                const currentY = sheetTranslateY.value;
-                const midPoint = SCREEN_HEIGHT * 0.25;
-
-                if (currentY < midPoint) {
-                  // Closer to top - stay fully visible
-                  sheetTranslateY.value = withSpring(0);
-                } else {
-                  // Closer to bottom - default open
-                  sheetTranslateY.value = withSpring(0);
-                }
-              }
-            }
-          }}
-        >
-          <Animated.View style={styles.dragHandle}>
-            <TouchableOpacity onPress={onClose} style={styles.dragHandleButton}>
-              <View style={styles.dragHandleBar} />
-            </TouchableOpacity>
-          </Animated.View>
-        </PanGestureHandler>
-
-        <View style={styles.sheetHeader}>
-        <View style={styles.sheetHeaderSpacer} />
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={styles.sheetTitle}>
-            {totalItems === 0
-              ? (cameraMode === 'shelf' ? 'Scan a shelf' : 'Ready to Create Items')
-              : `Analyze & List ${totalItems} New Item${totalItems > 1 ? 's' : ''}`
-            }
-          </Text>
-          <Text style={{ marginTop: 2, fontSize: 12, color: '#64748B', fontWeight: '600' }}>
-            {totalItems}/{MAX_BATCH_ITEMS}
-          </Text>
-        </View>
-        <TouchableOpacity
-          onPress={onClose}
-          style={styles.exitButton}
-          activeOpacity={0.8}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Icon name="close" size={18} color="#64748B" />
-          <Text style={styles.exitButtonText}>Exit</Text>
-        </TouchableOpacity>
-
-        {/* New Item button
-        <TouchableOpacity style={styles.headerNewItemButton} onPress={onAddNewItem}>
-          <Icon name="plus" size={20} color={BRAND_PRIMARY} />
-        </TouchableOpacity>
-         */}
-        </View>
-
-
-        {/* Main Camera View */}
-        <View style={styles.sheetContent}>
-
-
-        <Text style={styles.sheetSubtitle}>
-          {totalItems === 0
-            ? (cameraMode === 'shelf' ? 'One photo, we detect all items' : 'Take a photo to automatically create your first item')
-            : ''
-          }
-        </Text>
-
-        {/* Scrollable Items Container */}
-        <ScrollView
-          style={[
-            styles.itemsScrollContainer,
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={true}
-          contentContainerStyle={[
-            styles.scrollContent,
-            {
-              flexGrow: 1,
-              paddingBottom: scrollBottomPadding,
-            }
-          ]}
-        >
-          {displayItems.length === 0 ? (
-            (() => {
-              if (cameraMode === 'shelf' && shelfPhotoUri && shelfProgress && shelfProgress.status !== 'idle') {
-                return (
-                  <ShelfScanProgressCard
-                    photoUri={shelfPhotoUri}
-                    title={shelfPresentation?.title || 'Inspecting shelf'}
-                    subtitle={shelfPresentation?.subtitle || 'Reading the shelf image.'}
-                    phase={shelfProgress.phase}
-                    status={shelfProgress.status}
-                    progress={shelfProgress.progress}
-                    totalItems={shelfProgress.totalItems}
-                    completedItems={shelfProgress.completedItems}
-                    stalled={shelfProgress.stalled}
-                  />
-                );
-              }
-
-              if (currentInstruction && currentInstruction !== 'ready') {
-                if (shelfPhotoUri) {
-                  return (
-                    <ShelfScanProgressCard
-                      photoUri={shelfPhotoUri}
-                      title="Inspecting shelf"
-                      subtitle="Reading the photo and building the first item list."
-                      phase="inspecting_shelf"
-                      progress={0.18}
-                      totalItems={0}
-                      completedItems={0}
-                    />
-                  );
-                }
-                return (
-                  <View style={{ padding: 20 }}>
-                    {/* Skeleton 1 */}
-                    <View style={[styles.bulkItemContainer, { opacity: 0.7 }]}>
-                      <View style={styles.itemHeader}>
-                        <View style={[styles.itemLabelContainer, { width: 100, height: 20, backgroundColor: '#E0E0E0', borderRadius: 4 }]} />
-                        <View style={[styles.loadingBadge, { width: 80, height: 20, backgroundColor: '#E0E0E0', borderRadius: 10 }]} />
-                      </View>
-                      <View style={[styles.photoSlotsContainer, { marginTop: 15 }]}>
-                        <View style={[styles.photoSlot, { backgroundColor: '#F5F5F5' }]} />
-                        <View style={[styles.addPhotoButton, { backgroundColor: '#F5F5F5' }]} />
-                      </View>
-                    </View>
-                    {/* Skeleton 2 */}
-                    <View style={[styles.bulkItemContainer, { opacity: 0.4, marginTop: 10 }]}>
-                      <View style={styles.itemHeader}>
-                        <View style={[styles.itemLabelContainer, { width: 120, height: 20, backgroundColor: '#E0E0E0', borderRadius: 4 }]} />
-                      </View>
-                      <View style={[styles.photoSlotsContainer, { marginTop: 15 }]}>
-                        <View style={[styles.photoSlot, { backgroundColor: '#F5F5F5' }]} />
-                        <View style={[styles.addPhotoButton, { backgroundColor: '#F5F5F5' }]} />
-                      </View>
-                    </View>
-
-                    <Text style={{ marginTop: 24, fontSize: 16, color: '#666', textAlign: 'center', fontWeight: '500' }}>
-                      {'Recognizing...'}
-                    </Text>
-                  </View>
-                );
-              }
-
-              console.log('[RENDER] Showing EMPTY STATE (no items to display)');
-              return (
-                <TouchableOpacity
-                  style={{ padding: 20, alignItems: 'center' }}
-                  onPress={onImageUpload}
-                  activeOpacity={0.8}
-                >
-                  <Icon name="camera-plus-outline" size={48} color="#ccc" />
-                  <Text style={{ marginTop: 12, fontSize: 16, color: '#666', textAlign: 'center' }}>
-                    {cameraMode === 'shelf' ? 'Scan multiple items' : 'Take your first photo to get started'}
-                  </Text>
-                  <Text style={{ marginTop: 4, fontSize: 14, color: '#999', textAlign: 'center' }}>
-                    {cameraMode === 'shelf' ? 'Tap to capture' : 'Tap to take or upload a photo'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })()
-          ) : (
-            (() => {
-              console.log('[RENDER] Showing', displayItems.length, 'ITEMS');
-              return (
-                <>
-                  {displayItems.map((item, id) => {
-                    const loadingState = itemLoadingStates[item.id];
-                    const matchInfo = confirmedQuickMatchByItemId?.[item.id];
-                    const hasQuickScanData = quickScanStore?.[item.id];
-                    const matchCount = hasQuickScanData?.matchData?.totalMatches || 0;
-                    const topMatch = hasQuickScanData?.matchData?.rankedCandidates?.[0];
-                    const confirmedMatch = (matchInfo && matchInfo.serpApiData && matchInfo.preSelectedIndices && matchInfo.preSelectedIndices.length > 0)
-                      ? matchInfo.serpApiData[matchInfo.preSelectedIndices[0]]
-                      : null;
-                    const selectedMatch = confirmedMatch || topMatch;
-                    const selectedMatchImage = selectedMatch?.imageUrl || selectedMatch?.image || null;
-                    const selectedMatchTitle = selectedMatch?.title || 'Selected match';
-                    const isLocalInventoryMatch = Boolean(selectedMatch?.isLocalMatch);
-                    const selectedMatchLabel = isLocalInventoryMatch
-                      ? 'Already in Inventory'
-                      : confirmedMatch
-                        ? (matchInfo?.source === 'quick_scan_auto' ? 'Auto-selected Match' : 'Selected Match')
-                        : `${matchCount} Match${matchCount > 1 ? 'es' : ''} Found`;
-                    const countDraft = countDraftByItemId[item.id] ?? String(item.quantity ?? 1);
-
-                    if (currentInstruction === 'extracting' || currentInstruction === 'optimizing') {
-                      return (
-                        <ShelfScanPlaceholderRow
-                          key={`shelf-placeholder-${item.id}`}
-                          title={item.title || `Item ${id + 1}`}
-                          subtitle={currentInstruction === 'optimizing' ? 'Refining the best search wording.' : 'Splitting the shelf into distinct packages.'}
-                        />
-                      );
-                    }
-
-                    if (currentInstruction === 'searching' && !hasQuickScanData && !loadingState?.isLoading) {
-                      return (
-                        <ShelfScanPlaceholderRow
-                          key={`searching-placeholder-${item.id}`}
-                          title={item.title || `Item ${id + 1}`}
-                          subtitle="Searching matches and streaming results into this row."
-                        />
-                      );
-                    }
-
-                    return (
-                      <TouchableOpacity
-                        key={`bulk-item-${item.id}`}
-                        style={[
-                          styles.bulkItemContainer,
-                          item.isActive && styles.activeItemContainer,
-                          { backgroundColor: item.isActive ? '#e8f5e8' : '#ffffff' }
-                        ]}
-                        onPress={() => onSelectItem(item.id)}
-                      >
-                        <View style={styles.itemHeader}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Text style={[styles.itemLabel, item.isActive && styles.activeItemLabel]} numberOfLines={1}>
-                              Item {id + 1}
-                            </Text>
-                            {item.quantity != null && item.quantity > 1 && (
-                              <View style={{ backgroundColor: BRAND_PRIMARY, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
-                                <Text style={{ fontSize: 11, color: 'white', fontWeight: '600' }}>x{item.quantity}</Text>
-                              </View>
-                            )}
-                            {item.isActive && (
-                              <View style={styles.activeItemBadge}>
-                                <Text style={styles.activeItemBadgeText}>ACTIVE</Text>
-                              </View>
-                            )}
-                          </View>
-                          {loadingState?.isLoading ? (
-                            <View style={styles.loadingBadge}>
-                              <UnicodeSpinner
-                                spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition}
-                                color={BRAND_PRIMARY}
-                                size={12}
-                              />
-                              <Text style={styles.loadingBadgeText}>{loadingState.stage}</Text>
-                            </View>
-                          ) : null}
-                        </View>
-
-                        <View style={styles.photoSlotsContainer}>
-                          {item.photos.map((photo: CapturedPhoto, photoIndex: number) => (
-                            <View key={`photo-${item.id}-${photo.id}`} style={styles.photoSlotWrapper}>
-                              <TapGestureHandler
-                                numberOfTaps={2}
-                                onHandlerStateChange={(event) => {
-                                  if (event.nativeEvent.state === State.ACTIVE) {
-                                    onSetCoverPhoto(item.id, photo.id);
-                                  }
-                                }}
-                              >
-                                <Animated.View style={[styles.photoSlot, photo.isCover && styles.coverPhotoSlot]}>
-                                  <TouchableOpacity
-                                    style={StyleSheet.absoluteFill}
-                                    onPress={() => onOpenPhotoModal?.(item.id)}
-                                    onLongPress={() => {
-                                      Alert.alert(
-                                        'Photo Options',
-                                        `Photo ${photoIndex + 1}${photo.isCover ? ' (Cover)' : ''}`,
-                                        [
-                                          { text: 'Set as Cover', onPress: () => onSetCoverPhoto(item.id, photo.id) },
-                                          { text: 'Remove from Item', onPress: () => onRemovePhoto(item.id, photo.id) },
-                                          { text: 'Cancel', style: 'cancel' },
-                                        ]
-                                      );
-                                    }}
-                                  >
-                                    <Image source={{ uri: photo.uri }} style={styles.photoSlotImage} />
-                                    <View style={styles.photoSlotNumberBadge}>
-                                      <Text style={styles.photoSlotNumberBadgeText}>{photoIndex + 1}</Text>
-                                    </View>
-                                    {photo.isCover && (
-                                      <View style={[styles.photoSlotLabel, styles.coverPhotoLabel]}>
-                                        <Text style={styles.photoSlotLabelText}>COVER</Text>
-                                      </View>
-                                    )}
-                                  </TouchableOpacity>
-                                </Animated.View>
-                              </TapGestureHandler>
-                              <TouchableOpacity
-                                style={styles.bulkPhotoDeleteButton}
-                                onPress={() => onRemovePhoto(item.id, photo.id)}
-                                hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-                                activeOpacity={1}
-                              >
-                                <Icon name="close-circle" size={18} color="#ff4444" />
-                              </TouchableOpacity>
-                            </View>
-                          ))}
-
-                          {item.photos.length < 12 && (
-                            <TouchableOpacity style={styles.addPhotoButton} onPress={onImageUpload}>
-                              <Icon name="camera-plus-outline" size={20} color="#999" />
-                              <Text style={styles.addPhotoText}>Add Photo</Text>
-                            </TouchableOpacity>
-                          )}
-                        </View>
-
-                        {item.photos.length >= 12 && (
-                          <Text style={styles.maxPhotosText}>Maximum 12 photos per item</Text>
-                        )}
-
-                        {loadingState?.isLoading ? (
-                          <View style={styles.matchSkeletonCard}>
-                            <View style={styles.matchSkeletonThumb} />
-                            <View style={{ flex: 1 }}>
-                              <View style={styles.matchSkeletonLineShort} />
-                              <View style={styles.matchSkeletonLineLong} />
-                            </View>
-                          </View>
-                        ) : loadingState?.error ? (
-                          <View style={styles.matchErrorCard}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.matchErrorTitle}>Match failed</Text>
-                              <Text style={styles.matchErrorText} numberOfLines={2}>{loadingState.error}</Text>
-                            </View>
-                            <TouchableOpacity
-                              style={styles.matchActionPillDanger}
-                              onPress={(e) => {
-                                e.stopPropagation?.();
-                                onRetryItemScan?.(item.id);
-                              }}
-                            >
-                              <Text style={styles.matchActionPillDangerText}>Retry</Text>
-                            </TouchableOpacity>
-                          </View>
-                        ) : selectedMatch ? (
-                          <TouchableOpacity
-                            style={[
-                              styles.selectedMatchCard,
-                              isLocalInventoryMatch && styles.selectedMatchCardLocalInventory,
-                            ]}
-                            onPress={(e) => {
-                              e.stopPropagation?.();
-                              if (isLocalInventoryMatch) {
-                                onOpenLocalMatch?.(item.id);
-                                return;
-                              }
-                              onOpenQuickMatches?.(item.id);
-                            }}
-                          >
-                            {selectedMatchImage ? (
-                              <Image source={{ uri: selectedMatchImage }} style={styles.selectedMatchImage} />
-                            ) : (
-                              <View style={[styles.selectedMatchImage, { backgroundColor: '#E2E8F0' }]} />
-                            )}
-                            <View style={{ flex: 1, marginRight: 8 }}>
-                              <Text style={[
-                                styles.selectedMatchLabel,
-                                isLocalInventoryMatch && styles.selectedMatchLabelLocalInventory,
-                              ]}>
-                                {selectedMatchLabel}
-                              </Text>
-                              <Text style={styles.selectedMatchTitle} numberOfLines={1}>{selectedMatchTitle}</Text>
-                              {isLocalInventoryMatch ? (
-                                <Text style={styles.selectedMatchSubtitle} numberOfLines={1}>
-                                  Open stock details and clear it from this queue.
-                                </Text>
-                              ) : null}
-                            </View>
-                            <View style={[styles.matchActionPill, isLocalInventoryMatch && styles.matchActionPillLocalInventory]}>
-                              <Text style={[styles.matchActionPillText, isLocalInventoryMatch && styles.matchActionPillLocalInventoryText]}>
-                                {isLocalInventoryMatch ? 'View' : (confirmedMatch ? 'Manage' : 'Review')}
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        ) : (
-                          <View style={styles.noMatchCard}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.noMatchTitle}>No quick match yet.</Text>
-                              <Text style={styles.noMatchHint}>Deep analysis will keep searching, or retake cover photo.</Text>
-                            </View>
-                            <TouchableOpacity style={[styles.matchActionPill, styles.matchActionPillDisabled]} disabled={true}>
-                              <Text style={[styles.matchActionPillText, styles.matchActionPillDisabledText]}>Find Match</Text>
-                            </TouchableOpacity>
-                          </View>
-                        )}
-
-                        <View style={styles.itemFooterRow}>
-                          {bulkItems.length > 0 && (
-                            <TouchableOpacity
-                              style={styles.itemFooterRemoveButton}
-                              onPress={(e) => {
-                                e.stopPropagation?.();
-                                onDeleteItem(item.id);
-                              }}
-                            >
-                              <Icon name="trash-can-outline" size={16} color="#991B1B" />
-                              <Text style={styles.itemFooterRemoveText}>Remove</Text>
-                            </TouchableOpacity>
-                          )}
-                          <View style={styles.itemFooterCountBlock}>
-                            <Text style={styles.itemFooterCountLabel}>Count: </Text>
-                            <TextInput
-                              value={countDraft}
-                              onChangeText={(text) => handleCountDraftChange(item.id, text)}
-                              onBlur={() => commitCountDraft(item.id)}
-                              onEndEditing={() => commitCountDraft(item.id)}
-                              style={styles.itemFooterCountInput}
-                              keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
-                              inputMode="decimal"
-                              returnKeyType="done"
-                              placeholder="1"
-                              placeholderTextColor="#94A3B8"
-                            />
-                          </View>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </>
-              );
-            })()
-          )}
-        </ScrollView>
-
-        {shouldShowShelfFailureBar && onRetryShelfScan && onRetakeShelfScan ? (
-          <View style={[styles.bottomActions, { paddingBottom: bottomMargin }]}>
-            <BottomActionBar
-              primaryLabel="Retry scan"
-              onPrimary={onRetryShelfScan}
-              primaryIcon={<RotateCcw size={18} color="#FFFFFF" />}
-              secondaryLabel="Retake photo"
-              onSecondary={onRetakeShelfScan}
-              secondaryIcon={<CameraIcon size={18} color="#334155" />}
-              primaryButtonStyle={{ backgroundColor: '#0F172A' }}
-              secondaryButtonStyle={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#CBD5E1' }}
-              secondaryTextStyle={{ color: '#0F172A' }}
-              style={{ position: 'relative', left: 0, right: 0, bottom: 0 }}
-            />
-          </View>
-        ) : null}
-
-        {/* Fixed Bottom Actions */}
-        {shouldShowBottomActions && (
-          <View style={[styles.bottomActions, { paddingBottom: bottomMargin, flexDirection: 'column', gap: 6 }]}>
-            {totalItems >= 1 && (cameraMode === 'shelf' || cameraMode === 'camera') && (
-              <TouchableOpacity
-                style={[styles.newItemButton, totalItems >= MAX_BATCH_ITEMS && { opacity: 0.45 }]}
-                onPress={onAddNewItem}
-                disabled={totalItems >= MAX_BATCH_ITEMS}
-              >
-                <Icon name="plus" size={18} color="#666" />
-                <Text style={styles.newItemButtonText}>
-                  {totalItems >= MAX_BATCH_ITEMS ? 'Item Limit Reached' : 'Add Item'}
-                </Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={[
-                styles.searchForProductButton,
-                { backgroundColor: hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : BRAND_PRIMARY },
-              ]}
-              disabled={hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0)}
-              onPress={() => {
-                if (cameraMode === 'shelf' && totalItems > 0) {
-                  // Direct transition from shelf to camera mode
-                  onStartBroadSearch(); // We'll hijack this prop or close modal
-                } else {
-                  handleAnalyzeAndNavigate();
-                }
-              }}
-            >
-              {hasLoadingItems ? (
-                <UnicodeSpinner
-                  spinner={{ frames: ['■□■', '□■□', '▪□▪', '□▪□'], interval: 180 }}
-                  color="#FFFFFF"
-                  size={12}
-                  style={{ marginRight: 8 }}
-                />
-              ) : (
-                <Icon
-                  name="rocket-launch-outline"
-                  size={20}
-                  color="white"
-                />
-              )}
-              <Text style={[styles.searchForProductButtonText, { marginLeft: 8 }]}>
-                {cameraMode === 'shelf' && totalItems > 0
-                    ? `Take Photos for ${totalItems} Item${totalItems > 1 ? 's' : ''}`
-                    : cameraMode !== 'shelf' && totalItems === 0
-                      ? 'Take a photo to continue'
-                      : hasLoadingItems
-                        ? 'Analyzing...'
-                        : `Analyze & List ${totalItems} Items`}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        </View>
-      </KeyboardAvoidingView>
-    </Animated.View>
-  );
-};
-
 // Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+
     backgroundColor: 'black',
+  
   },
   camera: {
     flex: 1,
@@ -5796,7 +4462,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  // Photo Stack Styles
   photoStackContainer: {
     position: 'absolute',
     top: 100,
@@ -5807,6 +4472,83 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     gap: 8,
+  },
+  // Shop-style capture chrome
+  topPhotoBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 30,
+    backgroundColor: '#000',
+    justifyContent: 'flex-end',
+    paddingBottom: 10,
+  },
+  topPhotoBarContent: {
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    gap: 10,
+    flexDirection: 'row',
+  },
+  addPhotoTile: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoTileWrap: {
+    width: 64,
+    height: 64,
+  },
+  photoTile: {
+    width: 64,
+    height: 64,
+    borderRadius: 14,
+    backgroundColor: '#1C1C1E',
+  },
+  photoTileCover: {
+    borderWidth: 2,
+    borderColor: '#93C822',
+  },
+  photoTileRemove: {
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FF6B4A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#000',
+  },
+  cameraViewfinder: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    borderRadius: 28,
+    overflow: 'hidden',
+    backgroundColor: '#101012',
+  },
+  cameraBackButton: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 25,
   },
   activeItemIndicator: {
     width: 72,
@@ -5824,217 +4566,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
-  photoStackItem: {
-    position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-  },
-  photoStackImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  photoStackNumber: {
-    position: 'absolute',
-    top: 4,
-    left: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  photoStackNumberText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  coverBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // Camera Controls Styles
-  cameraControlsContainer: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    zIndex: 100,
-  },
-  cameraControlsContent: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    gap: 12,
-  },
-  controlButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-
-  centerOverlay: {
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centerOverlayText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  processingIndicator: {
-    marginLeft: 8,
-  },
-  centerOverlayMatchCard: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 16,
-    minHeight: 78,
-    paddingHorizontal: 12,
-    paddingVertical: 13,
-    borderWidth: 1,
-  },
-  centerOverlayMatchTouchable: {
-    width: '100%',
-    paddingLeft: 116,
-    paddingRight: 84,
-    marginBottom: 30,
-  },
-  centerOverlayMatchCardConfirmed: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E2E8F0',
-  },
-  centerOverlayMatchCardPending: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E2E8F0',
-  },
-  centerOverlayMatchImage: {
-    width: 52,
-    height: 52,
-    borderRadius: 12,
-    marginRight: 10,
-  },
-  centerOverlayMatchImageFallback: {
-    backgroundColor: '#E2E8F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centerOverlayMatchTextBlock: {
-    flex: 1,
-  },
-  centerOverlayMatchLabel: {
-    color: '#7BAF12',
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    marginBottom: 2,
-  },
-  centerOverlayMatchTitle: {
-    color: '#0F172A',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  centerOverlayMatchSubtitle: {
-    color: '#475569',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  centerOverlayChevron: {
-    marginLeft: 8,
-  },
-
-  // Barcode Overlay Styles
-  barcodeOverlayContainer: {
-    position: 'absolute',
-    top: 135, // Below nav bar
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    zIndex: 20,
-  },
-
-  textSearchOverlay: {
-    position: 'absolute',
-    top: 120,
-    left: 20,
-    right: 20,
-    zIndex: 200,
-  },
-  textSearchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    borderRadius: 25,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4 },
-      android: { elevation: 5 },
-    }),
-  },
-  textSearchInput: {
-    flex: 1,
-    height: 36,
-    fontSize: 16,
-    color: '#000',
-  },
-  textSearchClose: {
-    padding: 4,
-    marginLeft: 8,
-  },
-  barcodeOverlay: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  barcodeText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
-    maxWidth: 200,
-  },
-  copyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    gap: 4,
-  },
-  copyButtonText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-
-  // Photo Frame & Scan Line Styles
   photoFrameOverlay: {
     position: 'absolute',
     top: '25%',
@@ -7236,43 +5767,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-
-  // Debug styles
-  debugOverlay: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 40 : 20,
-    left: 10,
-    right: 10,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    borderRadius: 6,
-    padding: 8,
-    zIndex: 100,
-  },
-  debugText: {
-    color: 'white',
-    fontSize: 12,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    textAlign: 'center',
-  },
-  debugButtons: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 8,
-    gap: 10,
-  },
-  debugButton: {
-    backgroundColor: 'rgba(76, 175, 80, 0.8)',
-    borderRadius: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  debugButtonText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-
-  // Camera paused overlay styles
   cameraPausedOverlay: {
     position: 'absolute',
     top: 0,

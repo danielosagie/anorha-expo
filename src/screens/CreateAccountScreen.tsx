@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, memo, useContext, useEffect } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -21,7 +22,7 @@ import * as Notifications from 'expo-notifications';
 import { Camera } from 'expo-camera';
 import { AudioModule } from 'expo-audio';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
+import { CompositeNavigationProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import type { AuthStackParamList, AppStackParamList } from '../navigation/AppNavigator';
 import { useOrganizationList, useUser } from '@clerk/clerk-expo';
@@ -36,19 +37,20 @@ import Animated, {
   SlideOutLeft,
   FadeInDown,
 } from 'react-native-reanimated';
+import ConnectAccountsStep from '../components/onboarding/ConnectAccountsStep';
 
 const { width } = Dimensions.get('window');
-const API_BASE = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/$/, '');
+const API_BASE = API_BASE_URL;
 
-// --- THEME (matches OnboardingSlides.tsx) ---
+// --- THEME (matches the app's design language — Profile / Connections) ---
 const ONBOARDING = {
-  bg: '#FEF4DD',           // Cream background
-  green: '#5c9c00',        // Active buttons, dots, cards
-  title: '#313131ff',      // Primary text
-  subtitle: '#666',        // Secondary text
-  dotInactive: '#E5E5E5',  // Inactive pagination dots
-  cardBg: 'rgba(255,255,255,0.9)',
-  border: 'rgba(0,0,0,0.15)',
+  bg: '#F6F7F4',           // App light background
+  green: '#93C822',        // Primary green (active buttons, dots, selected cards)
+  title: '#18181B',        // Primary text (ink)
+  subtitle: '#71717A',     // Secondary text
+  dotInactive: '#E4E4E7',  // Inactive pagination dots
+  cardBg: '#FFFFFF',       // White surfaces
+  border: '#ECEBE6',       // Hairline borders
 };
 
 // CreateAccountScreen can live in AuthStack (signup flow) or AppStack (resume incomplete onboarding).
@@ -67,7 +69,8 @@ type Step =
   | 'ROLE'
   | 'CONTACT'
   | 'TEAM'
-  | 'FINISH';
+  | 'FINISH'
+  | 'CONNECT';
 
 interface FormData {
   businessName: string;
@@ -739,6 +742,7 @@ const PermissionsAndLegalStep = memo(({
 
 export default function CreateAccountScreen() {
   const navigation = useNavigation<CreateAccountScreenNavigationProp>();
+  const route = useRoute<any>();
   const authContext = useContext(AuthContext);
   const { user: clerkUser } = useUser();
   const { createOrganization } = useOrganizationList();
@@ -746,8 +750,10 @@ export default function CreateAccountScreen() {
   const insets = useSafeAreaInsets();
 
   // State
-  const [currentStep, setCurrentStep] = useState<Step>('WELCOME');
+  const [currentStep, setCurrentStep] = useState<Step>((route.params?.initialStep as Step) || 'WELCOME');
   const [loading, setLoading] = useState(false);
+  // Org created at FINISH — handed to the CONNECT step so connections link to it.
+  const [createdOrgId, setCreatedOrgId] = useState<string | null>(null);
   const [isLoadingAddress, setIsLoadingAddress] = useState(false);
   const [isRequestingLoc, setIsRequestingLoc] = useState(false);
   const [isRequestingNotif, setIsRequestingNotif] = useState(false);
@@ -1192,12 +1198,11 @@ export default function CreateAccountScreen() {
 
       capture(AnalyticsEvents.ONBOARDING_COMPLETED, { create_organization: !!createOrganization });
 
-      // After onboarding we go to main app. CreateAccountScreen can be in AuthStack or AppStack;
-      // TabNavigator lives in AppStack — cast so reset() is valid when we're in App stack.
-      (navigation as StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>).reset({
-        index: 0,
-        routes: [{ name: 'TabNavigator' }],
-      });
+      // Onboarding data is saved and the org exists. Hand off to the (skippable)
+      // CONNECT step so the user can hook up their stores — connecting there kicks
+      // off a background inventory pull + draft mappings via the new org.
+      setCreatedOrgId(createdOrgId);
+      setCurrentStep('CONNECT');
 
     } catch (error: any) {
       Alert.alert('Error', 'Setup failed. Please try again.');
@@ -1206,10 +1211,18 @@ export default function CreateAccountScreen() {
     }
   }, [clerkUser, formData, createOrganization, refreshOrgs, navigation]);
 
+  // Leave onboarding for the main app (from the CONNECT step: "Continue" or skip).
+  const finishToApp = useCallback(() => {
+    (navigation as StackNavigationProp<AppStackParamList, 'CreateAccountScreen'>).reset({
+      index: 0,
+      routes: [{ name: 'TabNavigator' }],
+    });
+  }, [navigation]);
+
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      {currentStep !== 'WELCOME' && (
+      {currentStep !== 'WELCOME' && currentStep !== 'CONNECT' && (
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => {
             if (currentStep === 'BUSINESS_NAME') goToStep('WELCOME');
@@ -1334,6 +1347,10 @@ export default function CreateAccountScreen() {
               onFinish={handleFinish}
             />
           )}
+
+          {currentStep === 'CONNECT' && (
+            <ConnectAccountsStep orgId={createdOrgId} onDone={finishToApp} />
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1343,7 +1360,7 @@ export default function CreateAccountScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FEF4DD',
+    backgroundColor: ONBOARDING.bg,
   },
   headerRow: {
     flexDirection: 'row',
@@ -1362,9 +1379,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#FFF",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.3)"
+    backgroundColor: ONBOARDING.dotInactive,
   },
   stepDotActive: {
     backgroundColor: ONBOARDING.green,
@@ -1402,13 +1417,13 @@ const styles = StyleSheet.create({
   },
   logoTitle: {
     fontSize: 48,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     letterSpacing: -2,
   },
   bigTitle: {
     fontSize: 36,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     textAlign: 'center',
     marginBottom: 16,
@@ -1422,14 +1437,14 @@ const styles = StyleSheet.create({
   },
   stepTitle: {
     fontSize: 32,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     marginBottom: 16,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
     textAlign: 'center',
     lineHeight: 26,
@@ -1449,12 +1464,12 @@ const styles = StyleSheet.create({
   },
   useLocationText: {
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
   },
   label: {
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.subtitle,
     marginBottom: 8,
     textTransform: 'uppercase',
@@ -1473,7 +1488,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
   },
   // Grid
@@ -1500,7 +1515,7 @@ const styles = StyleSheet.create({
   cardText: {
     marginTop: 8,
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
     textAlign: 'center',
   },
@@ -1513,7 +1528,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderBottomColor: ONBOARDING.border,
     fontSize: 24,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.title,
     paddingVertical: 12,
   },
@@ -1535,12 +1550,12 @@ const styles = StyleSheet.create({
   },
   listCardTitle: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
   },
   listCardDesc: {
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
     marginTop: 4,
   },
@@ -1565,13 +1580,13 @@ const styles = StyleSheet.create({
   phoneInput: {
     color: ONBOARDING.title,
     fontSize: 20,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     height: 64,
   },
   phoneCode: {
     color: ONBOARDING.title,
     fontSize: 20,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   },
   flagButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -1601,13 +1616,13 @@ const styles = StyleSheet.create({
   },
   permTitle: {
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
     marginBottom: 2,
   },
   permDesc: {
     fontSize: 13,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
   },
   // Legal Checkbox
@@ -1632,20 +1647,20 @@ const styles = StyleSheet.create({
   checkboxText: {
     flex: 1,
     fontSize: 15,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     color: ONBOARDING.title,
   },
 
   // Legal Links
   linkText: {
     fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
     textAlign: 'center',
   },
   legalLinkSmall: {
     fontSize: 13,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.title,
     textDecorationLine: 'underline',
   },
@@ -1662,7 +1677,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     color: ONBOARDING.title,
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
     height: 60,
     borderWidth: 1,
     borderColor: ONBOARDING.border,
@@ -1701,12 +1716,12 @@ const styles = StyleSheet.create({
   inviteInitials: {
     color: '#FFFFFF',
     fontSize: 14,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   },
   inviteEmail: {
     color: ONBOARDING.title,
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
   },
   emptyText: {
     color: ONBOARDING.subtitle,

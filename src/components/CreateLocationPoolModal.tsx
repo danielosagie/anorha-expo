@@ -16,18 +16,12 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import Button from './Button';
 import Card from './Card';
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
+import PlatformLogo from './PlatformLogo';
+import { getPlatform } from '../config/platforms';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 
-const API_BASE_URL = "https://api.sssync.app";
-
-const PLATFORM_LOGOS = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-};
+const API_BASE_URL = ENV_API_BASE_URL;
 
 interface CreateLocationPoolModalProps {
   visible: boolean;
@@ -234,7 +228,6 @@ export default function CreateLocationPoolModal({
                           <Text style={styles.connectionName}>{connection.connectionName}</Text>
 
                           {connection.locations.map((location: any) => {
-                            const PlatformLogo = PLATFORM_LOGOS[platform.platformType as keyof typeof PLATFORM_LOGOS];
                             const isSelected = selectedLocations.includes(location.id);
 
                             return (
@@ -250,8 +243,8 @@ export default function CreateLocationPoolModal({
                                     color={isSelected ? '#4CAF50' : '#999'}
                                   />
                                 </View>
-                                {PlatformLogo && (
-                                  <PlatformLogo width={20} height={20} style={styles.platformIcon} />
+                                {getPlatform(platform.platformType) && (
+                                  <PlatformLogo type={platform.platformType} size={20} style={styles.platformIcon} />
                                 )}
                                 <View style={styles.locationInfo}>
                                   <Text style={styles.locationName}>{location.name}</Text>

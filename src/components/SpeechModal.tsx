@@ -17,8 +17,9 @@ import {
   RecordingPresets,
 } from 'expo-audio';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 
-const API_BASE = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const API_BASE = API_BASE_URL;
 
 export interface SpeechModalProps {
   visible: boolean;

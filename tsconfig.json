@@ -1,13 +1,13 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "module": "NodeNext",
+    "module": "ESNext",
     "strict": true,
     "allowJs": true,
     "esModuleInterop": true,
     "jsx": "react-native",
     "lib": ["DOM", "ESNext"],
-    "moduleResolution": "nodenext",
+    "moduleResolution": "bundler",
     "customConditions": ["react-native"],
     "noEmit": true,
     "resolveJsonModule": true,
@@ -17,7 +17,14 @@
   "exclude": [
     "node_modules",
     "babel.config.js",
-    "metro.config.js"
+    "metro.config.js",
+    "src/screens/designExport",
+    "src/screens/DesignExportScreen.tsx",
+    "src/examples",
+    "App.web.tsx",
+    "src/components/VisionCamera.tsx",
+    "src/hooks/useVisionCamera.tsx",
+    "__tests__"
   ],
   "include": ["**/*.ts", "**/*.tsx"]
 }

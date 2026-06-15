@@ -19,9 +19,11 @@ interface SortByDropdownProps {
   sortBy: string;
   onSortChange: (sortValue: string) => void;
   options?: SortOption[];
+  /** Render a compact circular icon button (sits to the right of the search bar). */
+  compact?: boolean;
 }
 
-const DEFAULT_SORT_OPTIONS: SortOption[] = [
+export const DEFAULT_SORT_OPTIONS: SortOption[] = [
   { value: 'name', label: 'Name (A-Z)' },
   { value: 'price-low', label: 'Price (Low to High)' },
   { value: 'price-high', label: 'Price (High to Low)' },
@@ -34,6 +36,7 @@ const SortByDropdown: React.FC<SortByDropdownProps> = ({
   sortBy,
   onSortChange,
   options = DEFAULT_SORT_OPTIONS,
+  compact = false,
 }) => {
   const theme = useTheme();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -48,21 +51,27 @@ const SortByDropdown: React.FC<SortByDropdownProps> = ({
 
   return (
     <>
-      <TouchableOpacity
-        style={[styles.dropdownButton, { borderColor: theme.colors.textSecondary + '40' }]}
-        onPress={() => setIsModalVisible(true)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.dropdownContent}>
-          <Icon name="sort" size={18} color={theme.colors.textSecondary} />
-          
-          <Text style={[styles.dropdownText, { color: theme.colors.text }]}>
-            {displayLabel}
-          </Text>
+      {compact ? (
+        <TouchableOpacity style={styles.compactBtn} onPress={() => setIsModalVisible(true)} activeOpacity={0.7}>
+          <Icon name="sort" size={20} color="#3F3F46" />
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[styles.dropdownButton, { borderColor: theme.colors.textSecondary + '40' }]}
+          onPress={() => setIsModalVisible(true)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.dropdownContent}>
+            <Icon name="sort" size={18} color={theme.colors.textSecondary} />
 
-        </View>
-        {/*<Icon name="chevron-down" size={18} color={theme.colors.textSecondary} />*/}
-      </TouchableOpacity>
+            <Text style={[styles.dropdownText, { color: theme.colors.text }]}>
+              {displayLabel}
+            </Text>
+
+          </View>
+          {/*<Icon name="chevron-down" size={18} color={theme.colors.textSecondary} />*/}
+        </TouchableOpacity>
+      )}
 
       <Modal
         animationType="fade"
@@ -123,8 +132,16 @@ const SortByDropdown: React.FC<SortByDropdownProps> = ({
 };
 
 const styles = StyleSheet.create({
+  compactBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F2F2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dropdownButton: {
-    
+
     alignSelf: "flex-start",
     flexDirection: 'row',
     justifyContent: 'space-between',

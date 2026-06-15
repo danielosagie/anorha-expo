@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
@@ -23,9 +24,10 @@ import {
 } from 'react-native';
 import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
+import { ListFilter } from 'lucide-react-native';
+import { ChevronsUpDownIcon } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
-import { mockOrders } from '../data/mockData';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
@@ -34,13 +36,16 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
+import { AppMenu } from '../components/ui/AppMenu';
+import OrdersTab from './inventory/OrdersTab';
 import PlatformFilterChips from '../components/PlatformFilterChips';
-import PoolLocationCombobox from '../components/PoolLocationCombobox';
 import InventoryListCard from '../components/InventoryListCard';
+import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import BaseModal from '../components/BaseModal';
 import { SmartCommandInput } from '../components/SmartCommandInput';
 import { VoiceRecorder } from '../components/VoiceRecorder';
-import SortByDropdown from '../components/SortByDropdown';
+import SortByDropdown, { DEFAULT_SORT_OPTIONS } from '../components/SortByDropdown';
+import InventoryFilterSheet from '../components/inventory/InventoryFilterSheet';
 import { CameraView } from 'expo-camera';
 import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrg } from '../context/OrgContext';
@@ -106,6 +111,7 @@ const InventoryOrdersScreen = observer(() => {
 
   // Filter & Search State
   const [activeTab, setActiveTab] = useState('inventory');
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -120,7 +126,13 @@ const InventoryOrdersScreen = observer(() => {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerMounted, setScannerMounted] = useState(false);
   const scannerHeight = useRef(new RNAnimated.Value(0)).current;
-  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
+  // Unified filter sheet (Order / Location / Status) — location lives fully in-sheet now.
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const STATUS_OPTIONS = useMemo(() => ([
+    { value: 'all', label: 'All' },
+    { value: 'active', label: 'Active' },   // live / published on any platform
+    { value: 'draft', label: 'Drafts' },    // not published anywhere yet (Anorha or platform drafts)
+  ]), []);
   const scannerResultHandlerRef = useRef<((code: string) => void) | null>(null);
   const openScanner = useCallback((handler: (code: string) => void, source: string) => {
     logFlowEvent(FlowEvents.BARCODE_SCANNER_OPENED, { source });
@@ -177,7 +189,12 @@ const InventoryOrdersScreen = observer(() => {
       }
 
       if (p.openLocationPicker) {
-        setLocationPickerOpen(true);
+        setFilterSheetOpen(true); // location now lives inside the unified filter sheet
+      }
+
+      if ((p as any).selectForCampaign?.campaignId) {
+        setAddToCampaign((p as any).selectForCampaign);
+        setIsSelectionMode(true);
       }
     }
   }, [route.params, closeScanner, openScanner]);
@@ -193,6 +210,26 @@ const InventoryOrdersScreen = observer(() => {
   // Bulk Selection State
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [addToCampaign, setAddToCampaign] = useState<{ campaignId: string; title: string } | null>(null);
+  const [addingToCampaign, setAddingToCampaign] = useState(false);
+  const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
+
+  const handleAddToClearout = useCallback(async () => {
+    if (!addToCampaign || selectedItems.size === 0 || addingToCampaign) return;
+    setAddingToCampaign(true);
+    try {
+      await campaignAdapter.addCampaignItems(addToCampaign.campaignId, Array.from(selectedItems));
+      const camp = addToCampaign;
+      setSelectedItems(new Set());
+      setIsSelectionMode(false);
+      setAddToCampaign(null);
+      (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: camp.campaignId, entryPoint: 'detail' });
+    } catch (e: any) {
+      Alert.alert('Could not add items', e?.message || 'Please try again.');
+    } finally {
+      setAddingToCampaign(false);
+    }
+  }, [addToCampaign, selectedItems, addingToCampaign, campaignAdapter, navigation]);
 
   // Bulk action modal: filter by type/voice, review, then apply Delete/Archive/Liquidate
   const [bulkActionModalVisible, setBulkActionModalVisible] = useState(false);
@@ -270,7 +307,7 @@ const InventoryOrdersScreen = observer(() => {
         Alert.alert('Error', 'Not authenticated.');
         return;
       }
-      const response = await fetch(`https://api.sssync.app/api/insights/orgs/${encodeURIComponent(orgId)}/nudges`, {
+      const response = await fetch(`${API_BASE_URL}/api/insights/orgs/${encodeURIComponent(orgId)}/nudges`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
@@ -968,6 +1005,19 @@ const InventoryOrdersScreen = observer(() => {
     }
 
     // Filter by location - check both base variant AND its option variants
+    // Status filter by PUBLISH state (not the raw status string):
+    //  active = live/posted on at least one platform; drafts = published nowhere yet
+    //  (covers Anorha-made inventory + per-platform drafts, combined).
+    if (filterStatus === 'active' || filterStatus === 'draft') {
+      productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
+        const v = variants[variantId] as any;
+        if (!v) return false;
+        const isLive = v.OnShopify === true || v.OnSquare === true || v.OnClover === true
+          || v.OnAmazon === true || v.OnEbay === true || v.OnFacebook === true;
+        return filterStatus === 'active' ? isLive : !isLive;
+      });
+    }
+
     if (selectedLocationIds.length > 0) {
       productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
         const variant = variants[variantId];
@@ -1105,7 +1155,7 @@ const InventoryOrdersScreen = observer(() => {
     });
 
     return Array.from(uniqueVariants.values());
-  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, legendObservables, variantUpdateCounter, inventoryUpdateCounter, sharedLinkQuantities]);
+  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter, sharedLinkQuantities]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
@@ -1290,7 +1340,7 @@ const InventoryOrdersScreen = observer(() => {
       }
 
       const traceHeaders = await getTraceHeaders();
-      const response = await fetch(`https://api.sssync.app/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
+      const response = await fetch(`${API_BASE_URL}/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -1417,10 +1467,6 @@ const InventoryOrdersScreen = observer(() => {
     );
   };
 
-  const filteredOrders = mockOrders.filter((order: MockOrderItemData) =>
-    filterStatus === 'all' || order.status === filterStatus
-  );
-
   const platformsForChips = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook']
     .map(platformType => {
       const connectionCount = platformConnections.filter((conn: PlatformConnection) =>
@@ -1437,159 +1483,20 @@ const InventoryOrdersScreen = observer(() => {
 
   return (
     <View style={[styles.background]}>
+      {/* Tappable header title → AppMenu (Inventory / Orders / Scan inventory). */}
+      <View style={[styles.titleBar, { top: insets.top + 6 }]} pointerEvents="box-none">
+        <TouchableOpacity style={styles.titleTap} onPress={() => setHeaderMenuOpen(true)} activeOpacity={0.7}>
+          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text> {/*Page Title*/}
+          <ChevronsUpDownIcon color="#2c2c2c" fontWeight={500}/>
+        </TouchableOpacity>
+      </View>
 
-
-      <View style={[styles.container, { marginTop: 60, paddingTop: 20, backgroundColor: "#FFF", }]}>
+      <View style={[styles.container, { marginTop: 110, paddingTop: 20, backgroundColor: "#FFF", }]}>
 
         {activeTab === 'inventory' && (
           <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-            {/* Search Bar with Scanner OR Selection Header */}
-            {isSelectionMode ? (
-              <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
-                <View style={styles.selectionHeaderLeft}>
-                  <TouchableOpacity onPress={handleExitSelectionMode} style={styles.closeButton}>
-                    <Icon name="close" size={24} color="#333" />
-                  </TouchableOpacity>
-                  <Text style={styles.selectionCountText}>
-                    {selectedItems.size} Selected
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.selectAllButton}
-                  onPress={() => {
-                    if (selectedItems.size === filteredInventory.length && filteredInventory.length > 0) {
-                      setSelectedItems(new Set());
-                    } else {
-                      handleSelectAll();
-                    }
-                  }}
-                >
-                  <Text style={styles.selectAllButtonText}>
-                    {selectedItems.size === filteredInventory.length && filteredInventory.length > 0 ? "Deselect All" : "Select All"}
-                  </Text>
-                </TouchableOpacity>
-              </Animated.View>
-            ) : (
-              <View style={{ paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#FFF", }}>
-                <SearchBarWithScanner
-                  placeholder="Search for a product"
-                  value={searchQuery}
-                  onChangeText={handleSearchChange}
-                  onScan={handleBarcodeScan}
-                  onScannerOpen={() => {
-                    console.log('[InventoryOrdersScreen] Scanner button pressed, opening scanner');
-                    openScanner((code: string) => {
-                      handleBarcodeScan(code);
-                      closeScanner();
-                    }, 'search_bar');
-                  }}
-                  onClear={handleSearchClear}
-                  onVoicePress={() => setSpeechModalVisible(true)}
-                />
-
-                {/* Barcode Search Error Message */}
-                {barcodeSearchError && (
-                  <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
-                    <Icon name="alert-circle-outline" size={16} color={theme.colors.error} style={{ marginRight: 8 }} />
-                    <Text style={[styles.errorText, { color: theme.colors.error }]}>
-                      {barcodeSearchError}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )}
-
-            {/* Platform Filter Chips */}
-            <View style={{ paddingHorizontal: 8 }}>
-              <PlatformFilterChips
-                platforms={platformsForChips}
-                selectedPlatform={selectedPlatformType}
-                onSelectPlatform={setSelectedPlatformType}
-                activeColor={theme.colors.primary}
-              />
-            </View>
-
-            {/* Preset / smart filter chips
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.presetChipsRow}
-              style={styles.presetChipsScroll}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.presetChip,
-                  lowStockOnly && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
-                ]}
-                onPress={() => setLowStockOnly(prev => !prev)}
-              >
-                <Text style={[styles.presetChipText, lowStockOnly && { color: theme.colors.primary, fontWeight: '600' }]}>Low stock</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.presetChip,
-                  priceMax === 50 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
-                ]}
-                onPress={() => setPriceMax(prev => (prev === 50 ? null : 50))}
-              >
-                <Text style={[styles.presetChipText, priceMax === 50 && { color: theme.colors.primary, fontWeight: '600' }]}>Under $50</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.presetChip,
-                  priceMax === 100 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
-                ]}
-                onPress={() => setPriceMax(prev => (prev === 100 ? null : 100))}
-              >
-                <Text style={[styles.presetChipText, priceMax === 100 && { color: theme.colors.primary, fontWeight: '600' }]}>Under $100</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.presetChip,
-                  presetVariantIds != null && presetVariantIds.length > 0 && { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary },
-                ]}
-                onPress={fetchSlowMoversVariantIds}
-                disabled={loadingSlowMovers}
-              >
-                {loadingSlowMovers ? (
-                  <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
-                ) : null}
-                <Text style={[
-                  styles.presetChipText,
-                  presetVariantIds != null && presetVariantIds.length > 0 && { color: theme.colors.primary, fontWeight: '600' },
-                ]}>
-                  Slow movers
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.presetChip}
-                onPress={() => {
-                  setPriceMax(null);
-                  setPresetVariantIds(null);
-                }}
-              >
-                <Text style={styles.presetChipText}>Clear</Text>
-              </TouchableOpacity>
-            </ScrollView>
-            */}
-
-            {/* Pool/Location Combobox and Sort Dropdown */}
-            <View style={styles.filterRow}>
-              <View style={{ flex: 1 }}>
-                <PoolLocationCombobox
-                  platformConnections={platformConnections}
-                  selectedItems={selectedLocationIds}
-                  onSelectionChange={setSelectedLocationIds}
-                  startOpen={locationPickerOpen}
-                />
-              </View>
-              <View style={{ marginLeft: 8, marginRight: 0 }}>
-                <SortByDropdown
-                  sortBy={sortBy}
-                  onSortChange={setSortBy}
-                />
-              </View>
-            </View>
+            {/* Search + filters now live in the FlatList header (below) so they scroll away
+                with the list instead of staying sticky. */}
 
             {/* Inventory List */}
             <View
@@ -1637,9 +1544,84 @@ const InventoryOrdersScreen = observer(() => {
                   </>
                 }
                 ListHeaderComponent={
-                  <>
+                  <View>
+                    {isSelectionMode ? (
+                      <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
+                        <View style={styles.selectionHeaderLeft}>
+                          <TouchableOpacity onPress={handleExitSelectionMode} style={styles.closeButton}>
+                            <Icon name="close" size={24} color="#333" />
+                          </TouchableOpacity>
+                          <Text style={styles.selectionCountText}>
+                            {selectedItems.size} Selected
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.selectAllButton}
+                          onPress={() => {
+                            if (selectedItems.size === filteredInventory.length && filteredInventory.length > 0) {
+                              setSelectedItems(new Set());
+                            } else {
+                              handleSelectAll();
+                            }
+                          }}
+                        >
+                          <Text style={styles.selectAllButtonText}>
+                            {selectedItems.size === filteredInventory.length && filteredInventory.length > 0 ? "Deselect All" : "Select All"}
+                          </Text>
+                        </TouchableOpacity>
+                      </Animated.View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#fff", }}>
+                        {/* Search + compact location/sort buttons on one row (chat-search style). */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <View style={{ flex: 1, justifyContent: 'center' }}>
+                            <SearchBarWithScanner
+                              noBottomMargin
+                              placeholder="Search for a product"
+                              value={searchQuery}
+                              onChangeText={handleSearchChange}
+                              onScan={handleBarcodeScan}
+                              onScannerOpen={() => {
+                                openScanner((code: string) => {
+                                  handleBarcodeScan(code);
+                                  closeScanner();
+                                }, 'search_bar');
+                              }}
+                              onClear={handleSearchClear}
+                              onVoicePress={() => setSpeechModalVisible(true)}
+                            />
+                          </View>
+                          {/* One entry point: opens the unified filter sheet (Order / Location / Status). */}
+                          <TouchableOpacity
+                            onPress={() => setFilterSheetOpen(true)}
+                            activeOpacity={0.8}
+                            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: "center", width: 48, height: 48, borderRadius: 32, borderWidth: 2, borderColor: 'rgba(153, 153, 153, 0.20)', backgroundColor: '#fff' }}
+                          >
+                      
+                            <ListFilter  size={24} fontWeight={500} color="#666"/>
+                            
+                          </TouchableOpacity>
+                        </View>
+                        {barcodeSearchError && (
+                          <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
+                            <Icon name="alert-circle-outline" size={16} color={theme.colors.error} style={{ marginRight: 8 }} />
+                            <Text style={[styles.errorText, { color: theme.colors.error }]}>
+                              {barcodeSearchError}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
 
-                  </>
+                    <View style={{ paddingHorizontal: 8 }}>
+                      <PlatformFilterChips
+                        platforms={platformsForChips}
+                        selectedPlatform={selectedPlatformType}
+                        onSelectPlatform={setSelectedPlatformType}
+                        activeColor={theme.colors.primary}
+                      />
+                    </View>
+                  </View>
                 }
                 ListEmptyComponent={
                   isLoadingConnections ? (
@@ -1662,15 +1644,26 @@ const InventoryOrdersScreen = observer(() => {
 
         {activeTab === 'orders' && (
           <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
-            <View style={styles.comingSoonContainer}>
-              <Icon name="package-outline" size={48} color={theme.colors.textSecondary} />
-              <Text style={[styles.comingSoonText, { color: theme.colors.textSecondary }]}>
-                Orders view coming soon
-              </Text>
-            </View>
+            <OrdersTab />
           </Animated.View>
         )}
       </View>
+
+      {/* Header dropdown — reusable Linear-like menu, used for all app dropdowns. */}
+      <AppMenu
+        visible={headerMenuOpen}
+        onClose={() => setHeaderMenuOpen(false)}
+        anchor={{ top: insets.top + 44, left: 16 }}
+        sections={[
+          [
+            { key: 'inventory', label: 'Inventory', icon: 'package-variant', active: activeTab === 'inventory', onPress: () => { setActiveTab('inventory'); setHeaderMenuOpen(false); } },
+            { key: 'orders', label: 'Orders', icon: 'receipt-text-outline', active: activeTab === 'orders', onPress: () => { setActiveTab('orders'); setHeaderMenuOpen(false); } },
+          ],
+          [
+            { key: 'scan', label: 'Scan inventory', icon: 'barcode-scan', onPress: () => { setHeaderMenuOpen(false); openScanner((code: string) => { handleBarcodeScan(code); closeScanner(); }, 'header_menu'); } },
+          ],
+        ]}
+      />
 
       {/* Full-screen Scanner Modal - renders above everything */}
       {
@@ -1729,6 +1722,23 @@ const InventoryOrdersScreen = observer(() => {
                 contentContainerStyle={styles.actionsScrollContent}
                 style={styles.actionsScroll}
               >
+                {addToCampaign ? (
+                  <TouchableOpacity
+                    style={[styles.actionChip, styles.addToClearoutChip]}
+                    onPress={handleAddToClearout}
+                    disabled={addingToCampaign || selectedItems.size === 0}
+                  >
+                    {addingToCampaign ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Icon name="sprout-outline" size={18} color="#FFFFFF" />
+                    )}
+                    <Text style={[styles.actionChipText, { color: '#FFFFFF' }]}>
+                      Add {selectedItems.size || ''} to {addToCampaign.title}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+
                 <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
                   <Icon name="filter-variant-plus" size={18} color="#374151" />
                   <Text style={styles.actionChipText}>Bulk action</Text>
@@ -1827,7 +1837,7 @@ const InventoryOrdersScreen = observer(() => {
                     variant="inline"
                     disableKeyboardHandling={true}
                     fullWidth={true}
-                    apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+                    apiBaseUrl={API_BASE_URL}
                     getAuthToken={ensureSupabaseJwt}
                     onSubmit={async (text) => {
                       setBulkActionModalQuery(text);
@@ -1835,7 +1845,7 @@ const InventoryOrdersScreen = observer(() => {
                       setPlanLoading(true);
 
                       try {
-                        const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                        const baseUrl = API_BASE_URL;
                         const token = await ensureSupabaseJwt();
                         if (!baseUrl || !token) throw new Error('Missing config');
 
@@ -2035,7 +2045,7 @@ const InventoryOrdersScreen = observer(() => {
 
                 setExecuteLoading(true);
                 try {
-                  const baseUrl = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL;
+                  const baseUrl = API_BASE_URL;
                   const token = await ensureSupabaseJwt();
                   if (!baseUrl || !token) throw new Error('Missing config');
 
@@ -2105,7 +2115,7 @@ const InventoryOrdersScreen = observer(() => {
             paddingBottom: bottomSafePadding
           }}>
             <VoiceRecorder
-              apiBaseUrl={process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL}
+              apiBaseUrl={API_BASE_URL}
               getAuthToken={ensureSupabaseJwt}
               onTranscription={(text) => {
                 setSearchQuery(text);
@@ -2118,6 +2128,22 @@ const InventoryOrdersScreen = observer(() => {
           </View>
         </View>
       </Modal>
+
+      {/* Unified filter sheet (Order / Location / Status) */}
+      <InventoryFilterSheet
+        visible={filterSheetOpen}
+        onClose={() => setFilterSheetOpen(false)}
+        sortBy={sortBy}
+        sortOptions={DEFAULT_SORT_OPTIONS}
+        onSortChange={setSortBy}
+        filterStatus={filterStatus}
+        statusOptions={STATUS_OPTIONS}
+        onStatusChange={setFilterStatus}
+        platformConnections={platformConnections}
+        selectedLocationIds={selectedLocationIds}
+        onLocationChange={setSelectedLocationIds}
+        onReset={() => { setSortBy('date'); setFilterStatus('all'); setSelectedLocationIds([]); }}
+      />
 
       {/* More Actions Modal - Cleaner "Lowkey" Design */}
       <BaseModal
@@ -2316,7 +2342,7 @@ const InventoryOrdersScreen = observer(() => {
                 console.log('[BulkLiquidate] Starting campaign with:', requestBody);
 
                 // Call the actual API
-                const response = await fetch('https://api.sssync.app/api/agent/quick/liquidation', {
+                const response = await fetch(`${API_BASE_URL}/api/agent/quick/liquidation`, {
                   method: 'POST',
                   headers: {
                     'Authorization': `Bearer ${token}`,
@@ -2359,13 +2385,26 @@ const InventoryOrdersScreen = observer(() => {
 const styles = StyleSheet.create({
   background: {
     flex: 1,
-    backgroundColor: "rgb(208, 255, 170)",
+    backgroundColor: "#F2F2F7", // CHAT_COLORS.brand — align with the chat-style palette
   },
+  titleBar: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  titleTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  titleText: { fontSize: 26, fontWeight: '700', color: '#2c2c2c' },
   container: {
     borderTopRightRadius: 32,
     borderTopLeftRadius: 32,
+    borderColor: "#99999962",
+    borderWidth: 1,
     flex: 1,
-    backgroundColor: '#F8F9FB',
+    backgroundColor: '#F4F4F1', // CHAT_COLORS.surface
     padding: 4,
   },
   listContainer: {
@@ -2723,6 +2762,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 20,
     gap: 6,
+  },
+  addToClearoutChip: {
+    backgroundColor: '#93C822',
   },
   actionChipText: {
     fontSize: 13,

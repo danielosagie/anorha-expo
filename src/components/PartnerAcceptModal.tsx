@@ -2,8 +2,11 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BaseModal } from './BaseModal';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Handshake, Folder, Package, Tag, Check } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
+
+const ANORHA_GREEN = '#93C822';
+const ANORHA_GREEN_TINT = 'rgba(147,200,34,0.12)';
 
 interface ReceivedInvite {
     id: string;
@@ -64,11 +67,13 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
             visible={visible}
             onClose={onClose}
             position="bottom"
-            containerStyle={{ paddingBottom: 0 }}
+            containerStyle={{ paddingBottom: bottomPadding, paddingTop: 12 }}
         >
+            <View style={styles.dragHandle} />
+
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 <View style={styles.iconContainer}>
-                    <Icon name="handshake" size={32} color={theme.colors.primary} />
+                    <Handshake size={32} color={ANORHA_GREEN} />
                 </View>
 
                 <Text style={styles.title}>Accept Partnership?</Text>
@@ -79,15 +84,15 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
 
                 <View style={styles.detailsContainer}>
                     <View style={styles.detailRow}>
-                        <Icon name="folder-outline" size={20} color="#666" />
+                        <Folder size={20} color="#71717A" />
                         <Text style={styles.detailText}>Pool: <Text style={styles.bold}>{invite.sourcePoolName}</Text></Text>
                     </View>
                     <View style={styles.detailRow}>
-                        <Icon name="cube-outline" size={20} color="#666" />
+                        <Package size={20} color="#71717A" />
                         <Text style={styles.detailText}>Products: <Text style={styles.bold}>{invite.productCount}</Text></Text>
                     </View>
                     <View style={styles.detailRow}>
-                        <Icon name="tag-outline" size={20} color="#666" />
+                        <Tag size={20} color="#71717A" />
                         <Text style={styles.detailText}>Type: <Text style={styles.bold}>{invite.shareType}</Text></Text>
                     </View>
                 </View>
@@ -97,7 +102,7 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
                 <Text style={styles.locationSectionTitle}>Which location(s) should sync with this partner?</Text>
                 {locationsLoading ? (
                     <View style={styles.locationLoadingRow}>
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <ActivityIndicator size="small" color={ANORHA_GREEN} />
                         <Text style={styles.locationLoadingText}>Loading locations...</Text>
                     </View>
                 ) : !hasAnyLocations ? (
@@ -118,9 +123,9 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
                                         onPress={() => toggleLocation(loc.platformLocationId)}
                                         activeOpacity={0.7}
                                     >
-                                        <View style={[styles.checkbox, selectedLocationIds.includes(loc.platformLocationId) && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }]}>
+                                        <View style={[styles.checkbox, selectedLocationIds.includes(loc.platformLocationId) && styles.checkboxOn]}>
                                             {selectedLocationIds.includes(loc.platformLocationId) && (
-                                                <Icon name="check" size={14} color="#FFF" />
+                                                <Check size={16} color="#FFFFFF" strokeWidth={3} />
                                             )}
                                         </View>
                                         <Text style={styles.locationName}>{loc.locationName}</Text>
@@ -148,7 +153,7 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    style={[styles.button, styles.confirmButton, { backgroundColor: theme.colors.primary }]}
+                    style={[styles.button, styles.confirmButton]}
                     onPress={() => onConfirm(selectedLocationIds)}
                     disabled={loading}
                 >
@@ -164,17 +169,25 @@ export const PartnerAcceptModal: React.FC<PartnerAcceptModalProps> = ({
 };
 
 const styles = StyleSheet.create({
+    dragHandle: {
+        width: 60,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: '#D4D4D8',
+        alignSelf: 'center',
+        marginBottom: 16,
+    },
     scroll: {
         maxHeight: '75%',
     },
     scrollContent: {
         alignItems: 'center',
-        paddingBottom: 48,
+        paddingBottom: 24,
     },
     locationSectionTitle: {
         fontSize: 14,
-        fontWeight: '600',
-        color: '#374151',
+        fontFamily: 'Inter_600SemiBold',
+        color: '#18181B',
         marginBottom: 8,
         textAlign: 'center',
     },
@@ -186,15 +199,17 @@ const styles = StyleSheet.create({
     },
     locationLoadingText: {
         fontSize: 14,
-        color: '#6B7280',
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
     },
     locationEmptyText: {
         fontSize: 13,
-        color: '#6B7280',
-        backgroundColor: '#FFFBEB',
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
+        backgroundColor: '#FAFAF8',
         borderWidth: 1,
-        borderColor: '#FDE68A',
-        borderRadius: 8,
+        borderColor: '#ECEBE6',
+        borderRadius: 14,
         padding: 12,
         marginBottom: 16,
         textAlign: 'center',
@@ -209,8 +224,8 @@ const styles = StyleSheet.create({
     },
     locationGroupLabel: {
         fontSize: 11,
-        fontWeight: '600',
-        color: '#6B7280',
+        fontFamily: 'Inter_600SemiBold',
+        color: '#71717A',
         textTransform: 'uppercase',
         letterSpacing: 0.5,
         marginBottom: 6,
@@ -222,56 +237,63 @@ const styles = StyleSheet.create({
         paddingLeft: 4,
     },
     checkbox: {
-        width: 22,
-        height: 22,
-        borderRadius: 6,
-        borderWidth: 2,
-        borderColor: '#D1D5DB',
+        width: 24,
+        height: 24,
+        borderRadius: 8,
+        borderWidth: 1.5,
+        borderColor: '#D4D4D8',
+        backgroundColor: '#FFFFFF',
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
     },
+    checkboxOn: {
+        backgroundColor: ANORHA_GREEN,
+        borderColor: ANORHA_GREEN,
+    },
     locationName: {
         fontSize: 15,
-        color: '#111827',
+        fontFamily: 'Inter_400Regular',
+        color: '#18181B',
     },
     iconContainer: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: '#F0FDF4', // Light green
+        width: 72,
+        height: 72,
+        borderRadius: 36,
+        backgroundColor: ANORHA_GREEN_TINT,
         alignItems: 'center',
         justifyContent: 'center',
         marginBottom: 16,
     },
     title: {
         fontSize: 20,
-        fontWeight: 'bold',
-        color: '#111',
+        fontFamily: 'Inter_700Bold',
+        color: '#18181B',
         marginBottom: 8,
         textAlign: 'center',
     },
     description: {
-        fontSize: 15,
-        color: '#4B5563',
+        fontSize: 14,
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
         textAlign: 'center',
         marginBottom: 16,
-        lineHeight: 22,
+        lineHeight: 21,
     },
     bold: {
-        fontWeight: '700',
-        color: '#111',
+        fontFamily: 'Inter_700Bold',
+        color: '#18181B',
     },
     detailsContainer: {
         width: '100%',
         maxWidth: 320,
         alignSelf: 'center',
-        backgroundColor: '#F9FAFB',
-        borderRadius: 12,
-        padding: 12,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        padding: 14,
         marginBottom: 16,
         borderWidth: 1,
-        borderColor: '#F3F4F6',
+        borderColor: '#ECEBE6',
     },
     detailRow: {
         flexDirection: 'row',
@@ -280,43 +302,46 @@ const styles = StyleSheet.create({
     },
     detailText: {
         marginLeft: 12,
-        fontSize: 15,
-        color: '#374151',
+        fontSize: 14,
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
+        lineHeight: 21,
     },
     subtext: {
         fontSize: 13,
-        color: '#6B7280',
+        fontFamily: 'Inter_400Regular',
+        color: '#71717A',
+        lineHeight: 20,
         textAlign: 'center',
-        marginBottom: 32,
-        fontStyle: 'italic',
+        marginBottom: 8,
     },
     buttonContainer: {
         flexDirection: 'row',
         width: '100%',
         gap: 12,
-        marginTop: 8,
+        marginTop: 16,
     },
     button: {
         flex: 1,
         paddingVertical: 14,
-        borderRadius: 10,
+        borderRadius: 16,
         alignItems: 'center',
         justifyContent: 'center',
     },
     cancelButton: {
-        backgroundColor: '#F3F4F6',
+        backgroundColor: '#F1F1EE',
     },
     confirmButton: {
-        // Background color set via props/style
+        backgroundColor: ANORHA_GREEN,
     },
     cancelButtonText: {
-        color: '#4B5563',
-        fontWeight: '600',
-        fontSize: 16,
+        color: '#18181B',
+        fontFamily: 'Inter_600SemiBold',
+        fontSize: 15,
     },
     confirmButtonText: {
-        color: '#FFF',
-        fontWeight: 'bold',
-        fontSize: 16,
+        color: '#FFFFFF',
+        fontFamily: 'Inter_700Bold',
+        fontSize: 15,
     },
 });

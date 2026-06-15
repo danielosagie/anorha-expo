@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import {
   View,
   TouchableOpacity,
@@ -7,22 +8,16 @@ import {
   ScrollView,
   TextInput,
   Alert,
+  Modal,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { useOrg } from '../context/OrgContext';
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
+import PlatformLogo from './PlatformLogo';
+import { getPlatform } from '../config/platforms';
 
-const API_BASE_URL = 'https://api.sssync.app';
-
-const PLATFORM_LOGOS: Record<string, any> = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-};
+const API_BASE_URL = ENV_API_BASE_URL;
 
 interface LocationPool {
   id: string;
@@ -58,6 +53,8 @@ interface PoolLocationComboboxProps {
   selectedItems: string[]; // location IDs
   onSelectionChange: (locationIds: string[]) => void;
   startOpen?: boolean;
+  /** Render a compact circular icon button (sits to the right of the search bar). */
+  compact?: boolean;
 }
 
 const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
@@ -66,6 +63,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   selectedItems,
   onSelectionChange,
   startOpen = false,
+  compact = false,
 }) => {
   const theme = useTheme();
   const { currentOrg } = useOrg();
@@ -180,7 +178,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
             return prevPools.map(pool => {
               // If it's a partner pool, modify it to include itself as a location ID
               // This is a "virtual location" that represents the whole pool
-              if (pool.isPartnerPool || (partnerPools.find(pp => pp.id === pool.id))) {
+              if ((pool as any).isPartnerPool || (partnerPools.find(pp => pp.id === pool.id))) {
                 const virtualLocationId = pool.id; // Use Pool ID as virtual Location ID
 
                 // Add to singleLocations so metadata map picks it up (needs mock connection)
@@ -332,11 +330,10 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
 
   // Render platform logo
   const renderPlatformLogo = (platformType: string, key?: string) => {
-    const Logo = PLATFORM_LOGOS[platformType.toLowerCase()];
-    if (Logo) {
-      return <Logo key={key || platformType} width={16} height={16} style={{ marginLeft: 4 }} />;
-    }
-    return null;
+    if (!getPlatform(platformType)) return null;
+    return (
+      <PlatformLogo key={key || platformType} type={platformType} size={16} style={{ marginLeft: 4 }} />
+    );
   };
 
   // Helper to determine if global "All" is selected
@@ -381,26 +378,41 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity
-        style={[styles.dropdownButton, { borderColor: theme.colors.textSecondary + '40' }]}
-        onPress={handleOpenDropdown}
-        activeOpacity={0.7}
-      >
-        <View style={styles.dropdownContent}>
-          <Text style={[styles.dropdownText, { color: theme.colors.text }]}>
-            {getDisplayText()}
-          </Text>
-        </View>
-        <Icon
-          name={isDropdownOpen ? 'chevron-up' : 'chevron-down'}
-          size={18}
-          color={theme.colors.textSecondary}
-        />
-      </TouchableOpacity>
+      {compact ? (
+        <TouchableOpacity style={styles.compactBtn} onPress={handleOpenDropdown} activeOpacity={0.7}>
+          <Icon name="filter-variant" size={20} color="#3F3F46" />
+          {selectedLocations.length > 0 ? <View style={styles.compactDot} /> : null}
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[styles.dropdownButton, { borderColor: theme.colors.textSecondary + '40' }]}
+          onPress={handleOpenDropdown}
+          activeOpacity={0.7}
+        >
+          <View style={styles.dropdownContent}>
+            <Text style={[styles.dropdownText, { color: theme.colors.text }]}>
+              {getDisplayText()}
+            </Text>
+          </View>
+          <Icon
+            name={isDropdownOpen ? 'chevron-up' : 'chevron-down'}
+            size={18}
+            color={theme.colors.textSecondary}
+          />
+        </TouchableOpacity>
+      )}
 
-      {/* Absolute Positioned Inline Dropdown */}
-      {isDropdownOpen && (
-        <View style={styles.dropdownPanel}>
+      {/* Fade-in-place bottom sheet — a Modal overlays the list so it's never clipped behind items. */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isDropdownOpen}
+        onRequestClose={() => setIsDropdownOpen(false)}
+      >
+        <View style={styles.sheetRoot}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setIsDropdownOpen(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
           {/* Search Input */}
           <View style={styles.searchContainer}>
             <Icon name="magnify" size={18} color="#9CA3AF" />
@@ -520,9 +532,10 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
           )}
 
           {/* Footer Removed as requested ("dont really want a done button") */}
-          <View style={{ height: 8 }} />
+            <View style={{ height: 8 }} />
+          </View>
         </View>
-      )}
+      </Modal>
     </View>
   );
 };
@@ -530,6 +543,46 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
 const styles = StyleSheet.create({
   container: {
     position: 'relative',
+  },
+  compactBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F2F2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactDot: {
+    position: 'absolute',
+    top: 11,
+    right: 11,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#93C822',
+  },
+  // Fade-in-place bottom sheet (no background push).
+  sheetRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingBottom: 28,
+    paddingTop: 8,
+    maxHeight: '72%',
+    overflow: 'hidden',
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D4D4D8',
+    marginBottom: 8,
   },
   dropdownButton: {
     flexDirection: 'row',

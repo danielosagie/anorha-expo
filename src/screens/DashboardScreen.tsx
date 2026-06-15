@@ -12,6 +12,7 @@ import Card from '../components/Card';
 import InsightCard from '../components/InsightCard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LegendStateContext } from '../context/LegendStateContext';
+import { API_BASE_URL } from '../config/env';
 import { supabase } from '../../lib/supabase';
 import InventoryListCard from '../components/InventoryListCard';
 import ActivityEventCard from '../components/ActivityEventCard';
@@ -24,9 +25,6 @@ import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrgNudges, trackInsightAction } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { QuickSellCard } from '../components/liquidation/QuickSellCard';
-import ShopifySvg from '../assets/shopify.svg';
-import SquareSvg from '../assets/square.svg';
-import CloverSvg from '../assets/clover.svg';
 import { PartnerWelcomeModal } from '../components/PartnerWelcomeModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SessionContext } from '../context/SessionContext';
@@ -489,7 +487,7 @@ const DashboardScreen = () => {
       }
 
       // Fetch pools for this org
-      const poolsRes = await fetch(`https://api.sssync.app/api/pools/org/${currentOrg.id}`, {
+      const poolsRes = await fetch(`${API_BASE_URL}/api/pools/org/${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -554,7 +552,7 @@ const DashboardScreen = () => {
       }
 
       // Fetch platform locations for this org
-      const locationsRes = await fetch(`https://api.sssync.app/api/pools/locations/available?orgId=${currentOrg.id}`, {
+      const locationsRes = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${currentOrg.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -782,7 +780,7 @@ const DashboardScreen = () => {
         return;
       }
 
-      const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
+      const base = API_BASE_URL;
       // Fetch more events so we can filter and still have enough to show
       const url = `${base}/api/activity?limit=20&orgId=${encodeURIComponent(currentOrg.id)}`;
 
@@ -909,7 +907,7 @@ const DashboardScreen = () => {
     } else if (actionLink.includes('/orders')) {
       navigation.navigate('Orders');
     } else if (actionLink.includes('/pools')) {
-      navigation.navigate('Profile'); // Pools are managed in Profile
+      navigation.navigate('AccountSettings'); // Pools are managed in Profile
     }
   };
 
@@ -1416,7 +1414,7 @@ const DashboardScreen = () => {
         visible={showPartnerWelcome}
         partnerName={partnerSourceName}
         onDismiss={handleDismissPartnerWelcome}
-        onConnectPlatform={() => navigation.navigate('Profile')}
+        onConnectPlatform={() => navigation.navigate('AccountSettings')}
       />
 
       {/* Floating Tab Bar provided by Navigator, but we ensure spacing */}

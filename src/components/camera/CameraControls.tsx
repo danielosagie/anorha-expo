@@ -53,14 +53,15 @@ const CameraControls: React.FC<CameraControlsProps> = ({
 
 const styles = StyleSheet.create({
   cameraControlsContainer: {
+    // Matches the back button (styles.cameraBackButton in AddProductScreen: top 16,
+    // 44px circle) so Flash/History read as one header row with it.
     position: 'absolute',
-    top: 100,
+    top: 16,
     right: 0,
     zIndex: 10,
   },
   cameraControlsContent: {
     paddingHorizontal: 20,
-    paddingTop: 10,
     gap: 16,
   },
   controlGroup: {

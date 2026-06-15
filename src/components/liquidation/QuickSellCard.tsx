@@ -4,6 +4,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { useOrg } from '../../context/OrgContext';
 import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
 import InventoryListCard from '../InventoryListCard';
 
 interface QuickSellCardProps {
@@ -95,7 +96,7 @@ export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => 
         try {
             const token = await ensureSupabaseJwt();
             // Fire and forget call to real backend
-            await fetch('https://api.sssync.app/liquidation/strategies', {
+            await fetch(`${API_BASE_URL}/liquidation/strategies`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,

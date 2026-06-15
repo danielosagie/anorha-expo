@@ -13,9 +13,10 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../../context/ThemeContext';
 import Button from '../Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
 import { showMessage } from 'react-native-flash-message';
 
-const SSSYNC_API_BASE_URL = "https://api.sssync.app";
+const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 interface Member {
   Id: string;
@@ -30,7 +31,8 @@ interface Member {
 
 interface Permission {
   resourceId: string;
-  resourceType: 'platform_connection' | 'platform_location';
+  /** 'pool' rows come from MemberPoolPermissions (the only permissions table that exists). */
+  resourceType: 'platform_connection' | 'platform_location' | 'pool';
   canRead: boolean;
   canWrite: boolean;
 }
@@ -106,19 +108,21 @@ export default function MemberDetailModal({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Get member's permissions
+      // Get member's pool permissions. The real table is MemberPoolPermissions
+      // ('OrgMemberPermissions' never existed — this query silently returned nothing):
+      // one row per (MembershipId, PoolId) with canRead/canEdit/canSync flags.
       const { data: permsData } = await supabase
-        .from('OrgMemberPermissions')
-        .select('ResourceId, ResourceType, CanRead, CanWrite, OrgMembershipId')
-        .eq('OrgMembershipId', memberId);
+        .from('MemberPoolPermissions')
+        .select('PoolId, canRead, canEdit, MembershipId')
+        .eq('MembershipId', memberId);
 
       if (permsData) {
         setPermissions(
           permsData.map((p: any) => ({
-            resourceId: p.ResourceId,
-            resourceType: p.ResourceType,
-            canRead: p.CanRead,
-            canWrite: p.CanWrite,
+            resourceId: p.PoolId,
+            resourceType: 'pool',
+            canRead: p.canRead,
+            canWrite: p.canEdit,
           }))
         );
       }

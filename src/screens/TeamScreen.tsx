@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   View,
   Text,
@@ -8,25 +9,24 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
-  Modal,
-  SafeAreaView,
+  StatusBar,
   ActionSheetIOS,
   Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Card from '../components/Card';
+import { ChevronDown, RefreshCw, X } from 'lucide-react-native';
+import PageHeader from '../components/ui/PageHeader';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
 import InviteMemberModal from '../components/team/InviteMemberModal';
 import { useAuth } from '@clerk/clerk-expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const SSSYNC_API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
-const API_BASE_RAW = (process.env.EXPO_PUBLIC_API_BASE_URL || SSSYNC_API_BASE_URL).replace(/\/$/, '');
+const SSSYNC_API_BASE_URL = API_BASE_URL;
+const API_BASE_RAW = API_BASE_URL;
 const API_BASE = API_BASE_RAW.endsWith('/api') ? API_BASE_RAW : `${API_BASE_RAW}/api`;
-const ANORHA_GREEN = '#8cc63f';
+const ANORHA_GREEN = '#93C822';
 const NEUTRAL_GRAY = '#6B7280';
 const MEMBER_YELLOW = '#F59E0B';
 
@@ -68,11 +68,6 @@ export default function TeamScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'member' | null>(null);
-  
-  // Debug: Log role changes
-  useEffect(() => {
-    console.log('[TeamScreen] Current user role changed to:', currentUserRole);
-  }, [currentUserRole]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
 
@@ -106,16 +101,11 @@ export default function TeamScreen() {
       }
       const orgId = firstMembership.Organizations.Id;
       setCurrentOrg({ Id: orgId, Name: firstMembership.Organizations.Name ?? 'Team' });
-      
-      // Debug: Log the role value to see what we're getting
-      console.log('[TeamScreen] First membership role:', firstMembership.Role);
-      console.log('[TeamScreen] Full membership data:', JSON.stringify(firstMembership, null, 2));
-      
+
       // Check for admin role - handle multiple possible formats
       const role = firstMembership.Role;
       const isAdminFromRole = role === 'org:admin' || role === 'admin' || role === 'Admin' || role?.toLowerCase() === 'admin';
-      console.log('[TeamScreen] Is admin from role?', isAdminFromRole, 'from role:', role);
-      
+
       // Also check using the backend's check-admin endpoint for more reliable detection
       let isAdminFromBackend = isAdminFromRole;
       try {
@@ -123,7 +113,6 @@ export default function TeamScreen() {
         if (adminCheckRes.ok) {
           const adminCheckData = await adminCheckRes.json();
           isAdminFromBackend = adminCheckData.isAdmin === true;
-          console.log('[TeamScreen] Backend admin check result:', adminCheckData.isAdmin);
         }
       } catch (e) {
         console.warn('[TeamScreen] Failed to check admin status from backend:', e);
@@ -176,11 +165,9 @@ export default function TeamScreen() {
             m.User?.Email?.toLowerCase() === currentUser.email?.toLowerCase()
           );
           if (currentUserMember && currentUserMember.Role === 'admin') {
-            console.log('[TeamScreen] Fallback: Found current user as admin in members list');
             setCurrentUserRole('admin');
           } else if (currentUserMember && currentUserMember.Role === 'member' && currentUserRole === 'admin') {
             // If we thought we were admin but members list says member, trust members list
-            console.log('[TeamScreen] Fallback: Overriding admin status - user is member in members list');
             setCurrentUserRole('member');
           }
         }
@@ -421,32 +408,29 @@ export default function TeamScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: '#F8F9FB' }]}>
-      {/* HEADER */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Icon name="arrow-left" size={24} color="#111827" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage Team</Text>
-        <TouchableOpacity
-          onPress={handleInviteMember}
-          style={[styles.inviteButton, { backgroundColor: ANORHA_GREEN }]}
-        >
-          <Text style={styles.inviteButtonText}>Invite</Text>
-        </TouchableOpacity>
-      </View>
-
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
+        showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[ANORHA_GREEN]} />
         }
       >
-        <View style={styles.listContainer}>
+        <PageHeader
+          title="Team"
+          onBack={() => navigation.goBack()}
+          right={
+            <TouchableOpacity onPress={handleInviteMember} style={styles.invitePill} activeOpacity={0.85}>
+              <Text style={styles.invitePillText}>Invite</Text>
+            </TouchableOpacity>
+          }
+        />
+        <View style={styles.card}>
           {members.length === 0 ? (
             <Text style={styles.emptyText}>No team members found.</Text>
           ) : (
-            members.map((member) => {
+            members.map((member, index) => {
               const initials = member.User.FirstName && member.User.LastName
                 ? `${member.User.FirstName[0]}${member.User.LastName[0]}`.toUpperCase()
                 : (member.User.Email[0] || '?').toUpperCase();
@@ -455,7 +439,7 @@ export default function TeamScreen() {
               return (
                 <TouchableOpacity
                   key={member.Id}
-                  style={styles.memberRow}
+                  style={[styles.memberRow, index > 0 && styles.rowBorder]}
                   activeOpacity={0.95}
                   onLongPress={() => handleMemberActions(member)}
                   delayLongPress={250}
@@ -491,7 +475,7 @@ export default function TeamScreen() {
                       {member.Role === 'admin' ? 'Admin' : member.Role === 'partner' ? 'Partner' : 'Member'}
                     </Text>
                     {currentUserRole === 'admin' && member.Role !== 'partner' && (
-                      <Icon name="chevron-down" size={16} color="#9CA3AF" />
+                      <ChevronDown size={16} color="#9CA3AF" />
                     )}
                   </TouchableOpacity>
                 </TouchableOpacity>
@@ -503,21 +487,23 @@ export default function TeamScreen() {
         {/* PENDING INVITES */}
         {invitations.length > 0 && currentUserRole === 'admin' && (
           <View style={styles.invitesSection}>
-            <Text style={styles.sectionHeader}>Pending Invites</Text>
-            {invitations.map((inv) => (
-              <View key={inv.Id} style={styles.inviteRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inviteEmail}>{inv.Email}</Text>
-                  <Text style={styles.inviteMeta}>{inv.Role} • {new Date(inv.CreatedAt).toLocaleDateString()}</Text>
+            <Text style={styles.sectionLabel}>Pending invites</Text>
+            <View style={styles.card}>
+              {invitations.map((inv, index) => (
+                <View key={inv.Id} style={[styles.inviteRow, index > 0 && styles.rowBorder]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inviteEmail}>{inv.Email}</Text>
+                    <Text style={styles.inviteMeta}>{inv.Role} • {new Date(inv.CreatedAt).toLocaleDateString()}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => handleResendInvitation(inv.Id)} style={styles.iconBtn}>
+                    <RefreshCw size={18} color={ANORHA_GREEN} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleRevokeInvitation(inv.Id)} style={styles.iconBtn}>
+                    <X size={20} color="#EF4444" />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity onPress={() => handleResendInvitation(inv.Id)} style={styles.iconBtn}>
-                  <Icon name="refresh" size={20} color={ANORHA_GREEN} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleRevokeInvitation(inv.Id)} style={styles.iconBtn}>
-                  <Icon name="close" size={20} color="#EF4444" />
-                </TouchableOpacity>
-              </View>
-            ))}
+              ))}
+            </View>
           </View>
         )}
 
@@ -542,84 +528,74 @@ export default function TeamScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#F6F7F4',
   },
   centered: {
     justifyContent: 'center',
     alignItems: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 60,
+  invitePill: {
+    backgroundColor: '#18181B',
+    borderRadius: 999,
     paddingHorizontal: 16,
-    paddingBottom: 16,
-    backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  backBtn: {
-    padding: 8,
-    marginLeft: -8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  inviteButton: {
     paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginRight: -4,
   },
-  inviteButtonText: {
-    fontSize: 16,
-    color: '#FFF',
-    fontWeight: '600',
+  invitePillText: {
+    color: '#FFFFFF',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
   },
-  scrollContent: {
-    padding: 16,
+  sectionLabel: {
+    fontSize: 13,
+    color: '#71717A',
+    fontFamily: 'Inter_600SemiBold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    marginLeft: 4,
   },
-  listContainer: {
+  card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 20,
+    paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    overflow: 'hidden',
+    borderColor: '#ECEBE6',
   },
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    gap: 14,
+    paddingVertical: 14,
+  },
+  rowBorder: {
+    borderTopWidth: 1,
+    borderTopColor: '#F1F1EE',
   },
   avatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#F1F1EE',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
   },
   avatarText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: 'Inter_600SemiBold',
     color: '#4B5563',
   },
   memberInfo: {
     flex: 1,
   },
   memberName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
   },
   memberEmail: {
     fontSize: 13,
-    color: '#6B7280',
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
     marginTop: 2,
   },
   roleButton: {
@@ -627,52 +603,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#F6F7F4',
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#ECEBE6',
   },
   roleText: {
     fontSize: 13,
-    fontWeight: '500',
+    fontFamily: 'Inter_600SemiBold',
   },
   emptyText: {
-    padding: 24,
+    paddingVertical: 24,
     textAlign: 'center',
-    color: '#6B7280',
+    color: '#71717A',
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
   },
   invitesSection: {
-    marginTop: 32,
-  },
-  sectionHeader: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12,
-    marginLeft: 4,
+    marginTop: 28,
   },
   inviteRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    gap: 14,
+    paddingVertical: 14,
   },
   inviteEmail: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#111827',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
   },
   inviteMeta: {
-    fontSize: 12,
-    color: '#6B7280',
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
     marginTop: 2,
   },
   iconBtn: {
-    padding: 8,
+    padding: 6,
   },
 });

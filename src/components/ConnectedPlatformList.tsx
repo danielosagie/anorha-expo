@@ -1,18 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import ConnectedPlatformItem, { PlatformConnection } from './ConnectedPlatformItem';
-
-const AVAILABLE_PLATFORMS = [
-    { key: 'shopify', name: 'Shopify', icon: 'shopping' },
-    { key: 'amazon', name: 'Amazon', icon: 'package' },
-    { key: 'clover', name: 'Clover', icon: 'leaf' },
-    { key: 'square', name: 'Square', icon: 'square-outline' },
-    { key: 'ebay', name: 'eBay', icon: 'shopping' },
-    { key: 'facebook', name: 'Facebook', icon: 'facebook' },
-    { key: 'depop', name: 'Depop', icon: 'alpha-d' },
-    { key: 'whatnot', name: 'Whatnot', icon: 'chat-processing' },
-    { key: 'etsy', name: 'Etsy', icon: 'alpha-e' },
-];
+import { getPlatform } from '../config/platforms';
 
 interface ConnectedPlatformListProps {
     connections: PlatformConnection[];
@@ -67,7 +56,9 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
     return (
         <View style={styles.container}>
             {visibleConnections.map((connection) => {
-                let platformConfig = AVAILABLE_PLATFORMS.find((p: any) => p.key === connection.PlatformType);
+                const def = getPlatform(connection.PlatformType);
+                let platformConfig: { key: string; name: string; icon: string } | undefined =
+                    def ? { key: def.key, name: def.label, icon: def.mdiIcon } : undefined;
 
                 // Fallback for CSV or unknown platforms
                 if (!platformConfig) {
@@ -76,14 +67,14 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
                         platformConfig = {
                             key: 'csv',
                             name: connection.DisplayName || 'CSV Import',
-                            icon: 'table' as any // Use table icon for CSV
+                            icon: 'table' // Use table icon for CSV
                         };
                     } else {
                         // Generic fallback
                         platformConfig = {
                             key: connection.PlatformType,
                             name: connection.PlatformType.charAt(0).toUpperCase() + connection.PlatformType.slice(1),
-                            icon: 'cube-outline' as any
+                            icon: 'cube-outline'
                         };
                     }
                 }

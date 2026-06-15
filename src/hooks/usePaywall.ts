@@ -3,8 +3,9 @@ import * as WebBrowser from 'expo-web-browser';
 import { Alert } from 'react-native';
 import { UserEntitlements, fetchUserEntitlements, isFeatureAvailable } from '../utils/entitlements';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 
-const API_BASE_URL = 'https://api.sssync.app';
+const API_BASE_URL = ENV_API_BASE_URL;
 
 interface UsePaywallReturn {
   entitlements: UserEntitlements | null;

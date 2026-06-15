@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
 import { CloudDownload, Settings } from 'lucide-react-native';
-import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system';
+import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 import BaseModal from './BaseModal';
 import { useOrg } from '../context/OrgContext';
 
@@ -17,7 +18,7 @@ interface CSVManageModalProps {
 export default function CSVManageModal({ visible, onClose, onSettings }: CSVManageModalProps) {
     const [isExporting, setIsExporting] = useState(false);
     const { currentOrg } = useOrg();
-    const rawApiBase = (process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app').replace(/\/+$/, '');
+    const rawApiBase = API_BASE_URL;
     const API_BASE = rawApiBase.endsWith('/api') ? rawApiBase : `${rawApiBase}/api`;
 
     const handleExport = async () => {

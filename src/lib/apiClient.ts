@@ -1,25 +1,18 @@
+/**
+ * Single HTTP client for the sssync backend.
+ *
+ * Two layers over one base-URL resolver and one auth path:
+ *   - api.get/post/...  + apiRequest → typed helpers; throw ApiError on non-2xx.
+ *   - apiFetch / apiJson            → lower-level fetch with a single 401-refresh
+ *                                      retry and an auto Idempotency-Key on mutations.
+ *   - parseOrWarn                   → advisory zod contract check (never throws).
+ *
+ * Base URL comes from getApiBaseUrl(); the Supabase JWT is attached via
+ * ensureSupabaseJwt() (opt out with `auth: false`).
+ */
+import { z } from 'zod';
 import * as Crypto from 'expo-crypto';
 import { ensureSupabaseJwt, forceRefreshSupabaseJwt, getApiBaseUrl } from './supabase';
-
-/**
- * Single API access layer for the backend.
- *
- * Replaces the pattern copy-pasted across ~40 screens:
- *
- *   const token = await ensureSupabaseJwt();
- *   const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.sssync.app';
- *   const res = await fetch(`${base}/api/foo`, { headers: { Authorization: `Bearer ${token}` } });
- *
- * with:
- *
- *   const data = await apiJson('/api/foo');                       // GET + parsed JSON, throws on !ok
- *   await apiJson('/api/foo', { method: 'POST', body: {...} });   // mutation w/ auto idempotency key
- *   const res  = await apiFetch('/api/foo');                      // when you need the raw Response
- *
- * Benefits over the old pattern: one base-URL resolver, consistent auth header, a single
- * 401-refresh-and-retry (raw fetches had none, so they silently failed on an expired JWT),
- * and an Idempotency-Key on mutations so safe retries don't double-apply server-side.
- */
 
 export class ApiError extends Error {
   status: number;
@@ -32,6 +25,112 @@ export class ApiError extends Error {
   }
 }
 
+export type QueryValue = string | number | boolean | null | undefined;
+
+const ABSOLUTE_URL = /^https?:\/\//i;
+
+function buildUrl(path: string, query?: Record<string, QueryValue>): string {
+  const base = ABSOLUTE_URL.test(path)
+    ? path
+    : `${getApiBaseUrl()}${path.startsWith('/') ? '' : '/'}${path}`;
+
+  if (!query) return base;
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null) params.append(key, String(value));
+  }
+  const qs = params.toString();
+  if (!qs) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}${qs}`;
+}
+
+function parseBody(text: string): unknown {
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function newIdempotencyKey(): string {
+  try {
+    return Crypto.randomUUID();
+  } catch {
+    // Fallback if randomUUID is unavailable for any reason.
+    return `idem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+// ───────────────────────── Typed helpers (api.*) ─────────────────────────
+
+export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'method'> {
+  /** Request body. Plain objects are JSON-stringified; strings are sent as-is. */
+  body?: unknown;
+  /** Attach the Supabase JWT. Default true; set false for public endpoints. */
+  auth?: boolean;
+  /** Query params appended to the URL (undefined/null values are dropped). */
+  query?: Record<string, QueryValue>;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<T> {
+  const { auth = true, body, query, headers, ...rest } = options;
+
+  const hasBody = body !== undefined && body !== null;
+  const finalHeaders = new Headers(headers as HeadersInit | undefined);
+  if (hasBody && !finalHeaders.has('Content-Type')) {
+    finalHeaders.set('Content-Type', 'application/json');
+  }
+  if (auth) {
+    const token = await ensureSupabaseJwt();
+    if (token) finalHeaders.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(buildUrl(path, query), {
+    ...rest,
+    method,
+    headers: finalHeaders,
+    body: hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
+  });
+
+  const data = parseBody(await response.text());
+
+  if (!response.ok) {
+    const message =
+      (data && typeof data === 'object' && 'message' in data &&
+      typeof (data as { message?: unknown }).message === 'string'
+        ? (data as { message: string }).message
+        : undefined) ||
+      response.statusText ||
+      `Request failed with status ${response.status}`;
+    throw new ApiError(response.status, message, data);
+  }
+
+  return data as T;
+}
+
+export const api = {
+  get: <T = unknown>(path: string, options?: ApiRequestOptions) =>
+    request<T>('GET', path, options),
+  post: <T = unknown>(path: string, body?: unknown, options?: ApiRequestOptions) =>
+    request<T>('POST', path, { ...options, body }),
+  put: <T = unknown>(path: string, body?: unknown, options?: ApiRequestOptions) =>
+    request<T>('PUT', path, { ...options, body }),
+  patch: <T = unknown>(path: string, body?: unknown, options?: ApiRequestOptions) =>
+    request<T>('PATCH', path, { ...options, body }),
+  delete: <T = unknown>(path: string, options?: ApiRequestOptions) =>
+    request<T>('DELETE', path, options),
+};
+
+/** Lower-level escape hatch when you need full control over method/options. */
+export { request as apiRequest };
+
+// ──────────────────── Raw fetch layer (apiFetch / apiJson) ───────────────
+
 export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
   /** Object bodies are JSON-stringified automatically; strings/FormData are passed through. */
   body?: any;
@@ -42,23 +141,6 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
    * Pass an explicit value to dedupe across attempts, or `false` to omit.
    */
   idempotencyKey?: string | false;
-}
-
-const ABSOLUTE_URL = /^https?:\/\//i;
-
-function buildUrl(path: string): string {
-  if (ABSOLUTE_URL.test(path)) return path;
-  const base = getApiBaseUrl();
-  return path.startsWith('/') ? `${base}${path}` : `${base}/${path}`;
-}
-
-function newIdempotencyKey(): string {
-  try {
-    return Crypto.randomUUID();
-  } catch {
-    // Fallback if randomUUID is unavailable for any reason.
-    return `idem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }
 }
 
 /**
@@ -125,4 +207,25 @@ export async function apiJson<T = any>(path: string, options: ApiFetchOptions = 
     throw new ApiError(res.status, typeof message === 'string' ? message : `Request failed (${res.status})`, data);
   }
   return data as T;
+}
+
+// ───────────────────────── Contract validation ───────────────────────────
+
+/**
+ * Advisory contract validation for API responses. Never throws and never strips:
+ * the original payload is returned untouched (typed), and any mismatch against the
+ * shared contract (src/contracts) is logged as drift telemetry. Use at the seam:
+ *
+ *   const status = parseOrWarn(zMatchJobStatus, await api.get(`/api/products/match/jobs/${id}/status`), 'match job status');
+ */
+export function parseOrWarn<S extends z.ZodType>(schema: S, data: unknown, label: string): z.infer<S> {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    const issues = result.error.issues
+      .slice(0, 3)
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join(' · ');
+    console.warn(`[contract] ${label} drifted from contract — ${issues}`);
+  }
+  return data as z.infer<S>;
 }

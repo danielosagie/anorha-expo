@@ -167,15 +167,8 @@ export const ensureAssistantPlaceholder = (
   threadId: string,
   assistantMessageId?: string,
 ): { state: ConversationThreadState; assistantMessageId: string } => {
-  const existing = state.messages.find(
-    message => message.role === 'assistant' && message.deliveryState === 'streaming',
-  );
-  if (existing) {
-    return { state, assistantMessageId: existing.id };
-  }
-  const nextId = assistantMessageId || createClientId('assistant');
-  const nextState = appendMessage(state, {
-    id: nextId,
+  const makeMessage = (id: string): ConversationMessage => ({
+    id,
     campaignId,
     threadId,
     role: 'assistant',
@@ -184,7 +177,27 @@ export const ensureAssistantPlaceholder = (
     deliveryState: 'streaming',
     kind: 'text',
   });
-  return { state: nextState, assistantMessageId: nextId };
+
+  // With an explicit (turn-scoped) id, ALWAYS bind to that message. Each agent run
+  // gets its own bubble + activity card instead of piling steps onto the previous
+  // run's card (the "it just updates the original one" bug). Reusing whatever
+  // message happened to still be 'streaming' is what caused that.
+  if (assistantMessageId) {
+    const byId = state.messages.find(message => message.id === assistantMessageId);
+    if (byId) {
+      return { state, assistantMessageId };
+    }
+    return { state: appendMessage(state, makeMessage(assistantMessageId)), assistantMessageId };
+  }
+
+  const existing = state.messages.find(
+    message => message.role === 'assistant' && message.deliveryState === 'streaming',
+  );
+  if (existing) {
+    return { state, assistantMessageId: existing.id };
+  }
+  const nextId = createClientId('assistant');
+  return { state: appendMessage(state, makeMessage(nextId)), assistantMessageId: nextId };
 };
 
 export const appendAssistantDelta = (
@@ -200,6 +213,50 @@ export const appendAssistantDelta = (
       ...message,
       content: `${message.content}${delta}`,
       deliveryState: 'streaming',
+    })),
+  );
+};
+
+/** Attach a completed tool step to the streaming assistant message's metadata. */
+export const appendAssistantToolStep = (
+  state: ConversationThreadState,
+  campaignId: string,
+  threadId: string,
+  step: { tool: string; label: string; status?: string; durationMs?: number },
+  assistantMessageId?: string,
+): ConversationThreadState => {
+  const ensured = ensureAssistantPlaceholder(state, campaignId, threadId, assistantMessageId);
+  return withUpdatedAt(
+    updateMessage(ensured.state, ensured.assistantMessageId, message => ({
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        toolSteps: [
+          ...((message.metadata?.toolSteps as any[]) || []),
+          step,
+        ],
+      },
+    })),
+  );
+};
+
+/** Accumulate streamed reasoning/thinking text into the streaming assistant message. */
+export const appendAssistantReasoning = (
+  state: ConversationThreadState,
+  campaignId: string,
+  threadId: string,
+  reasoning: string,
+  assistantMessageId?: string,
+): ConversationThreadState => {
+  if (!reasoning) return state;
+  const ensured = ensureAssistantPlaceholder(state, campaignId, threadId, assistantMessageId);
+  return withUpdatedAt(
+    updateMessage(ensured.state, ensured.assistantMessageId, message => ({
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        reasoning: `${(message.metadata?.reasoning as string) || ''}${reasoning}`,
+      },
     })),
   );
 };
@@ -340,6 +397,7 @@ export const toQueueItem = ({
   content,
   actionType,
   actionPayload,
+  imageUrls,
 }: {
   campaignId: string;
   threadId: string;
@@ -348,6 +406,7 @@ export const toQueueItem = ({
   content?: string;
   actionType?: string;
   actionPayload?: Record<string, unknown>;
+  imageUrls?: string[];
 }): ConversationQueueItem => ({
   id: createClientId('queue'),
   campaignId,
@@ -357,6 +416,7 @@ export const toQueueItem = ({
   content,
   actionType,
   actionPayload,
+  imageUrls,
   createdAt: new Date().toISOString(),
 });
 

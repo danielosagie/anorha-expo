@@ -17,6 +17,10 @@ export interface CampaignSummary {
   stateSummary?: string;
   inventoryScope?: 'all' | 'pool' | 'specific';
   timeframeDays?: number;
+  /** First campaign item's image — the home card thumbnail. */
+  imageUrl?: string;
+  /** When the agent's next autonomous check is scheduled (ISO) — shown on the card. */
+  nextWakeAt?: string;
   stats?: {
     soldToday?: number;
     totalCount?: number;
@@ -75,6 +79,12 @@ export interface CampaignOverview {
     createdAt: string;
     metadata?: Record<string, unknown>;
   }>;
+  /** Most recent scheduled 12h Sprout digest, if the backend has produced one. */
+  latestDigest?: {
+    text: string;
+    createdAt: string;
+    nextReportAt?: string;
+  };
 }
 
 export type ConversationTarget = { mode: 'home' } | { mode: 'thread'; threadId: string };
@@ -99,6 +109,26 @@ export interface DecisionPrompt {
   reviseLabel?: string;
   followUpLabel?: string;
   strategyId?: string;
+}
+
+export interface QuestionOption {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+}
+
+export interface QuestionItem {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: QuestionOption[];
+}
+
+// A Sprout ask_seller_question pending action, hydrated for the question card.
+export interface QuestionPrompt {
+  pendingActionId: string;
+  threadId?: string;
+  questions: QuestionItem[];
 }
 
 export interface ConversationMessage {
@@ -130,6 +160,8 @@ export interface ConversationQueueItem {
   content?: string;
   actionType?: string;
   actionPayload?: Record<string, unknown>;
+  /** Public urls of photos the seller attached — the agent decides what to do with them. */
+  imageUrls?: string[];
   createdAt: string;
 }
 
@@ -151,6 +183,31 @@ export interface StreamTurnInput {
   content?: string;
   actionType?: string;
   actionPayload?: Record<string, unknown>;
+  /** Public urls of photos attached to this turn (already uploaded). */
+  imageUrls?: string[];
+}
+
+/** Payload the agent attaches (message.metadata.jobCard) for a tappable cart card. */
+export interface ChatJobCardMeta {
+  /** quick-scan-session id the AddProduct cart hydrates from. */
+  sessionId: string;
+  itemCount: number;
+  coverImageUrl?: string;
+  title?: string;
+  status?: string;
+}
+
+/**
+ * Compact, arg-free record of one executed agent tool. Streamed only AFTER the
+ * tool finishes (tool.completed) and persisted in the assistant message's
+ * metadata.toolSteps — the chat renders these as step items; raw arguments,
+ * SQL, and tool syntax never reach the client.
+ */
+export interface ConversationToolStep {
+  tool: string;
+  label: string;
+  status?: string;
+  durationMs?: number;
 }
 
 export interface StreamTurnObserver {
@@ -158,7 +215,9 @@ export interface StreamTurnObserver {
   onMessageAck?: (payload: { clientMessageId: string; serverMessageId?: string; threadId?: string }) => void;
   onAssistantStarted?: (payload: { messageId?: string; threadId?: string }) => void;
   onAssistantDelta?: (payload: { delta: string; messageId?: string; threadId?: string }) => void;
+  onReasoning?: (payload: { reasoning: string; messageId?: string; threadId?: string }) => void;
   onAssistantCompleted?: (payload: { messageId?: string; content?: string; threadId?: string }) => void;
+  onToolCompleted?: (payload: ConversationToolStep & { threadId?: string }) => void;
   onActionCompleted?: (payload: {
     clientMessageId?: string;
     actionType?: string;

@@ -104,7 +104,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
 
     // Poll every 2 seconds while processing
     useEffect(() => {
-        let intervalId: NodeJS.Timeout | null = null;
+        let intervalId: ReturnType<typeof setInterval> | null = null;
 
         const poll = async () => {
             const status = await fetchJobStatus();

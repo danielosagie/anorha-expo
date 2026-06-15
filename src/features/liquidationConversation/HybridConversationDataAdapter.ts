@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from 'convex/browser';
 import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
 import { clearThreadState, loadThreadState, persistThreadState, updateStoredThreadState } from './LocalConversationStore';
 import type { ConversationDataAdapter } from './ConversationDataAdapter';
 import {
@@ -18,6 +19,7 @@ import {
 import type {
   CampaignConfig,
   CampaignConfigUpdate,
+  CampaignItem,
   CampaignOverview,
   CampaignSummary,
   CampaignThreadSummary,
@@ -26,16 +28,14 @@ import type {
   CreateThreadInput,
   DecisionPrompt,
   DecisionSubmission,
+  ItemStatus,
   NegotiationDecisionInput,
+  QuestionPrompt,
   RunFlashCampaignInput,
   StreamTurnInput,
   StreamTurnObserver,
 } from './types';
 
-const RAW_API_BASE_URL =
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app';
 const CONVEX_URL = process.env.EXPO_PUBLIC_CONVEX_URL || 'https://merry-buffalo-800.convex.cloud';
 
 type NestSession = {
@@ -46,6 +46,12 @@ type NestSession = {
   createdAt: string;
   updatedAt: string;
   primaryThreadId?: string;
+  /** First campaign item's image (backend list enrichment). */
+  thumbnailUrl?: string;
+  /** When the agent's next autonomous check is scheduled (ISO). */
+  nextWakeAt?: string;
+  /** Sold/total item counts (backend list enrichment) — drives the card progress bar. */
+  stats?: { soldCount?: number; totalCount?: number; negotiating?: number };
 };
 
 type NestThread = {
@@ -101,10 +107,7 @@ class RequestError extends Error {
   }
 }
 
-const getApiBaseUrl = () => {
-  const normalized = RAW_API_BASE_URL.replace(/\/+$/, '');
-  return /localhost|127\.0\.0\.1/i.test(normalized) ? 'https://api.sssync.app' : normalized;
-};
+const getApiBaseUrl = () => API_BASE_URL;
 
 const readString = (value: unknown) => (typeof value === 'string' ? value : undefined);
 
@@ -253,6 +256,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
           content: input.content,
           actionType: input.actionType,
           actionPayload: input.actionPayload,
+          imageUrls: input.imageUrls,
         }),
       } as any);
 
@@ -300,10 +304,19 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       };
 
       source.addEventListener('message', (event: StreamingEvent) => {
+        const raw = typeof event.data === 'string' ? event.data : '';
+        // A keep-alive ping, an SSE comment, a sentinel, or a split/garbled chunk
+        // is not a turn failure. Skip the single event instead of tearing down the
+        // whole stream (the prior code called fail() here, which is what made the
+        // chat "crash" mid-response).
+        if (!raw || raw === 'undefined' || raw === '[DONE]' || raw.startsWith(':')) return;
+        let parsed: any;
         try {
-          const raw = typeof event.data === 'string' ? event.data : '';
-          if (!raw || raw === 'undefined') return;
-          const parsed = JSON.parse(raw);
+          parsed = JSON.parse(raw);
+        } catch {
+          return; // un-parseable event, ignore and keep streaming
+        }
+        try {
           const type = readString(parsed.type) || readString(parsed.event);
           const payload = parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : parsed;
           const threadId = readString(payload.threadId);
@@ -350,6 +363,25 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
               });
               finish(threadId);
               break;
+            case 'assistant.reasoning':
+              // Optional thinking trace — rendered in the collapsible activity card.
+              // Absent for non-thinking models; harmless when never emitted.
+              observer.onReasoning?.({
+                reasoning: readString(payload.reasoning) || readString(payload.delta) || readString(payload.content) || '',
+                messageId: readString(payload.messageId) || readString(payload.assistantMessageId),
+                threadId,
+              });
+              break;
+            case 'tool.completed':
+              // A finished agent tool — arg-free by contract. Surfaces as a step item.
+              observer.onToolCompleted?.({
+                tool: readString(payload.tool) || 'tool',
+                label: readString(payload.label) || readString(payload.tool) || 'Step',
+                status: readString(payload.status) || 'success',
+                durationMs: typeof payload.durationMs === 'number' ? payload.durationMs : undefined,
+                threadId,
+              });
+              break;
             case 'action.completed':
               observer.onActionCompleted?.({
                 clientMessageId: readString(payload.clientMessageId) || input.clientMessageId,
@@ -367,8 +399,10 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
             default:
               break;
           }
-        } catch (error) {
-          fail(error instanceof Error ? error : new Error('Invalid streaming event'));
+        } catch {
+          // A handler threw (e.g. a transient state update). Drop this one event;
+          // do not fail the turn — the stream finishes on assistant.completed / error.
+          return;
         }
       });
 
@@ -448,6 +482,40 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     };
   }
 
+  async getCampaignItems(campaignId: string): Promise<CampaignItem[]> {
+    const res = await this.requestNest<{
+      success: boolean;
+      items: Array<{
+        id: string;
+        productId: string;
+        name: string;
+        channels: string;
+        currentPrice: number;
+        floorPrice?: number;
+        status: string;
+        imageUrl?: string;
+      }>;
+    }>(`/api/agent/sessions/${campaignId}/items`);
+    return (res.items || []).map(it => ({
+      id: it.id,
+      productId: it.productId,
+      name: it.name,
+      channels: it.channels || '',
+      currentPrice: it.currentPrice,
+      floorPrice: it.floorPrice,
+      status: (it.status as ItemStatus) || 'listed',
+      imageUrl: it.imageUrl,
+    }));
+  }
+
+  async addCampaignItems(campaignId: string, variantIds: string[]): Promise<{ added: number; skipped: number }> {
+    const res = await this.requestNest<{ success: boolean; added: number; skipped: number }>(
+      `/api/agent/sessions/${campaignId}/items`,
+      { method: 'POST', body: JSON.stringify({ variantIds }) },
+    );
+    return { added: res.added || 0, skipped: res.skipped || 0 };
+  }
+
   async createThread(campaignId: string, input: CreateThreadInput): Promise<CampaignThreadSummary> {
     const threadId = `thread-${Date.now()}`;
     const created = await this.requestNest<{ success: boolean; thread: NestThread }>(
@@ -497,6 +565,14 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     });
     await this.safeConvexMutation('campaigns:remove', { campaignId });
     await this.safeConvexMutation('threads:removeByCampaign', { campaignId });
+  }
+
+  // Pause/resume a campaign from the home screen (PATCH the session status).
+  async setCampaignStatus(campaignId: string, status: CampaignSummary['status']): Promise<void> {
+    await this.tryRequestNest(`/api/agent/sessions/${campaignId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
   }
 
   async renameThread(campaignId: string, threadId: string, title: string): Promise<CampaignThreadSummary> {
@@ -553,6 +629,35 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         clientMessageId: createClientId('decision'),
       }),
     });
+  }
+
+  // The newest unanswered ask_seller_question pending action for this thread,
+  // hydrated into a QuestionPrompt. Null when Sprout isn't waiting on a choice.
+  async getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null> {
+    const res = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+      `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
+    ).catch(() => null);
+    const actions = res?.pendingActions || [];
+    const open = actions
+      .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
+      .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+    const action = open[0];
+    const questions = action?.input?.questions;
+    if (!action || !Array.isArray(questions) || questions.length === 0) return null;
+    return { pendingActionId: action.id, threadId: action.threadId, questions };
+  }
+
+  // Record the seller's answer (does NOT resume the turn — the controller sends
+  // the chosen text as a normal message so Sprout replies with full streaming).
+  async answerQuestion(
+    campaignId: string,
+    pendingActionId: string,
+    answer: { answers?: Record<string, string[]>; other?: string; text?: string },
+  ): Promise<void> {
+    await this.requestNest(
+      `/api/agent/sessions/${campaignId}/pending-actions/${pendingActionId}/answer`,
+      { method: 'POST', body: JSON.stringify(answer) },
+    );
   }
 
   async getCampaignConfig(campaignId: string): Promise<CampaignConfig> {
@@ -673,6 +778,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         content: input.content,
         threadId: input.threadId,
         clientMessageId: input.clientMessageId,
+        imageUrls: input.imageUrls,
       }),
     });
 
@@ -801,6 +907,9 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       primaryThreadId: session.primaryThreadId || `primary-${session.id}`,
       stateSummary: session.state?.phase ? `Phase: ${session.state.phase}` : undefined,
       timeframeDays: timeframe,
+      imageUrl: session.thumbnailUrl,
+      nextWakeAt: session.nextWakeAt,
+      stats: session.stats,
     };
   }
 

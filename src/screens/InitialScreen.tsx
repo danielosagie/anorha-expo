@@ -1,11 +1,13 @@
 import React, { useEffect } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, Image } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Button from '../components/Button';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
-import { PlusJakartaSans_500Medium } from '@expo-google-fonts/plus-jakarta-sans/500Medium';
-import { PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans/700Bold';
-import { PlusJakartaSans_800ExtraBold } from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold';
+import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
+import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
+import { Inter_600SemiBold } from '@expo-google-fonts/inter/600SemiBold';
+import { Inter_700Bold } from '@expo-google-fonts/inter/700Bold';
 import { useFonts } from 'expo-font';
 
 
@@ -14,10 +16,12 @@ type Props = {
 };
 
 const InitialScreen = ({ navigation }: Props) => {
+  const insets = useSafeAreaInsets();
   const [fontsLoaded] = useFonts({
-    PlusJakartaSans_700Bold,
-    PlusJakartaSans_500Medium,
-    PlusJakartaSans_800ExtraBold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
   });
 
   useEffect(() => {
@@ -29,140 +33,150 @@ const InitialScreen = ({ navigation }: Props) => {
   }
 
   return (
-    <View style={styles.container}>
-      
-
-      <View style={styles.contentContainer}>  
+    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
+      <View style={styles.contentContainer}>
         <View style={styles.logoContainer}>
-            <View style={styles.logoBox}>
+          <View style={styles.logoBox}>
             <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} />
-            </View>
-            <Text style={styles.title}>anorha</Text>
+          </View>
+          <Text style={styles.title}>anorha</Text>
         </View>
-        
+
         <View style={styles.textContainer}>
-            <Text style={styles.heading}>
+          <Text style={styles.heading}>
             Sync Everywhere,{'\n'}
             List Faster,{'\n'}
             Work Together.
-            </Text>
-            
+          </Text>
         </View>
       </View>
 
-        
-        <View style={styles.ActionContainer}>
-            <Text style={styles.subheading}>
-                Make your inventory work <Text style={styles.underline}>for</Text> you.
+      <View style={styles.ActionContainer}>
+        <View style={styles.pillRow}>
+          <View style={styles.pill}>
+            <Text style={styles.pillText}>
+              Make your inventory work <Text style={styles.underline}>for</Text> you
             </Text>
-            
-            <View style={styles.buttonContainer}>
-                <Button 
-                title="Continue" 
-                onPress={() => navigation.navigate('OnboardingSlides')} 
-                style={styles.continueButton} 
-                />
-
-                <Text style={styles.terms}>
-                    By continuing, you agree to our Terms & Privacy Policy
-                </Text>
-            </View>
-
+          </View>
         </View>
+
+        <View style={styles.buttonContainer}>
+          <Button
+            title="Continue"
+            onPress={() => navigation.navigate('OnboardingSlides')}
+            style={styles.continueButton}
+            textStyle={styles.continueButtonText}
+          />
+
+          <Text style={styles.terms}>
+            By continuing, you agree to our Terms & Privacy Policy
+          </Text>
+        </View>
+      </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-    ActionContainer: {
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        gap: 24,
-        paddingBottom: 24,
-    },
-    buttonContainer: {
-        gap: 24,
-    },
+  ActionContainer: {
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    gap: 20,
+  },
+  buttonContainer: {
+    gap: 16,
+  },
   container: {
     backgroundColor: BRAND_PRIMARY,
     flex: 1,
     justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 24,
+    paddingHorizontal: 24,
   },
   contentContainer: {
     justifyContent: 'center',
     flex: 1,
     gap: 24,
     alignItems: 'center',
-    padding: 24,
   },
   logoContainer: {
-    marginTop: 80,
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     zIndex: 1,
-    gap: 20,
-    marginBottom: 40,
+    gap: 16,
+    marginBottom: 32,
   },
   logoBox: {
-    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    padding: 16,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
   logoImage: {
-    width: 100,
-    height: 100,
+    width: 80,
+    height: 80,
     resizeMode: 'stretch',
-  },
-  logoText: {
-    fontSize: 60,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: 'white',
   },
   textContainer: {
     alignItems: 'center',
   },
   heading: {
     fontSize: 32,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: 'white',
+    fontFamily: 'Inter_700Bold',
+    color: '#18181B',
     textAlign: 'center',
-    marginBottom: 24,
-  }, 
+    lineHeight: 40,
+  },
   title: {
-    fontSize: 70,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: 'white',
+    fontSize: 34,
+    fontFamily: 'Inter_700Bold',
+    color: '#18181B',
     textAlign: 'center',
   },
-  subheading: {
-    fontSize: 24,
-    fontFamily: 'PlusJakartaSans_800ExtraBold',
-    color: 'white',
+  pillRow: {
+    alignItems: 'center',
+  },
+  pill: {
+    backgroundColor: '#18181B',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  pillText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
     textAlign: 'center',
   },
   underline: {
     textDecorationLine: 'underline',
   },
-  footer: {
-    width: '100%',
-    marginBottom: 20,
-  },
   continueButton: {
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: 8,
-    height: 56,
+    backgroundColor: '#93C822',
+    borderRadius: 16,
+    paddingVertical: 15,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+  },
+  continueButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontFamily: 'Inter_700Bold',
   },
   terms: {
-    color: 'white',
+    color: '#71717A',
     textAlign: 'center',
     fontSize: 12,
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_400Regular',
+    lineHeight: 18,
   },
 });
 
-export default InitialScreen; 
+export default InitialScreen;

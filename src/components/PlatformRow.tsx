@@ -25,27 +25,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PlatformProductMapping, PlatformConnection } from '../utils/SupaLegend';
 
 // Import platform logo helper (extract from ProductDetail.tsx)
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
-
-const platformSvgMap: Record<string, React.FC<any>> = {
-  shopify: ShopifySvg,
-  square: SquareSvg,
-  clover: CloverSvg,
-  amazon: AmazonSvg,
-  ebay: EbaySvg,
-  facebook: FacebookSvg,
-};
-
-function getPlatformLogoComponent(platformType?: string) {
-  const type = (platformType || '').toLowerCase();
-  const found = Object.entries(platformSvgMap).find(([key]) => type.includes(key));
-  return found ? found[1] : null;
-}
+import PlatformLogo from './PlatformLogo';
 
 interface PlatformRowProps {
   mapping: PlatformProductMapping;
@@ -64,7 +44,6 @@ export function PlatformRow({ mapping, connection, theme, onDelist }: PlatformRo
   // ✅ Data transformation happens ONCE when component receives props
   const platformName = connection?.DisplayName || `${connection?.PlatformType || 'Unknown'} Account`;
   const platformType = connection?.PlatformType || 'unknown';
-  const Logo = getPlatformLogoComponent(platformType);
 
   const handleDelistPress = () => {
     Alert.alert(
@@ -85,11 +64,7 @@ export function PlatformRow({ mapping, connection, theme, onDelist }: PlatformRo
     <View style={styles.platformRow}>
       <View style={styles.platformInfo}>
         <View style={styles.platformLogoContainer}>
-          {Logo ? (
-            <Logo width={18} height={18} />
-          ) : (
-            <Icon name="store" size={18} color={'#666'} />
-          )}
+          <PlatformLogo type={platformType} size={18} fallbackIcon="store" />
         </View>
         <View style={styles.platformDetails}>
           <Text style={[styles.platformName, { color: theme.colors.text }]}>

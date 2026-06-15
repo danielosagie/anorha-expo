@@ -1,4 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { API_BASE_URL } from '../config/env';
 import {
   ActivityIndicator,
   Alert,
@@ -70,7 +71,7 @@ type JobSnapshot = {
   error?: string;
 };
 
-const BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const BASE_URL = API_BASE_URL;
 
 const STAGES_BY_PROCESS: Record<'match' | 'generate' | 'match-and-generate', string[]> = {
   match: [
@@ -266,21 +267,6 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     snapshotRef.current = latestJobSnapshot;
   }, [latestJobSnapshot]);
 
-  useEffect(() => {
-    if (!jobId) return;
-    const nextProps = buildLiveActivityProps(latestJobSnapshot);
-    const statusValue = String(latestJobSnapshot?.status || jobStatus || '').toLowerCase();
-    const jobType = processType === 'generate' ? 'generate' : 'match';
-
-    if (nextProps) {
-      updateBulkJobActivity(jobId, jobType, nextProps);
-    }
-
-    if (statusValue === 'completed' || statusValue === 'failed' || statusValue === 'cancelled') {
-      endBulkJobActivity(jobId);
-    }
-  }, [buildLiveActivityProps, endBulkJobActivity, jobId, jobStatus, latestJobSnapshot, processType, updateBulkJobActivity]);
-
   const clearPolling = useCallback(() => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
@@ -354,6 +340,22 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
       progress,
     };
   }, [formatLiveActivityStage, processType]);
+
+  // Moved below buildLiveActivityProps to avoid a temporal-dead-zone crash on web.
+  useEffect(() => {
+    if (!jobId) return;
+    const nextProps = buildLiveActivityProps(latestJobSnapshot);
+    const statusValue = String(latestJobSnapshot?.status || jobStatus || '').toLowerCase();
+    const jobType = processType === 'generate' ? 'generate' : 'match';
+
+    if (nextProps) {
+      updateBulkJobActivity(jobId, jobType, nextProps);
+    }
+
+    if (statusValue === 'completed' || statusValue === 'failed' || statusValue === 'cancelled') {
+      endBulkJobActivity(jobId);
+    }
+  }, [buildLiveActivityProps, endBulkJobActivity, jobId, jobStatus, latestJobSnapshot, processType, updateBulkJobActivity]);
 
   const buildGenerateItems = useCallback((results: MatchResult[]) => {
     const sourceBulk = Array.isArray(payloadRef.current?.bulkItems) ? payloadRef.current?.bulkItems : [];

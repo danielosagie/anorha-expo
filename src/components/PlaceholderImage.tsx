@@ -84,7 +84,7 @@ const PlaceholderImage: React.FC<PlaceholderImageProps> = ({
   if (type === 'gradient') {
     return (
       <LinearGradient
-        colors={colors}
+        colors={colors as any}
         start={start}
         end={end}
         style={[

@@ -124,7 +124,13 @@ export async function initializeLegendState(
         },
         supabase: supabaseClient,
         retry: {
-            infinite: true,
+            // Bounded retry: a rejected write (e.g. HTTP 400) must NOT retry forever.
+            // `infinite: true` previously turned a single failed upsert into a sustained
+            // request storm. Cap attempts with exponential backoff instead.
+            times: 3,
+            delay: 1000,
+            backoff: 'exponential',
+            maxDelay: 30000,
         },
     };
     const customSynced = configureSynced(syncedSupabase, syncBaseOptions);
@@ -202,8 +208,11 @@ export async function initializeLegendState(
             // Only fetch essential columns for inventory tracking
             // IMPORTANT: PoolId and OrgId are needed for partner-shared inventory
             select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt'),
-            actions: ['read', 'create', 'update', 'delete'],
-            realtime: true, // Live updates essential for inventory
+            // READ-ONLY sync: the client never writes InventoryLevels (inventory is mutated
+            // server-side and flows back via realtime). Allowing write actions let realtime
+            // echoes upsert rows back to Supabase, failing RLS with HTTP 400 → retry storm.
+            actions: ['read'],
+            realtime: true, // Live updates essential for inventory (read-only mirror)
             persist: {
                 name: `inventoryLevels_user_${currentUserId}_v6`, // Bumped to include PoolId
                 retrySync: true,

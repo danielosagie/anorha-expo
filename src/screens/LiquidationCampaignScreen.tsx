@@ -5,6 +5,7 @@ import {
   Alert,
   Animated,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -18,14 +19,18 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import {
+  ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Trash2, Check,
+  Search, X, Plus, PlusCircle, ChevronRight, AlertCircle, CheckCircle2,
+} from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignItem, ItemStatus } from '../features/liquidationConversation/types';
-import InventoryListCard from '../components/InventoryListCard';
-import SearchBarWithScanner from '../components/SearchBarWithScanner';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -76,6 +81,11 @@ const LiquidationCampaignScreen = () => {
   const [configCampaignTarget, setConfigCampaignTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameTarget, setRenameTarget] = useState<null | { kind: 'thread' | 'campaign'; id: string; title: string }>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  const [headerH, setHeaderH] = useState(104);
+  const [platformFilter, setPlatformFilter] = useState('All');
+  const [showAddChooser, setShowAddChooser] = useState(false);
 
   // Items table
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -96,18 +106,25 @@ const LiquidationCampaignScreen = () => {
   const [items, setItems] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
 
-  useEffect(() => {
+  const loadItems = useCallback(async () => {
     if (!initialCampaignId) return;
     setLoadingItems(true);
-    // Ideally we'd have a `adapter.getCampaignItems(initialCampaignId)` here.
-    // We will simulate real data rendering from the adapter when it's available.
-    // Since we don't have the exact API exposed in the current type file, we create a
-    // fallback empty state that handles real data structure once wired by the user.
-    setTimeout(() => {
-       setItems([]); // Replace with actual API call to adapter
-       setLoadingItems(false);
-    }, 500);
-  }, [initialCampaignId]);
+    try {
+      const fetched = await adapter.getCampaignItems(initialCampaignId);
+      setItems(fetched);
+    } catch {
+      setItems([]);
+    } finally {
+      setLoadingItems(false);
+    }
+  }, [adapter, initialCampaignId]);
+
+  // Reload items whenever the screen regains focus (e.g. after picking items).
+  useFocusEffect(
+    useCallback(() => {
+      loadItems();
+    }, [loadItems]),
+  );
 
   const itemCount = items.length;
   const hasPendingAsks = (controller.campaignOverview?.needsInput?.length || 0) > 0;
@@ -125,6 +142,40 @@ const LiquidationCampaignScreen = () => {
   const sendAction = (actionType: string, title: string, payload?: Record<string, unknown>) => {
     controller.dispatchAction({ actionType, title, payload }).catch(() => controller.setNotice(null));
   };
+
+  const openAddChooser = () => setShowAddChooser(true);
+
+  const addFromInventory = () => {
+    setShowAddChooser(false);
+    const cam = controller.activeCampaign;
+    const cid = initialCampaignId || cam?.id;
+    if (!cid) return;
+    navigation.navigate('CampaignInventorySelect', { campaignId: cid, title: cam?.title || 'Clearout' });
+  };
+
+  const addNewProduct = () => {
+    setShowAddChooser(false);
+    navigation.navigate('AddProduct');
+  };
+
+  // Per-platform filter chips, derived from the items' channels
+  const platforms = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of items) {
+      String(it.channels || '').split(/[·,]/).map(s => s.trim()).filter(Boolean).forEach(p => set.add(p));
+    }
+    return Array.from(set);
+  }, [items]);
+
+  const visibleItems = useMemo(() => {
+    let list = items;
+    if (platformFilter !== 'All') {
+      list = list.filter(it => String(it.channels || '').toLowerCase().includes(platformFilter.toLowerCase()));
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) list = list.filter(it => String(it.name || '').toLowerCase().includes(q));
+    return list;
+  }, [items, platformFilter, searchQuery]);
 
   const openCampaignConfig = async (campaignId: string, title: string) => {
     setConfigCampaignTarget({ id: campaignId, title });
@@ -210,19 +261,11 @@ const LiquidationCampaignScreen = () => {
 
   const handleItemRowPress = (item: CampaignItem) => {
     if (selectedItems.size > 0) toggleItem(item.id);
-    else openItemDetail(item);
+    // CampaignItem.productId holds the ProductVariantId, which is what ProductDetail loads by.
+    else navigation.navigate('ProductDetail', { productId: item.productId });
   };
 
-  const handleEllipsis = () => {
-    const cam = controller.activeCampaign;
-    if (!cam) return;
-    Alert.alert(cam.title, undefined, [
-      { text: 'Rename', onPress: () => openRename('campaign', cam.id, cam.title) },
-      { text: 'Settings', onPress: () => void openCampaignConfig(cam.id, cam.title) },
-      { text: 'Delete', style: 'destructive', onPress: () => deleteCampaign(cam.id, cam.title) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  };
+  const handleEllipsis = () => setMenuOpen(open => !open);
 
   /* ── render ───────────────────────────────────────────────────────── */
 
@@ -234,118 +277,114 @@ const LiquidationCampaignScreen = () => {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
       >
-        {/* ── Top bar ──────────────────────────────────────────────── */}
-        <View style={s.topBar}>
-          <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
-            <Icon name="arrow-left" size={20} color="#111827" />
-          </TouchableOpacity>
-          <View style={s.topInfo}>
-            <View style={s.topTitleRow}>
-              <View style={s.plantDot} />
-              <Text style={s.topTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
-            </View>
-            <Text style={s.topMeta} numberOfLines={1}>
-              {controller.campaignConfig?.aggressiveness || 'balanced'} · {soldCount}/{totalCount} sold
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity 
-              style={s.threadBtn} 
-              onPress={() => navigation.navigate('CampaignThreadScreen', { campaignId: controller.activeCampaign?.id, title: controller.activeCampaign?.title })}
-            >
-              <Text style={s.threadBtnText}>≡ chat</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={{ padding: 4 }} onPress={handleEllipsis}>
-              <Icon name="dots-vertical" size={24} color="#9CA3AF" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* ── Progress strip ──────────────────────────────────────── */}
-        <View style={s.progStrip}>
-          <View style={[s.progFill, { width: `${progressPct}%` }]} />
-        </View>
-
-        {/* ── Ambient tray ────────────────────────────────────────── */}
-        {hasPendingAsks && latestAsk ? (
-          <View style={s.ambientTray}>
-            <View style={s.trayDot} />
-            <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} — needs you</Text>
-            <TouchableOpacity onPress={() => {
-              if (latestAsk.threadId) controller.openThread(latestAsk.threadId);
-            }}>
-              <Text style={s.trayAction}>Review ↓</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {/* ── Main content ────────────────────────────────────────── */}
+        {/* ── Main content (scrolls under the floating glass header) ── */}
         {controller.loading ? (
-          <View style={s.loadingWrap}>
+          <View style={[s.loadingWrap, { paddingTop: headerH }]}>
             <ActivityIndicator size="large" color={BRAND_PRIMARY} />
             <Text style={s.loadingText}>Loading...</Text>
           </View>
         ) : (
           <View style={s.container}>
-            {/* Search Bar */}
-            <View style={{ paddingHorizontal: 14, paddingTop: 10 }}>
-              <SearchBarWithScanner
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                onScan={() => {}}
-                onScannerOpen={() => {}}
-                placeholder="Search items..."
-              />
+            {/* Search + add row */}
+            <View style={[s.searchRow, { paddingTop: headerH + 4 }]}>
+              <View style={s.searchBox}>
+                <Search size={18} color="#9CA3AF" />
+                <TextInput
+                  style={s.searchInput}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search items"
+                  placeholderTextColor="#9CA3AF"
+                  returnKeyType="search"
+                />
+                {searchQuery ? (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <X size={16} color="#9CA3AF" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <TouchableOpacity style={s.addBtn} onPress={openAddChooser} activeOpacity={0.85}>
+                <Plus size={24} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
 
-            {/* Controls row */}
-            <View style={s.controlsRow}>
-              <TouchableOpacity style={s.ctrlBtn} onPress={toggleSelectAll}>
-                <Text style={s.ctrlBtnText}>☐ Select</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.ctrlBtn} onPress={() => Alert.alert('Filter', 'Status, channel, price range, floor hit')}>
-                <Text style={s.ctrlBtnText}>Filter</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.ctrlBtn} onPress={() => Alert.alert('Sort', 'Price, status, date added, views')}>
-                <Text style={s.ctrlBtnText}>Sort</Text>
-              </TouchableOpacity>
-              <View style={{ flex: 1 }} />
-              {selectedItems.size > 0 ? (
-                <Text style={s.selCount}>{selectedItems.size} selected</Text>
-              ) : null}
-            </View>
+            {/* Per-platform filter chips */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={s.filterScroll}
+              contentContainerStyle={s.filterRow}
+            >
+              {['All', ...platforms].map(p => {
+                const active = platformFilter === p;
+                const count = p === 'All'
+                  ? items.length
+                  : items.filter(it => String(it.channels || '').toLowerCase().includes(p.toLowerCase())).length;
+                return (
+                  <TouchableOpacity
+                    key={p}
+                    style={[s.filterChip, active && s.filterChipActive]}
+                    onPress={() => setPlatformFilter(p)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[s.filterChipText, active && s.filterChipTextActive]}>{p}</Text>
+                    <Text style={[s.filterCount, active && s.filterCountActive]}>{count}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
             <FlatList
-              data={items}
+              data={visibleItems}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingHorizontal: 10, paddingBottom: 100 }}
+              contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 4, paddingBottom: 100 }}
+              keyboardShouldPersistTaps="handled"
               ListEmptyComponent={
                 <View style={s.emptyState}>
-                  <Text style={s.emptyStateText}>No items found in this campaign.</Text>
+                  <Text style={s.emptyStateText}>
+                    {searchQuery || platformFilter !== 'All' ? 'No items match.' : 'No items in this clearout yet.'}
+                  </Text>
+                  <TouchableOpacity style={s.emptyAddBtn} onPress={openAddChooser}>
+                    <Plus size={16} color="#FFFFFF" />
+                    <Text style={s.emptyAddBtnText}>Add items</Text>
+                  </TouchableOpacity>
                 </View>
               }
+              ItemSeparatorComponent={() => <View style={s.itemSep} />}
               renderItem={({ item }) => {
                 const sel = selectedItems.has(item.id);
                 return (
-                  <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
-                     {selectedItems.size > 0 && (
-                        <TouchableOpacity style={[s.cb, sel && s.cbChecked, { marginRight: 8 }]} onPress={() => toggleItem(item.id)}>
-                          {sel ? <Icon name="check" size={10} color="#FFF" /> : null}
-                        </TouchableOpacity>
-                     )}
-                     <View style={{ flex: 1 }}>
-                        <InventoryListCard
-                          id={item.id}
-                          title={item.name || item.title || 'Unknown Item'}
-                          price={item.currentPrice || item.price}
-                          imageUrl={item.imageUrl}
-                          platformNames={item.channels ? item.channels.split(' · ') : []}
-                          isSelected={sel}
-                          onPress={() => handleItemRowPress(item)}
-                          onLongPress={() => toggleItem(item.id)}
-                        />
-                     </View>
-                  </View>
+                  <TouchableOpacity
+                    style={[s.itemRow, sel && s.itemRowSel]}
+                    onPress={() => handleItemRowPress(item)}
+                    onLongPress={() => toggleItem(item.id)}
+                    delayLongPress={250}
+                    activeOpacity={0.7}
+                  >
+                    {selectedItems.size > 0 ? (
+                      <View style={[s.cb, sel && s.cbChecked, { marginRight: 12 }]}>
+                        {sel ? <Check size={12} color="#FFF" /> : null}
+                      </View>
+                    ) : null}
+                    <View style={s.itemThumb}>
+                      {item.imageUrl ? (
+                        <Image source={{ uri: item.imageUrl }} style={s.itemThumbImg} resizeMode="cover" />
+                      ) : item.emoji ? (
+                        <Text style={{ fontSize: 24 }}>{item.emoji}</Text>
+                      ) : (
+                        <Box size={22} color="#A1A1AA" />
+                      )}
+                    </View>
+                    <View style={s.itemInfo}>
+                      <Text style={s.itemTitle} numberOfLines={1}>{item.name || 'Unknown item'}</Text>
+                      <Text style={s.itemSub} numberOfLines={1}>
+                        ${Number(item.currentPrice ?? 0).toFixed(2)}
+                        {item.channels ? `  ·  ${item.channels}` : ''}
+                      </Text>
+                    </View>
+                    <ChevronRight size={18} color="#D4D4D8" />
+                  </TouchableOpacity>
                 );
               }}
             />
@@ -377,26 +416,135 @@ const LiquidationCampaignScreen = () => {
         <View style={s.footerStack}>
           {controller.error ? (
             <View style={s.errorBanner}>
-              <Icon name="alert-circle-outline" size={14} color="#EF4444" />
+              <AlertCircle size={14} color="#EF4444" />
               <Text style={s.errorText}>{controller.error}</Text>
               <TouchableOpacity onPress={controller.onRefresh}><Text style={s.errorRetry}>Retry</Text></TouchableOpacity>
             </View>
           ) : null}
           {controller.notice ? (
             <View style={s.noticeBanner}>
-              <Icon name="check-circle-outline" size={14} color="#5D7E16" />
+              <CheckCircle2 size={14} color="#5D7E16" />
               <Text style={s.noticeText}>{controller.notice}</Text>
               <TouchableOpacity onPress={() => controller.setNotice(null)}>
-                <Icon name="close" size={14} color="#5D7E16" />
+                <X size={14} color="#5D7E16" />
               </TouchableOpacity>
             </View>
           ) : null}
         </View>
+
+        {/* ── Floating glass header (matches the chat) ──────────────── */}
+        <View
+          style={[s.header, { paddingTop: 6 }]}
+          onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+        >
+          <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+            <BlurView intensity={Platform.OS === 'ios' ? 24 : 14} tint="light" style={StyleSheet.absoluteFill} />
+            <LinearGradient
+              colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </View>
+          <View style={s.headerRow}>
+            <TouchableOpacity style={s.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+              <ChevronLeft size={22} color="#18181B" />
+            </TouchableOpacity>
+
+            <View style={s.titlePill}>
+              <Text style={s.pillTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
+              <Text style={s.pillSub} numberOfLines={1}>
+                {soldCount}/{totalCount} sold · {controller.campaignConfig?.aggressiveness || 'balanced'}
+              </Text>
+            </View>
+
+            <TouchableOpacity style={s.chatPill} onPress={handleEllipsis} activeOpacity={0.85}>
+              <Menu size={16} color="#18181B" />
+              <Text style={s.chatPillText}>Chat</Text>
+            </TouchableOpacity>
+          </View>
+
+          {hasPendingAsks && latestAsk ? (
+            <TouchableOpacity
+              style={s.ambientTray}
+              activeOpacity={0.85}
+              onPress={() => { if (latestAsk.threadId) controller.openThread(latestAsk.threadId); }}
+            >
+              <View style={s.trayDot} />
+              <Text style={s.trayText} numberOfLines={1}>{latestAsk.title} needs you</Text>
+              <Text style={s.trayAction}>Review</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </KeyboardAvoidingView>
+
+      {/* ── Clean dropdown menu (Items / Settings / Rename / Delete) ── */}
+      {menuOpen ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
+          <View style={[s.dropdown, { top: insets.top + 64 }]}>
+            <View style={s.dropItem}>
+              <Box size={18} color="#43631A" />
+              <Text style={[s.dropText, { color: '#43631A' }]}>Items</Text>
+              <View style={{ flex: 1 }} />
+              <Check size={17} color="#43631A" />
+            </View>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); navigation.navigate('CampaignThreadScreen', { campaignId: cam?.id, title: cam?.title }); }}>
+              <MessageSquare size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Chat</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); navigation.navigate('CampaignSettings', { campaignId: cam?.id, title: cam?.title }); }}>
+              <SettingsIcon size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Settings</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) openRename('campaign', cam.id, cam.title); }}>
+              <Pencil size={18} color="#3F3F46" />
+              <Text style={s.dropText}>Rename</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) deleteCampaign(cam.id, cam.title); }}>
+              <Trash2 size={18} color="#DC2626" />
+              <Text style={[s.dropText, { color: '#DC2626' }]}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
 
       {/* ═══════════════ MODALS ═══════════════════════════════════════ */}
 
-
+      {/* Add-items chooser */}
+      <Modal visible={showAddChooser} transparent animationType="fade" onRequestClose={() => setShowAddChooser(false)}>
+        <View style={s.chooserRoot}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowAddChooser(false)} />
+          <View style={[s.chooserSheet, { paddingBottom: insets.bottom + 14 }]}>
+            <View style={s.chooserHandle} />
+            <Text style={s.chooserTitle}>Add items to this clearout</Text>
+            <TouchableOpacity style={s.chooserOption} onPress={addFromInventory} activeOpacity={0.8}>
+              <View style={s.chooserIcon}><Box size={22} color="#43631A" /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.chooserOptTitle}>Select from inventory</Text>
+                <Text style={s.chooserOptSub}>Pick from products you already have</Text>
+              </View>
+              <ChevronRight size={18} color="#A1A1AA" />
+            </TouchableOpacity>
+            <View style={s.chooserDivider} />
+            <TouchableOpacity style={s.chooserOption} onPress={addNewProduct} activeOpacity={0.8}>
+              <View style={s.chooserIcon}><PlusCircle size={22} color="#43631A" /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.chooserOptTitle}>Add a new product</Text>
+                <Text style={s.chooserOptSub}>Scan or create one, then add it here</Text>
+              </View>
+              <ChevronRight size={18} color="#A1A1AA" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Config sheet */}
       <Modal visible={isConfigSheetOpen} transparent animationType="fade"
@@ -542,42 +690,104 @@ const ConfigInput = ({ label, value, onChangeText }: { label: string; value: str
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
 
-  // Top bar
-  topBar: { minHeight: 60, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 0.5, borderBottomColor: '#E5E5E5' },
-  backBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: '#E5E5E5' },
-  topInfo: { flex: 1 },
-  topTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  plantDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#639922' },
-  topTitle: { fontSize: 15, fontWeight: '500', color: '#111827', fontFamily: 'PlusJakartaSans_500Medium' },
-  topMeta: { fontSize: 11, color: '#71717A', marginTop: 1, fontFamily: 'PlusJakartaSans_500Medium' },
-  threadBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
-  threadBtnText: { fontSize: 16, color: '#374151', fontFamily: 'PlusJakartaSans_500Medium' },
+  // Floating glass header (matches the chat)
+  header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  navCircle: {
+    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  titlePill: {
+    flexShrink: 1, alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 8,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 12, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  titlePillRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pillTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  pillSub: { fontSize: 12, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
+  chatPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  chatPillText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 
-  // Progress strip
-  progStrip: { height: 2, backgroundColor: '#F3F4F6' },
-  progFill: { height: '100%', backgroundColor: '#97C459' },
-
-  // Ambient tray
-  ambientTray: { backgroundColor: '#fafdf5', borderBottomWidth: 0.5, borderBottomColor: '#c0dd97', paddingHorizontal: 16, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Ambient "needs you" tray (floats under the pills)
+  ambientTray: {
+    marginTop: 8, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(250,253,245,0.97)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { flex: 1, fontSize: 11, color: '#3B6D11', fontFamily: 'PlusJakartaSans_500Medium' },
-  trayAction: { fontSize: 11, color: '#BA7517', fontWeight: '500' },
+  trayText: { fontSize: 12, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
+  trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Loading
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
-  loadingText: { color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13 },
+  loadingText: { color: '#71717A', fontFamily: 'Inter_500Medium', fontSize: 13 },
 
   // Controls row
   controlsRow: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 8 },
   ctrlBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5', backgroundColor: '#F9FAFB' },
-  ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium' },
+  ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
   selCount: { fontSize: 11, color: '#3B6D11', fontWeight: '500' },
 
+  // Search + add row
+  searchRow: { paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F4F4F1', borderRadius: 24, paddingHorizontal: 16, height: 48 },
+  searchInput: { flex: 1, fontSize: 15, color: '#18181B', fontFamily: 'Inter_500Medium', paddingVertical: 0 },
+  addBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#18181B', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+
+  // Per-platform filter chips
+  filterScroll: { flexGrow: 0, flexShrink: 0 },
+  filterRow: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 4, gap: 8, flexDirection: 'row', alignItems: 'center' },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: '#F1F2EE' },
+  filterChipActive: { backgroundColor: '#18181B' },
+  filterChipText: { fontSize: 13, color: '#52525B', fontFamily: 'Inter_600SemiBold' },
+  filterChipTextActive: { color: '#FFFFFF' },
+  filterCount: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_600SemiBold' },
+  filterCountActive: { color: 'rgba(255,255,255,0.7)' },
+
+  // Add-items chooser
+  chooserRoot: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  chooserSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 18, paddingTop: 10 },
+  chooserHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#E4E4E7', marginBottom: 14 },
+  chooserTitle: { fontSize: 18, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 8, paddingHorizontal: 4 },
+  chooserOption: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 4 },
+  chooserDivider: { height: 1, backgroundColor: '#F1F1EE', marginLeft: 62 },
+  chooserIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center' },
+  chooserOptTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 2 },
+  chooserOptSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular' },
+
   // Items list
-  emptyState: { padding: 40, alignItems: 'center' },
-  emptyStateText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium' },
+  emptyState: { padding: 40, alignItems: 'center', gap: 16 },
+  emptyStateText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'Inter_500Medium' },
+  emptyAddBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12 },
+  emptyAddBtnText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
+  addItemsBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#eaf3de', borderWidth: 0.5, borderColor: '#97C459', paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10 },
+  addItemsBtnText: { fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' },
   cb: { width: 18, height: 18, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
   cbChecked: { backgroundColor: '#639922', borderColor: '#639922' },
+
+  // Clean Shop-style item rows
+  itemSep: { height: 1, backgroundColor: '#F1F1EE', marginLeft: 76 },
+  itemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 6 },
+  itemRowSel: { backgroundColor: 'rgba(132,204,22,0.08)', borderRadius: 14 },
+  itemThumb: { width: 56, height: 56, borderRadius: 14, backgroundColor: '#F4F4F1', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)', overflow: 'hidden' },
+  itemThumbImg: { width: '100%', height: '100%' },
+  itemInfo: { flex: 1, marginLeft: 14, marginRight: 8 },
+  itemTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 3 },
+  itemSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular' },
+  itemChip: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
+  itemChipText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+
+  // Clean dropdown menu (centered under the title pill)
+  dropdown: {
+    position: 'absolute', left: '50%', marginLeft: -110, width: 220,
+    backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
+  },
+  dropItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
+  dropText: { color: '#27272A', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
+  dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
 
   // Bulk action bar
   bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
@@ -591,17 +801,17 @@ const s = StyleSheet.create({
   footerStack: { backgroundColor: '#FFFFFF', paddingTop: 4 },
   footerStackLifted: { paddingBottom: 68 },
   errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
-  errorRetry: { color: '#DC2626', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12 },
+  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
+  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },
   noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12 },
+  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
 
   // Sheet common
   sheetBackdrop: { flex: 1, justifyContent: 'flex-end' },
   sheetBackdropTap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.24)' },
   sheetPanel: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 28, maxHeight: '78%' },
-  sheetTitle: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 22 },
-  sheetHint: { marginTop: 8, marginBottom: 12, color: '#71717A', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13 },
+  sheetTitle: { color: '#111827', fontFamily: 'Inter_700Bold', fontSize: 22 },
+  sheetHint: { marginTop: 8, marginBottom: 12, color: '#71717A', fontFamily: 'Inter_500Medium', fontSize: 13 },
 
 
 
@@ -609,13 +819,13 @@ const s = StyleSheet.create({
   primaryBtn: { height: 48, borderRadius: 14, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   primaryBtnText: { color: '#1F2937', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
   secondaryBtn: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  secondaryBtnText: { color: '#111827', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
+  secondaryBtnText: { color: '#111827', fontFamily: 'Inter_700Bold', fontSize: 14 },
   rowActions: { flexDirection: 'row', gap: 12 },
 
   // Config
   configField: { marginBottom: 12 },
-  configLabel: { marginBottom: 6, color: '#374151', fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12 },
-  configInput: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFF', paddingHorizontal: 12, color: '#111827', fontFamily: 'PlusJakartaSans_500Medium', fontSize: 14 },
+  configLabel: { marginBottom: 6, color: '#374151', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  configInput: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFF', paddingHorizontal: 12, color: '#111827', fontFamily: 'Inter_500Medium', fontSize: 14 },
 
   // Rename
   renameBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 20, backgroundColor: 'rgba(0,0,0,0.24)' },
