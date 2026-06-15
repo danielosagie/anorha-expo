@@ -1,10 +1,15 @@
-import { supabase } from '../../lib/supabase';
-import { ENV } from '../config/env';
+// NOTE: this module must stay free of top-level app imports. ~Everything imports
+// the console facade below (incl. config/env and lib/supabase), so a static
+// `import { supabase }` / `import { ENV }` would form a module-init CYCLE that
+// crashes at startup (createLogger undefined / ENV undefined). supabase is loaded
+// lazily inside writeLog; isDev is computed inline.
 
 type LogLevel = 'info' | 'error' | 'warning' | 'success';
 
 async function writeLog(level: LogLevel, eventType: string, message: string, details?: any, entity?: { type?: string; id?: string }, platformConnectionId?: string) {
   try {
+    // Lazy (runtime) import to avoid the module-init cycle described above.
+    const { supabase } = await import('../../lib/supabase');
     const { data: { user } } = await supabase.auth.getUser();
     await supabase.from('ActivityLogs').insert({
       UserId: user?.id ?? null,
@@ -39,7 +44,9 @@ export async function logInfo(eventType: string, message: string, details?: any,
 type ConsoleLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVEL_ORDER: Record<ConsoleLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
-const MIN_CONSOLE_LEVEL = ENV.isDev ? LEVEL_ORDER.debug : LEVEL_ORDER.warn;
+// isDev inline (NOT imported from config/env) to keep this module dependency-free.
+const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const MIN_CONSOLE_LEVEL = isDev ? LEVEL_ORDER.debug : LEVEL_ORDER.warn;
 
 function emitConsole(level: ConsoleLevel, scope: string | undefined, args: unknown[]): void {
   if (LEVEL_ORDER[level] < MIN_CONSOLE_LEVEL) return;

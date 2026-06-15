@@ -230,7 +230,7 @@ export function getSupabaseUserId(): string | null {
       : (globalThis as any).Buffer?.from(base64, 'base64').toString('binary');
     if (!json) return null;
     const payload = JSON.parse(json);
-    return typeof payload.sub === 'string' && payload.sub.length > 0 ? payload.sub : null;
+    return typeof payload.sub === 'string' && payload.sub.trim().length > 0 ? payload.sub.trim() : null;
   } catch {
     return null;
   }

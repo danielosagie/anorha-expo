@@ -55,17 +55,18 @@ export async function withRetry<T>(
       onRetry?.(err, attempt, delay);
 
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, delay);
-        if (signal) {
-          signal.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(timer);
-              reject(signal.reason ?? new Error('Aborted'));
-            },
-            { once: true },
-          );
-        }
+        let timer: ReturnType<typeof setTimeout>;
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(signal?.reason ?? new Error('Aborted'));
+        };
+        timer = setTimeout(() => {
+          // Drop the abort listener when the wait completes normally, so a long-lived
+          // signal reused across many retries doesn't accumulate listeners.
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, delay);
+        signal?.addEventListener('abort', onAbort, { once: true });
       });
     }
   }
