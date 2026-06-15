@@ -3743,7 +3743,7 @@ const ProductDetailScreen = observer(
 
 
           {/* Listing editor (edit mode) */}
-          <Card style={styles.basicSection}>
+          <Card shadow="none" style={styles.basicSection}>
             <ListingEditorForm
               ref={listingEditorRef}
               platforms={displayedPlatforms}
@@ -3861,7 +3861,7 @@ const ProductDetailScreen = observer(
             />
 
             {/* Active Listings */}
-            <Card style={styles.platformsSection}>
+            <Card shadow="none" style={styles.platformsSection}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                 <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
                 <TouchableOpacity
