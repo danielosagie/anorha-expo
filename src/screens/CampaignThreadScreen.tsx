@@ -416,14 +416,20 @@ const CampaignThreadScreen = () => {
           </View>
         )}
 
-        {/* ── Bottom: floating glass composer (no border, fades to white) ─ */}
-        <View style={[s.footer, { paddingBottom: insets.bottom || 10 }]}>
-          <LinearGradient
-            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.9)', '#FFFFFF']}
-            locations={[0, 0.55, 1]}
-            style={s.footerFade}
-            pointerEvents="none"
-          />
+        {/* ── Bottom: floating glass composer (no border, progressive blur to white) ─ */}
+        <View style={[s.footer, { paddingBottom: (insets.bottom || 10) + 12 }]}>
+          {/* Progressive blur behind the composer: strongest at the bottom under the
+              input, fading to clear upward so chat content blurs into the bar as it
+              scrolls under it. Mirrors the header (rit3zh/expo-progressive-blur),
+              direction='up' so the strong edge is at the bottom. */}
+          <View pointerEvents="none" style={s.footerBlur}>
+            <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="up" />
+            <LinearGradient
+              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)', '#FFFFFF']}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </View>
           {controller.error ? (
             <View style={s.errorBanner}>
               <AlertCircle size={14} color="#EF4444" />
@@ -605,9 +611,12 @@ const s = StyleSheet.create({
   trayText: { fontSize: 12, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
   trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
-  // Floating glass footer — content fades to white, no border
-  footer: { paddingTop: 6, backgroundColor: '#FFFFFF' },
-  footerFade: { position: 'absolute', left: 0, right: 0, top: -30, height: 30 },
+  // Floating glass footer — transparent so the progressive blur shows through; the
+  // blur band (footerBlur) carries the white fade and obscures content scrolling under.
+  footer: { paddingTop: 6, backgroundColor: 'transparent' },
+  // Progressive-blur band behind the composer. Extends above the footer so the blur has
+  // room to fade to clear (top) before it sits solid under the input (bottom).
+  footerBlur: { position: 'absolute', left: 0, right: 0, top: -44, bottom: 0 },
   errorBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
   errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },

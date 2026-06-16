@@ -1,15 +1,21 @@
 import React from 'react';
-import { StyleProp, StyleSheet, UIManager, View, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 
-// The progressive-blur effect needs the native RNCMaskedView view manager. In an
-// Expo Go / un-rebuilt dev client that module isn't registered, and mounting
-// MaskedView throws "View config not found for component RNCMaskedView" — which
-// surfaces as a fatal redbox before the error boundary can swap in the fallback.
-// Detect availability up front and skip MaskedView entirely when it's missing.
-const MASKED_VIEW_AVAILABLE = !!(UIManager.getViewManagerConfig && UIManager.getViewManagerConfig('RNCMaskedView'));
+// The progressive-blur effect needs the native RNCMaskedView view manager. It ships in
+// every real build (dev client, preview, production) and is absent ONLY in Expo Go.
+//
+// The previous gate probed UIManager.getViewManagerConfig('RNCMaskedView'), but that
+// legacy API returns null on the New Architecture (Fabric) even when the view IS
+// registered — a false negative that silently forced the flat uniform-blur fallback on
+// EVERY screen using this component (header + composer across the app). Gate on the
+// runtime instead: only Expo Go lacks the native module, and this app always runs as a
+// dev client / standalone build, never Expo Go. The BlurBoundary below stays as a final
+// safety net in case the module is somehow missing from a build.
+const MASKED_VIEW_AVAILABLE = Constants.executionEnvironment !== ExecutionEnvironment.StoreClient;
 
 type Props = {
   /** Max blur intensity (at the strong edge). expo-blur scale 0-100. */
