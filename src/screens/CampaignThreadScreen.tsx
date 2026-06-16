@@ -366,6 +366,7 @@ const CampaignThreadScreen = () => {
         loading={controller.isLoadingMessages}
         onDecision={controller.submitDecision}
         onRetry={controller.retryMessage}
+        onCancelQueued={controller.cancelQueuedMessage}
         onOpenCart={(sessionId: string) => {
           // AddProduct is a hidden TAB screen, so go through the nested navigator
           // (the pattern PastScans uses), with a flat fallback.

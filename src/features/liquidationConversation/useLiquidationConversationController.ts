@@ -657,6 +657,23 @@ export const useLiquidationConversationController = ({
     void processQueue(threadId);
   }, [adapter, processQueue]);
 
+  // Cancel a message the seller queued while Sprout was still responding, before it's sent.
+  // Only a still-'queued' message can be pulled — once it's 'sending'/'streaming' it's in
+  // flight. Removes the queue item AND the optimistic bubble so it vanishes cleanly.
+  const cancelQueuedMessage = useCallback((clientMessageId: string) => {
+    const threadId = activeThreadIdRef.current;
+    if (!threadId) return;
+    setThreadStateFor(threadId, current => {
+      const msg = current.messages.find(m => m.clientMessageId === clientMessageId);
+      if (!msg || msg.deliveryState !== 'queued') return current;
+      return {
+        ...current,
+        pendingQueue: current.pendingQueue.filter(item => item.clientMessageId !== clientMessageId),
+        messages: current.messages.filter(m => m.clientMessageId !== clientMessageId),
+      };
+    }, { immediate: true });
+  }, [setThreadStateFor]);
+
   const openHome = useCallback(() => {
     setSurfaceState('home_overview');
   }, []);
@@ -927,6 +944,7 @@ export const useLiquidationConversationController = ({
     loadCampaignDetails,
     loadThreads,
     queueTextMessage,
+    cancelQueuedMessage,
     submitDecision,
     pendingQuestion,
     answeringQuestion,

@@ -17,6 +17,7 @@ type Props = {
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
   onOpenCart?: (sessionId: string) => void;
+  onCancelQueued?: (clientMessageId: string) => void;
   ListHeaderComponent?: React.ReactElement | null;
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
@@ -29,6 +30,7 @@ export const ConversationList = ({
   onDecision,
   onRetry,
   onOpenCart,
+  onCancelQueued,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
@@ -101,7 +103,7 @@ export const ConversationList = ({
         }}
         ListHeaderComponent={ListHeaderComponent}
         renderItem={({ item }) => (
-          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} />
+          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} onCancelQueued={onCancelQueued} />
         )}
         ListEmptyComponent={(
           <View style={styles.emptyState}>
