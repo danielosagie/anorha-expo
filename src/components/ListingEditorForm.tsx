@@ -39,6 +39,15 @@ export type PlatformsData = Record<string, any>;
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
+// Module-level pricing-research cache. Keyed by the request inputs so reopening
+// the sheet for the same item serves the previous result instantly instead of
+// clearing to a loading state and re-hitting the network every time. Survives
+// modal close/reopen and component remounts within the session.
+const PRICING_RESEARCH_CACHE = new Map<string, { data: any; ts: number }>();
+const PRICING_RESEARCH_TTL = 30 * 60 * 1000; // 30 min — refetch only if older
+const pricingCacheKey = (input: { title: string; categoryId?: string; condition?: string }) =>
+  `${input.title}|${input.categoryId ?? ''}|${input.condition ?? ''}`.trim().toLowerCase();
+
 type Props = {
   platforms: PlatformsData;
   updateCounter?: number; // Signal when platforms ref content changes
@@ -649,6 +658,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const fetchPricingResearch = useCallback(async () => {
     const input = pricingResearchInput;
     if (!input?.title) return;
+
+    // Serve a recent cached result instantly — open the sheet with the previous
+    // result and skip the network round-trip / loading flash entirely.
+    const key = pricingCacheKey(input);
+    const cached = PRICING_RESEARCH_CACHE.get(key);
+    if (cached && Date.now() - cached.ts < PRICING_RESEARCH_TTL) {
+      setPricingResearchResult(cached.data);
+      setPricingResearchModalVisible(true);
+      return;
+    }
+
     setPricingResearchLoading(true);
     setPricingResearchResult(null);
     try {
@@ -664,6 +684,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         }),
       });
       const data = await res.json();
+      if (data && !data.error) PRICING_RESEARCH_CACHE.set(key, { data, ts: Date.now() });
       setPricingResearchResult(data);
       setPricingResearchModalVisible(true);
     } catch (e) {
@@ -2020,18 +2041,18 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       <Modal visible={pricingResearchModalVisible} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
           <Pressable style={{ backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingTop: 20, paddingBottom: 12 }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
               <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
                 <Icon name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
             </View>
             {pricingResearchResult?.error ? (
-              <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+              <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
                 <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
               </View>
             ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 28 }}>
+              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 28 }}>
                 {/* The one shared pricing overview (same card as the add-product preview). */}
                 <PricingGuidanceCard
                   headers="none"
@@ -2047,7 +2068,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 />
               </ScrollView>
             ) : (
-              <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+              <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
                 <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
               </View>
             )}
