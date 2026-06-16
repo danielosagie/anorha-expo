@@ -18,7 +18,6 @@ import { CenterOverlay } from './AddProduct/CenterOverlay';
 import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
-import { MatchResultsSheet } from './AddProduct/MatchResultsSheet';
 import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
 import { useBulkItems } from './AddProduct/hooks/useBulkItems';
 import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
@@ -401,6 +400,44 @@ const getSelectedQuickMatchCandidate = (
   };
 };
 
+// Full-match (orchestrate/match) result → ordered candidate list. The reranker ranks a
+// subset of the raw serpApiData rows (rerankedResults[].serpApiIndex); reorder serpApiData
+// by that ranking, then append any rows the reranker didn't rank. Mirrors the same merge
+// MatchSelectionScreen uses, so the in-camera card and the match picker agree. The rows are
+// raw SerpAPI candidates ({ title, price:{extracted_value}, thumbnail, link, source }) which
+// performQuickScan's parser already understands.
+const reorderMatchJobCandidates = (result: any): any[] => {
+  const base: any[] = Array.isArray(result?.serpApiData) ? result.serpApiData : [];
+  const reranked: any[] = Array.isArray(result?.rerankedResults) ? result.rerankedResults : [];
+  // Fallback: if the raw SerpAPI rows are missing but the reranker still returned ranked rows
+  // (they carry their own title/link/imageUrl), surface THOSE rather than collapsing to a
+  // false "no matches". Shape them like the SerpAPI candidate the parser reads.
+  if (!base.length) {
+    return reranked.map((r: any) => ({
+      title: r?.title,
+      link: r?.link,
+      productUrl: r?.link,
+      thumbnail: r?.imageUrl,
+      image: r?.imageUrl,
+      imageUrl: r?.imageUrl,
+      snippet: r?.snippet,
+    }));
+  }
+  if (!reranked.length) return base;
+  const ordered: any[] = [];
+  const used = new Set<number>();
+  for (const item of reranked) {
+    const idx = item?.serpApiIndex;
+    // Number.isInteger guards against a float/NaN index silently indexing past the array.
+    if (Number.isInteger(idx) && base[idx] && !used.has(idx)) {
+      ordered.push(base[idx]);
+      used.add(idx);
+    }
+  }
+  base.forEach((candidate, index) => { if (!used.has(index)) ordered.push(candidate); });
+  return ordered;
+};
+
 const rankedCandidatesToQuickMatchHintCandidates = (candidates: MatchCandidate[] = []): any[] => (
   candidates.map((candidate, index) => ({
     position: index + 1,
@@ -492,6 +529,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [facing, setFacing] = useState<CameraType>('back');
   const [flash, setFlash] = useState<FlashMode>('off');
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+
+  // Inline "add a photo" camera overlay (replaces the OS gallery as the primary add-photo
+  // path): a self-contained full-screen capture that targets one item, takes one shot,
+  // attaches it (re-running the full match), then returns to wherever the user was. Its own
+  // CameraView so it never fights the paused persistent camera / Fabric unmount asserts.
+  const [photoCaptureTargetId, setPhotoCaptureTargetId] = useState<string | null>(null);
+  const captureOverlayRef = useRef<CameraView>(null);
+  const [overlayFacing, setOverlayFacing] = useState<CameraType>('back');
+  const [overlayFlash, setOverlayFlash] = useState<FlashMode>('off');
+  const [isOverlayCapturing, setIsOverlayCapturing] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const [isCapturing, setIsCapturing] = useState(false);
   const [cameraMode, setCameraMode] = useState<'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf'>(
@@ -922,13 +969,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       onResearch={({ text }) => {
         const id = previewItemId;
         setPreviewItemId(null);
-        if (id && text) void runQuickScanTextSearch(id, text);
+        if (id && text) researchItemWithText(id, text);
       }}
       onAddPhoto={() => {
-        const id = previewItemId;
-        setPreviewItemId(null);
-        if (id) setActiveItemId(id);
-        handleImageUpload();
+        // Inline in-app camera (not the OS gallery) targeting this item; on capture it
+        // re-runs the full match and returns here. Keep previewItemId so we land back.
+        if (previewItemId) openPhotoCaptureForItem(previewItemId);
       }}
       sellLabel="Confirm item"
       onSell={() => {
@@ -971,17 +1017,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRemovePhoto={(photoId) => removeBulkItemPhoto(id, photoId)}
         onBack={() => setAddDetailsItemId(null)}
         onCaptureTag={() => {
-          // Target this item and drop back to the live camera for the tag shot.
-          // The overlay unmount must commit BEFORE the cart Modal starts closing —
-          // overlapping the two transactions hits the Fabric unmount assert.
-          setAddDetailsItemId(null);
-          setPreviewItemId(null);
-          setActiveItemId(id);
-          setTimeout(closeBulkItemsSheet, 80);
+          // Inline camera overlay ON TOP of this sheet (no cart teardown, no Fabric unmount
+          // race): captures one tag shot and re-runs the full match for this item, then returns.
+          openPhotoCaptureForItem(id);
         }}
         onImportTag={() => {
-          setActiveItemId(id);
-          handleImageUpload();
+          // Gallery import stays as the explicit "Import" action; targets this item + re-matches.
+          handleImageUpload(id);
         }}
         onContinue={(detail) => {
           setAddDetailsItemId(null);
@@ -989,7 +1031,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             const newQuery = [baseTitle, detail].filter(Boolean).join(' ');
             setBulkItems((prev) => prev.map((b) => (b.id === id ? { ...b, title: newQuery } : b)));
             setPreviewItemId(null); // back to the cart row so they watch the re-search land
-            void runQuickScanTextSearch(id, newQuery);
+            researchItemWithText(id, newQuery);
           }
         }}
       />
@@ -1600,9 +1642,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 const activeItemIdLocal = prev[activeIndex].id;
                 const next = prev.map((it, idx) => {
                   if (idx !== activeIndex) return it;
-                  const wasFirstPhoto = it.photos.length === 0;
                   const updated = { ...it, photos: [...it.photos, newPhoto] };
-                  if (wasFirstPhoto) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
+                  // Always re-research on a new photo (incl. a wrong-item tag shot on an
+                  // item that already has photos), not only the first — run the full match.
+                  setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
                   return updated;
                 });
                 return next;
@@ -2064,6 +2107,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   serpApiData: res.matches.map((match: any) => ({ ...match, queryKey: newQuery })),
                 },
               }));
+              // Drop the previously confirmed/auto-selected match so the fresh results actually
+              // surface — previewData prioritizes confirmedQuickMatchByItemId, which would
+              // otherwise keep showing the OLD (wrong) match after a re-research.
+              setConfirmedQuickMatchByItemId((prev) => {
+                if (!prev[itemId]) return prev;
+                const next = { ...prev };
+                delete next[itemId];
+                return next;
+              });
             }
           } else if (parsed.type === 'COMPLETE') {
             setItemLoadingStates((prev) => {
@@ -2369,7 +2421,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage, showMatchSheet]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
-  const handleImageUpload = useCallback(async () => {
+  const handleImageUpload = useCallback(async (targetItemId?: string) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission needed', 'We need camera roll permissions to upload images.');
@@ -2421,17 +2473,23 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (newPhotos[0]) {
           setTimeout(() => performQuickScan(newPhotos[0], firstItem.id), 500);
         }
-      } else if (activeItemId) {
+      } else if ((targetItemId ?? activeItemId)) {
+        // targetItemId (passed by the wrong-item / add-details flows) wins over activeItemId,
+        // which can be stale right after setActiveItemId — so the photo lands on the right item.
+        const effectiveItemId = (targetItemId ?? activeItemId) as string;
+        const wasEmpty = (bulkItems.find(i => i.id === effectiveItemId)?.photos.length ?? 0) === 0;
         setBulkItems(prev => prev.map(item => {
-          if (item.id !== activeItemId) return item;
-          const wasEmpty = item.photos.length === 0;
+          if (item.id !== effectiveItemId) return item;
           const added = newPhotos.map((p, i) => ({ ...p, isCover: wasEmpty && i === 0 }));
           return { ...item, photos: [...item.photos, ...added] };
         }));
         setCapturedPhotos(prev => [...prev, ...newPhotos]);
-        const activeItem = bulkItems.find(i => i.id === activeItemId);
-        if (activeItem?.photos.length === 0 && newPhotos[0]) {
-          setTimeout(() => performQuickScan(newPhotos[0], activeItemId), 500);
+        // Re-research with the new photo when this is an EXPLICIT correction (targetItemId is
+        // passed by the wrong-item / add-details / overlay flows) OR the item had no photo yet.
+        // Plain multi-photo gallery imports to an already-matched item don't each fire a full
+        // (~15s, billable) re-match — that was a cost regression from dropping the old gate.
+        if (newPhotos[0] && (!!targetItemId || wasEmpty)) {
+          setTimeout(() => performQuickScan(newPhotos[0], effectiveItemId), 500);
         }
       } else {
         if (!canAddAnotherItem(bulkItems.length)) {
@@ -2580,7 +2638,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const performQuickScan = useCallback(async (
     photo: CapturedPhoto,
     itemId: string,
-    options?: { skipPreflight?: boolean },
+    options?: { skipPreflight?: boolean; textHint?: string },
   ) => {
     if (isAutoScanning) {
       if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
@@ -2604,8 +2662,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Set loading state for this item
     setItemLoadingStates(prev => ({
       ...prev,
-      [itemId]: { isLoading: true, stage: 'Quick Scanning...', error: undefined }
+      [itemId]: { isLoading: true, stage: 'Searching…', error: undefined }
     }));
+
+    // Drop any previously confirmed/auto-selected match for this item NOW, at the start of
+    // the (re-)match. previewData/the card prioritize confirmedQuickMatchByItemId, so leaving
+    // it set would keep showing the OLD (wrong) match for the ~10-15s the full match runs —
+    // exactly the "it didn't re-research" symptom on a Wrong-item correction. The end of this
+    // function re-confirms the new top match if confidence is high enough.
+    setConfirmedQuickMatchByItemId(prev => {
+      if (!prev[itemId]) return prev;
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
 
     let scanErrorMessage: string | null = null;
 
@@ -2656,63 +2726,37 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const token = tokenMaybe;
 
-      // Call backend /orchestrate/quick-scan endpoint.
-      const quickScanPath = '/api/products/orchestrate/quick-scan';
-      const quickScanUrlPrimary = `${API_BASE_URL}${quickScanPath}`;
-      const quickScanUrlFallback = `${API_BASE_URL}${quickScanPath}`;
-
-      let response: Response;
-      try {
-        response = await fetch(quickScanUrlPrimary, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+      // FULL MATCH — the whole matcher (local inventory + web search + reranking), submitted
+      // as an async job and polled in place. This replaces the lightweight quick-scan so every
+      // scan AND every "Wrong item?" correction runs the real pipeline. options.textHint fuses
+      // a typed correction with the photo for a combined image+text match. skipMatchSelection
+      // is false so we get ranked candidates back to review here (not an auto-generated listing).
+      const matchSubmitUrl = `${API_BASE_URL}/api/products/orchestrate/match`;
+      const response = await fetch(matchSubmitUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          products: [{
+            productIndex: 0,
             images: [{
-              url: publicImageUrl, // Use Supabase public URL instead of local file path
-              metadata: {
-                id: photo.id,
-                timestamp: photo.timestamp,
-                width: photo.width,
-                height: photo.height
-              }
+              url: publicImageUrl,
+              metadata: { id: photo.id, timestamp: photo.timestamp, width: photo.width, height: photo.height },
             }],
-            // Query general index + eBay explicitly to speed up price-relevant results.
-            targetSites: ['general', 'ebay.com'],
+            ...(options?.textHint ? { textQuery: options.textHint } : {}),
+          }],
+          options: {
+            useReranking: true,
+            vectorSearchLimit: 10,
+            skipMatchSelection: false,
+            autoGenerateAllPlatforms: false,
+          },
+        }),
+      });
 
-            reranker: "llama4-groq", //"reranker": "llama4-groq"  // or "jina-modal" or "fast-text" or "none" 
-            mode: "ocr-vlm-search"
-          })
-        });
-      } catch (networkErr) {
-        if (quickScanUrlPrimary !== quickScanUrlFallback) {
-          log.warn(`[QUICK SCAN] Primary endpoint failed (${quickScanUrlPrimary}), retrying fallback`);
-          response = await fetch(quickScanUrlFallback, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              images: [{
-                url: publicImageUrl,
-                metadata: {
-                  id: photo.id,
-                  timestamp: photo.timestamp,
-                  width: photo.width,
-                  height: photo.height
-                }
-              }],
-              targetSites: ['general', 'ebay.com'],
-              reranker: "llama4-groq",
-              mode: "ocr-vlm-search"
-            })
-          });
-        } else {
-          throw networkErr;
-        }
-      }
-
-      // 🎯 FREEMIUM: Handle 402 Payment Required (free tier exhausted)
+      // 🎯 FREEMIUM: Handle 402 Payment Required (free tier exhausted) on submit
       if (response.status === 402) {
         const errorData = await response.json();
-        log.debug('[QUICK SCAN] Free tier exhausted:', errorData);
+        log.debug('[FULL MATCH] Free tier exhausted:', errorData);
         const gate = normalizeBillingGateResponse(errorData, 'ai_quick_scan');
         await persistPendingQuickScan(photo, itemId);
         const decision = await presentBillingGateSheet(gate);
@@ -2724,11 +2768,88 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      // Increment local usage count on successful scan
-      incrementLocalUsage();
+      // Submit cleared the billing gate — drop the persisted billing-pending scan.
+      // (Usage is counted AFTER the job completes, below — not here — so a timed-out /
+      // unreachable match never burns a scan with nothing to show.)
       await clearPendingQuickScan();
 
-      const result = await response.json();
+      const submit = await response.json();
+      const matchJobId: string | undefined = submit?.jobId || submit?.job?.jobId || submit?.data?.jobId;
+      if (!matchJobId) throw new Error('Match did not return a jobId to poll.');
+
+      // Poll the match job to completion (full match ~10-15s). Surface the backend's stage
+      // text so the card shows live progress; abort cleanly if the scan was cancelled; and
+      // bail fast (rather than freezing on "Searching…" for the full timeout) if status
+      // checks keep failing — a down matcher should surface an error, not a 90s hang.
+      const MATCH_POLL_INTERVAL_MS = 1500;
+      const MATCH_POLL_TIMEOUT_MS = 90000;
+      const MATCH_POLL_MAX_CONSECUTIVE_ERRORS = 8;
+      const matchPollStart = Date.now();
+      let matchResult: any = null;
+      let matchPollErrors = 0;
+      for (;;) {
+        if (quickScanCancelledRef.current) return;
+        if (Date.now() - matchPollStart > MATCH_POLL_TIMEOUT_MS) {
+          throw new Error('Match timed out. Please try again.');
+        }
+        await new Promise((resolve) => setTimeout(resolve, MATCH_POLL_INTERVAL_MS));
+        if (quickScanCancelledRef.current) return;
+        let statusSnap: any = null;
+        try {
+          const statusRes = await fetch(
+            `${API_BASE_URL}/api/products/match/jobs/${encodeURIComponent(matchJobId)}/status`,
+            { headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } },
+          );
+          if (!statusRes.ok) throw new Error(`status ${statusRes.status}`);
+          statusSnap = await statusRes.json();
+          matchPollErrors = 0; // reset on a good read
+        } catch {
+          if (++matchPollErrors >= MATCH_POLL_MAX_CONSECUTIVE_ERRORS) {
+            throw new Error('Could not reach the matcher. Please try again.');
+          }
+          continue; // transient — keep polling
+        }
+        if (quickScanCancelledRef.current) return; // a cancel may have landed during the await/parse
+        if (statusSnap?.currentStage) {
+          setItemLoadingStates(prev => ({
+            ...prev,
+            [itemId]: { isLoading: true, stage: statusSnap.currentStage, error: undefined },
+          }));
+        }
+        if (statusSnap?.status === 'completed') {
+          matchResult = Array.isArray(statusSnap?.results) ? statusSnap.results[0] : null;
+          break;
+        }
+        if (statusSnap?.status === 'failed') {
+          throw new Error(statusSnap?.error || 'Match failed.');
+        }
+      }
+
+      if (quickScanCancelledRef.current) return;
+
+      // The match job actually ran — count usage now (post-completion).
+      incrementLocalUsage();
+
+      if (!matchResult) log.warn('[FULL MATCH] Job completed with no result object for item:', itemId);
+
+      // Shape the match-job result into what the parser below expects: an ordered candidate
+      // list under results[0].matches (the parser already reads serpApiData candidate fields).
+      const orderedMatchCandidates = reorderMatchJobCandidates(matchResult);
+      // Confidence comes back as a string enum ('high'|'medium'|'low'); shouldAutoSelectQuickMatch
+      // compares it NUMERICALLY, so map it (high→0.9, medium→0.6, low→0.2 — same mapping used
+      // elsewhere in this file) or auto-confirm would never fire on the full-match path.
+      const matchConfidenceLabel: string = matchResult?.confidence || 'medium';
+      const matchConfidenceNum = matchConfidenceLabel === 'high' ? 0.9 : matchConfidenceLabel === 'medium' ? 0.6 : 0.2;
+      // Typed `any` to match the original `response.json()` shape the parser below reads
+      // loosely (result.results[].matches, result.matches, result.quickScanMatches).
+      const result: any = {
+        recommendedAction: matchResult?.matchDecision === 'matched' ? 'show_single_match' : 'show_multiple_matches',
+        overallConfidence: matchConfidenceLabel,
+        results: [{
+          matches: orderedMatchCandidates,
+          rerankerAnalysis: { confidence: matchConfidenceNum, reasoning: matchResult?.matchDecisionReason },
+        }],
+      };
 
       if (quickScanCancelledRef.current) return;
 
@@ -2930,6 +3051,72 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     clearPendingQuickScan,
   ]);
 
+  // Re-research an item from a typed correction (the "Wrong item?" detail box or a cart
+  // query edit). Runs the FULL match, not a text quick-scan: when the item still has its
+  // photo we fuse the photo + the typed text for a combined image+text match; with no photo
+  // we fall back to a text-only search. performQuickScan clears/re-confirms the match itself.
+  const researchItemWithText = useCallback((itemId: string, query: string) => {
+    const trimmed = (query || '').trim();
+    if (!trimmed) return;
+    const item = bulkItems.find((b) => b.id === itemId);
+    const coverPhoto = item?.photos?.find((p) => p.isCover) || item?.photos?.[0];
+    if (coverPhoto) {
+      void performQuickScan(coverPhoto as CapturedPhoto, itemId, { textHint: trimmed });
+    } else {
+      void runQuickScanTextSearch(itemId, trimmed);
+    }
+  }, [bulkItems, performQuickScan, runQuickScanTextSearch]);
+
+  // Attach a freshly captured photo to a specific item and re-run the full match. First
+  // photo becomes the cover. Mirrors the live-camera capture branch, target-id explicit.
+  const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto) => {
+    setBulkItems((prev) => prev.map((item) => {
+      if (item.id !== itemId) return item;
+      const wasEmpty = item.photos.length === 0;
+      return { ...item, photos: [...item.photos, { ...photo, isCover: wasEmpty ? true : photo.isCover }] };
+    }));
+    setCapturedPhotos((prev) => [...prev, photo]);
+    // Always re-research on the new photo (incl. a wrong-item correction) via the full match.
+    setTimeout(() => performQuickScan(photo, itemId), 500);
+  }, [performQuickScan]);
+
+  // Open / close the inline capture overlay for a target item.
+  const openPhotoCaptureForItem = useCallback((itemId: string) => {
+    if (photoCaptureTargetId) return; // overlay already open — ignore re-entrant taps
+    setOverlayFacing('back');
+    setOverlayFlash('off');
+    setPhotoCaptureTargetId(itemId);
+  }, [photoCaptureTargetId]);
+  const closePhotoCaptureOverlay = useCallback(() => setPhotoCaptureTargetId(null), []);
+
+  // Take one shot in the overlay, attach it, and return to the prior surface.
+  const handleOverlayCapture = useCallback(async () => {
+    const targetId = photoCaptureTargetId;
+    if (!targetId || !captureOverlayRef.current || isOverlayCapturing) return;
+    try {
+      setIsOverlayCapturing(true);
+      const shot = await captureOverlayRef.current.takePictureAsync({ quality: 0.7, base64: false });
+      if (shot?.uri) {
+        attachPhotoToItem(targetId, {
+          id: `capture-${Date.now()}`,
+          uri: shot.uri,
+          width: shot.width || SCREEN_WIDTH,
+          height: shot.height || SCREEN_HEIGHT,
+          timestamp: Date.now(),
+          isCover: false,
+        });
+        setPhotoCaptureTargetId(null); // success only → dismiss back to where the user was
+      }
+    } catch (err) {
+      // Keep the overlay OPEN on failure so the user can read the alert and retry the shot,
+      // instead of the camera vanishing out from under the error.
+      log.error('[INLINE CAPTURE] Failed:', err);
+      Alert.alert('Error', 'Failed to take photo. Please try again.');
+    } finally {
+      setIsOverlayCapturing(false);
+    }
+  }, [photoCaptureTargetId, isOverlayCapturing, attachPhotoToItem]);
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -3027,14 +3214,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
     setMatchData(store.matchData);
     setCurrentMatchItemId(itemId);
-    // Deterministic modal handoff: close bulk first, then open quick matches.
-    setShowDeepSearchSheet(false);
-    sheetTranslateY.value = SCREEN_HEIGHT;
-    requestAnimationFrame(() => {
-      setShowMatchSheet(true);
-      matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
-    });
-  }, [quickScanStore, matchSheetTranslateY, sheetTranslateY, showNotificationMessage, isProcessingShelfScan]);
+    // Show the full-screen MatchPreview overlay inside the already-open cart Modal.
+    // (Replaces the retired half-height MatchResultsSheet.)
+    setPreviewItemId(itemId);
+  }, [quickScanStore, showNotificationMessage, isProcessingShelfScan]);
 
   const openExistingInventoryMatch = useCallback((itemId: string) => {
     const localMatch = getLocalInventoryCandidateForItem(itemId, confirmedQuickMatchByItemId, quickScanStore) as any;
@@ -3309,14 +3492,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           showNotificationMessage('Quick matches are still loading for this item.', 2000);
           return;
         }
+        // Open the full-screen MatchPreview (hosted as an overlay inside the cart
+        // Modal) instead of the retired half-height MatchResultsSheet. Use the ref
+        // because openBulkItemsSheet is declared later in the component body.
         setMatchData(itemMatches.matchData);
         setCurrentMatchItemId(activeItemId);
-        setShowDeepSearchSheet(false);
-        sheetTranslateY.value = SCREEN_HEIGHT;
-        requestAnimationFrame(() => {
-          setShowMatchSheet(true);
-          matchSheetTranslateY.value = withSpring(SCREEN_HEIGHT * 0.2);
-        });
+        openBulkItemsSheetRef.current();
+        setPreviewItemId(activeItemId);
       } else {
         // Retry: re-trigger quick scan for this item if no matches yet
         if (currentInstruction === 'processing') {
@@ -3335,7 +3517,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } else {
       showNotificationMessage('Select an item first', 1500);
     }
-  }, [activeItemId, quickScanStore, currentInstruction, showNotificationMessage, bulkItems, performQuickScan, sheetTranslateY, matchSheetTranslateY]);
+  }, [activeItemId, quickScanStore, currentInstruction, showNotificationMessage, bulkItems, performQuickScan]);
 
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
@@ -3767,7 +3949,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }
 
   const isMatchSheetVisible = !!showMatchSheet && !!matchData;
-  const isAnySheetVisible = showDeepSearchSheet || isMatchSheetVisible || showBarcodeResultModal;
+  const isAnySheetVisible = showDeepSearchSheet || isMatchSheetVisible || showBarcodeResultModal || !!photoCaptureTargetId;
   const connectedPlatformKeys = getConnectedPlatformKeys(platformLocations);
   const matchedItemsCount = bulkItems.reduce((count, item) => {
     const matchCount = quickScanStore[item.id]?.matchData?.totalMatches || 0;
@@ -3840,7 +4022,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               contentContainerStyle={styles.topPhotoBarContent}
               keyboardShouldPersistTaps="handled"
             >
-              <TouchableOpacity style={styles.addPhotoTile} onPress={handleImageUpload} activeOpacity={0.8}>
+              <TouchableOpacity style={styles.addPhotoTile} onPress={() => handleImageUpload()} activeOpacity={0.8}>
                 <MaterialIcons name="add" size={26} color="rgba(255,255,255,0.85)" />
               </TouchableOpacity>
               {displayPhotos.map((photo) => (
@@ -4055,59 +4237,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         </Animated.View>
       </PanGestureHandler>
 
-      {/* Match results sheet (rendered above TabBar via Modal) */}
-      <Modal
-        visible={!!showMatchSheet && !!matchData}
-        transparent
-        animationType="none"
-        statusBarTranslucent
-        onRequestClose={closeMatchSheetToBulk}
-        presentationStyle="overFullScreen"
-      >
-        {/* Keep mounted while `visible` toggles — see the cart Modal note (Fabric unmount assert). */}
-        {matchData ? (
-          <MatchResultsSheet
-            matchData={matchData}
-            onClose={closeMatchSheetToBulk}
-            onUseForSelection={() => openMatchSelectionForItem(currentMatchItemId)}
-            onConfirmMatch={currentMatchItemId ? (_serpApiData, preSelectedIndices) => {
-              const confirmedCandidates = matchData
-                ? rankedCandidatesToQuickMatchHintCandidates(matchData.rankedCandidates)
-                : [];
-              setConfirmedQuickMatchByItemId(prev => ({
-                ...prev,
-                [currentMatchItemId]: {
-                  serpApiData: confirmedCandidates,
-                  preSelectedIndices,
-                  source: 'quick_scan_confirmed',
-                },
-              }));
-            } : undefined}
-            currentMatchItemId={currentMatchItemId}
-            initialSelectedIndices={currentMatchItemId ? confirmedQuickMatchByItemId[currentMatchItemId]?.preSelectedIndices : undefined}
-            fetchPricingResearch={async (title: string) => {
-              try {
-                const token = await getToken();
-                const API_BASE = API_BASE_URL;
-                const res = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
-                  method: 'POST',
-                  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ title: title.trim(), condition: 'new', limit: 20 }),
-                });
-                const data = await res.json();
-                return data?.error ? null : data;
-              } catch {
-                return null;
-              }
-            }}
-            sheetStyle={matchSheetAnimatedStyle}
-            navigation={navigation}
-            onStartBroadSearch={() => {
-              closeMatchSheetToBulk();
-            }}
-          />
-        ) : null}
-      </Modal>
+      {/* Retired: the half-height MatchResultsSheet. Tapping a match card / "Review"
+          now opens the full-screen MatchPreview overlay inside the cart Modal below
+          (see handleMatchIndicatorPress + openQuickMatchesForItem + renderMatchPreview). */}
 
       {/* Bulk items sheet (rendered above TabBar via Modal) */}
       <Modal
@@ -4216,7 +4348,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   }}
                   onUpdateItemQuery={(id, newQuery) => {
                     setBulkItems(prev => prev.map(item => item.id === id ? { ...item, title: newQuery } : item));
-                    void runQuickScanTextSearch(id, newQuery);
+                    researchItemWithText(id, newQuery);
                   }}
                 />
               );
@@ -4464,12 +4596,88 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }}
         onContinue={() => closeBillingGateSheet('continue')}
       />
+
+      {/* Inline "add a photo" camera overlay — its own full-screen Modal + CameraView (NO
+          children on CameraView; controls are siblings) so it never fights the paused
+          persistent camera or the Fabric unmount assert. Slides up, one shot, returns. */}
+      <Modal
+        visible={!!photoCaptureTargetId}
+        animationType="slide"
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={closePhotoCaptureOverlay}
+      >
+        <View style={styles.captureOverlayRoot}>
+          {/* Unconditional (no `{cond && <CameraView/>}` guard): the Modal only mounts its
+              children while visible, and its dismissal tears down the native tree — toggling a
+              conditional child in the same commit as `visible` trips the Fabric unmount assert.
+              `active` (not mount/unmount) gates the live preview. CameraView has NO children. */}
+          <CameraView
+            ref={captureOverlayRef}
+            style={StyleSheet.absoluteFill}
+            facing={overlayFacing}
+            flash={overlayFlash}
+            active={!!photoCaptureTargetId}
+          />
+          <TouchableOpacity
+            style={[styles.captureOverlayClose, { top: screenInsets.top + 12 }]}
+            onPress={closePhotoCaptureOverlay}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <MaterialIcons name="close" size={26} color="#FFF" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.captureOverlayFlash, { top: screenInsets.top + 12 }]}
+            onPress={() => setOverlayFlash((f) => (f === 'on' ? 'off' : 'on'))}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <MaterialIcons name={overlayFlash === 'on' ? 'flash-on' : 'flash-off'} size={24} color="#FFF" />
+          </TouchableOpacity>
+          <View style={[styles.captureOverlayBar, { paddingBottom: screenInsets.bottom + 24 }]}>
+            <TouchableOpacity
+              style={styles.captureOverlaySideBtn}
+              onPress={() => {
+                // Switch to the OS gallery for this same item (import instead of shoot).
+                const id = photoCaptureTargetId;
+                setPhotoCaptureTargetId(null);
+                // 500ms (not 350) so the overlay's dismiss animation fully settles before the
+                // OS picker presents — launching over a dismissing Modal can silently no-op on iOS.
+                if (id) setTimeout(() => handleImageUpload(id), 500);
+              }}
+            >
+              <MaterialIcons name="photo-library" size={26} color="#FFF" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.captureOverlayShutter}
+              onPress={handleOverlayCapture}
+              disabled={isOverlayCapturing}
+              activeOpacity={0.8}
+            >
+              <View style={styles.captureOverlayShutterInner} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.captureOverlaySideBtn}
+              onPress={() => setOverlayFacing((f) => (f === 'back' ? 'front' : 'back'))}
+            >
+              <MaterialIcons name="flip-camera-ios" size={26} color="#FFF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </GestureHandlerRootView>
   );
 };
 
 // Styles
 const styles = StyleSheet.create({
+  // Inline add-photo camera overlay
+  captureOverlayRoot: { flex: 1, backgroundColor: '#000' },
+  captureOverlayClose: { position: 'absolute', left: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  captureOverlayFlash: { position: 'absolute', right: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  captureOverlayBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 36 },
+  captureOverlaySideBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
+  captureOverlayShutter: { width: 74, height: 74, borderRadius: 37, borderWidth: 4, borderColor: '#FFF', alignItems: 'center', justifyContent: 'center' },
+  captureOverlayShutterInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#FFF' },
   container: {
     flex: 1,
 

@@ -340,33 +340,42 @@ const CampaignThreadScreen = () => {
           and feeds agent-initiated posts (digests, proactive updates) into the feed. */}
       <ConvexLiveMessages threadId={controller.activeThreadId} onMessages={controller.ingestLiveMessages} />
 
+      {/* ── Feed scrolls full-bleed under both floating glass bars ── */}
+      <ConversationList
+        messages={controller.activeMessages}
+        loading={controller.isLoadingMessages}
+        onDecision={controller.submitDecision}
+        onRetry={controller.retryMessage}
+        onOpenCart={(sessionId: string) => {
+          // AddProduct is a hidden TAB screen, so go through the nested navigator
+          // (the pattern PastScans uses), with a flat fallback.
+          try {
+            navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId } });
+          } catch {
+            navigation.navigate('AddProduct', { sessionId });
+          }
+        }}
+        contentTopInset={headerH + 8}
+        contentBottomInset={footerH + 8}
+      />
+
+      {/* ── Composer + pending question ride the keyboard together. The KAV itself is
+          the absolute bottom anchor (behavior:'padding' pads its OWN in-flow column),
+          so the composer rises with the keyboard. An absolute child INSIDE a KAV does
+          not — that was the bug. Mirrors GenerateDetailsScreen's working composer. ── */}
       <KeyboardAvoidingView
-        style={s.flex}
+        style={s.composerAvoider}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
+        pointerEvents="box-none"
       >
-        {/* ── Feed scrolls under both glass bars ──────────────────── */}
-        <ConversationList
-          messages={controller.activeMessages}
-          loading={controller.isLoadingMessages}
-          onDecision={controller.submitDecision}
-          onRetry={controller.retryMessage}
-          onOpenCart={(sessionId: string) => {
-            // AddProduct is a hidden TAB screen, so go through the nested navigator
-            // (the pattern PastScans uses), with a flat fallback.
-            try {
-              navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId } });
-            } catch {
-              navigation.navigate('AddProduct', { sessionId });
-            }
-          }}
-          contentTopInset={headerH + 8}
-          contentBottomInset={footerH + 8}
-        />
-
+        {/* One measured wrapper around BOTH the question card and the composer, so the feed's
+            contentBottomInset reserves room for the whole composer area (not just the footer)
+            and the last message can't hide behind the pending-question card. */}
+        <View onLayout={e => setFooterH(e.nativeEvent.layout.height)}>
         {/* ── Sprout's structured question (tappable options), above the composer ── */}
         {controller.pendingQuestion && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 8, marginBottom: footerH }}>
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
             <QuestionCard
               prompt={controller.pendingQuestion}
               submitting={controller.answeringQuestion}
@@ -378,10 +387,7 @@ const CampaignThreadScreen = () => {
         )}
 
         {/* ── Bottom: floating glass composer (no border, fades to white) ─ */}
-        <View
-          style={[s.footer, { paddingBottom: insets.bottom || 10 }]}
-          onLayout={e => setFooterH(e.nativeEvent.layout.height)}
-        >
+        <View style={[s.footer, { paddingBottom: insets.bottom || 10 }]}>
           <LinearGradient
             colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.9)', '#FFFFFF']}
             locations={[0, 0.55, 1]}
@@ -429,6 +435,7 @@ const CampaignThreadScreen = () => {
             isStreaming={controller.isStreaming}
             getAuthToken={ensureSupabaseJwt}
           />
+        </View>
         </View>
       </KeyboardAvoidingView>
 
@@ -534,6 +541,9 @@ const CampaignThreadScreen = () => {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
   flex: { flex: 1 },
+  // The composer's keyboard-avoider: absolute bottom anchor so behavior:'padding' lifts
+  // the composer column with the keyboard (the feed is a full-bleed sibling behind it).
+  composerAvoider: { position: 'absolute', left: 0, right: 0, bottom: 0 },
 
   // Floating glass header — white at the top, fading to transparent, content scrolls under
   header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
@@ -566,7 +576,7 @@ const s = StyleSheet.create({
   trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Floating glass footer — content fades to white, no border
-  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 6, backgroundColor: '#FFFFFF' },
+  footer: { paddingTop: 6, backgroundColor: '#FFFFFF' },
   footerFade: { position: 'absolute', left: 0, right: 0, top: -30, height: 30 },
   errorBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },

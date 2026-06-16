@@ -139,6 +139,10 @@ export const SwipeBackRing: React.FC<Props> = ({
       onMoveShouldSetPanResponder: (_e, g) =>
         !committingRef.current && g.dx > 8 && Math.abs(g.dy) < Math.abs(g.dx),
       onPanResponderGrant: (e) => setGrabY(e.nativeEvent.pageY),
+      // Once the user is actively pulling the ring, don't surrender the touch to the
+      // native gesture-handler stack underneath (GestureHandlerRootView / PanGestureHandler
+      // on the camera screen). Without this the RNGH stack can cancel the pull mid-gesture.
+      onPanResponderTerminationRequest: () => progressRef.current <= 0,
       onPanResponderMove: (_e, g) => {
         if (committingRef.current) return;
         progress.setValue(Math.max(0, Math.min(1, g.dx / threshold)));
@@ -149,7 +153,13 @@ export const SwipeBackRing: React.FC<Props> = ({
         else snapBack();
       },
       onPanResponderTerminate: () => {
-        if (!committingRef.current) snapBack();
+        if (committingRef.current) return;
+        // RNGH (e.g. AddProductScreen's PanGestureHandler with failOffsetX) cancels the
+        // underlying touch as it resolves its own state, so a COMPLETED swipe-back arrives
+        // here as a TERMINATE, not a RELEASE. Commit if fully pulled; otherwise snap back —
+        // otherwise the ring lights up and fills but never calls onBack (never navigates).
+        if (progressRef.current >= 1) commit();
+        else snapBack();
       },
     }),
   ).current;
