@@ -645,17 +645,30 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
   // The newest unanswered ask_seller_question pending action for this thread,
   // hydrated into a QuestionPrompt. Null when Sprout isn't waiting on a choice.
   async getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null> {
-    const res = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+    const pick = (actions: any[] | undefined): QuestionPrompt | null => {
+      const open = (actions || [])
+        .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
+        .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+      const action = open[0];
+      const questions = action?.input?.questions;
+      if (!action || !Array.isArray(questions) || questions.length === 0) return null;
+      return { pendingActionId: action.id, threadId: action.threadId, questions };
+    };
+    // Thread-scoped first: the open ask for the thread the seller is viewing.
+    const scoped = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
       `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
     ).catch(() => null);
-    const actions = res?.pendingActions || [];
-    const open = actions
-      .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
-      .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
-    const action = open[0];
-    const questions = action?.input?.questions;
-    if (!action || !Array.isArray(questions) || questions.length === 0) return null;
-    return { pendingActionId: action.id, threadId: action.threadId, questions };
+    const fromThread = pick(scoped?.pendingActions);
+    if (fromThread) return fromThread;
+    // Fallback: campaign-wide. The "Needs you" badge is campaign-wide (overview.needsInput),
+    // so an ask sitting on a different/primary thread must still surface as a card here —
+    // otherwise the badge shows with no question to answer. answerQuestion is keyed by
+    // pendingActionId (not threadId), so answering an off-thread ask still works. If the
+    // un-scoped query isn't supported it just rejects → null (same as before, no phantom card).
+    const all = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+      `/api/agent/sessions/${campaignId}/pending-actions`,
+    ).catch(() => null);
+    return pick(all?.pendingActions);
   }
 
   // Record the seller's answer (does NOT resume the turn — the controller sends
