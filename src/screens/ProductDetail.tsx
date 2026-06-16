@@ -494,11 +494,16 @@ const ProductDetailScreen = observer(
     // Phase 2: Draft state for auto-save and versioning
     const [draftData, setDraftData] = useState<Record<string, any> | null>(null);
     const [isLoadingDraft, setIsLoadingDraft] = useState(false);
+    // Surfaced autosave failure (null = no error). Replaces the old silent
+    // swallow so a failed save is visible + retryable instead of lost.
+    const [saveError, setSaveError] = useState<string | null>(null);
     const [deleteConfirmation, setDeleteConfirmation] = useState<{ visible: boolean; platformKey: string }>({ visible: false, platformKey: '' });
 
     // Custom Action Menu State
     const [actionMenuVisible, setActionMenuVisible] = useState(false);
     const [draftVersions, setDraftVersions] = useState<Array<{ id: string; createdAt: string; platforms: any; publishedPlatforms?: string[] }>>([]);
+    const [versionsVisible, setVersionsVisible] = useState(false);
+    const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
 
     // Add-to-clearout (campaign) state — publish this product into a clearout
     const [clearoutVisible, setClearoutVisible] = useState(false);
@@ -573,9 +578,11 @@ const ProductDetailScreen = observer(
       TaxCode: '',
     });
 
-    useEffect(() => {
-      editVersionRef.current += 1;
-    }, [displayedPlatforms, formData]);
+    // NOTE: editVersionRef is bumped ONLY on a genuine user edit (in
+    // ListingEditorForm's onChangePlatforms), NOT here. Bumping it on every
+    // displayedPlatforms/formData change made hydration, the save-merge, and
+    // realtime echoes advance the token, so performAutoSave's reconcile never
+    // matched → the header stuck on "Unsaved" and re-fired duplicate PUTs.
 
     // State for sync status
     const [syncStatus, setSyncStatus] = useState<any>(null);
@@ -1442,6 +1449,7 @@ const ProductDetailScreen = observer(
 
         if (!token) {
           log.error('No authentication token available');
+          setSaveError('Not signed in — changes not saved');
           return;
         }
 
@@ -1457,11 +1465,11 @@ const ProductDetailScreen = observer(
         const updateData = {
           Title: canonical.title || formData.Title,
           Description: canonical.description || formData.Description,
-          Price: canonical.price !== undefined ? Number(canonical.price) : formData.Price,
-          CompareAtPrice: canonical.compareAtPrice !== undefined ? Number(canonical.compareAtPrice) : formData.CompareAtPrice,
+          Price: canonical.price !== undefined && canonical.price !== '' && !isNaN(Number(canonical.price)) ? Number(canonical.price) : formData.Price,
+          CompareAtPrice: canonical.compareAtPrice !== undefined && canonical.compareAtPrice !== '' && !isNaN(Number(canonical.compareAtPrice)) ? Number(canonical.compareAtPrice) : formData.CompareAtPrice,
           Sku: canonical.sku || formData.Sku,
           Barcode: canonical.barcode || formData.Barcode,
-          Weight: canonical.weight !== undefined ? Number(canonical.weight) : formData.Weight,
+          Weight: canonical.weight !== undefined && canonical.weight !== '' && !isNaN(Number(canonical.weight)) ? Number(canonical.weight) : formData.Weight,
           WeightUnit: canonical.weightUnit || formData.WeightUnit,
           RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : formData.RequiresShipping,
           IsTaxable: formData.IsTaxable,
@@ -1516,7 +1524,10 @@ const ProductDetailScreen = observer(
           const merged = {
             ...prev,              // ← Keep ALL existing fields (ImageUrls, Options, Metadata, etc.)
             ...updateData,        // ← Override only the fields that changed
-            PlatformSpecificData: displayedPlatforms,  // ← Ensure platform data is updated
+            // Write platform data into Metadata.platformSpecificData — the SAME key
+            // the reload hydration reads. The old orphan top-level PlatformSpecificData
+            // was ignored by every reader, so the in-memory edit looked reverted on re-entry.
+            Metadata: { ...(prev as any).Metadata, platformSpecificData: cleanedPlatformData },
           };
           log.debug('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
           return merged as ProductVariant;
@@ -1529,6 +1540,7 @@ const ProductDetailScreen = observer(
           setHasUnsavedChanges(true);
         }
         setLastSaveTime(Date.now());
+        setSaveError(null);
 
         // CRITICAL FIX: Clear draft data after successful save
         // This fixes the "Changes not published" message persisting
@@ -1538,7 +1550,10 @@ const ProductDetailScreen = observer(
 
       } catch (error) {
         log.error('Auto-save failed:', error);
-        // Don't show alert for auto-save failures, just log them
+        // Surface the failure instead of silently dropping the edit: keep the
+        // dirty flag so the change isn't lost, and show a retryable error.
+        setHasUnsavedChanges(true);
+        setSaveError(error instanceof Error ? error.message : 'Save failed');
       } finally {
         setIsSaving(false);
       }
@@ -1547,6 +1562,9 @@ const ProductDetailScreen = observer(
     useEffect(() => {
       if (!ENABLE_AUTOSAVE) return;
       if (!hasUnsavedChanges || isSaving) return;
+      // Stop hot-retrying a persistent failure; a new user edit clears saveError
+      // (and the header "Retry" / manual Save button retries directly).
+      if (saveError) return;
 
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current);
@@ -1562,7 +1580,57 @@ const ProductDetailScreen = observer(
           autoSaveTimeoutRef.current = null;
         }
       };
-    }, [hasUnsavedChanges, isSaving, performAutoSave]);
+    }, [hasUnsavedChanges, isSaving, saveError, performAutoSave]);
+
+    // Restore a previous saved version as the working draft (R3 versions UI).
+    const restoreDraftVersion = useCallback(async (versionId: string) => {
+      if (!detailedItem?.Id || restoringVersionId) return;
+      setRestoringVersionId(versionId);
+      try {
+        const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('Not signed in');
+        const res = await fetch(
+          `${SSSYNC_API_BASE_URL}/api/products/drafts/${detailedItem.Id}/restore-version/${versionId}`,
+          { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({} as any));
+          throw new Error(err.message || `Restore failed (${res.status})`);
+        }
+        setVersionsVisible(false);
+        setHasUnsavedChanges(false);
+        // Re-load so the restored draft hydrates the editor.
+        await loadProductDetails();
+        Alert.alert('Version restored', 'This version is now your working draft.');
+      } catch (e: any) {
+        Alert.alert('Could not restore', e?.message || 'Please try again.');
+      } finally {
+        setRestoringVersionId(null);
+      }
+    }, [detailedItem?.Id, restoringVersionId, loadProductDetails]);
+
+    // Refresh the version list whenever the history sheet opens, so a version
+    // just created by a save appears without a full screen reload.
+    useEffect(() => {
+      if (!versionsVisible || !detailedItem?.Id) return;
+      let canceled = false;
+      (async () => {
+        try {
+          const token = await ensureSupabaseJwt();
+          if (!token) return;
+          const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/drafts/${detailedItem.Id}`, {
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          });
+          if (res.ok && !canceled) {
+            const data = await res.json();
+            setDraftVersions(data.versions || []);
+          }
+        } catch (e) {
+          log.debug('[ProductDetail] versions refresh on open failed', e);
+        }
+      })();
+      return () => { canceled = true; };
+    }, [versionsVisible, detailedItem?.Id]);
 
     useEffect(() => {
       return () => {
@@ -2994,9 +3062,10 @@ const ProductDetailScreen = observer(
           // platformData comes from stale ProductVariants.Metadata.platformSpecificData
           // We want to use it for SEO, descriptions, titles etc. but NOT for prices/quantities
           // which should come from LIVE InventoryLevels data
+          // Keep the SAVED per-platform price/compareAtPrice from Metadata — that's
+          // exactly what the user's last save wrote. Only the inventory-derived
+          // collections (variants/locations/quantities) come from live InventoryLevels.
           const {
-            price: _stalePlatformPrice,
-            compareAtPrice: _staleCompareAtPrice,
             variants: _staleVariants,
             locations: _staleLocations,
             locationQuantities: _staleLocationQty,
@@ -3013,10 +3082,11 @@ const ProductDetailScreen = observer(
 
           allPlatforms[platformKey] = {
             ...canonicalBase,           // Base canonical data (includes ProductVariants.Price as fallback)
-            ...safePlatformData,        // Platform-specific SEO, titles, descriptions (NO price/inventory)
-            // ⚡ OVERRIDE: Use LIVE InventoryLevels prices if available
-            price: livePrice ?? canonicalBase.price,
-            compareAtPrice: liveCompareAtPrice ?? canonicalBase.compareAtPrice,
+            ...safePlatformData,        // Platform-specific SEO, titles, descriptions, and SAVED price
+            // Saved metadata price wins (it's the user's last edit); fall back to live
+            // InventoryLevels, then canonical, only when metadata has no price.
+            price: safePlatformData.price ?? livePrice ?? canonicalBase.price,
+            compareAtPrice: safePlatformData.compareAtPrice ?? liveCompareAtPrice ?? canonicalBase.compareAtPrice,
             options: safePlatformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object'
               ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] }))
               : []),
@@ -3719,12 +3789,16 @@ const ProductDetailScreen = observer(
           {/* Header — shared PageHeader (matches Connections/Settings/etc.) */}
           <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: 4, backgroundColor: theme.colors.surface }}>
             <PageHeader
-              title="Product Details"
+              title=""
               onBack={navigation.goBack}
               right={
                 <>
                   {isSaving ? (
                     <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
+                  ) : saveError ? (
+                    <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
+                      <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '700' }}>Save failed · Retry</Text>
+                    </TouchableOpacity>
                   ) : hasUnsavedChanges ? (
                     <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
                   ) : lastSaveTime > 0 ? (
@@ -3753,6 +3827,10 @@ const ProductDetailScreen = observer(
               platformLocations={buildPlatformLocations()}
               onChangePlatforms={(next) => {
                 log.debug('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
+                // Genuine user edit: advance the autosave version token and clear
+                // any prior save error so autosave re-arms.
+                editVersionRef.current += 1;
+                setSaveError(null);
                 setDisplayedPlatforms(next);
                 setHasUnsavedChanges(true)
                 log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
@@ -4083,6 +4161,17 @@ const ProductDetailScreen = observer(
               style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
               onPress={() => {
                 setActionMenuVisible(false);
+                setVersionsVisible(true);
+              }}
+            >
+              <Icon name="history" size={20} color={theme.colors.text} style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Version history</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+              onPress={() => {
+                setActionMenuVisible(false);
                 Alert.alert(
                   'Archive Product',
                   'Are you sure you want to archive this product? It will be hidden from your active listings.',
@@ -4170,6 +4259,63 @@ const ProductDetailScreen = observer(
                   )}
                 </TouchableOpacity>
               </>
+            )}
+          </View>
+        </BaseModal>
+
+        {/* Version history */}
+        <BaseModal
+          onClose={() => setVersionsVisible(false)}
+          visible={versionsVisible}
+          showCloseButton={false}
+          containerStyle={{ width: '88%', maxWidth: 380 }}
+        >
+          <View style={{ width: '100%' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ width: 24 }} />
+              <Text style={{ fontSize: 18, fontWeight: '700', flex: 1, textAlign: 'center' }}>Version history</Text>
+              <TouchableOpacity onPress={() => setVersionsVisible(false)}>
+                <Icon name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            {draftVersions.length === 0 ? (
+              <Text style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13, paddingVertical: 16 }}>
+                No saved versions yet. Versions are captured as you save and refine this listing.
+              </Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 360 }}>
+                {[...draftVersions].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((v, idx) => (
+                  <View
+                    key={v.id}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}
+                  >
+                    <View style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                      <Icon name="history" size={18} color="#5D7E16" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }} numberOfLines={1}>
+                        {idx === 0 ? 'Latest' : `Version ${draftVersions.length - idx}`}
+                      </Text>
+                      <Text style={{ fontSize: 12, color: '#71717A', marginTop: 1 }} numberOfLines={1}>
+                        {(() => { try { return new Date(v.createdAt).toLocaleString(); } catch { return String(v.createdAt); } })()}
+                        {Array.isArray(v.publishedPlatforms) && v.publishedPlatforms.length > 0 ? ` · ${v.publishedPlatforms.join(', ')}` : ''}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => restoreDraftVersion(v.id)}
+                      disabled={!!restoringVersionId}
+                      style={{ paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, backgroundColor: restoringVersionId ? '#E5E7EB' : 'rgba(147,200,34,0.16)' }}
+                    >
+                      {restoringVersionId === v.id ? (
+                        <ActivityIndicator size="small" color="#5D7E16" />
+                      ) : (
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#5D7E16' }}>Restore</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
             )}
           </View>
         </BaseModal>

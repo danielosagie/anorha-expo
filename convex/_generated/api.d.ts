@@ -9,7 +9,11 @@
  */
 
 import type * as campaigns from "../campaigns.js";
+import type * as crons from "../crons.js";
+import type * as grants from "../grants.js";
+import type * as listing from "../listing.js";
 import type * as messages from "../messages.js";
+import type * as presence from "../presence.js";
 import type * as threads from "../threads.js";
 
 import type {
@@ -20,7 +24,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   campaigns: typeof campaigns;
+  crons: typeof crons;
+  grants: typeof grants;
+  listing: typeof listing;
   messages: typeof messages;
+  presence: typeof presence;
   threads: typeof threads;
 }>;
 
