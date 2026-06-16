@@ -515,8 +515,8 @@ const PastScansScreen = () => {
   };
 
   const TABS: Array<{ key: 'drafts' | 'matches' | 'listings'; label: string }> = [
-    { key: 'drafts', label: 'Scan drafts' },
-    { key: 'matches', label: 'Matches' },
+    { key: 'drafts', label: 'Scan carts' },
+    //{ key: 'matches', label: 'Matches' },
     { key: 'listings', label: 'Listings' },
   ];
 
@@ -581,16 +581,19 @@ const styles = StyleSheet.create({
   pillTitle: { ...GLASS_HEADER_STYLES.pillTitle },
 
   // Segmented chips (chat quick-chip styling)
-  tabChips: { flexDirection: 'row', gap: 8, marginTop: 10, justifyContent: 'center' },
+  tabChips: { flexDirection: 'row', gap: 4, marginTop: 10, justifyContent: 'center' },
   tabChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    flex: 1,
+    minWidth: 150,
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 10,
     borderRadius: 16,
     backgroundColor: CHAT_COLORS.surface,
     marginHorizontal: 12,
   },
   tabChipActive: { backgroundColor: CHAT_COLORS.ink },
-  tabChipText: { fontSize: 13, color: '#52525B', fontFamily: CHAT_FONT.medium },
+  tabChipText: { textAlign: "center", fontSize: 14, color: '#52525B', fontFamily: CHAT_FONT.medium },
   tabChipTextActive: { color: CHAT_COLORS.white, fontFamily: CHAT_FONT.semibold },
 
   // List rows (chat card language: white, rounded 18, glass shadow)

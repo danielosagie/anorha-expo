@@ -497,6 +497,10 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         floorPrice?: number;
         status: string;
         imageUrl?: string;
+        sku?: string;
+        totalQuantity?: number;
+        lastSyncedAt?: string | null;
+        isStale?: boolean;
       }>;
     }>(`/api/agent/sessions/${campaignId}/items`);
     return (res.items || []).map(it => ({
@@ -508,6 +512,10 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       floorPrice: it.floorPrice,
       status: (it.status as ItemStatus) || 'listed',
       imageUrl: it.imageUrl,
+      sku: it.sku,
+      totalQuantity: it.totalQuantity,
+      lastSyncedAt: it.lastSyncedAt,
+      isStale: it.isStale,
     }));
   }
 

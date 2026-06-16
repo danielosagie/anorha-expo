@@ -1,11 +1,12 @@
 import { mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 
-const ensureIdentity = (ctx: any) => {
-  const identity = ctx.auth.getUserIdentity();
+const ensureIdentity = async (ctx: any) => {
+  const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new Error('Unauthorized');
   }
+  return identity;
 };
 
 const MESSAGE_FIELDS = v.object({
@@ -24,7 +25,7 @@ const MESSAGE_FIELDS = v.object({
 export const listByThread = query({
   args: { threadId: v.string() },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const rows = await ctx.db
       .query('thread_messages_cache')
       .withIndex('by_thread', q => q.eq('threadId', args.threadId))
@@ -107,7 +108,7 @@ export const cacheUpsertBatch = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const now = Date.now();
     let inserted = 0;
 

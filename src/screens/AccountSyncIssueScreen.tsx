@@ -27,8 +27,8 @@ export default function AccountSyncIssueScreen() {
     <View style={[styles.container, { backgroundColor: isDark ? '#0B1F1C' : '#F7F7F2' }]}>
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={[styles.card, { backgroundColor: isDark ? '#13201C' : '#FFFFFF', borderColor: isDark ? 'rgba(15, 118, 110, 0.3)' : 'rgba(15, 118, 110, 0.14)' }]}>
-          <View style={[styles.iconWrapper, { backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.12)' }]}>
-            <Icon name="account-sync" size={32} color="#F59E0B" />
+          <View style={[styles.iconWrapper, { backgroundColor: isDark ? '#f4f4f4' : '#f4f4f4' }]}>
+            <Icon name="account-sync" size={32} color="#666" />
           </View>
           <Text style={[styles.title, { color: isDark ? '#F7F7F2' : '#13201C' }]}>
             Account sync issue
@@ -37,7 +37,7 @@ export default function AccountSyncIssueScreen() {
             We couldn't confirm your account status. This can happen when your session is out of sync. Try again or sign out.
           </Text>
 
-          <TouchableOpacity style={[styles.primaryButton, { backgroundColor: '#0F766E' }]} onPress={onRetry}>
+          <TouchableOpacity style={[styles.primaryButton, { backgroundColor: '#666' }]} onPress={onRetry}>
             <Icon name="refresh" size={20} color="#FFFFFF" style={styles.buttonIcon} />
             <Text style={styles.primaryButtonText}>Retry</Text>
           </TouchableOpacity>

@@ -1,8 +1,8 @@
 import { mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 
-const ensureIdentity = (ctx: any) => {
-  const identity = ctx.auth.getUserIdentity();
+const ensureIdentity = async (ctx: any) => {
+  const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new Error('Unauthorized');
   }
@@ -19,7 +19,7 @@ export const upsertFromSession = mutation({
     metadata: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
-    const identity = ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
     const now = Date.now();
 
     const existing = await ctx.db
@@ -66,7 +66,7 @@ export const upsertFromSession = mutation({
 export const listCampaigns = query({
   args: {},
   handler: async (ctx) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const campaigns = await ctx.db.query('campaigns').collect();
     return campaigns.sort((a, b) => b.updatedAt - a.updatedAt);
   },
@@ -78,7 +78,7 @@ export const rename = mutation({
     title: v.string(),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const existing = await ctx.db
       .query('campaigns')
       .withIndex('by_campaign_id', q => q.eq('campaignId', args.campaignId))
@@ -102,7 +102,7 @@ export const remove = mutation({
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const existing = await ctx.db
       .query('campaigns')
       .withIndex('by_campaign_id', q => q.eq('campaignId', args.campaignId))

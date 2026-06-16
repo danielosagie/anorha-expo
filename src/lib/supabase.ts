@@ -127,6 +127,12 @@ export function isSupabaseBridgeUnavailableState(state: SupabaseJwtAcquisitionSt
 
 // Custom fetch for Supabase client to inject Authorization and handle 401 refresh
 const realFetch = globalThis.fetch.bind(globalThis);
+/**
+ * @deprecated MINT-BRIDGE FALLBACK — only attached to the Supabase client when
+ * EXPO_PUBLIC_CLERK_NATIVE_AUTH=false. Native Clerk auth (live since 2026-06-15) uses
+ * supabase-js's `accessToken` callback instead — no custom fetch, no 401-retry. Kept as
+ * the flip-back fallback; remove after the native soak. See docs/CLERK_NATIVE_AUTH.md.
+ */
 async function supabaseFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers || {});
   if (currentSupabaseJwt) {
@@ -175,6 +181,10 @@ export function getCurrentSupabaseJwt(): string | null {
   return currentSupabaseJwt;
 }
 
+/**
+ * @deprecated MINT-BRIDGE FALLBACK — drives the Clerk→Supabase token exchange. Bypassed
+ * under native auth (EXPO_PUBLIC_CLERK_NATIVE_AUTH=true). Remove after the native soak.
+ */
 async function refreshSupabaseToken(): Promise<boolean> {
   // If an exchange is already in progress, wait for it instead of starting another
   if (exchangeInProgress) {
@@ -212,11 +222,11 @@ function jwtExpiryMs(token: string | null): number | null {
 }
 
 /**
- * The current Supabase user id (JWT `sub` claim), decoded synchronously, or null
- * if no token is minted yet / it can't be parsed. Same atob/Buffer fallback as
- * jwtExpiryMs — no extra dependency. Lets callers that sit ABOVE the session
- * provider (e.g. PlatformConnectionsContext) scope realtime filters without a
- * network round-trip; returns null safely so callers degrade to RLS-only scoping.
+ * @deprecated Returns the raw JWT `sub` claim. That equals the internal Users.Id UUID ONLY
+ * under the mint bridge. Under native Clerk auth (CLERK_NATIVE_AUTH) `sub` is the Clerk user
+ * id (user_xxx), NOT Users.Id — so using it in a `UserId=eq.<id>` filter or query matches
+ * zero rows. For the internal user UUID use `getUserLike()` (the `me` view), which is correct
+ * in both auth modes. Kept only for backwards compatibility; has no in-app callers.
  */
 export function getSupabaseUserId(): string | null {
   const token = currentSupabaseJwt;
@@ -272,6 +282,11 @@ export async function ensureSupabaseJwt(): Promise<string | null> {
   return ok ? getSupabaseJwtState().token : null;
 }
 
+/**
+ * @deprecated MINT-BRIDGE FALLBACK — POSTs the Clerk token to /api/auth/exchange to mint a
+ * short-lived HS256 Supabase JWT. Not used under native auth (the Clerk session token is
+ * sent to Supabase directly). Remove after the native soak.
+ */
 async function exchangeClerkForSupabase(): Promise<boolean> {
   if (!getClerkTokenFn) {
     currentSupabaseJwt = null;
@@ -347,6 +362,10 @@ function clearRefreshTimer() {
 // Self-rescheduling refresh keyed off the token's real lifetime. We refresh
 // REFRESH_LEAD_SECONDS before `expires_in` elapses so the JWT (and Realtime auth)
 // never goes stale mid-session.
+/**
+ * @deprecated MINT-BRIDGE FALLBACK — the minted-token refresh timer. Native auth has no
+ * timer (supabase-js pulls a fresh Clerk token on demand). Remove after the native soak.
+ */
 function scheduleNextRefresh() {
   clearRefreshTimer();
   const lifetime = lastExpiresInSeconds && lastExpiresInSeconds > 0
@@ -415,21 +434,42 @@ export function stopClerkSupabaseBridge() {
   emitSupabaseJwtState();
 }
 
-// Compatibility shim: replace supabase.auth.getUser() with a view-based lookup
-// so existing screens can continue to call supabase.auth.getUser().
-// We return the same shape: { data: { user }, error }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(supabase as any).auth.getUser = async () => {
+// Compatibility shim for supabase.auth.getUser()/getSession() (~38 + 4 call sites).
+//
+// In native (CLERK_NATIVE_AUTH) mode supabase-js sets `supabase.auth` to a Proxy whose
+// get-trap THROWS on EVERY property access ("accessing supabase.auth.<x> is not
+// possible"), so the old `auth.getUser = fn` assignment was a silent no-op. We replace
+// the whole `auth` object with a Clerk-backed shim. In mint-bridge mode `supabase.auth`
+// is the real GoTrue client, so we only override getUser. User identity comes from the
+// `me` view in both modes; the session access_token is the current bridge/Clerk JWT.
+async function meUser(): Promise<{ user: { id: string; email: string } | null; error: unknown }> {
   const { data, error } = await supabase.from('me').select('Id, Email').maybeSingle();
-  if (error || !data) {
-    return { data: { user: null }, error };
-  }
-  return { data: { user: { id: data.Id, email: data.Email } }, error: null };
+  if (error || !data) return { user: null, error: error ?? null };
+  return { user: { id: data.Id, email: data.Email }, error: null };
+}
+
+const authGetUserShim = async () => {
+  const { user, error } = await meUser();
+  return { data: { user }, error };
 };
+
+const authGetSessionShim = async () => {
+  const access_token = await ensureSupabaseJwt();
+  return { data: { session: access_token ? { access_token } : null }, error: null };
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supabaseAuthAny = supabase as any;
+if (CLERK_NATIVE_AUTH) {
+  // `supabase.auth` is a throw-on-access Proxy — replace it wholesale.
+  supabaseAuthAny.auth = { getUser: authGetUserShim, getSession: authGetSessionShim };
+} else {
+  // Real GoTrue client — keep its methods, just override getUser to the me-view lookup.
+  supabaseAuthAny.auth.getUser = authGetUserShim;
+}
 
 // Optional explicit helper if you want to import directly
 export async function getUserLike() {
-  const { data, error } = await supabase.from('me').select('Id, Email').maybeSingle();
-  if (error || !data) return { user: null };
-  return { user: { id: data.Id, email: data.Email } };
+  const { user } = await meUser();
+  return { user };
 }

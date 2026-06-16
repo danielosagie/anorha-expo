@@ -36,18 +36,18 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                     style={{ maxHeight: '90%', backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16 }}
                     onPress={e => e.stopPropagation()}
                 >
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingTop: 20, paddingBottom: 12 }}>
                         <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
                         <TouchableOpacity onPress={onClose}>
                             <Icon name="close" size={24} color="#6B7280" />
                         </TouchableOpacity>
                     </View>
                     {pricingResearchResult?.error ? (
-                        <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+                        <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
                             <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
                         </View>
                     ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-                        <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 28 }}>
+                        <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 28 }}>
                             <PricingGuidanceCard
                                 headers="none"
                                 pricing={pricingResearchResult}
@@ -62,7 +62,7 @@ export const PricingResearchModal: React.FC<PricingResearchModalProps> = ({
                             />
                         </ScrollView>
                     ) : (
-                        <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
+                        <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
                             <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
                         </View>
                     )}

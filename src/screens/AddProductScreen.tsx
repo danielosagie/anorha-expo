@@ -29,20 +29,6 @@ import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
 import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem } from '../features/cart/cartStore';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
-
-// DEV: set true to force-render the pricing-research preview page for visual QA.
-// Normal flow restored when false; the page is still reachable via __ds === 'matchPreview'.
-const DEV_FORCE_MATCH_PREVIEW = false;
-// DEV: set true to seed a shelf folder + open its page for visual QA (remove after).
-const DEV_FORCE_FOLDER_PAGE = false;
-
-// One spring for the cart open/close + screen lift so every entry point feels identical
-// (settles quickly, slight give — "made by Shopify" smooth, no bounce-on-bounce).
-const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as const;
-
-// Active generation jobs, module-level so they SURVIVE AddProductScreen unmount (navigate-away):
-// the in-place poller re-attaches and resumes on remount instead of orphaning in-flight jobs.
-const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>>([]);
 import {
   View,
   Text,
@@ -63,6 +49,20 @@ import {
   PanResponder,
   AppState,
 } from 'react-native';
+
+// DEV: set true to force-render the pricing-research preview page for visual QA.
+// Normal flow restored when false; the page is still reachable via __ds === 'matchPreview'.
+const DEV_FORCE_MATCH_PREVIEW = false;
+// DEV: set true to seed a shelf folder + open its page for visual QA (remove after).
+const DEV_FORCE_FOLDER_PAGE = false;
+
+// One spring for the cart open/close + screen lift so every entry point feels identical
+// (settles quickly, slight give — "made by Shopify" smooth, no bounce-on-bounce).
+const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as const;
+
+// Active generation jobs, module-level so they SURVIVE AddProductScreen unmount (navigate-away):
+// the in-place poller re-attaches and resumes on remount instead of orphaning in-flight jobs.
+const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>>([]);
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -3154,7 +3154,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const normalizedJobId = analyzeResult?.jobId || analyzeResult?.job?.jobId || analyzeResult?.data?.jobId || null;
       if (!normalizedJobId) {
+        // No jobId means there is nothing to poll — fail loudly instead of returning a
+        // jobId:null that looks successful to callers (handled by the catch below).
         log.error('[ANALYZE] Missing jobId in response payload:', analyzeResult);
+        throw new Error('Analysis response did not include a jobId to poll.');
       }
 
       logFlowEvent(FlowEvents.SCAN_ANALYSIS_COMPLETED, {

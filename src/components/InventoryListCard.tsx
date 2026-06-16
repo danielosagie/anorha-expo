@@ -241,30 +241,34 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
               </View>
             </View>
 
-            {/* Stock Badge */}
-            <View
-              style={[
-                styles.stockBadge,
-                {
-                  borderColor: isOutOfStock ? '#9CA3AF' : isLowStock ? '#EF4444' : '#E5E7EB',
-                },
-              ]}
-            >
-              {isLowStock && !isOutOfStock && (
-                <Icon name="alert-outline" size={14} color="#EF4444" style={{ marginRight: 4 }} />
-              )}
-              {isOutOfStock && (
-                <Icon name="refresh" size={14} color="#6B7280" style={{ marginRight: 4 }} />
-              )}
-              <Text
+            {/* Stock Badge — only when quantity is known. Sources that don't track
+                stock (e.g. campaign items) pass totalQuantity undefined; we hide the
+                badge rather than show a misleading "0 Units Left". */}
+            {totalQuantity !== undefined ? (
+              <View
                 style={[
-                  styles.stockText,
-                  { color: isOutOfStock ? '#6B7280' : isLowStock ? '#EF4444' : '#374151' },
+                  styles.stockBadge,
+                  {
+                    borderColor: isOutOfStock ? '#9CA3AF' : isLowStock ? '#EF4444' : '#E5E7EB',
+                  },
                 ]}
               >
-                {totalQuantity ?? 0} Units Left
-              </Text>
-            </View>
+                {isLowStock && !isOutOfStock && (
+                  <Icon name="alert-outline" size={14} color="#EF4444" style={{ marginRight: 4 }} />
+                )}
+                {isOutOfStock && (
+                  <Icon name="refresh" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                )}
+                <Text
+                  style={[
+                    styles.stockText,
+                    { color: isOutOfStock ? '#6B7280' : isLowStock ? '#EF4444' : '#374151' },
+                  ]}
+                >
+                  {totalQuantity ?? 0} Units Left
+                </Text>
+              </View>
+            ) : null}
           </View>
         </View>
       </TouchableOpacity>

@@ -90,6 +90,10 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
 }) => {
   const p = pricing ?? {};
   const samples = p.samples ?? [];
+  // Modals (headers="none") render the stripped-down sheet: sold avg/median + the
+  // three price chips, then history/comps. The full preview screen keeps the
+  // richer breakdown (current value + suggested-range slider).
+  const compact = headers === 'none';
 
   const low = p.low;
   const high = p.high;
@@ -111,14 +115,6 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   const fillRight = hasRange ? pct(high!) : 1;
   const centerVal = typeof median === 'number' ? median : hasRange ? (low! + high!) / 2 : 0;
 
-  // Live eBay asking price (Browse API) — "listed right now", shown next to the
-  // sold-comp metrics so the seller sees both at a glance.
-  const live =
-    p.livePricing && (typeof p.livePricing.median === 'number' || typeof p.livePricing.low === 'number')
-      ? p.livePricing
-      : null;
-  const liveValue = live ? live.median ?? live.high ?? live.low : undefined;
-
   const recommended = typeof p.recommended === 'number' ? p.recommended : median;
   const sampleCount = p.sampleCount ?? (samples.length || undefined);
   const cached = cachedLabel(p.cachedAt);
@@ -139,10 +135,14 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
       {headers === 'screen' ? <Text style={styles.sectionHeader}>Pricing guidance</Text> : null}
 
       <View style={styles.priceCard}>
-        <Text style={styles.kicker}>CURRENT VALUE</Text>
-        <Text style={styles.bigValue}>{rangeText(low, high)}</Text>
+        {!compact ? (
+          <>
+            <Text style={styles.kicker}>CURRENT VALUE</Text>
+            <Text style={styles.bigValue}>{rangeText(low, high)}</Text>
+          </>
+        ) : null}
 
-        <View style={styles.metricRow}>
+        <View style={[styles.metricRow, compact && styles.metricRowFirst]}>
           <View style={styles.metricCol}>
             <Text style={styles.kicker}>SOLD AVG</Text>
             <Text style={styles.metricValue}>{money(average)}</Text>
@@ -151,41 +151,34 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
             <Text style={styles.kicker}>SOLD MEDIAN</Text>
             <Text style={styles.metricValue}>{money(median)}</Text>
           </View>
-          {live ? (
-            <View style={styles.metricCol}>
-              <Text style={[styles.kicker, styles.liveKicker]}>● LIVE</Text>
-              <Text style={styles.metricValue}>{money(liveValue)}</Text>
+        </View>
+
+        {!compact ? (
+          <>
+            <View style={styles.divider} />
+
+            <View style={styles.suggestedRow}>
+              <Text style={styles.suggestedLabel}>Suggested range</Text>
+              <Text style={styles.suggestedValue}>{rangeText(low, high)}</Text>
             </View>
-          ) : null}
-        </View>
-        {live && typeof live.sampleCount === 'number' ? (
-          <Text style={styles.liveMeta}>
-            {live.sampleCount} listed now{typeof live.low === 'number' && typeof live.high === 'number' ? ` · ${rangeText(live.low, live.high)}` : ''}
-          </Text>
+
+            {/* Slider band */}
+            <View style={styles.sliderTrack}>
+              <View
+                style={[
+                  styles.sliderFill,
+                  { left: `${fillLeft * 100}%`, right: `${(1 - fillRight) * 100}%` },
+                ]}
+              />
+              <View style={[styles.sliderTick, { left: `${pct(centerVal) * 100}%` }]} />
+            </View>
+            <View style={styles.sliderLabels}>
+              <Text style={styles.sliderLabel}>{money(sliderMin)}</Text>
+              <Text style={styles.sliderLabel}>{money(centerVal)}</Text>
+              <Text style={styles.sliderLabel}>{money(sliderMax)}</Text>
+            </View>
+          </>
         ) : null}
-
-        <View style={styles.divider} />
-
-        <View style={styles.suggestedRow}>
-          <Text style={styles.suggestedLabel}>Suggested range</Text>
-          <Text style={styles.suggestedValue}>{rangeText(low, high)}</Text>
-        </View>
-
-        {/* Slider band */}
-        <View style={styles.sliderTrack}>
-          <View
-            style={[
-              styles.sliderFill,
-              { left: `${fillLeft * 100}%`, right: `${(1 - fillRight) * 100}%` },
-            ]}
-          />
-          <View style={[styles.sliderTick, { left: `${pct(centerVal) * 100}%` }]} />
-        </View>
-        <View style={styles.sliderLabels}>
-          <Text style={styles.sliderLabel}>{money(sliderMin)}</Text>
-          <Text style={styles.sliderLabel}>{money(centerVal)}</Text>
-          <Text style={styles.sliderLabel}>{money(sliderMax)}</Text>
-        </View>
 
         {applyOptions ? (
           <View style={styles.applyRow}>
@@ -305,6 +298,7 @@ const styles = StyleSheet.create({
   metaLine: { color: COLORS.label, fontSize: 11.5, fontFamily: FONT.regular, marginTop: 4 },
 
   metricRow: { flexDirection: 'row', marginTop: 14 },
+  metricRowFirst: { marginTop: 0 },
   metricCol: { flex: 1 },
   metricValue: { color: COLORS.text, fontSize: 16, fontFamily: FONT.semibold, marginTop: 4 },
   liveKicker: { color: GREEN },

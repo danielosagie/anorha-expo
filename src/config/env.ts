@@ -61,6 +61,8 @@ export const ENV = {
   socketBaseUrl: SOCKET_BASE_URL,
   convexUrl: process.env.EXPO_PUBLIC_CONVEX_URL ?? '',
   clerkPublishableKey: process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? '',
+  /** @deprecated MINT-BRIDGE only — the Clerk JWT template for the legacy /api/auth/exchange
+   * path. Native auth sends the bare Clerk session token (no template). Remove after the soak. */
   clerkJwtTemplate: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase',
   supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
   aiServerUrl: process.env.EXPO_PUBLIC_AI_SERVER_URL ?? '',

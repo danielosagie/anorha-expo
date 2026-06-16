@@ -32,7 +32,7 @@ export default function NotificationSettingsScreen() {
     const loadPreferences = async () => {
         try {
             setLoading(true);
-            const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
+            const token = await getToken();
             const apiBaseUrl = API_BASE_URL;
             if (!apiBaseUrl) {
                 log.warn('API Base URL not found');
@@ -66,7 +66,7 @@ export default function NotificationSettingsScreen() {
         setPreferences(prev => ({ ...prev, [key]: newValue }));
 
         try {
-            const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
+            const token = await getToken();
             const apiBaseUrl = API_BASE_URL;
 
             // Map frontend key (PascalCase) to backend key (camelCase)
@@ -91,7 +91,7 @@ export default function NotificationSettingsScreen() {
     const sendTestNotification = async () => {
         try {
             setTestSending(true);
-            const token = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
+            const token = await getToken();
             const apiBaseUrl = API_BASE_URL;
             if (!apiBaseUrl) {
                 Alert.alert('Error', 'API base URL not configured');

@@ -1,8 +1,8 @@
 import { mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 
-const ensureIdentity = (ctx: any) => {
-  const identity = ctx.auth.getUserIdentity();
+const ensureIdentity = async (ctx: any) => {
+  const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new Error('Unauthorized');
   }
@@ -19,7 +19,7 @@ export const create = mutation({
     metadata: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const now = Date.now();
 
     const existing = await ctx.db
@@ -71,7 +71,7 @@ export const listByCampaign = query({
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const rows = await ctx.db
       .query('threads')
       .withIndex('by_campaign', q => q.eq('campaignId', args.campaignId))
@@ -91,7 +91,7 @@ export const updateMeta = mutation({
     lastMessageAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const existing = await ctx.db
       .query('threads')
       .withIndex('by_thread_id', q => q.eq('threadId', args.threadId))
@@ -133,7 +133,7 @@ export const remove = mutation({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const existing = await ctx.db
       .query('threads')
       .withIndex('by_thread_id', q => q.eq('threadId', args.threadId))
@@ -153,7 +153,7 @@ export const removeByCampaign = mutation({
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    ensureIdentity(ctx);
+    await ensureIdentity(ctx);
     const rows = await ctx.db
       .query('threads')
       .withIndex('by_campaign', q => q.eq('campaignId', args.campaignId))

@@ -9,7 +9,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
-import { Boxes, X, Sparkles, Pencil, ArrowLeft, ChevronLeft, History } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Pencil, ArrowLeft, ChevronLeft, History, Edit, PencilIcon } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import { CHAT_COLORS, CHAT_FONT, CHAT_SHADOWS, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
@@ -34,6 +34,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
+
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
@@ -1886,57 +1887,66 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Upload local image URIs to Supabase and return public URLs
   const uploadLocalImagesToSupabase = async (localUris: string[]): Promise<string[]> => {
     const publicUrls: string[] = [];
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
+    let lastError: string | null = null;
+    let attempted = 0;
 
-      for (const localUri of localUris) {
-        // Skip if already a public URL
-        if (localUri.startsWith('http://') || localUri.startsWith('https://')) {
-          publicUrls.push(localUri);
-          continue;
-        }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('You appear to be signed out. Please sign in again to add photos.');
 
-        try {
-          log.debug('[UPLOAD] Uploading image:', localUri);
-          // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
-          const compressed = await ImageManipulator.manipulateAsync(
-            localUri,
-            [{ resize: { width: 1920 } }], // Only downscale if wider than 1920px
-            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-          );
-          const response = await fetch(compressed.uri);
-          const arrayBuffer = await response.arrayBuffer();
-          const bytes = new Uint8Array(arrayBuffer);
-
-          const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-
-          const { data, error } = await supabase.storage
-            .from('product-images')
-            .upload(fileName, bytes, {
-              contentType: 'image/jpeg',
-              cacheControl: '86400', // 24h - reduces egress via browser cache
-            });
-
-          if (error) {
-            log.error('[UPLOAD] Supabase upload error:', error);
-            continue; // Skip this image but continue with others
-          }
-
-          const { data: urlData } = supabase.storage
-            .from('product-images')
-            .getPublicUrl(fileName);
-
-          const publicUrl = urlData.publicUrl;
-          log.debug('[UPLOAD] Successfully uploaded to:', publicUrl);
-          publicUrls.push(publicUrl);
-        } catch (err) {
-          log.error('[UPLOAD] Failed to upload image:', localUri, err);
-        }
+    for (const localUri of localUris) {
+      // Skip if already a public URL
+      if (localUri.startsWith('http://') || localUri.startsWith('https://')) {
+        publicUrls.push(localUri);
+        continue;
       }
-    } catch (err) {
-      log.error('[UPLOAD] Upload batch failed:', err);
+
+      attempted += 1;
+      try {
+        log.debug('[UPLOAD] Uploading image:', localUri);
+        // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
+        const compressed = await ImageManipulator.manipulateAsync(
+          localUri,
+          [{ resize: { width: 1920 } }], // Only downscale if wider than 1920px
+          { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        const response = await fetch(compressed.uri);
+        const arrayBuffer = await response.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+
+        const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+
+        const { data, error } = await supabase.storage
+          .from('product-images')
+          .upload(fileName, bytes, {
+            contentType: 'image/jpeg',
+            cacheControl: '86400', // 24h - reduces egress via browser cache
+          });
+
+        if (error) {
+          log.error('[UPLOAD] Supabase upload error:', error);
+          lastError = error.message || 'Storage upload failed';
+          continue; // Skip this image but continue with others
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('product-images')
+          .getPublicUrl(fileName);
+
+        const publicUrl = urlData.publicUrl;
+        log.debug('[UPLOAD] Successfully uploaded to:', publicUrl);
+        publicUrls.push(publicUrl);
+      } catch (err: any) {
+        log.error('[UPLOAD] Failed to upload image:', localUri, err);
+        lastError = err?.message || 'Upload failed';
+      }
     }
+
+    // If we tried to upload local files and none succeeded, surface the reason
+    // instead of returning [] (which silently no-ops the "Add Photo" action).
+    if (attempted > 0 && publicUrls.length === 0) {
+      throw new Error(lastError || 'Image upload failed. Please try again.');
+    }
+
     return publicUrls;
   };
 
@@ -2471,12 +2481,17 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const handleImagesChange = (newImages: string[]) => {
     log.debug('[GEN-DETAILS] handleImagesChange:', newImages.length, newImages);
-    if (!effectiveResult?.variantId) return;
 
-    setDbImages(prev => ({
-      ...prev,
-      [effectiveResult.variantId!]: newImages
-    }));
+    // Saved items have a variantId → key into the DB-image cache so Priority 1 picks it up.
+    // Freshly generated items have NO variantId yet — DON'T early-return (that silently
+    // dropped added photos). We still persist them onto the canonical platform draft below,
+    // which userImagesByIndex reads as Priority 2.
+    if (effectiveResult?.variantId) {
+      setDbImages(prev => ({
+        ...prev,
+        [effectiveResult.variantId!]: newImages
+      }));
+    }
 
     // Also update the 'images' field in the canonical platform data so it saves correctly
     updatePlatforms(prev => {
@@ -2604,9 +2619,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       // Upload the picked (camera or library) images to Supabase.
                       const uploadedUrls = await uploadLocalImagesToSupabase(assets.map(asset => asset.uri));
                       if (uploadedUrls.length > 0) onResult(uploadedUrls);
-                    } catch (error) {
+                    } catch (error: any) {
                       log.error('Error picking images:', error);
-                      Alert.alert('Error', 'Failed to add images. Please try again.');
+                      Alert.alert('Couldn’t add photo', error?.message || 'Failed to add images. Please try again.');
                     }
                   }}
                   onAddMissingField={(platformKey: string) => {
@@ -2754,97 +2769,98 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
           <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}>
             {isInputExpanded ? (
-            <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 }}>
+            <View style={{ flexDirection: 'column', justifyContent: "center", alignItems: 'flex-start', gap: 8, marginBottom: 4, minWidth: "100%" }}>
               <TouchableOpacity
                 onPress={() => { setIsInputExpanded(false); setQuickFixText(''); }}
                 activeOpacity={0.85}
-                style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F2EE' }}
+                style={{ flexDirection: "row", height: 40, borderRadius: 20, alignSelf: 'center', alignItems: "center", paddingHorizontal: 12, gap: 6, justifyContent: 'center', backgroundColor: '#F1F2EE' }}
               >
-                <X size={18} color={CHAT_COLORS.ink} />
+                <X size={18} color={CHAT_COLORS.inkSoft} />
+                <Text style={{ fontSize: 14, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.ink }}>Cancel</Text>
               </TouchableOpacity>
-              <View style={{ flex: 1 }}>
-            <MessageComposer
-              autoFocus
-              value={quickFixText}
-              onChangeText={setQuickFixText}
-              placeholder="Wanna change something?"
-              queuedCount={0}
-              isStreaming={quickFixLoading}
-              getAuthToken={ensureSupabaseJwt}
-              onSend={async () => {
-                const text = quickFixText.trim();
-                if (!text) return;
-                setQuickFixText('');
-                try {
-                  setQuickFixLoading(true);
-                  const baseUrl = API_BASE_URL;
-                  const token = await ensureSupabaseJwt();
-                  const productId = (route.params as any)?.productId || effectiveResult?.productId;
-                  const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
-                  if (!baseUrl || !productId || !token) return;
+              <View style={{ flex: 1, minWidth: "100%" }}>
+                <MessageComposer
+                  autoFocus
+                  value={quickFixText}
+                  onChangeText={setQuickFixText}
+                  placeholder="Wanna change something?"
+                  queuedCount={0}
+                  isStreaming={quickFixLoading}
+                  getAuthToken={ensureSupabaseJwt}
+                  onSend={async () => {
+                    const text = quickFixText.trim();
+                    if (!text) return;
+                    setQuickFixText('');
+                    try {
+                      setQuickFixLoading(true);
+                      const baseUrl = API_BASE_URL;
+                      const token = await ensureSupabaseJwt();
+                      const productId = (route.params as any)?.productId || effectiveResult?.productId;
+                      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
+                      if (!baseUrl || !productId || !token) return;
 
-                  const targetPlatform = platformKeys[0];
+                      const targetPlatform = platformKeys[0];
 
-                  const res = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      mode: 'quick_fix',
-                      products: [{
-                        productIndex: currentProductIndex,
-                        productId,
-                        variantId,
-                        regenerateType: 'specific_fields',
-                        targetPlatform,
-                        userQuery: text,
-                        currentProductData: displayedPlatforms,
-                      }],
-                    }),
-                  });
+                      const res = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          mode: 'quick_fix',
+                          products: [{
+                            productIndex: currentProductIndex,
+                            productId,
+                            variantId,
+                            regenerateType: 'specific_fields',
+                            targetPlatform,
+                            userQuery: text,
+                            currentProductData: displayedPlatforms,
+                          }],
+                        }),
+                      });
 
-                  if (!res.ok) throw new Error('Quick fix failed');
-                  const data = await res.json();
+                      if (!res.ok) throw new Error('Quick fix failed');
+                      const data = await res.json();
 
-                  // Apply fixes to displayed platforms
-                  if (data?.results?.[0]?.fixes) {
-                    const fixes = data.results[0].fixes;
-                    const changedFields = data.results[0].changedFields || [];
+                      // Apply fixes to displayed platforms
+                      if (data?.results?.[0]?.fixes) {
+                        const fixes = data.results[0].fixes;
+                        const changedFields = data.results[0].changedFields || [];
 
-                    updatePlatforms(prev => {
-                      const updated = { ...prev };
-                      for (const [platform, fieldChanges] of Object.entries(fixes as Record<string, any>)) {
-                        updated[platform] = {
-                          ...(updated[platform] || {}),
-                          ...fieldChanges,
-                          __refilled: Array.from(new Set([
-                            ...((updated[platform] as any)?.__refilled || []),
-                            ...Object.keys(fieldChanges as Record<string, any>),
-                          ])),
-                        };
+                        updatePlatforms(prev => {
+                          const updated = { ...prev };
+                          for (const [platform, fieldChanges] of Object.entries(fixes as Record<string, any>)) {
+                            updated[platform] = {
+                              ...(updated[platform] || {}),
+                              ...fieldChanges,
+                              __refilled: Array.from(new Set([
+                                ...((updated[platform] as any)?.__refilled || []),
+                                ...Object.keys(fieldChanges as Record<string, any>),
+                              ])),
+                            };
+                          }
+                          return updated;
+                        });
+
+                        log.debug('[QuickFix] Applied fixes to fields:', changedFields);
                       }
-                      return updated;
-                    });
-
-                    log.debug('[QuickFix] Applied fixes to fields:', changedFields);
-                  }
-                } catch (e) {
-                  log.error('[QuickFix] Error:', e);
-                  Alert.alert('Fix failed', 'Could not apply the AI fix. Please try again.');
-                } finally {
-                  setQuickFixLoading(false);
-                }
-              }}
-            />
+                    } catch (e) {
+                      log.error('[QuickFix] Error:', e);
+                      Alert.alert('Fix failed', 'Could not apply the AI fix. Please try again.');
+                    } finally {
+                      setQuickFixLoading(false);
+                    }
+                  }}
+                />
               </View>
             </View>
             ) : (
             <TouchableOpacity
               onPress={() => setIsInputExpanded(true)}
               activeOpacity={0.85}
-              style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22, backgroundColor: '#F4F4F2', borderWidth: 1, borderColor: '#ECECEA', marginBottom: 12 }}
+              style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22, backgroundColor: '#F4F4F2', borderWidth: 1, borderColor: CHAT_COLORS.border, marginBottom: 0 }}
             >
-              <Sparkles size={15} color={CHAT_COLORS.dim} />
-              <Text style={{ fontSize: 14, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim }}>Wanna change something?</Text>
+              <PencilIcon size={15} color={CHAT_COLORS.inkSoft} />
+              <Text style={{ fontSize: 14, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.inkSoft }}>Wanna change something?</Text>
             </TouchableOpacity>
             )}
 
@@ -2855,8 +2871,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 bottom: 0,
                 left: 0,
                 right: 0,
-                paddingHorizontal: 0,
-                marginBottom: 0,
+                paddingHorizontal: 18,
+                marginBottom: 12,
               }}
               primaryLabel={
                 canPublish
