@@ -28,6 +28,7 @@ import { ConversationList } from '../features/liquidationConversation/components
 import { ConvexLiveMessages } from '../features/liquidationConversation/ConvexLiveMessages';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import QuestionCard from '../features/liquidationConversation/components/QuestionCard';
+import PlanCard from '../features/liquidationConversation/components/PlanCard';
 import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
 
 const CONVEX_TEMPLATE =
@@ -392,6 +393,16 @@ const CampaignThreadScreen = () => {
             contentBottomInset reserves room for the whole composer area (not just the footer)
             and the last message can't hide behind the pending-question card. */}
         <View onLayout={e => setFooterH(e.nativeEvent.layout.height)}>
+        {/* ── Sprout's proposed plan (Accept / Revise / Follow-up), above the composer ── */}
+        {controller.pendingPlan && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+            <PlanCard
+              prompt={controller.pendingPlan}
+              onDecision={controller.submitDecision}
+            />
+          </View>
+        )}
+
         {/* ── Sprout's structured question (tappable options), above the composer ── */}
         {controller.pendingQuestion && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>

@@ -10,6 +10,7 @@ import type {
   StreamTurnObserver,
   CreateCampaignInput,
   CreateThreadInput,
+  DecisionPrompt,
   DecisionSubmission,
   NegotiationDecisionInput,
   QuestionPrompt,
@@ -33,6 +34,7 @@ export interface ConversationDataAdapter {
   deleteThread(campaignId: string, threadId: string): Promise<void>;
   submitDecision(campaignId: string, threadId: string, decision: DecisionSubmission): Promise<void>;
   getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null>;
+  getPendingPlan(campaignId: string, threadId: string): Promise<DecisionPrompt | null>;
   answerQuestion(campaignId: string, pendingActionId: string, answer: { answers?: Record<string, string[]>; other?: string; text?: string }): Promise<void>;
   getCampaignConfig(campaignId: string): Promise<CampaignConfig>;
   updateCampaignConfig(campaignId: string, update: CampaignConfigUpdate): Promise<CampaignConfig>;

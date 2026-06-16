@@ -100,6 +100,11 @@ export interface CampaignThreadSummary {
   metadata?: Record<string, unknown>;
 }
 
+export interface PlanStep {
+  title: string;
+  detail?: string;
+}
+
 export interface DecisionPrompt {
   id: string;
   kind: 'approve' | 'revise' | 'follow_up';
@@ -109,6 +114,12 @@ export interface DecisionPrompt {
   reviseLabel?: string;
   followUpLabel?: string;
   strategyId?: string;
+  // Generic plan (propose_plan pending action) — present when this card came from a plan
+  // proposal rather than a strategy approval. planId is the pending-action id approval hits.
+  planId?: string;
+  planType?: string;
+  summary?: string;
+  steps?: PlanStep[];
 }
 
 export interface QuestionOption {
@@ -245,6 +256,7 @@ export interface DecisionSubmission {
   decisionId: string;
   action: 'approve' | 'revise' | 'follow_up';
   strategyId?: string;
+  planId?: string;
   content?: string;
 }
 

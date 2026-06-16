@@ -57,6 +57,7 @@ export const useLiquidationConversationController = ({
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [threads, setThreads] = useState<CampaignThreadSummary[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<QuestionPrompt | null>(null);
+  const [pendingPlan, setPendingPlan] = useState<DecisionPrompt | null>(null);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [campaignOverview, setCampaignOverview] = useState<CampaignOverview | null>(null);
   const [campaignConfig, setCampaignConfig] = useState<CampaignConfig | null>(null);
@@ -784,13 +785,24 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter]);
 
+  // The open propose_plan proposal (if any) → the Accept/Revise plan card.
+  const refreshPendingPlan = useCallback(async (campaignId: string, threadId: string) => {
+    if (!campaignId || !threadId) return;
+    try {
+      setPendingPlan(await adapter.getPendingPlan(campaignId, threadId));
+    } catch {
+      /* non-fatal — the plan card just won't show */
+    }
+  }, [adapter]);
+
   // Refresh on thread switch and whenever a turn finishes streaming (Sprout may
-  // have just asked, or the answer may have closed the question).
+  // have just asked / proposed, or the answer may have closed the question/plan).
   useEffect(() => {
     const cid = activeCampaignIdRef.current;
     if (!cid || !activeThreadId || isStreaming) return;
     void refreshPendingQuestion(cid, activeThreadId);
-  }, [activeThreadId, isStreaming, refreshPendingQuestion]);
+    void refreshPendingPlan(cid, activeThreadId);
+  }, [activeThreadId, isStreaming, refreshPendingQuestion, refreshPendingPlan]);
 
   const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {
     const campaignId = activeCampaignIdRef.current;
@@ -830,7 +842,10 @@ export const useLiquidationConversationController = ({
         decisionId: prompt.id,
         action,
         strategyId: prompt.strategyId,
+        planId: prompt.planId,
       });
+      // A plan decision resolves the card right away (approve runs it; revise/follow_up drop it).
+      if (prompt.planId) setPendingPlan(null);
       const remoteMessages = await adapter.getMessages(campaignId, threadId);
       setThreadStateFor(threadId, current => ({
         ...current,
@@ -947,6 +962,7 @@ export const useLiquidationConversationController = ({
     cancelQueuedMessage,
     submitDecision,
     pendingQuestion,
+    pendingPlan,
     answeringQuestion,
     submitAnswer,
     ingestLiveMessages,
