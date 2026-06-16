@@ -400,44 +400,6 @@ const getSelectedQuickMatchCandidate = (
   };
 };
 
-// Full-match (orchestrate/match) result → ordered candidate list. The reranker ranks a
-// subset of the raw serpApiData rows (rerankedResults[].serpApiIndex); reorder serpApiData
-// by that ranking, then append any rows the reranker didn't rank. Mirrors the same merge
-// MatchSelectionScreen uses, so the in-camera card and the match picker agree. The rows are
-// raw SerpAPI candidates ({ title, price:{extracted_value}, thumbnail, link, source }) which
-// performQuickScan's parser already understands.
-const reorderMatchJobCandidates = (result: any): any[] => {
-  const base: any[] = Array.isArray(result?.serpApiData) ? result.serpApiData : [];
-  const reranked: any[] = Array.isArray(result?.rerankedResults) ? result.rerankedResults : [];
-  // Fallback: if the raw SerpAPI rows are missing but the reranker still returned ranked rows
-  // (they carry their own title/link/imageUrl), surface THOSE rather than collapsing to a
-  // false "no matches". Shape them like the SerpAPI candidate the parser reads.
-  if (!base.length) {
-    return reranked.map((r: any) => ({
-      title: r?.title,
-      link: r?.link,
-      productUrl: r?.link,
-      thumbnail: r?.imageUrl,
-      image: r?.imageUrl,
-      imageUrl: r?.imageUrl,
-      snippet: r?.snippet,
-    }));
-  }
-  if (!reranked.length) return base;
-  const ordered: any[] = [];
-  const used = new Set<number>();
-  for (const item of reranked) {
-    const idx = item?.serpApiIndex;
-    // Number.isInteger guards against a float/NaN index silently indexing past the array.
-    if (Number.isInteger(idx) && base[idx] && !used.has(idx)) {
-      ordered.push(base[idx]);
-      used.add(idx);
-    }
-  }
-  base.forEach((candidate, index) => { if (!used.has(index)) ordered.push(candidate); });
-  return ordered;
-};
-
 const rankedCandidatesToQuickMatchHintCandidates = (candidates: MatchCandidate[] = []): any[] => (
   candidates.map((candidate, index) => ({
     position: index + 1,
@@ -581,6 +543,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         : initialShelfProgressState()
   );
   const shelfScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
+  const quickScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
   const lastShelfScanPhotoRef = useRef<CapturedPhoto | null>(null);
 
   // Fetch platform locations on mount (with platformType from connections)
@@ -749,6 +712,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     itemStageById: params?.itemStageById || {},
     processedItemIds: params?.processedItemIds || [],
   }));
+
+  // Live mirror of bulkItems for callbacks (performQuickScan / stream handlers) that must read
+  // the CURRENT items without taking bulkItems as a dependency. Used to skip writing scan
+  // results for an item the user deleted mid-match (avoids resurrecting orphaned store entries).
+  const bulkItemsRef = useRef(bulkItems);
+  bulkItemsRef.current = bulkItems;
 
   // Map the previewed cart item (photo + confirmed/quick match + pricing) into the MatchPreview shape.
   const previewData = useMemo<MatchPreviewData | undefined>(() => {
@@ -1241,6 +1210,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setShowProgressBar(false);
     quickScanCancelledRef.current = true;
     quickScanQueueRef.current = [];
+    quickScanStreamRef.current?.close();
+    quickScanStreamRef.current = null;
     void saveDraftToBackend({
       scannedItems: nextBulkItems,
       matchContext: nextQuickScanStore,
@@ -2726,128 +2697,96 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const token = tokenMaybe;
 
-      // FULL MATCH — the whole matcher (local inventory + web search + reranking), submitted
-      // as an async job and polled in place. This replaces the lightweight quick-scan so every
-      // scan AND every "Wrong item?" correction runs the real pipeline. options.textHint fuses
-      // a typed correction with the photo for a combined image+text match. skipMatchSelection
-      // is false so we get ranked candidates back to review here (not an auto-generated listing).
-      const matchSubmitUrl = `${API_BASE_URL}/api/products/orchestrate/match`;
-      const response = await fetch(matchSubmitUrl, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          products: [{
-            productIndex: 0,
-            images: [{
-              url: publicImageUrl,
-              metadata: { id: photo.id, timestamp: photo.timestamp, width: photo.width, height: photo.height },
-            }],
+      // FULL MATCH over a CLEAN STREAMING CONNECTION (SSE) — not HTTP polling. The agentic
+      // matcher (local inventory + eBay web search + image-crop search; the precision gate
+      // applies to its local lane) streams progress phases then a SEARCH_RESULT, and we resolve
+      // when it COMPLETEs. Reuses the same react-native-sse client the shelf/text scans use.
+      // options.textHint fuses a typed correction with the photo for a combined image+text match.
+      // Billing is gated UPFRONT by preflightAIGate above; the SSE endpoint can't return a clean
+      // 402, so a payment failure surfaces as a connection error (rare — preflight catches it).
+      quickScanStreamRef.current?.close();
+      quickScanStreamRef.current = null;
+      const streamResult = await new Promise<{ matches: any[]; confidence: any } | null>((resolve, reject) => {
+        let latestMatches: any[] = [];
+        let latestConfidence: any = 'medium';
+        let settled = false;
+        const finish = (run: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearInterval(cancelWatcher);
+          quickScanStreamRef.current?.close();
+          quickScanStreamRef.current = null;
+          run();
+        };
+        // Cancellation settles the promise even when the stream is closed externally (a delete /
+        // teardown calls stream.close(), which fires NO event) — without this the await would hang.
+        const cancelWatcher = setInterval(() => {
+          if (quickScanCancelledRef.current) finish(() => resolve(null));
+        }, 400);
+        quickScanStreamRef.current = openQuickScanStream({
+          url: `${API_BASE_URL}/api/products/orchestrate/quick-scan-stream`,
+          token,
+          body: {
+            images: [{ url: publicImageUrl, metadata: { id: photo.id, timestamp: photo.timestamp, width: photo.width, height: photo.height } }],
             ...(options?.textHint ? { textQuery: options.textHint } : {}),
-          }],
-          options: {
-            useReranking: true,
-            vectorSearchLimit: 10,
-            skipMatchSelection: false,
-            autoGenerateAllPlatforms: false,
+            targetSites: ['general', 'ebay.com'],
+            reranker: 'llama4-groq',
+            mode: 'ocr-vlm-search',
           },
-        }),
+          onEvent: (evt) => {
+            if (quickScanCancelledRef.current) { finish(() => resolve(null)); return; }
+            // Surface the agent's human-readable progress message as the card's live stage text.
+            if (evt.message && evt.type !== 'COMPLETE') {
+              setItemLoadingStates(prev => ({ ...prev, [itemId]: { isLoading: true, stage: evt.message as string, error: undefined } }));
+            }
+            // Matches arrive either in an intermediate SEARCH_RESULT (evt.result.matches) OR in
+            // the terminal payload (evt.data.results[].matches — where this backend actually puts
+            // the final list). Capture whichever we see, preferring the latest non-empty.
+            const fromResult = Array.isArray(evt.result?.matches) ? evt.result.matches : null;
+            const fromData = Array.isArray(evt.data?.results) ? evt.data.results.flatMap((r: any) => r?.matches || []) : null;
+            const seen = (fromResult && fromResult.length) ? fromResult : ((fromData && fromData.length) ? fromData : null);
+            if (seen) {
+              latestMatches = seen;
+              latestConfidence = evt.result?.confidence ?? evt.data?.overallConfidence ?? latestConfidence;
+            }
+            // Resolve on a terminal event (COMPLETE / NO_ITEMS) or as soon as a terminal data
+            // payload (evt.data.results) lands — even under a non-standard terminal type.
+            if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || Array.isArray(evt.data?.results)) {
+              finish(() => resolve({ matches: latestMatches, confidence: latestConfidence }));
+            } else if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
+              finish(() => reject(new Error(evt.message || 'Match failed.')));
+            }
+          },
+          onConnectionError: (message) => { finish(() => reject(new Error(message || 'Connection failed.'))); },
+        });
       });
 
-      // 🎯 FREEMIUM: Handle 402 Payment Required (free tier exhausted) on submit
-      if (response.status === 402) {
-        const errorData = await response.json();
-        log.debug('[FULL MATCH] Free tier exhausted:', errorData);
-        const gate = normalizeBillingGateResponse(errorData, 'ai_quick_scan');
-        await persistPendingQuickScan(photo, itemId);
-        const decision = await presentBillingGateSheet(gate);
-        scanErrorMessage = gate.message;
+      // Cancelled (or the stream was closed out from under us): bail without mutating state.
+      if (quickScanCancelledRef.current || !streamResult) return;
+
+      // The match ran — count usage + clear any persisted billing-pending scan.
+      incrementLocalUsage();
+      await clearPendingQuickScan();
+
+      // Skip writing results for an item the user deleted mid-match — avoids resurrecting an
+      // orphaned quickScanStore/confirmed entry for an item that no longer exists.
+      if (!bulkItemsRef.current.some((it) => it.id === itemId)) {
+        log.debug('[QUICK SCAN] Item removed mid-match; discarding results for', itemId);
         return;
       }
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      // Submit cleared the billing gate — drop the persisted billing-pending scan.
-      // (Usage is counted AFTER the job completes, below — not here — so a timed-out /
-      // unreachable match never burns a scan with nothing to show.)
-      await clearPendingQuickScan();
-
-      const submit = await response.json();
-      const matchJobId: string | undefined = submit?.jobId || submit?.job?.jobId || submit?.data?.jobId;
-      if (!matchJobId) throw new Error('Match did not return a jobId to poll.');
-
-      // Poll the match job to completion (full match ~10-15s). Surface the backend's stage
-      // text so the card shows live progress; abort cleanly if the scan was cancelled; and
-      // bail fast (rather than freezing on "Searching…" for the full timeout) if status
-      // checks keep failing — a down matcher should surface an error, not a 90s hang.
-      const MATCH_POLL_INTERVAL_MS = 1500;
-      const MATCH_POLL_TIMEOUT_MS = 90000;
-      const MATCH_POLL_MAX_CONSECUTIVE_ERRORS = 8;
-      const matchPollStart = Date.now();
-      let matchResult: any = null;
-      let matchPollErrors = 0;
-      for (;;) {
-        if (quickScanCancelledRef.current) return;
-        if (Date.now() - matchPollStart > MATCH_POLL_TIMEOUT_MS) {
-          throw new Error('Match timed out. Please try again.');
-        }
-        await new Promise((resolve) => setTimeout(resolve, MATCH_POLL_INTERVAL_MS));
-        if (quickScanCancelledRef.current) return;
-        let statusSnap: any = null;
-        try {
-          const statusRes = await fetch(
-            `${API_BASE_URL}/api/products/match/jobs/${encodeURIComponent(matchJobId)}/status`,
-            { headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } },
-          );
-          if (!statusRes.ok) throw new Error(`status ${statusRes.status}`);
-          statusSnap = await statusRes.json();
-          matchPollErrors = 0; // reset on a good read
-        } catch {
-          if (++matchPollErrors >= MATCH_POLL_MAX_CONSECUTIVE_ERRORS) {
-            throw new Error('Could not reach the matcher. Please try again.');
-          }
-          continue; // transient — keep polling
-        }
-        if (quickScanCancelledRef.current) return; // a cancel may have landed during the await/parse
-        if (statusSnap?.currentStage) {
-          setItemLoadingStates(prev => ({
-            ...prev,
-            [itemId]: { isLoading: true, stage: statusSnap.currentStage, error: undefined },
-          }));
-        }
-        if (statusSnap?.status === 'completed') {
-          matchResult = Array.isArray(statusSnap?.results) ? statusSnap.results[0] : null;
-          break;
-        }
-        if (statusSnap?.status === 'failed') {
-          throw new Error(statusSnap?.error || 'Match failed.');
-        }
-      }
-
-      if (quickScanCancelledRef.current) return;
-
-      // The match job actually ran — count usage now (post-completion).
-      incrementLocalUsage();
-
-      if (!matchResult) log.warn('[FULL MATCH] Job completed with no result object for item:', itemId);
-
-      // Shape the match-job result into what the parser below expects: an ordered candidate
-      // list under results[0].matches (the parser already reads serpApiData candidate fields).
-      const orderedMatchCandidates = reorderMatchJobCandidates(matchResult);
-      // Confidence comes back as a string enum ('high'|'medium'|'low'); shouldAutoSelectQuickMatch
-      // compares it NUMERICALLY, so map it (high→0.9, medium→0.6, low→0.2 — same mapping used
-      // elsewhere in this file) or auto-confirm would never fire on the full-match path.
-      const matchConfidenceLabel: string = matchResult?.confidence || 'medium';
+      const streamMatches: any[] = streamResult.matches || [];
+      // Confidence is a string enum ('high'|'medium'|'low'); shouldAutoSelectQuickMatch compares
+      // it NUMERICALLY, so map it (high→0.9, medium→0.6, low→0.2) or auto-confirm never fires.
+      const matchConfidenceLabel: string = typeof streamResult.confidence === 'string' ? streamResult.confidence : 'medium';
       const matchConfidenceNum = matchConfidenceLabel === 'high' ? 0.9 : matchConfidenceLabel === 'medium' ? 0.6 : 0.2;
-      // Typed `any` to match the original `response.json()` shape the parser below reads
-      // loosely (result.results[].matches, result.matches, result.quickScanMatches).
+      // Typed `any` — the parser below reads it loosely (result.results[].matches, etc.).
       const result: any = {
-        recommendedAction: matchResult?.matchDecision === 'matched' ? 'show_single_match' : 'show_multiple_matches',
+        recommendedAction: matchConfidenceLabel === 'high' ? 'show_single_match' : 'show_multiple_matches',
         overallConfidence: matchConfidenceLabel,
         results: [{
-          matches: orderedMatchCandidates,
-          rerankerAnalysis: { confidence: matchConfidenceNum, reasoning: matchResult?.matchDecisionReason },
+          matches: streamMatches,
+          rerankerAnalysis: { confidence: matchConfidenceNum, reasoning: undefined },
         }],
       };
 
@@ -3016,6 +2955,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       showNotificationMessage('Quick scan failed. Retrying in background...', 3000);
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
+      // Make sure the SSE connection is torn down on every exit (success, error, or early
+      // return) so we never leak a live EventSource.
+      quickScanStreamRef.current?.close();
+      quickScanStreamRef.current = null;
       setIsAutoScanning(false);
       if (scanErrorMessage) {
         setItemLoadingStates(prev => ({
@@ -3787,6 +3730,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Cancel any in-progress quick scan so it doesn't reopen sheets
     quickScanCancelledRef.current = true;
     quickScanQueueRef.current = [];
+    quickScanStreamRef.current?.close();
+    quickScanStreamRef.current = null;
     setIsAutoScanning(false);
     stopProgressAnimation();
     setShowProgressBar(false);
