@@ -1,21 +1,24 @@
 import React from 'react';
-import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, UIManager, View, ViewStyle } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
-import Constants, { ExecutionEnvironment } from 'expo-constants';
 
-// The progressive-blur effect needs the native RNCMaskedView view manager. It ships in
-// every real build (dev client, preview, production) and is absent ONLY in Expo Go.
+// The progressive-blur effect needs the native RNCMaskedView view manager. masked-view
+// registers through the legacy/interop view-manager path here (even on the New
+// Architecture), so UIManager.getViewManagerConfig is a reliable probe: it returns the
+// config when the native module is compiled into the build, and null when it isn't.
 //
-// The previous gate probed UIManager.getViewManagerConfig('RNCMaskedView'), but that
-// legacy API returns null on the New Architecture (Fabric) even when the view IS
-// registered — a false negative that silently forced the flat uniform-blur fallback on
-// EVERY screen using this component (header + composer across the app). Gate on the
-// runtime instead: only Expo Go lacks the native module, and this app always runs as a
-// dev client / standalone build, never Expo Go. The BlurBoundary below stays as a final
-// safety net in case the module is somehow missing from a build.
-const MASKED_VIEW_AVAILABLE = Constants.executionEnvironment !== ExecutionEnvironment.StoreClient;
+// When it's absent (an old dev client built BEFORE the masked-view dependency was added,
+// or Expo Go), mounting MaskedView throws "View config not found for component
+// RNCMaskedView" as a fatal redbox that the error boundary below can't swap out in time.
+// So we detect availability up front and render the plain uniform BlurView fallback
+// instead. A build that includes masked-view passes this check and gets the real blur —
+// the fix for a flat blur is to REBUILD/REINSTALL, not to bypass this gate.
+const MASKED_VIEW_AVAILABLE = !!(
+  (UIManager.getViewManagerConfig && UIManager.getViewManagerConfig('RNCMaskedView')) ||
+  (UIManager.hasViewManagerConfig && UIManager.hasViewManagerConfig('RNCMaskedView'))
+);
 
 type Props = {
   /** Max blur intensity (at the strong edge). expo-blur scale 0-100. */
