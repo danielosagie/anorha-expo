@@ -17,6 +17,7 @@ type Props = {
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
   onOpenCart?: (sessionId: string) => void;
+  onCancelQueued?: (clientMessageId: string) => void;
   ListHeaderComponent?: React.ReactElement | null;
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
@@ -29,6 +30,7 @@ export const ConversationList = ({
   onDecision,
   onRetry,
   onOpenCart,
+  onCancelQueued,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
@@ -57,16 +59,25 @@ export const ConversationList = ({
 
   // Keep pinned to the bottom without flicker: stream deltas pin instantly
   // (animated:false), only a brand-new message gets a gentle animated scroll.
+  // Also re-pin when the bottom inset grows (the keyboard opening pushes the feed up
+  // via contentBottomInset) so the latest message stays visible above the lifted
+  // composer — unless the seller has scrolled up to read history (showJumpToLatest).
   const prevLenRef = useRef(0);
+  const prevBottomRef = useRef(contentBottomInset ?? 0);
   useEffect(() => {
     if (showJumpToLatest) {
       prevLenRef.current = messages.length;
+      prevBottomRef.current = contentBottomInset ?? 0;
       return;
     }
     const grew = messages.length > prevLenRef.current;
+    const insetGrew = (contentBottomInset ?? 0) > prevBottomRef.current;
     prevLenRef.current = messages.length;
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
-  }, [messages, showJumpToLatest]);
+    prevBottomRef.current = contentBottomInset ?? 0;
+    if (grew || insetGrew) {
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
+    }
+  }, [messages, showJumpToLatest, contentBottomInset]);
 
   if (loading) {
     return (
@@ -92,7 +103,7 @@ export const ConversationList = ({
         }}
         ListHeaderComponent={ListHeaderComponent}
         renderItem={({ item }) => (
-          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} />
+          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} onCancelQueued={onCancelQueued} />
         )}
         ListEmptyComponent={(
           <View style={styles.emptyState}>

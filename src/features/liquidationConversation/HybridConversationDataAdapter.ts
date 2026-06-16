@@ -625,6 +625,24 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       return;
     }
 
+    // Generic plan (propose_plan pending action): approve runs the bundled action via the
+    // backend executor; revise/follow_up reject the proposal and send the seller's note so
+    // Sprout re-plans. Keyed by planId (the pending-action id), not a thread.
+    if (decision.planId) {
+      if (decision.action === 'approve') {
+        await this.requestNest(`/api/agent/sessions/${campaignId}/pending-actions/${decision.planId}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ note: decision.content }),
+        });
+        return;
+      }
+      // Drop the proposed plan (best-effort) before sending the seller's revision note below.
+      await this.requestNest(`/api/agent/sessions/${campaignId}/pending-actions/${decision.planId}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ note: decision.content }),
+      }).catch(() => undefined);
+    }
+
     const fallbackContent =
       decision.action === 'revise'
         ? 'Please revise the strategy with a more conservative execution path.'
@@ -645,17 +663,71 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
   // The newest unanswered ask_seller_question pending action for this thread,
   // hydrated into a QuestionPrompt. Null when Sprout isn't waiting on a choice.
   async getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null> {
-    const res = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+    const pick = (actions: any[] | undefined): QuestionPrompt | null => {
+      const open = (actions || [])
+        .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
+        .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+      const action = open[0];
+      const questions = action?.input?.questions;
+      if (!action || !Array.isArray(questions) || questions.length === 0) return null;
+      return { pendingActionId: action.id, threadId: action.threadId, questions };
+    };
+    // Thread-scoped first: the open ask for the thread the seller is viewing.
+    const scoped = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
       `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
     ).catch(() => null);
-    const actions = res?.pendingActions || [];
-    const open = actions
-      .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
-      .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
-    const action = open[0];
-    const questions = action?.input?.questions;
-    if (!action || !Array.isArray(questions) || questions.length === 0) return null;
-    return { pendingActionId: action.id, threadId: action.threadId, questions };
+    const fromThread = pick(scoped?.pendingActions);
+    if (fromThread) return fromThread;
+    // Fallback: campaign-wide. The "Needs you" badge is campaign-wide (overview.needsInput),
+    // so an ask sitting on a different/primary thread must still surface as a card here —
+    // otherwise the badge shows with no question to answer. answerQuestion is keyed by
+    // pendingActionId (not threadId), so answering an off-thread ask still works. If the
+    // un-scoped query isn't supported it just rejects → null (same as before, no phantom card).
+    const all = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+      `/api/agent/sessions/${campaignId}/pending-actions`,
+    ).catch(() => null);
+    return pick(all?.pendingActions);
+  }
+
+  // The open propose_plan pending action (if any) → a DecisionPrompt for the plan card.
+  // Mirrors getPendingQuestion: thread-scoped first, then campaign-wide. planId is the
+  // pending-action id that approval/reject hit.
+  async getPendingPlan(campaignId: string, threadId: string): Promise<DecisionPrompt | null> {
+    const pick = (actions: any[] | undefined): DecisionPrompt | null => {
+      const open = (actions || [])
+        .filter((a) => a?.toolName === 'propose_plan' && a?.status !== 'completed' && a?.status !== 'rejected')
+        .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+      const action = open[0];
+      const input = action?.input;
+      if (!action || !input?.title) return null;
+      return {
+        id: action.id,
+        kind: 'approve',
+        planId: action.id,
+        title: String(input.title),
+        summary: typeof input.summary === 'string' ? input.summary : undefined,
+        description: typeof input.summary === 'string' ? input.summary : undefined,
+        planType: typeof input.planType === 'string' ? input.planType : undefined,
+        steps: Array.isArray(input.steps)
+          ? input.steps
+              .filter((s: any) => s && typeof s.title === 'string')
+              .map((s: any) => ({ title: String(s.title), detail: typeof s.detail === 'string' ? s.detail : undefined }))
+          : undefined,
+        strategyId: typeof input.strategyId === 'string' ? input.strategyId : undefined,
+        approveLabel: 'Approve',
+        reviseLabel: 'Revise',
+        followUpLabel: 'Follow-up',
+      };
+    };
+    const scoped = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+      `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
+    ).catch(() => null);
+    const fromThread = pick(scoped?.pendingActions);
+    if (fromThread) return fromThread;
+    const all = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+      `/api/agent/sessions/${campaignId}/pending-actions`,
+    ).catch(() => null);
+    return pick(all?.pendingActions);
   }
 
   // Record the seller's answer (does NOT resume the turn — the controller sends

@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import {
   Dimensions,
-  KeyboardAvoidingView,
+  Keyboard,
   PanResponder,
   Platform,
   ScrollView,
@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { interpolate, runOnJS, useAnimatedKeyboard, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
@@ -28,6 +28,7 @@ import { ConversationList } from '../features/liquidationConversation/components
 import { ConvexLiveMessages } from '../features/liquidationConversation/ConvexLiveMessages';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import QuestionCard from '../features/liquidationConversation/components/QuestionCard';
+import PlanCard from '../features/liquidationConversation/components/PlanCard';
 import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
 
 const CONVEX_TEMPLATE =
@@ -197,6 +198,26 @@ const CampaignThreadScreen = () => {
   const [headerH, setHeaderH] = useState(104);
   const [footerH, setFooterH] = useState(150);
 
+  // Keyboard handling: KeyboardAvoidingView is unreliable on the New Architecture (Fabric,
+  // which reanimated 4 requires) — it silently fails to lift an absolute composer. Drive the
+  // composer directly from reanimated's keyboard value instead. translateY lifts it to sit
+  // just above the keyboard (minus the bottom safe area, which the keyboard already covers).
+  const keyboard = useAnimatedKeyboard();
+  const composerLiftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -Math.max(keyboard.height.value - insets.bottom, 0) }],
+  }));
+  // JS mirror of the keyboard height so the feed can reserve room (the latest message stays
+  // visible above the lifted composer instead of hiding behind it / the keyboard).
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvt, (e) => setKeyboardHeight(Math.max(e.endCoordinates?.height ?? 0, 0)));
+    const hide = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const feedKeyboardInset = Math.max(keyboardHeight - insets.bottom, 0);
+
   // ── Threads drawer: swipe left→right (or tap) to open, like the chat template ──
   const screenW = Dimensions.get('window').width;
   const DRAWER_W = Math.min(330, screenW * 0.84);
@@ -340,33 +361,51 @@ const CampaignThreadScreen = () => {
           and feeds agent-initiated posts (digests, proactive updates) into the feed. */}
       <ConvexLiveMessages threadId={controller.activeThreadId} onMessages={controller.ingestLiveMessages} />
 
-      <KeyboardAvoidingView
-        style={s.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
+      {/* ── Feed scrolls full-bleed under both floating glass bars ── */}
+      <ConversationList
+        messages={controller.activeMessages}
+        loading={controller.isLoadingMessages}
+        onDecision={controller.submitDecision}
+        onRetry={controller.retryMessage}
+        onCancelQueued={controller.cancelQueuedMessage}
+        onOpenCart={(sessionId: string) => {
+          // AddProduct is a hidden TAB screen, so go through the nested navigator
+          // (the pattern PastScans uses), with a flat fallback.
+          try {
+            navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId } });
+          } catch {
+            navigation.navigate('AddProduct', { sessionId });
+          }
+        }}
+        contentTopInset={headerH + 8}
+        contentBottomInset={footerH + 8 + feedKeyboardInset}
+      />
+
+      {/* ── Composer + pending question ride the keyboard. Absolute bottom anchor whose
+          translateY is driven by reanimated's live keyboard height (composerLiftStyle) —
+          NOT KeyboardAvoidingView, which silently no-ops for an absolute composer on the
+          New Architecture (Fabric). box-none lets taps above the bar reach the feed. ── */}
+      <Animated.View
+        style={[s.composerAvoider, composerLiftStyle]}
+        pointerEvents="box-none"
       >
-        {/* ── Feed scrolls under both glass bars ──────────────────── */}
-        <ConversationList
-          messages={controller.activeMessages}
-          loading={controller.isLoadingMessages}
-          onDecision={controller.submitDecision}
-          onRetry={controller.retryMessage}
-          onOpenCart={(sessionId: string) => {
-            // AddProduct is a hidden TAB screen, so go through the nested navigator
-            // (the pattern PastScans uses), with a flat fallback.
-            try {
-              navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId } });
-            } catch {
-              navigation.navigate('AddProduct', { sessionId });
-            }
-          }}
-          contentTopInset={headerH + 8}
-          contentBottomInset={footerH + 8}
-        />
+        {/* One measured wrapper around BOTH the question card and the composer, so the feed's
+            contentBottomInset reserves room for the whole composer area (not just the footer)
+            and the last message can't hide behind the pending-question card. */}
+        <View onLayout={e => setFooterH(e.nativeEvent.layout.height)}>
+        {/* ── Sprout's proposed plan (Accept / Revise / Follow-up), above the composer ── */}
+        {controller.pendingPlan && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+            <PlanCard
+              prompt={controller.pendingPlan}
+              onDecision={controller.submitDecision}
+            />
+          </View>
+        )}
 
         {/* ── Sprout's structured question (tappable options), above the composer ── */}
         {controller.pendingQuestion && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 8, marginBottom: footerH }}>
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
             <QuestionCard
               prompt={controller.pendingQuestion}
               submitting={controller.answeringQuestion}
@@ -378,10 +417,7 @@ const CampaignThreadScreen = () => {
         )}
 
         {/* ── Bottom: floating glass composer (no border, fades to white) ─ */}
-        <View
-          style={[s.footer, { paddingBottom: insets.bottom || 10 }]}
-          onLayout={e => setFooterH(e.nativeEvent.layout.height)}
-        >
+        <View style={[s.footer, { paddingBottom: insets.bottom || 10 }]}>
           <LinearGradient
             colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.9)', '#FFFFFF']}
             locations={[0, 0.55, 1]}
@@ -430,7 +466,8 @@ const CampaignThreadScreen = () => {
             getAuthToken={ensureSupabaseJwt}
           />
         </View>
-      </KeyboardAvoidingView>
+        </View>
+      </Animated.View>
 
       {/* ── Top: floating glass header (white at top → transparent, blur) ─ */}
       <View
@@ -534,6 +571,9 @@ const CampaignThreadScreen = () => {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
   flex: { flex: 1 },
+  // The composer's keyboard-avoider: absolute bottom anchor so behavior:'padding' lifts
+  // the composer column with the keyboard (the feed is a full-bleed sibling behind it).
+  composerAvoider: { position: 'absolute', left: 0, right: 0, bottom: 0 },
 
   // Floating glass header — white at the top, fading to transparent, content scrolls under
   header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
@@ -566,7 +606,7 @@ const s = StyleSheet.create({
   trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Floating glass footer — content fades to white, no border
-  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 6, backgroundColor: '#FFFFFF' },
+  footer: { paddingTop: 6, backgroundColor: '#FFFFFF' },
   footerFade: { position: 'absolute', left: 0, right: 0, top: -30, height: 30 },
   errorBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },

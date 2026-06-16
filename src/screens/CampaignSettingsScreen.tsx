@@ -264,7 +264,7 @@ const s = StyleSheet.create({
   // Section accordion card
   section: { backgroundColor: '#FFFFFF', borderRadius: 18, marginBottom: 14, borderWidth: 1, borderColor: '#ECEBE6', overflow: 'hidden' },
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 16 },
-  sectionIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center' },
+  sectionIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: '#f4f4f4', alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { flex: 1, fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   chevOpen: { transform: [{ rotate: '180deg' }] },
   sectionBody: { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 2, gap: 14 },

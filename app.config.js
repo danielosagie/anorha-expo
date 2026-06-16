@@ -33,7 +33,17 @@ export default {
     "**/*.{ttf,png,jpg,jpeg,gif,webp,svg}"
   ],
   plugins: [
-    "@sentry/react-native/expo",
+    [
+      "@sentry/react-native/expo",
+      {
+        // Source-map / debug-symbol upload target. Auth token is supplied at
+        // build time via the SENTRY_AUTH_TOKEN env var (never committed).
+        // NOTE: org slug per Sentry's wizard command was "dosagie" — change to
+        // "inirha" here if that's actually your org.
+        organization: "inirha",
+        project: "anorha-expo"
+      }
+    ],
     [
       "expo-camera",
       {

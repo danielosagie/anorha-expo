@@ -71,6 +71,14 @@
         {
           "faceIDPermission": "Allow Anorha to use Face ID for quick and secure access to your account."
         }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "project": "anorha-expo",
+          "organization": "inirha"
+        }
       ]
     ],
     "extra": {

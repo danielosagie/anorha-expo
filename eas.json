@@ -17,6 +17,13 @@
       "distribution": "store",
       "autoIncrement": true,
       "node": "22.11.0",
+      "env": {
+        "EXPO_PUBLIC_SENTRY_DSN": "https://5e714aa70799af9c558d5861a72d188c@o4510591966642176.ingest.us.sentry.io/4511574746005504",
+        "EXPO_PUBLIC_ENV": "production",
+        "SENTRY_ORG": "inirha",
+        "SENTRY_PROJECT": "anorha-expo",
+        "SENTRY_ALLOW_FAILURE": "true"
+      },
       "ios": {
         "simulator": false
       }

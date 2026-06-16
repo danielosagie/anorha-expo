@@ -199,9 +199,10 @@ type Props = {
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
   onOpenCart?: (sessionId: string) => void;
+  onCancelQueued?: (clientMessageId: string) => void;
 };
 
-const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart }: Props) => {
+const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued }: Props) => {
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -303,6 +304,24 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart }
           </MarkdownBoundary>
         ) : isStreaming ? (
           <TypingIndicator />
+        ) : null}
+
+        {/* Queued/sending state for messages the seller lined up while Sprout was responding.
+            A still-queued message can be pulled back with the ✕ before it's sent. */}
+        {isUser && (message.deliveryState === 'queued' || message.deliveryState === 'sending') ? (
+          <View style={styles.queuedRow}>
+            <Text style={styles.queuedText}>
+              {message.deliveryState === 'queued' ? 'Queued' : 'Sending…'}
+            </Text>
+            {message.deliveryState === 'queued' && onCancelQueued && message.clientMessageId ? (
+              <TouchableOpacity
+                onPress={() => onCancelQueued(message.clientMessageId!)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Icon name="close-circle" size={15} color="rgba(255,255,255,0.75)" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : null}
 
         {message.actionMeta?.summary ? (
@@ -628,6 +647,18 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
     marginTop: 6,
+  },
+  queuedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+    marginTop: 5,
+  },
+  queuedText: {
+    color: 'rgba(255,255,255,0.75)',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
   },
   cursor: {
     color: BRAND_PRIMARY,
