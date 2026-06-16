@@ -11,6 +11,8 @@ import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw } from 'lucide-react-native';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
 import { AppMenuSelect } from './ui/AppMenuSelect';
@@ -1464,85 +1466,109 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   return (
     <View style={{ paddingBottom: bottomSafePadding }}>
-      {/* Media with Remove & Add Photo Management */}
-      <View style={styles.mediaRow}>
-        <ScrollView style={{ paddingVertical: 10 }} horizontal={true} showsHorizontalScrollIndicator={false}>
-          {/* Images first - Cover (index 0) appears on left */}
-          {/* Filter out empty/invalid URLs to prevent gray placeholder images */}
-          {(images || []).filter((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0).map((uri, i) => (
-            <View key={`${uri}-${i}`} style={{ position: 'relative', marginRight: 8 }}>
-              <TouchableOpacity
-                style={[styles.thumbWrap, i === 0 && styles.thumbCover]}
-                onPress={() => {
-                  const next = (images || []).slice();
-                  const [chosen] = next.splice(i, 1);
-                  next.unshift(chosen);
-                  onChangeImages?.(next);
+      {/* Media — drag to reorder, tap to set cover, ✕ to remove */}
+      {(() => {
+        // Canonical, de-noised list. All mutations operate on this and emit the result,
+        // so empty/garbage URLs are dropped rather than shifting indexes.
+        const validImages = (images || []).filter((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0);
+        const validPending = (pendingImages || []).filter((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0);
+        return (
+          <View style={styles.mediaRow}>
+            <GestureHandlerRootView style={{ height: 116 }}>
+              <DraggableFlatList
+                data={validImages}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(uri, index) => `${uri}-${index}`}
+                activationDistance={12}
+                contentContainerStyle={{ paddingVertical: 14, alignItems: 'center' }}
+                onDragEnd={({ data }) => onChangeImages?.(data)}
+                renderItem={({ item: uri, getIndex, drag, isActive }) => {
+                  const i = getIndex() ?? 0;
+                  return (
+                    <ScaleDecorator>
+                      <View style={{ position: 'relative', marginRight: 8 }}>
+                        <TouchableOpacity
+                          style={[styles.thumbWrap, i === 0 && styles.thumbCover, isActive && { opacity: 0.85 }]}
+                          onLongPress={drag}
+                          delayLongPress={150}
+                          onPress={() => {
+                            // Tap promotes to cover (index 0)
+                            if (i <= 0) return;
+                            const next = validImages.slice();
+                            const [chosen] = next.splice(i, 1);
+                            next.unshift(chosen);
+                            onChangeImages?.(next);
+                          }}
+                        >
+                          <Image source={{ uri }} style={styles.thumb} />
+                          {i === 0 && (
+                            <View style={styles.coverBadge}>
+                              <Icon name="star" size={14} color="#fff" />
+                              <Text style={{ color: '#fff', marginLeft: 4, fontSize: 10 }}>Cover</Text>
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                        {/* Remove Button */}
+                        <TouchableOpacity
+                          onPress={() => onChangeImages?.(validImages.filter((_, idx) => idx !== i))}
+                          style={{
+                            position: 'absolute',
+                            top: -8,
+                            right: -6,
+                            backgroundColor: '#EF4444',
+                            borderRadius: 12,
+                            width: 24,
+                            height: 24,
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            borderWidth: 2,
+                            borderColor: '#FFF',
+                            zIndex: 10,
+                          }}
+                        >
+                          <Icon name="close" size={12} color="#FFF" />
+                        </TouchableOpacity>
+                      </View>
+                    </ScaleDecorator>
+                  );
                 }}
-              >
-                <Image source={{ uri }} style={styles.thumb} />
-                {i === 0 && (
-                  <View style={styles.coverBadge}>
-                    <Icon name="star" size={14} color="#fff" />
-                    <Text style={{ color: '#fff', marginLeft: 4, fontSize: 10 }}>Cover</Text>
+                ListFooterComponent={
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {/* Pending uploads (optimistic UI) */}
+                    {validPending.map((uri, i) => (
+                      <View key={`pending-${i}`} style={[styles.thumbWrap, { opacity: 0.6, marginRight: 8 }]}>
+                        <Image source={{ uri }} style={styles.thumb} />
+                        <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 12 }]}>
+                          <ActivityIndicator size="small" color="#fff" />
+                        </View>
+                      </View>
+                    ))}
+
+                    {/* Single Add Photo button (only show if under max photos) */}
+                    {validImages.length < 6 && (
+                      <TouchableOpacity
+                        style={[styles.thumbWrap, { backgroundColor: '#F3F4F6', borderStyle: 'dashed', borderColor: '#D1D5DB', borderWidth: 1 }]}
+                        onPress={() => onOpenImageCapture?.((uris) => {
+                          if (uris && uris.length > 0) {
+                            onChangeImages?.([...validImages, ...uris]);
+                          }
+                        })}
+                      >
+                        <View style={{ alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
+                          <Icon name="plus" size={24} color="#9CA3AF" />
+                          <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 4, fontWeight: '600' }}>Add Photo</Text>
+                        </View>
+                      </TouchableOpacity>
+                    )}
                   </View>
-                )}
-              </TouchableOpacity>
-              {/* Remove Button */}
-              <TouchableOpacity
-                onPress={() => {
-                  const next = (images || []).filter((_, idx) => idx !== i);
-                  onChangeImages?.(next);
-                }}
-                style={{
-                  position: 'absolute',
-                  top: -8,
-                  right: -6,
-                  backgroundColor: '#EF4444',
-                  borderRadius: 12,
-                  width: 24,
-                  height: 24,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  borderWidth: 2,
-                  borderColor: '#FFF',
-                  zIndex: 10,
-                }}
-              >
-                <Icon name="close" size={12} color="#FFF" />
-              </TouchableOpacity>
-            </View>
-          ))}
-
-          {/* Pending uploads (optimistic UI) */}
-          {(pendingImages || []).filter((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0).map((uri, i) => (
-            <View key={`pending-${i}`} style={[styles.thumbWrap, { opacity: 0.6 }]}>
-              <Image source={{ uri }} style={styles.thumb} />
-              <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 12 }]}>
-                <ActivityIndicator size="small" color="#fff" />
-              </View>
-            </View>
-          ))}
-
-          {/* Single Add Photo button on the right (only show if under max photos) */}
-          {(images?.length || 0) < 6 && (
-            <TouchableOpacity
-              style={[styles.thumbWrap, { backgroundColor: '#F3F4F6', borderStyle: 'dashed', borderColor: '#D1D5DB', borderWidth: 1 }]}
-              onPress={() => onOpenImageCapture?.((uris) => {
-                if (uris && uris.length > 0) {
-                  onChangeImages?.([...(images || []), ...uris]);
                 }
-              })}
-            >
-              <View style={{ alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
-                <Icon name="plus" size={24} color="#9CA3AF" />
-                <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 4, fontWeight: '600' }}>Add Photo</Text>
-              </View>
-            </TouchableOpacity>
-          )}
-        </ScrollView>
-        <Text style={styles.mediaHint}>Tap an image to set it as the cover</Text>
-      </View>
+              />
+            </GestureHandlerRootView>
+            <Text style={styles.mediaHint}>Drag to reorder · tap to set cover</Text>
+          </View>
+        );
+      })()}
 
       {/* Platform filter pills */}
       <ScrollView horizontal={true} showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 8 }}>

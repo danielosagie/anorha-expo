@@ -1,7 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing, Platform } from 'react-native';
 import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import ProgressiveBlurView from '../components/ProgressiveBlurView';
+import { GLASS_HEADER_STYLES } from '../design/chatGlass';
 import BaseModal from '../components/BaseModal';
 import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
@@ -10,7 +13,6 @@ import PlatformLogo from '../components/PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import BottomActionBar from '../components/BottomActionBar';
-import { PageHeader } from '../components/ui/PageHeader';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
 import PlaceholderImage from '../components/PlaceholderImage';
@@ -241,9 +243,16 @@ const ProductDetailScreen = observer(
     // State management
     const [detailedItem, setDetailedItem] = useState<ProductVariant | undefined | null>(passedItem);
 
-    // Derive images from ProductImages table or PrimaryImageUrl (ProductVariants has no ImageUrls column)
+    // Direct DB fetch of this variant's ProductImages. The global productImages$ sync has
+    // realtime disabled (one-time get at startup), so it frequently doesn't have this item's
+    // rows — which made the gallery show "no pictures". This fetch is the reliable source.
+    const [dbImagesOverride, setDbImagesOverride] = useState<string[] | null>(null);
+
+    // Derive images: prefer the direct DB fetch, then the global observable, then PrimaryImageUrl.
+    // (ProductVariants has no ImageUrls column, so images live in the ProductImages table.)
     const displayImages = useMemo(() => {
       if (!detailedItem?.Id) return [];
+      if (dbImagesOverride && dbImagesOverride.length > 0) return dbImagesOverride;
       try {
         const obs = getLegendStateObservables();
         const productImages = obs?.productImages$?.get?.() ?? {};
@@ -253,13 +262,40 @@ const ProductDetailScreen = observer(
         }
       } catch { /* Legend may not be ready */ }
       return detailedItem?.PrimaryImageUrl ? [detailedItem.PrimaryImageUrl] : [];
-    }, [detailedItem?.Id, detailedItem?.PrimaryImageUrl]);
+    }, [detailedItem?.Id, detailedItem?.PrimaryImageUrl, dbImagesOverride]);
     // Optimistic layer: edits (add/delete/reorder) show instantly, then we re-follow the
     // synced observable once productImages$ catches up (so it never feels broken).
     const [optimisticImages, setOptimisticImages] = useState<string[] | null>(null);
     const displayImagesKey = displayImages.join('|');
     useEffect(() => { setOptimisticImages(null); }, [displayImagesKey]);
     const editorImages = optimisticImages ?? displayImages;
+
+    // Load this variant's ProductImages directly from Supabase (mirrors GenerateDetails).
+    // Reliable even when the global productImages$ observable hasn't synced this item.
+    useEffect(() => {
+      const variantId = detailedItem?.Id;
+      if (!variantId) { setDbImagesOverride(null); return; }
+      let canceled = false;
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from('ProductVariants')
+            .select('Id, ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )')
+            .eq('Id', variantId);
+          if (error || !data || canceled) return;
+          const row: any = Array.isArray(data) ? data[0] : data;
+          const urls: string[] = (row?.ProductImages || [])
+            .slice()
+            .sort((a: any, b: any) => (a.Position ?? 0) - (b.Position ?? 0))
+            .map((img: any) => img.ImageUrl)
+            .filter((u: any): u is string => typeof u === 'string' && u.trim().length > 0);
+          if (!canceled && urls.length > 0) setDbImagesOverride(urls);
+        } catch (e) {
+          log.error('[ProductDetail] Failed to load ProductImages:', e);
+        }
+      })();
+      return () => { canceled = true; };
+    }, [detailedItem?.Id]);
     const [mappings, setMappings] = useState<PlatformProductMapping[]>([]);
     const [groupedInventory, setGroupedInventory] = useState<GroupedInventoryLocations>({});
     const [connections, setConnections] = useState<PlatformConnection[]>([]);
@@ -2301,6 +2337,19 @@ const ProductDetailScreen = observer(
     const uploadImagesToSupabase = async (assets: ImagePicker.ImagePickerAsset[]): Promise<string[]> => {
       const uploadedUrls: string[] = [];
 
+      // CRITICAL: Path MUST be {orgId}/{variantId}/{filename} for RLS to work.
+      // Resolve once up front — if either is missing, every upload would fail
+      // silently, so surface it as a clear error instead of returning [].
+      const orgId = currentOrg?.id || connections.find(c => c.OrgId)?.OrgId || detailedItem?.UserId;
+      const variantId = detailedItem?.Id;
+      log.debug(`[uploadImagesToSupabase] Resolved orgId: ${orgId}, variantId: ${variantId}`);
+      if (!orgId || !variantId) {
+        log.error('Missing OrgId or VariantId for upload', { orgId, variantId });
+        throw new Error("Couldn't determine your organization for this item. Try reopening it or reconnecting your store.");
+      }
+
+      let lastError: string | null = null;
+
       for (const asset of assets) {
         try {
           // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
@@ -2310,19 +2359,7 @@ const ProductDetailScreen = observer(
             { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
           );
 
-          const fileName = `${Date.now()}.jpg`;
-
-          // CRITICAL: Path MUST be {orgId}/{variantId}/{filename} for RLS to work
-          const orgId = currentOrg?.id || connections.find(c => c.OrgId)?.OrgId || detailedItem?.UserId;
-          const variantId = detailedItem?.Id;
-
-          log.debug(`[uploadImagesToSupabase] Resolved orgId: ${orgId}, variantId: ${variantId}`);
-
-          if (!orgId || !variantId) {
-            log.error('Missing OrgId or VariantId for upload', { orgId, variantId });
-            continue;
-          }
-
+          const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
           const filePath = `${orgId}/${variantId}/${fileName}`;
 
           const response = await fetch(compressed.uri);
@@ -2339,6 +2376,7 @@ const ProductDetailScreen = observer(
 
           if (error) {
             log.error('Upload error:', error);
+            lastError = error.message || 'Storage upload failed';
             continue;
           }
 
@@ -2347,9 +2385,15 @@ const ProductDetailScreen = observer(
             .getPublicUrl(filePath);
 
           uploadedUrls.push(publicUrlData.publicUrl);
-        } catch (error) {
+        } catch (error: any) {
           log.error('Error uploading image:', error);
+          lastError = error?.message || 'Upload failed';
         }
+      }
+
+      // If nothing made it through, don't fail silently — tell the caller why.
+      if (uploadedUrls.length === 0 && assets.length > 0) {
+        throw new Error(lastError || 'Image upload failed. Please try again.');
       }
 
       return uploadedUrls;
@@ -3784,38 +3828,8 @@ const ProductDetailScreen = observer(
 
         <ScrollView
           ref={scrollViewRef}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomSafePadding }]}
+          contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 56, paddingBottom: bottomSafePadding }]}
         >
-          {/* Header — shared PageHeader (matches Connections/Settings/etc.) */}
-          <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: 4, backgroundColor: theme.colors.surface }}>
-            <PageHeader
-              title=""
-              onBack={navigation.goBack}
-              right={
-                <>
-                  {isSaving ? (
-                    <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
-                  ) : saveError ? (
-                    <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
-                      <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '700' }}>Save failed · Retry</Text>
-                    </TouchableOpacity>
-                  ) : hasUnsavedChanges ? (
-                    <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
-                  ) : lastSaveTime > 0 ? (
-                    <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '600' }}>Saved</Text>
-                  ) : null}
-                  <TouchableOpacity
-                    onPress={() => setActionMenuVisible(true)}
-                    activeOpacity={0.85}
-                    style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 }}
-                  >
-                    <Icon name="dots-horizontal" size={22} color="#18181B" />
-                  </TouchableOpacity>
-                </>
-              }
-            />
-          </View>
-
 
 
           {/* Listing editor (edit mode) */}
@@ -3920,10 +3934,10 @@ const ProductDetailScreen = observer(
                     setPendingImages(prev => prev.filter(uri => !localUris.includes(uri)));
                     setIsUploadingImages(false);
                   }
-                } catch (error) {
+                } catch (error: any) {
                   log.error('Error picking images:', error);
                   setIsUploadingImages(false);
-                  Alert.alert('Error', 'Failed to add images. Please try again.');
+                  Alert.alert('Couldn’t add photo', error?.message || 'Failed to add images. Please try again.');
                 }
               }}
               // 🟢 EXTERNAL UPDATES: Pass field changes for green border highlighting
@@ -4118,6 +4132,39 @@ const ProductDetailScreen = observer(
 
           </Card>
         </ScrollView>
+
+        {/* Floating glass header (matches Generate Details): blur + fade, back · save status · menu */}
+        <View style={[styles.glassHeader, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
+          <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+            <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="down" />
+            <LinearGradient
+              colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+              locations={[0, 0.55, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </View>
+          <View style={styles.glassHeaderRow}>
+            <TouchableOpacity style={styles.navCircle} onPress={navigation.goBack} activeOpacity={0.85}>
+              <ChevronLeft size={22} color="#18181B" />
+            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {isSaving ? (
+                <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
+              ) : saveError ? (
+                <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
+                  <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '700' }}>Save failed · Retry</Text>
+                </TouchableOpacity>
+              ) : hasUnsavedChanges ? (
+                <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
+              ) : lastSaveTime > 0 ? (
+                <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '600' }}>Saved</Text>
+              ) : null}
+              <TouchableOpacity onPress={() => setActionMenuVisible(true)} activeOpacity={0.85} style={styles.navCircle}>
+                <Icon name="dots-horizontal" size={22} color="#18181B" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
 
         {/* Action Menu Modal */}
         <BaseModal
@@ -4400,6 +4447,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scrollContent: {},
+  glassHeader: { ...GLASS_HEADER_STYLES.header },
+  glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
+  navCircle: { ...GLASS_HEADER_STYLES.navCircle },
   header: {
     paddingTop: 60,
     flexDirection: 'row',

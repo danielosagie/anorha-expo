@@ -259,8 +259,10 @@ const CampaignThreadScreen = () => {
   }, [closeDrawer]);
   const navToInventory = useCallback(() => {
     closeDrawer();
-    navigation.navigate('Inventory');
-  }, [closeDrawer, navigation]);
+    // THIS campaign's items (LiquidationCampaignScreen = the campaign inventory,
+    // headerTitle "Inventory"), not the global Inventory tab. Mirrors goToInventory.
+    navigation.navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' });
+  }, [closeDrawer, navigation, campaignId]);
   const navToSettings = useCallback(() => {
     closeDrawer();
     // Campaign settings for THIS clearout (not the app settings page).

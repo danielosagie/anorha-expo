@@ -100,7 +100,7 @@ export function usePushNotifications() {
         if (!user?.id) return;
 
         try {
-            const authToken = await getToken({ template: process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'supabase' });
+            const authToken = await getToken();
             const base = API_BASE_URL;
             if (!base) {
                 log.warn('[PushNotifications] No API base URL found');

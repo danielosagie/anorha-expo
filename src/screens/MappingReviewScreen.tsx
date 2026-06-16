@@ -768,14 +768,14 @@ const styles = StyleSheet.create({
   overviewBig: {
     fontSize: 24,
     marginTop: 12,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
     letterSpacing: -0.3,
   },
   overviewSub: {
     fontSize: 14,
     marginTop: 4,
     textAlign: 'center',
-    fontFamily: 'PlusJakartaSans_500Medium',
+    fontFamily: 'Inter_500Medium',
   },
   autoSection: {
     marginTop: 4,
@@ -789,13 +789,13 @@ const styles = StyleSheet.create({
   autoToggleText: {
     flex: 1,
     fontSize: 13,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontFamily: 'Inter_600SemiBold',
   },
   sectionTitle: {
     fontSize: 12,
     letterSpacing: 0.5,
     marginBottom: 8,
-    fontFamily: 'PlusJakartaSans_700Bold',
+    fontFamily: 'Inter_700Bold',
   },
 
   // Group card

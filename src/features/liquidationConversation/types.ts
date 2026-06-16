@@ -317,4 +317,9 @@ export interface CampaignItem {
   emoji?: string;
   floorPrice?: number;
   priceHistory?: Array<{ date: string; price: number; reason: string }>;
+  // Inventory fields for the InventoryListCard (populated by the backend items endpoint).
+  sku?: string;
+  totalQuantity?: number;
+  lastSyncedAt?: string | null;
+  isStale?: boolean;
 }

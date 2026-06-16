@@ -597,9 +597,18 @@ const App: React.FC = () => {
   const WithSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { getToken } = useAuth();
     const template = process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'mobile';
+    // Native third-party auth (CLERK_NATIVE_AUTH=true): Supabase validates the
+    // Clerk token directly and requires the SESSION token (which carries the
+    // `role: authenticated` claim added by the Clerk↔Supabase integration). The
+    // legacy custom "mobile" template lacks that claim, so Supabase 401s it.
+    // Mint-bridge mode still uses the "mobile" template that /api/auth/exchange expects.
+    const clerkNativeAuth = process.env.EXPO_PUBLIC_CLERK_NATIVE_AUTH === 'true';
     const getClerkToken = useCallback(
-      () => getToken({ template }).catch(async () => getToken()),
-      [getToken, template],
+      () =>
+        clerkNativeAuth
+          ? getToken()
+          : getToken({ template }).catch(async () => getToken()),
+      [getToken, template, clerkNativeAuth],
     );
 
     return (

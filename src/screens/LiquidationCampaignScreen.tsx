@@ -31,6 +31,7 @@ import {
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignItem, ItemStatus } from '../features/liquidationConversation/types';
+import InventoryListCard from '../components/InventoryListCard';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -338,7 +339,7 @@ const LiquidationCampaignScreen = () => {
             <FlatList
               data={visibleItems}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingHorizontal: 14, paddingTop: 4, paddingBottom: 100 }}
+              contentContainerStyle={{ paddingHorizontal: 6, paddingTop: 4, paddingBottom: 100 }}
               keyboardShouldPersistTaps="handled"
               ListEmptyComponent={
                 <View style={s.emptyState}>
@@ -351,40 +352,29 @@ const LiquidationCampaignScreen = () => {
                   </TouchableOpacity>
                 </View>
               }
-              ItemSeparatorComponent={() => <View style={s.itemSep} />}
               renderItem={({ item }) => {
                 const sel = selectedItems.has(item.id);
+                // Channels string ("shopify, amazon") → platform avatar names.
+                const platformNames = String(item.channels || '')
+                  .split(/[,/|]+|\s+/)
+                  .map(p => p.trim())
+                  .filter(Boolean);
                 return (
-                  <TouchableOpacity
-                    style={[s.itemRow, sel && s.itemRowSel]}
+                  <InventoryListCard
+                    id={item.id}
+                    title={item.name || 'Unknown item'}
+                    price={item.currentPrice}
+                    sku={item.sku}
+                    imageUrl={item.imageUrl}
+                    totalQuantity={item.totalQuantity}
+                    platformNames={platformNames}
+                    lastSyncedAt={item.lastSyncedAt}
+                    isStale={item.isStale}
+                    isSelectionMode={selectedItems.size > 0}
+                    isSelected={sel}
                     onPress={() => handleItemRowPress(item)}
                     onLongPress={() => toggleItem(item.id)}
-                    delayLongPress={250}
-                    activeOpacity={0.7}
-                  >
-                    {selectedItems.size > 0 ? (
-                      <View style={[s.cb, sel && s.cbChecked, { marginRight: 12 }]}>
-                        {sel ? <Check size={12} color="#FFF" /> : null}
-                      </View>
-                    ) : null}
-                    <View style={s.itemThumb}>
-                      {item.imageUrl ? (
-                        <Image source={{ uri: item.imageUrl }} style={s.itemThumbImg} resizeMode="cover" />
-                      ) : item.emoji ? (
-                        <Text style={{ fontSize: 24 }}>{item.emoji}</Text>
-                      ) : (
-                        <Box size={22} color="#A1A1AA" />
-                      )}
-                    </View>
-                    <View style={s.itemInfo}>
-                      <Text style={s.itemTitle} numberOfLines={1}>{item.name || 'Unknown item'}</Text>
-                      <Text style={s.itemSub} numberOfLines={1}>
-                        ${Number(item.currentPrice ?? 0).toFixed(2)}
-                        {item.channels ? `  ·  ${item.channels}` : ''}
-                      </Text>
-                    </View>
-                    <ChevronRight size={18} color="#D4D4D8" />
-                  </TouchableOpacity>
+                  />
                 );
               }}
             />
@@ -817,7 +807,7 @@ const s = StyleSheet.create({
 
   // Buttons
   primaryBtn: { height: 48, borderRadius: 14, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  primaryBtnText: { color: '#1F2937', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14 },
+  primaryBtnText: { color: '#1F2937', fontFamily: 'Inter_700Bold', fontSize: 14 },
   secondaryBtn: { height: 48, borderRadius: 14, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   secondaryBtnText: { color: '#111827', fontFamily: 'Inter_700Bold', fontSize: 14 },
   rowActions: { flexDirection: 'row', gap: 12 },

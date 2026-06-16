@@ -1,4 +1,4 @@
-import { supabase, getSupabaseUserId } from './supabase';
+import { supabase, getUserLike } from './supabase';
 import { TABLES } from '../constants/tableNames';
 import { createLogger } from '../utils/logger';
 
@@ -10,8 +10,8 @@ const log = createLogger('platformConnectionsRealtime');
  * Lives in the data layer (src/lib) so contexts/screens don't open raw Supabase
  * channels themselves — the channel is just a change-signal: `onChange` fires on any
  * INSERT/UPDATE/DELETE and the caller re-fetches (the API enriches the rows). Scoped
- * to the current user via a `UserId=eq.<id>` filter when the JWT is minted (RLS
- * enforces it server-side regardless), with bounded exponential-backoff retry on
+ * to the current user via a `UserId=eq.<internal UUID>` filter resolved from the `me`
+ * view (RLS enforces it server-side regardless), with bounded exponential-backoff retry on
  * CHANNEL_ERROR. Returns a cleanup function.
  */
 export function subscribePlatformConnectionChanges(onChange: () => void): () => void {
@@ -19,9 +19,21 @@ export function subscribePlatformConnectionChanges(onChange: () => void): () => 
   let retryCount = 0;
   const maxRetries = 3;
   let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+  let cancelled = false;
 
-  const setup = () => {
-    const currentUserId = getSupabaseUserId();
+  const setup = async () => {
+    // Resolve the INTERNAL user UUID from the `me` view — NOT the JWT `sub`. Under native
+    // Clerk auth `sub` is the Clerk id (user_xxx), not Users.Id, so `UserId=eq.<sub>` would
+    // match zero rows and drop every change event. The `me` view returns the real UUID in
+    // both auth modes; RLS still enforces scoping server-side regardless of this filter.
+    let currentUserId: string | null = null;
+    try {
+      currentUserId = (await getUserLike()).user?.id ?? null;
+    } catch {
+      currentUserId = null;
+    }
+    if (cancelled) return;
+
     channel = supabase
       // Stable channel name: a `Date.now()` suffix produced a new, distinctly-named
       // channel on every (re)subscribe, risking orphaned channels on the server.
@@ -63,6 +75,7 @@ export function subscribePlatformConnectionChanges(onChange: () => void): () => 
 
   return () => {
     log.debug('Unsubscribing from realtime updates');
+    cancelled = true;
     if (retryTimeout) clearTimeout(retryTimeout);
     if (channel) supabase.removeChannel(channel);
   };

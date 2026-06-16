@@ -7,7 +7,11 @@ import {
   StyleSheet,
   TextInput,
   ActivityIndicator,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Props = {
   visible: boolean;
@@ -40,6 +44,8 @@ const BarcodeEntrySheet: React.FC<Props> = ({
     onChangeBarcode(barcode.slice(0, -1));
   };
 
+  const insets = useSafeAreaInsets();
+
   return (
     <Modal
       visible={visible}
@@ -50,73 +56,83 @@ const BarcodeEntrySheet: React.FC<Props> = ({
       presentationStyle="overFullScreen"
     >
       <View style={styles.backdrop}>
-        
-        <View style={styles.sheet}>
-          <View style={styles.sheetHeader}>
-            <TouchableOpacity onPress={onCancel} disabled={loading}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>Enter barcode</Text>
-            <TouchableOpacity
-              onPress={onSubmit}
-              disabled={loading || !barcode.trim()}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.keyboardAvoider}
+        >
+          <View style={[styles.sheet, { maxHeight: '85%' }]}>
+            <View style={styles.sheetHeader}>
+              <TouchableOpacity onPress={onCancel} disabled={loading}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.headerTitle}>Enter barcode</Text>
+              <TouchableOpacity
+                onPress={onSubmit}
+                disabled={loading || !barcode.trim()}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#111827" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.addText,
+                      (!barcode.trim() || loading) && styles.addTextDisabled,
+                    ]}
+                  >
+                    Search
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 24 + insets.bottom }}
             >
-              {loading ? (
-                <ActivityIndicator size="small" color="#111827" />
-              ) : (
-                <Text
-                  style={[
-                    styles.addText,
-                    (!barcode.trim() || loading) && styles.addTextDisabled,
-                  ]}
-                >
-                  Search
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  value={barcode}
+                  onChangeText={onChangeBarcode}
+                  placeholder="0000000000000"
+                  keyboardType="number-pad"
+                  maxLength={20}
+                  style={styles.input}
+                />
+              </View>
 
-          <View style={styles.inputWrapper}>
-            <TextInput
-              value={barcode}
-              onChangeText={onChangeBarcode}
-              placeholder="0000000000000"
-              keyboardType="number-pad"
-              maxLength={20}
-              style={styles.input}
-            />
-          </View>
+              {errorMessage ? (
+                <Text style={styles.errorText}>{errorMessage}</Text>
+              ) : null}
 
-          {errorMessage ? (
-            <Text style={styles.errorText}>{errorMessage}</Text>
-          ) : null}
-
-          <View style={styles.keypad}>
-            <View style={styles.keypadRow}>
-              {DIGITS.slice(0, 3).map((d) => (
-                <KeypadButton key={d} label={d} onPress={() => handleDigitPress(d)} />
-              ))}
-            </View>
-            <View style={styles.keypadRow}>
-              {DIGITS.slice(3, 6).map((d) => (
-                <KeypadButton key={d} label={d} onPress={() => handleDigitPress(d)} />
-              ))}
-            </View>
-            <View style={styles.keypadRow}>
-              {DIGITS.slice(6, 9).map((d) => (
-                <KeypadButton key={d} label={d} onPress={() => handleDigitPress(d)} />
-              ))}
-            </View>
-            <View style={styles.keypadRow}>
-              <View style={{ flex: 1 }} />
-              <KeypadButton
-                label={DIGITS[9]}
-                onPress={() => handleDigitPress(DIGITS[9])}
-              />
-              <KeypadButton label="⌫" onPress={handleBackspace} />
-            </View>
+              <View style={styles.keypad}>
+                <View style={styles.keypadRow}>
+                  {DIGITS.slice(0, 3).map((d) => (
+                    <KeypadButton key={d} label={d} onPress={() => handleDigitPress(d)} />
+                  ))}
+                </View>
+                <View style={styles.keypadRow}>
+                  {DIGITS.slice(3, 6).map((d) => (
+                    <KeypadButton key={d} label={d} onPress={() => handleDigitPress(d)} />
+                  ))}
+                </View>
+                <View style={styles.keypadRow}>
+                  {DIGITS.slice(6, 9).map((d) => (
+                    <KeypadButton key={d} label={d} onPress={() => handleDigitPress(d)} />
+                  ))}
+                </View>
+                <View style={styles.keypadRow}>
+                  <View style={{ flex: 1 }} />
+                  <KeypadButton
+                    label={DIGITS[9]}
+                    onPress={() => handleDigitPress(DIGITS[9])}
+                  />
+                  <KeypadButton label="⌫" onPress={handleBackspace} />
+                </View>
+              </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </View>
     </Modal>
   );
@@ -138,6 +154,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.9)',
     justifyContent: 'flex-end',
+  },
+  keyboardAvoider: {
+    width: '100%',
   },
   topContent: {
     flex: 1,
@@ -163,7 +182,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     paddingHorizontal: 24,
     paddingTop: 16,
-    paddingBottom: 32,
   },
   sheetHeader: {
     flexDirection: 'row',

@@ -183,7 +183,7 @@ const AccountLoginScreen = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Passkey promo card */}
+        {/* Passkey promo card 
         <View style={styles.passkeyCard}>
           <Text style={styles.passkeyTitle}>Sign in faster with a passkey</Text>
           <View style={styles.benefitRow}>
@@ -210,6 +210,7 @@ const AccountLoginScreen = () => {
             )}
           </TouchableOpacity>
         </View>
+        */}
 
         {/* Log out of all devices */}
         <TouchableOpacity

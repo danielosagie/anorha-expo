@@ -301,6 +301,12 @@ export const useLiquidationConversationController = ({
   useEffect(() => {
     if (!activeCampaignId) return;
     let cancelled = false;
+    // Hold the loading state across the WHOLE entry: resolving the primary thread id
+    // (loadThreads) happens before loadThreadIntoMemory flips isLoadingMessages on, so
+    // without this there's a window where activeThreadId is null + messages are empty +
+    // isLoadingMessages is false → ConversationList renders its empty "Start the
+    // conversation" state. That's the "new chat flashes before the primary chat" bug.
+    setIsLoadingMessages(true);
     (async () => {
       try {
         // Open straight into the campaign's primary feed (with history) rather than
@@ -314,9 +320,13 @@ export const useLiquidationConversationController = ({
           await loadThreadIntoMemory(activeCampaignId, primaryId);
         } else {
           setSurfaceState('home_overview');
+          setIsLoadingMessages(false);
         }
       } catch (loadError: any) {
-        if (!cancelled) setError(loadError?.message || 'Failed to load campaign');
+        if (!cancelled) {
+          setError(loadError?.message || 'Failed to load campaign');
+          setIsLoadingMessages(false);
+        }
       }
     })();
     loadThreadState(activeCampaignId, HOME_DRAFT_SCOPE)
@@ -817,9 +827,10 @@ export const useLiquidationConversationController = ({
 
   // Live Convex messages (fed by the ConvexLiveMessages bridge). Agent-INITIATED
   // posts (digests, proactive updates) appear in the open thread the moment the
-  // backend writes them — no tap, no poll. Append-by-id only, and skipped while
-  // the thread is mid-turn (the send flow + refetch own that). Convex carries no
-  // clientMessageId, so we never reconcile the seller's optimistic message here.
+  // backend writes them — no tap, no poll. Skipped while the thread is mid-turn
+  // (the send flow + refetch own that). Convex carries no clientMessageId, so we
+  // reconcile the seller's optimistic message HEURISTICALLY (by content) below —
+  // this is what un-duplicates a message whose stream dropped before its ack.
   const ingestLiveMessages = useCallback((rawMessages: Array<{
     id: string;
     role: string;
@@ -840,6 +851,26 @@ export const useLiquidationConversationController = ({
         const role = rm.role === 'tool' ? 'assistant' : rm.role;
         if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
         if (next.messages.some(m => m.id === rm.id || m.serverMessageId === rm.id)) continue;
+        // Reconcile a seller message whose stream dropped before its ack: the backend
+        // persists its OWN copy, so match the most-recent un-acked user bubble and attach
+        // the server id instead of appending a duplicate. This also clears a falsely-
+        // "failed" bubble — the turn kept running server-side and its reply lands on this
+        // same live feed. Prefer an EXACT clientMessageId match (the backend now stamps it
+        // into metadata); fall back to identical-content for older backends that don't.
+        if (role === 'user') {
+          const rmClientId =
+            typeof rm.metadata?.clientMessageId === 'string' ? (rm.metadata.clientMessageId as string) : undefined;
+          const optimistic = [...next.messages].reverse().find(m => {
+            if (m.role !== 'user' || m.serverMessageId) return false;
+            if (rmClientId && m.clientMessageId) return m.clientMessageId === rmClientId;
+            return (m.content || '').trim() === (rm.content || '').trim();
+          });
+          if (optimistic) {
+            next = acknowledgeMessage(next, optimistic.id, rm.id);
+            changed = true;
+            continue;
+          }
+        }
         next = appendMessage(next, {
           id: rm.id,
           serverMessageId: rm.id,
