@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import {
   Dimensions,
-  KeyboardAvoidingView,
+  Keyboard,
   PanResponder,
   Platform,
   ScrollView,
@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { interpolate, runOnJS, useAnimatedKeyboard, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
@@ -197,6 +197,26 @@ const CampaignThreadScreen = () => {
   const [headerH, setHeaderH] = useState(104);
   const [footerH, setFooterH] = useState(150);
 
+  // Keyboard handling: KeyboardAvoidingView is unreliable on the New Architecture (Fabric,
+  // which reanimated 4 requires) — it silently fails to lift an absolute composer. Drive the
+  // composer directly from reanimated's keyboard value instead. translateY lifts it to sit
+  // just above the keyboard (minus the bottom safe area, which the keyboard already covers).
+  const keyboard = useAnimatedKeyboard();
+  const composerLiftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -Math.max(keyboard.height.value - insets.bottom, 0) }],
+  }));
+  // JS mirror of the keyboard height so the feed can reserve room (the latest message stays
+  // visible above the lifted composer instead of hiding behind it / the keyboard).
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvt, (e) => setKeyboardHeight(Math.max(e.endCoordinates?.height ?? 0, 0)));
+    const hide = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const feedKeyboardInset = Math.max(keyboardHeight - insets.bottom, 0);
+
   // ── Threads drawer: swipe left→right (or tap) to open, like the chat template ──
   const screenW = Dimensions.get('window').width;
   const DRAWER_W = Math.min(330, screenW * 0.84);
@@ -356,17 +376,15 @@ const CampaignThreadScreen = () => {
           }
         }}
         contentTopInset={headerH + 8}
-        contentBottomInset={footerH + 8}
+        contentBottomInset={footerH + 8 + feedKeyboardInset}
       />
 
-      {/* ── Composer + pending question ride the keyboard together. The KAV itself is
-          the absolute bottom anchor (behavior:'padding' pads its OWN in-flow column),
-          so the composer rises with the keyboard. An absolute child INSIDE a KAV does
-          not — that was the bug. Mirrors GenerateDetailsScreen's working composer. ── */}
-      <KeyboardAvoidingView
-        style={s.composerAvoider}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
+      {/* ── Composer + pending question ride the keyboard. Absolute bottom anchor whose
+          translateY is driven by reanimated's live keyboard height (composerLiftStyle) —
+          NOT KeyboardAvoidingView, which silently no-ops for an absolute composer on the
+          New Architecture (Fabric). box-none lets taps above the bar reach the feed. ── */}
+      <Animated.View
+        style={[s.composerAvoider, composerLiftStyle]}
         pointerEvents="box-none"
       >
         {/* One measured wrapper around BOTH the question card and the composer, so the feed's
@@ -437,7 +455,7 @@ const CampaignThreadScreen = () => {
           />
         </View>
         </View>
-      </KeyboardAvoidingView>
+      </Animated.View>
 
       {/* ── Top: floating glass header (white at top → transparent, blur) ─ */}
       <View
