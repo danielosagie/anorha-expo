@@ -1,8 +1,12 @@
 const path = require('path');
-const { getDefaultConfig } = require('expo/metro-config');
+// Sentry's drop-in replacement for expo's getDefaultConfig. Adds Debug ID
+// generation so uploaded source maps match the shipped bundle (required for
+// readable JS stack traces in Sentry). Falls through to getDefaultConfig
+// internally, so the resolver/transformer tweaks below behave identically.
+const { getSentryExpoConfig } = require('@sentry/react-native/metro');
 
 /** @type {import('expo/metro-config').MetroConfig} */
-const config = getDefaultConfig(__dirname);
+const config = getSentryExpoConfig(__dirname);
 
 // Watchman is failing on this machine's global state dir, so force Metro to use
 // the node-based crawler instead of crashing during startup.

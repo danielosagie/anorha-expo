@@ -1,10 +1,12 @@
+# EAS build-archive ignore list.
+# When this file exists, EAS uses it INSTEAD of .gitignore to decide what to
+# strip from the build upload. It mirrors .gitignore so every secret/credential
+# and all junk stays excluded — EXCEPT .env.local, which is re-included at the
+# bottom so Metro can inline EXPO_PUBLIC_* vars (Clerk key, API URLs, etc.) at
+# build time. .env.local remains gitignored, so nothing is committed.
+
 # ───────────────────────────── Dependencies ─────────────────────────────
 node_modules/
-# package-lock.json is committed on purpose. EAS strips gitignored files from
-# its upload archive, so ignoring the lockfile made EAS fall back to yarn +
-# "latest" resolution — which silently pulled a Node-22-only transitive dep
-# (@wallet-standard/base) and broke the build. Keep it tracked → reproducible
-# `npm ci`.
 
 # ───────────────────────────── Expo / build ─────────────────────────────
 .expo/
@@ -20,7 +22,7 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
-# ──────────────────── Secrets — NEVER commit (rotate if leaked) ──────────
+# ──────────────────── Secrets — keep stripped from the archive ───────────
 .env
 .env.*
 *.local
@@ -32,7 +34,6 @@ expo-env.d.ts
 *.jks
 *.keystore
 *.mobileprovision
-# Cloud service-account / Firebase credential files
 *-service-account*.json
 *serviceAccount*.json
 anorha-*.json
@@ -52,18 +53,6 @@ logs*.json
 ts_errors.txt
 diff.txt
 
-# ─────────────────────── Scratch / debug scripts ────────────────────────
-test-braces*.js
-test-jsx*.js
-test-platform-filtering.js
-formatting.js
-cleanup_*.sql
-
-# Root-level scratch markdown (keep real docs in docs/ ; README/CONTRIBUTING tracked)
-/*.md
-!/README.md
-!/CONTRIBUTING.md
-
 # ───────────────────────────── OS / editor ──────────────────────────────
 .DS_Store
 **/.DS_Store
@@ -72,15 +61,9 @@ npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# Historical review docs — intentionally kept out of the repo (do not un-hide silently)
-ANTI_PATTERNS_FOUND.md
-LISTING_EDITOR_ARCHITECTURE_REVIEW.md
-PHASE_1_IMPLEMENTATION.md
-FRONTEND_SYNC_LESSON.md
-HOOKS_COMPARISON.md
-QUICK_REFERENCE.md
-REACT_TYPESCRIPT_FUNDAMENTALS.md
-SPREAD_OPERATOR_GUIDE.md
-FIX_BARCODE_INVENTORY.md
-
-.env.local
+# ─────────── Re-include the runtime env so the build is configured ───────
+# Must come AFTER the .env/.local exclusions above (last match wins).
+# Holds EXPO_PUBLIC_* values (already pk_live / prod hosts). Local builds keep
+# this file on your machine; if you ever switch to cloud `eas build`, move these
+# to EAS environment variables instead so secrets don't upload to EAS servers.
+!.env.local
