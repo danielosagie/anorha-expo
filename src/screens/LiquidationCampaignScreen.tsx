@@ -112,7 +112,18 @@ const LiquidationCampaignScreen = () => {
     setLoadingItems(true);
     try {
       const fetched = await adapter.getCampaignItems(initialCampaignId);
-      setItems(fetched);
+      // Defensive de-dupe so the same item never renders twice (by item id, then by the
+      // underlying product/variant id) even if the backend ever returns overlapping rows.
+      const seen = new Set<string>();
+      const unique = fetched.filter((it: any) => {
+        const key = String(it.id || it.productId || '');
+        const vkey = it.productId ? `v:${it.productId}` : '';
+        if (seen.has(key) || (vkey && seen.has(vkey))) return false;
+        seen.add(key);
+        if (vkey) seen.add(vkey);
+        return true;
+      });
+      setItems(unique);
     } catch {
       setItems([]);
     } finally {
@@ -255,6 +266,78 @@ const LiquidationCampaignScreen = () => {
     setSelectedItems(new Set());
   };
 
+  // After a mutation, clear the selection, refresh the list, and surface a notice.
+  const reloadAfter = useCallback(async (msg: string) => {
+    setSelectedItems(new Set());
+    await loadItems();
+    controller.setNotice(msg);
+  }, [loadItems, controller]);
+
+  const removeItems = useCallback(async (ids: string[]) => {
+    const cid = initialCampaignId;
+    if (!cid || ids.length === 0) return;
+    try {
+      const { removed } = await adapter.removeCampaignItems(cid, ids);
+      await reloadAfter(`Removed ${removed} item${removed === 1 ? '' : 's'}`);
+    } catch (e: any) {
+      Alert.alert('Could not remove', e?.message || 'Please try again.');
+    }
+  }, [adapter, initialCampaignId, reloadAfter]);
+
+  const confirmRemoveItems = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    confirmThen(
+      'Remove items',
+      `Remove ${ids.length} item${ids.length === 1 ? '' : 's'} from this clearout? The product stays in your inventory.`,
+      () => { void removeItems(ids); },
+    );
+  }, [removeItems]);
+
+  const applyReprice = useCallback(async (ids: string[]) => {
+    const cid = initialCampaignId;
+    if (!cid || ids.length === 0) return;
+    try {
+      const flat = parseFloat(repriceValue);
+      if (Number.isFinite(flat) && flat > 0) {
+        // Flat new price for every selected item.
+        await adapter.updateCampaignItems(cid, ids, { price: Math.round(flat * 100) / 100 });
+      } else if (repriceDropPct != null) {
+        // Percentage drop is per-item (each starts from its own price, clamped to its floor).
+        const byId = new Map(items.map((it: any) => [it.id, it]));
+        await Promise.all(ids.map(id => {
+          const it: any = byId.get(id);
+          const cur = Number(it?.currentPrice || 0);
+          if (!cur) return Promise.resolve({ updated: 0 });
+          let next = Math.round(cur * (1 - repriceDropPct / 100) * 100) / 100;
+          const floor = Number(it?.floorPrice || 0);
+          if (floor && next < floor) next = floor;
+          return adapter.updateCampaignItems(cid, [id], { price: next });
+        }));
+      } else {
+        Alert.alert('Enter a new price or pick a drop %');
+        return;
+      }
+      setIsRepriceSheetOpen(false);
+      await reloadAfter(`Repriced ${ids.length} item${ids.length === 1 ? '' : 's'}`);
+    } catch (e: any) {
+      Alert.alert('Could not reprice', e?.message || 'Please try again.');
+    }
+  }, [adapter, initialCampaignId, repriceValue, repriceDropPct, items, reloadAfter]);
+
+  const applyFloor = useCallback(async (ids: string[]) => {
+    const cid = initialCampaignId;
+    if (!cid || ids.length === 0) return;
+    const floor = parseFloat(floorValue);
+    if (!Number.isFinite(floor) || floor <= 0) { Alert.alert('Enter a floor price'); return; }
+    try {
+      await adapter.updateCampaignItems(cid, ids, { floorPrice: Math.round(floor * 100) / 100 });
+      setIsFloorSheetOpen(false);
+      await reloadAfter(`Floor set on ${ids.length} item${ids.length === 1 ? '' : 's'}`);
+    } catch (e: any) {
+      Alert.alert('Could not set floor', e?.message || 'Please try again.');
+    }
+  }, [adapter, initialCampaignId, floorValue, reloadAfter]);
+
   const openItemDetail = (item: CampaignItem) => {
     setDetailItem(item);
     setIsDetailSheetOpen(true);
@@ -339,7 +422,7 @@ const LiquidationCampaignScreen = () => {
             <FlatList
               data={visibleItems}
               keyExtractor={item => item.id}
-              contentContainerStyle={{ paddingHorizontal: 6, paddingTop: 4, paddingBottom: 100 }}
+              contentContainerStyle={{ paddingHorizontal: 6, paddingTop: 4, paddingBottom: selectedItems.size > 0 ? 200 : 120 }}
               keyboardShouldPersistTaps="handled"
               ListEmptyComponent={
                 <View style={s.emptyState}>
@@ -379,9 +462,11 @@ const LiquidationCampaignScreen = () => {
               }}
             />
 
-            {/* Bulk action bar */}
+            {/* Bulk action bar — sits ABOVE the floating tab bar (TAB_ROW_HEIGHT 64 +
+                bottom inset) so its buttons are tappable, instead of being hidden behind the
+                app navigator. Mirrors the fix already in InventoryOrdersScreen. */}
             {selectedItems.size > 0 ? (
-              <View style={s.bulkBar}>
+              <View style={[s.bulkBar, { bottom: Math.max(18, insets.bottom) + 64 + 10 }]}>
                 <TouchableOpacity style={[s.baBtn, s.baPrimary]} onPress={() => { setRepriceValue(''); setIsRepriceSheetOpen(true); }}>
                   <Text style={s.baBtnText}>Reprice</Text>
                 </TouchableOpacity>
@@ -394,7 +479,7 @@ const LiquidationCampaignScreen = () => {
                 <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => bulkAction('Pause')}>
                   <Text style={s.baBtnText}>Pause</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.baBtn, s.baDanger]} onPress={() => bulkAction('Remove')}>
+                <TouchableOpacity style={[s.baBtn, s.baDanger]} onPress={() => confirmRemoveItems(Array.from(selectedItems))}>
                   <Text style={[s.baBtnText, { color: '#A32D2D' }]}>Remove</Text>
                 </TouchableOpacity>
               </View>
@@ -594,7 +679,7 @@ const LiquidationCampaignScreen = () => {
                 </TouchableOpacity>
               ))}
             </View>
-            <TouchableOpacity style={s.primaryBtn} onPress={() => { bulkAction('Reprice'); setIsRepriceSheetOpen(false); }}>
+            <TouchableOpacity style={s.primaryBtn} onPress={() => applyReprice(Array.from(selectedItems))}>
               <Text style={s.primaryBtnText}>Apply to selected</Text>
             </TouchableOpacity>
           </View>
@@ -609,7 +694,7 @@ const LiquidationCampaignScreen = () => {
             <Text style={s.sheetTitle}>Override floor</Text>
             <Text style={s.sheetHint}>Overrides campaign-level floor for these items only.</Text>
             <ConfigInput label="FLOOR PRICE" value={floorValue} onChangeText={setFloorValue} />
-            <TouchableOpacity style={s.primaryBtn} onPress={() => { bulkAction('Floor override'); setIsFloorSheetOpen(false); }}>
+            <TouchableOpacity style={s.primaryBtn} onPress={() => applyFloor(Array.from(selectedItems))}>
               <Text style={s.primaryBtnText}>Set floor</Text>
             </TouchableOpacity>
           </View>
@@ -653,7 +738,7 @@ const LiquidationCampaignScreen = () => {
                   <TouchableOpacity style={s.daBtn} onPress={() => { setIsDetailSheetOpen(false); setFloorValue(''); setSelectedItems(new Set([detailItem.id])); setIsFloorSheetOpen(true); }}>
                     <Text style={s.daBtnText}>Set floor</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={s.daBtn} onPress={() => { setIsDetailSheetOpen(false); Alert.alert('Remove', `${detailItem.name} removed from campaign`); }}>
+                  <TouchableOpacity style={s.daBtn} onPress={() => { const id = detailItem.id; setIsDetailSheetOpen(false); confirmRemoveItems([id]); }}>
                     <Text style={s.daBtnText}>Remove</Text>
                   </TouchableOpacity>
                 </View>
@@ -780,7 +865,7 @@ const s = StyleSheet.create({
   dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
 
   // Bulk action bar
-  bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 12, zIndex: 1000 },
   baBtn: { flex: 1, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 10, borderWidth: 0.5, alignItems: 'center' },
   baPrimary: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
   baDefault: { borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
