@@ -260,18 +260,23 @@ const LiquidationCampaignScreen = () => {
     else setSelectedItems(new Set(items.map(i => i.id)));
   };
 
-  const bulkAction = (action: string) => {
-    const n = selectedItems.size;
-    Alert.alert(action, `${action} applied to ${n} item${n !== 1 ? 's' : ''}`);
-    setSelectedItems(new Set());
-  };
-
   // After a mutation, clear the selection, refresh the list, and surface a notice.
   const reloadAfter = useCallback(async (msg: string) => {
     setSelectedItems(new Set());
     await loadItems();
     controller.setNotice(msg);
   }, [loadItems, controller]);
+
+  const pauseItems = useCallback(async (ids: string[]) => {
+    const cid = initialCampaignId;
+    if (!cid || ids.length === 0) return;
+    try {
+      const { updated } = await adapter.updateCampaignItems(cid, ids, { status: 'paused' });
+      await reloadAfter(`Paused ${updated} item${updated === 1 ? '' : 's'}`);
+    } catch (e: any) {
+      Alert.alert('Could not pause', e?.message || 'Please try again.');
+    }
+  }, [adapter, initialCampaignId, reloadAfter]);
 
   const removeItems = useCallback(async (ids: string[]) => {
     const cid = initialCampaignId;
@@ -482,10 +487,7 @@ const LiquidationCampaignScreen = () => {
                 <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => { setFloorValue(''); setIsFloorSheetOpen(true); }}>
                   <Text style={s.baBtnText}>Set floor</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => bulkAction('Move')}>
-                  <Text style={s.baBtnText}>Move</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => bulkAction('Pause')}>
+                <TouchableOpacity style={[s.baBtn, s.baDefault]} onPress={() => pauseItems(Array.from(selectedItems))}>
                   <Text style={s.baBtnText}>Pause</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[s.baBtn, s.baDanger]} onPress={() => confirmRemoveItems(Array.from(selectedItems))}>
