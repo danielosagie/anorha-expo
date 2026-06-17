@@ -2722,10 +2722,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // 402, so a payment failure surfaces as a connection error (rare — preflight catches it).
       quickScanStreamRef.current?.close();
       quickScanStreamRef.current = null;
-      const streamResult = await new Promise<{ matches: any[]; confidence: any; livePricing?: any } | null>((resolve, reject) => {
+      const streamResult = await new Promise<{
+        matches: any[];
+        confidence: any;
+        livePricing?: any;
+        canAutoConfirm?: boolean;
+        confidenceState?: string;
+        confidenceScore?: number;
+        reasonCode?: string;
+        rerankerAnalysis?: any;
+      } | null>((resolve, reject) => {
         let latestMatches: any[] = [];
         let latestConfidence: any = 'medium';
         let latestLivePricing: any = null;
+        let latestVerdict: { canAutoConfirm?: boolean; confidenceState?: string; confidenceScore?: number; reasonCode?: string; rerankerAnalysis?: any } = {};
         let settled = false;
         const finish = (run: () => void) => {
           if (settled) return;
@@ -2769,10 +2779,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             // Free live price range the match already computed from its eBay results.
             if (evt.result?.livePricing) latestLivePricing = evt.result.livePricing;
             else if (evt.data?.results?.[0]?.livePricing) latestLivePricing = evt.data.results[0].livePricing;
+            // Backend's structured quality verdict (the single source of truth) — prefer the rich
+            // SEARCH_RESULT, fall back to the terminal mappedResults[0] / COMPLETE data.
+            const verdictSrc = (evt.result && typeof evt.result.canAutoConfirm === 'boolean') ? evt.result
+              : (evt.data?.results?.[0] && typeof evt.data.results[0].canAutoConfirm === 'boolean') ? evt.data.results[0]
+              : (typeof evt.data?.canAutoConfirm === 'boolean' ? evt.data : null);
+            if (verdictSrc) {
+              latestVerdict = {
+                canAutoConfirm: verdictSrc.canAutoConfirm,
+                confidenceState: verdictSrc.confidenceState,
+                confidenceScore: verdictSrc.confidenceScore,
+                reasonCode: verdictSrc.reasonCode,
+                rerankerAnalysis: verdictSrc.rerankerAnalysis ?? latestVerdict.rerankerAnalysis,
+              };
+            }
             // Resolve on a terminal event (COMPLETE / NO_ITEMS) or as soon as a terminal data
             // payload (evt.data.results) lands — even under a non-standard terminal type.
             if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || Array.isArray(evt.data?.results)) {
-              finish(() => resolve({ matches: latestMatches, confidence: latestConfidence, livePricing: latestLivePricing }));
+              finish(() => resolve({ matches: latestMatches, confidence: latestConfidence, livePricing: latestLivePricing, ...latestVerdict }));
             } else if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
               finish(() => reject(new Error(evt.message || 'Match failed.')));
             }
@@ -2800,13 +2824,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // it NUMERICALLY, so map it (high→0.9, medium→0.6, low→0.2) or auto-confirm never fires.
       const matchConfidenceLabel: string = typeof streamResult.confidence === 'string' ? streamResult.confidence : 'medium';
       const matchConfidenceNum = matchConfidenceLabel === 'high' ? 0.9 : matchConfidenceLabel === 'medium' ? 0.6 : 0.2;
+      // Backend now owns match quality (computeScanConfidence) and sends a structured verdict.
+      // Read it DIRECTLY instead of re-deriving a synthetic confidence bucket on the client (the
+      // old label→0.9/0.6/0.2 hack that discarded the real reranker score/state/reasoning).
+      const backendAutoConfirm: boolean | undefined = typeof streamResult.canAutoConfirm === 'boolean' ? streamResult.canAutoConfirm : undefined;
+      const backendOwnsQuality = typeof backendAutoConfirm === 'boolean';
+      const backendState: string | undefined = typeof streamResult.confidenceState === 'string' ? streamResult.confidenceState : undefined;
+      const backendReranker = streamResult.rerankerAnalysis; // real {type,confidence,reasoning,...} when present
       // Typed `any` — the parser below reads it loosely (result.results[].matches, etc.).
       const result: any = {
-        recommendedAction: matchConfidenceLabel === 'high' ? 'show_single_match' : 'show_multiple_matches',
+        recommendedAction: backendOwnsQuality
+          ? (backendAutoConfirm ? 'show_single_match' : 'show_multiple_matches')
+          : (matchConfidenceLabel === 'high' ? 'show_single_match' : 'show_multiple_matches'),
         overallConfidence: matchConfidenceLabel,
         results: [{
           matches: streamMatches,
-          rerankerAnalysis: { confidence: matchConfidenceNum, reasoning: undefined },
+          rerankerAnalysis: backendReranker || { confidence: matchConfidenceNum, reasoning: undefined },
         }],
       };
 
@@ -2883,17 +2916,25 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // flywheel listing whose title repeats itself ("Patriot HD Glass Truck Body
         // Patriot HD Glass Truck Body patriot hd glass…"). Detect that low unique-word
         // ratio + a low-confidence verdict and refuse to auto-confirm — prompt a retake.
+        // Backend is authoritative on match quality. Trust its canAutoConfirm/confidenceState when
+        // present; fall back to the legacy client-side guard ONLY for an older backend (or shelf
+        // mode) that doesn't send the structured verdict. (The keyword-soup heuristic and the
+        // label→bucket are now belt-and-suspenders fallbacks, not the primary signal.)
         const topTitleForGuard = String(nextMatchData.rankedCandidates?.[0]?.title || '');
         const guardWords = topTitleForGuard.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
         const isKeywordSoup = guardWords.length >= 6 && (new Set(guardWords).size / guardWords.length) < 0.5;
-        const looksUnidentified = isKeywordSoup || matchConfidenceLabel === 'low';
+        const looksUnidentified = backendOwnsQuality
+          ? !backendAutoConfirm
+          : (isKeywordSoup || matchConfidenceLabel === 'low');
 
-        const shouldAutoConfirmTopMatch = !looksUnidentified && shouldAutoSelectQuickMatch({
-          totalMatches: allMatches.length,
-          recommendedAction: quickScanResult?.recommendedAction,
-          rerankerConfidence: rerankerMeta?.confidence,
-          topCandidateIsLocalMatch: Boolean(nextMatchData.rankedCandidates?.[0]?.isLocalMatch),
-        });
+        const shouldAutoConfirmTopMatch = backendOwnsQuality
+          ? backendAutoConfirm!
+          : (!looksUnidentified && shouldAutoSelectQuickMatch({
+              totalMatches: allMatches.length,
+              recommendedAction: quickScanResult?.recommendedAction,
+              rerankerConfidence: rerankerMeta?.confidence,
+              topCandidateIsLocalMatch: Boolean(nextMatchData.rankedCandidates?.[0]?.isLocalMatch),
+            }));
 
         setConfirmedQuickMatchByItemId(prev => {
           if (!shouldAutoConfirmTopMatch) {
@@ -2919,7 +2960,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setMatchData(nextMatchData);
         setCurrentInstruction(shouldAutoConfirmTopMatch ? 'matched' : 'matches_found');
         if (looksUnidentified) {
-          showNotificationMessage('Couldn’t identify this clearly — try a closer, well-lit photo.', 3500);
+          // We DID surface candidates here (allMatches.length > 0). Nudge honestly by state: a
+          // genuine couldn't-verify (no photo / reranker never ran / nothing found) suggests a
+          // retake; otherwise it's "review the candidates and pick the right one".
+          const retakeState = !backendOwnsQuality || backendState === 'NOT_RUN' || backendState === 'NO_PHOTO' || backendState === 'NO_CANDIDATES';
+          showNotificationMessage(
+            retakeState
+              ? 'Couldn’t identify this clearly — try a closer, well-lit photo.'
+              : 'Found possible matches — tap to review and pick the right one.',
+            3500,
+          );
         }
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
