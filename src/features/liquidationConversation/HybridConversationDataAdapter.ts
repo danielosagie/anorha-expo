@@ -114,6 +114,21 @@ const getApiBaseUrl = () => API_BASE_URL;
 
 const readString = (value: unknown) => (typeof value === 'string' ? value : undefined);
 
+// Pull attached photo urls off a persisted message's metadata so they render as
+// thumbnails in the chat history. The backend may store them under any of these
+// keys depending on the turn type (seller-attached photos vs agent-posted job card).
+const extractImageUrls = (metadata: Record<string, any> | undefined): string[] => {
+  if (!metadata) return [];
+  const candidates = [metadata.imageUrls, metadata.image_urls, metadata.images, metadata.photos];
+  for (const c of candidates) {
+    if (Array.isArray(c)) {
+      const urls = c.map(u => (typeof u === 'string' ? u : u?.url)).filter((u: unknown): u is string => typeof u === 'string' && !!u);
+      if (urls.length) return urls;
+    }
+  }
+  return [];
+};
+
 export class HybridConversationDataAdapter implements ConversationDataAdapter {
   private readonly convex = new ConvexHttpClient(CONVEX_URL);
   private readonly getClerkToken?: () => Promise<string | null>;
@@ -1054,6 +1069,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     const createdAt = message.timestamp || message.createdAt || new Date().toISOString();
     const metadata = message.metadata || {};
     const kind = metadata.type === 'action' ? 'action' : 'text';
+    const imageUrls = extractImageUrls(metadata);
 
     return {
       id: message.id,
@@ -1065,6 +1081,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       createdAt,
       deliveryState: 'sent',
       kind,
+      ...(imageUrls.length ? { imageUrls } : {}),
       metadata,
       actionMeta: kind === 'action'
         ? {

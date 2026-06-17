@@ -448,6 +448,14 @@ const TabNavigator = () => {
         // Its own bottom controls carry Back / shutter / mode + the cart CTA.
         const focusedRouteName = props.state?.routes?.[props.state?.index]?.name;
         if (focusedRouteName === 'AddProduct') return null;
+        // A screen can hand its bottom spot to a floating action pill (e.g. home's
+        // multi-select bar) by setting tabBarStyle: { display: 'none' }.
+        const focusedKey = props.state?.routes?.[props.state?.index]?.key;
+        const tbStyle = focusedKey ? props.descriptors?.[focusedKey]?.options?.tabBarStyle : undefined;
+        const tabBarHidden = Array.isArray(tbStyle)
+          ? tbStyle.some((s: any) => s && s.display === 'none')
+          : tbStyle?.display === 'none';
+        if (tabBarHidden) return null;
         return (
           <TabBar
             {...props}
@@ -506,7 +514,16 @@ const TabNavigator = () => {
         // works on every revisit, not just the first.
         component={sb(AddProductScreen, {
           mode: 'pin', size: 44, pinLeft: 16, accent: '#FFFFFF',
-          onBack: (nav: any) => { if (nav.canGoBack?.()) nav.goBack(); else nav.navigate('Inventory'); },
+          // Deterministic back: pop the current navigator if it can, else pop the parent
+          // stack (returns to the camera/chat that pushed us), else land on Home. Always
+          // navigates somewhere — previously a tab-level goBack could no-op (swipe ring
+          // filled but the screen never moved).
+          onBack: (nav: any) => {
+            if (nav.canGoBack?.()) { nav.goBack(); return; }
+            const parent = nav.getParent?.();
+            if (parent?.canGoBack?.()) { parent.goBack(); return; }
+            nav.navigate('Clearouts');
+          },
         })}
         options={{
           tabBarButton: () => null,

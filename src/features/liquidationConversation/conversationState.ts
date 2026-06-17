@@ -337,6 +337,7 @@ export const createTextMessage = ({
   role,
   content,
   deliveryState,
+  imageUrls,
 }: {
   campaignId: string;
   threadId: string;
@@ -344,6 +345,7 @@ export const createTextMessage = ({
   role: ConversationMessage['role'];
   content: string;
   deliveryState: ConversationMessage['deliveryState'];
+  imageUrls?: string[];
 }): ConversationMessage => ({
   id: clientMessageId,
   clientMessageId,
@@ -354,6 +356,7 @@ export const createTextMessage = ({
   createdAt: new Date().toISOString(),
   deliveryState,
   kind: 'text',
+  ...(imageUrls && imageUrls.length ? { imageUrls } : {}),
 });
 
 export const createActionMessage = ({

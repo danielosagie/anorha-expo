@@ -153,6 +153,8 @@ export interface ConversationMessage {
   kind: ConversationMessageKind;
   clientMessageId?: string;
   serverMessageId?: string;
+  /** Public urls of photos attached to this message — shown as thumbnails in the bubble. */
+  imageUrls?: string[];
   metadata?: Record<string, unknown>;
   actionMeta?: {
     actionType: string;

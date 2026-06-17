@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BRAND_PRIMARY } from '../../../design/tokens';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
@@ -38,6 +38,36 @@ export const ConversationList = ({
   const listRef = useRef<any>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canJump = useMemo(() => messages.length > 2, [messages.length]);
+
+  // FlashList can need a couple frames after content lands before scrollToEnd settles
+  // on the true bottom; nudge it across a few frames so the chat always OPENS at the
+  // latest message instead of the top.
+  const scrollToBottom = useCallback((animated: boolean) => {
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
+    setTimeout(() => listRef.current?.scrollToEnd({ animated }), 120);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated }), 320);
+  }, []);
+
+  // Land at the bottom on first open AND whenever the thread switches (the list stays
+  // mounted across thread switches, so a fresh thread would otherwise stay scrolled
+  // wherever the last one was). Keyed off the rendered thread.
+  const threadKey = messages[0]?.threadId ?? null;
+  const didInitialScrollRef = useRef(false);
+  const prevThreadKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (threadKey !== prevThreadKeyRef.current) {
+      prevThreadKeyRef.current = threadKey;
+      didInitialScrollRef.current = false;
+    }
+  }, [threadKey]);
+  useEffect(() => {
+    if (didInitialScrollRef.current) return;
+    if (loading || !messages.length) return;
+    didInitialScrollRef.current = true;
+    prevLenRef.current = messages.length;
+    setShowJumpToLatest(false);
+    scrollToBottom(false);
+  }, [loading, messages.length, scrollToBottom]);
 
   // iMessage-style swipe-left to reveal timestamps on the right.
   const dragX = useSharedValue(0);
@@ -102,6 +132,11 @@ export const ConversationList = ({
           paddingBottom: contentBottomInset ?? 18,
         }}
         ListHeaderComponent={ListHeaderComponent}
+        onLoad={() => {
+          // FlashList finished its first real layout — make sure we're pinned to the
+          // newest message (this fires after content is measured, so scrollToEnd lands).
+          if (messages.length && !showJumpToLatest) scrollToBottom(false);
+        }}
         renderItem={({ item }) => (
           <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} onCancelQueued={onCancelQueued} />
         )}

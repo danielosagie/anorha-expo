@@ -43,6 +43,25 @@ const ChatJobCard = ({ card, onOpen }: { card: ChatJobCardMeta; onOpen?: (sessio
   </TouchableOpacity>
 );
 
+// Photos the seller attached to a message (or the agent posted), shown as
+// thumbnails in the bubble so the chat history actually shows what was sent.
+const AttachedImages = ({ urls }: { urls: string[] }) => {
+  if (!urls.length) return null;
+  const single = urls.length === 1;
+  return (
+    <View style={styles.attachedRow}>
+      {urls.slice(0, 6).map((uri, i) => (
+        <Image
+          key={`${uri}-${i}`}
+          source={{ uri }}
+          style={[styles.attachedImage, single && styles.attachedImageSingle]}
+          resizeMode="cover"
+        />
+      ))}
+    </View>
+  );
+};
+
 const TypingDot = ({ delay }: { delay: number }) => {
   const progress = useSharedValue(0.3);
   useEffect(() => {
@@ -242,6 +261,9 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
     : []);
   const reasoning = !isUser ? ((message.metadata as any)?.reasoning as string | undefined) : undefined;
   const jobCard = !isUser ? ((message.metadata as any)?.jobCard as ChatJobCardMeta | undefined) : undefined;
+  const imageUrls = Array.isArray(message.imageUrls)
+    ? message.imageUrls.filter((u): u is string => typeof u === 'string' && !!u)
+    : [];
 
   // Digest / watch-cycle check-ins live in the feed but stay folded by default so
   // they don't crowd the conversation. Tap to expand.
@@ -288,12 +310,12 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           <ToolActivityCard steps={toolSteps} reasoning={reasoning} streaming={isStreaming} />
         ) : null}
 
-        {jobCard?.sessionId ? (
-          <ChatJobCard card={jobCard} onOpen={onOpenCart} />
-        ) : null}
+        {/* Attached photos render above the text, like iMessage — so the chat
+            history shows what the seller (or agent) actually sent. */}
+        {imageUrls.length ? <AttachedImages urls={imageUrls} /> : null}
 
         {isUser ? (
-          <Text style={[styles.messageText, styles.userMessageText]}>{content}</Text>
+          content ? <Text style={[styles.messageText, styles.userMessageText]}>{content}</Text> : null
         ) : renderMarkdown ? (
           // Stream the reply live: render the partial markdown as deltas arrive
           // (content accumulates via appendAssistantDelta). The typing bubble only
@@ -304,6 +326,14 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           </MarkdownBoundary>
         ) : isStreaming ? (
           <TypingIndicator />
+        ) : null}
+
+        {/* The tappable cart card sits BELOW the agent's message response (the seller
+            reads the value check first, then taps to review the draft listing). */}
+        {jobCard?.sessionId ? (
+          <View style={styles.jobCardWrap}>
+            <ChatJobCard card={jobCard} onOpen={onOpenCart} />
+          </View>
         ) : null}
 
         {/* Queued/sending state for messages the seller lined up while Sprout was responding.
@@ -396,7 +426,8 @@ export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (pr
     a.decisionPrompt === b.decisionPrompt &&
     (aSteps?.length || 0) === (bSteps?.length || 0) &&
     ((a.metadata as any)?.reasoning || '') === ((b.metadata as any)?.reasoning || '') &&
-    ((a.metadata as any)?.jobCard?.sessionId || '') === ((b.metadata as any)?.jobCard?.sessionId || '')
+    ((a.metadata as any)?.jobCard?.sessionId || '') === ((b.metadata as any)?.jobCard?.sessionId || '') &&
+    (a.imageUrls?.join('|') || '') === (b.imageUrls?.join('|') || '')
   );
 });
 
@@ -404,6 +435,9 @@ const styles = StyleSheet.create({
   row: {
     width: '100%',
     marginBottom: 10,
+  },
+  jobCardWrap: {
+    marginTop: 8,
   },
   jobCard: {
     flexDirection: 'row',
@@ -416,6 +450,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2EAD0',
     minWidth: 220,
+  },
+  attachedRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 6,
+  },
+  attachedImage: {
+    width: 96,
+    height: 96,
+    borderRadius: 12,
+    backgroundColor: '#E5E7EB',
+  },
+  attachedImageSingle: {
+    width: 200,
+    height: 200,
+    maxWidth: '100%',
   },
   jobCardImage: {
     width: 44,

@@ -484,10 +484,21 @@ export const useLiquidationConversationController = ({
       if (item.kind === 'action' || (item.imageUrls && item.imageUrls.length > 0)) {
         const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
         if (remoteMessages) {
-          setThreadStateFor(threadId, current => ({
-            ...current,
-            messages: remoteMessages,
-          }), { immediate: true });
+          setThreadStateFor(threadId, current => {
+            // The seller's attached photos must survive the blind replace: if the server
+            // copy of this turn's user message doesn't echo the urls in its metadata, carry
+            // them over from the local optimistic message so the thumbnails don't vanish.
+            const turnImages = item.imageUrls;
+            const merged = turnImages && turnImages.length
+              ? remoteMessages.map(rm => {
+                  if (rm.role !== 'user' || (rm.imageUrls && rm.imageUrls.length)) return rm;
+                  const matchesContent = (rm.content || '').trim() === (item.content || '').trim();
+                  const matchesId = !!rm.clientMessageId && rm.clientMessageId === item.clientMessageId;
+                  return matchesId || matchesContent ? { ...rm, imageUrls: turnImages } : rm;
+                })
+              : remoteMessages;
+            return { ...current, messages: merged };
+          }, { immediate: true });
         }
       }
       // Pull fresh thread metadata so the backend's topic auto-title replaces
@@ -583,6 +594,7 @@ export const useLiquidationConversationController = ({
       role: 'user',
       content,
       deliveryState: isStreaming ? 'queued' : 'sending',
+      imageUrls,
     });
     const queueItem = toQueueItem({
       campaignId,
@@ -795,14 +807,19 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter]);
 
-  // Refresh on thread switch and whenever a turn finishes streaming (Sprout may
-  // have just asked / proposed, or the answer may have closed the question/plan).
+  // Refresh on thread switch, whenever a turn finishes streaming (Sprout may have just
+  // asked / proposed, or the answer may have closed the question/plan), AND whenever a
+  // new message lands while idle — so a PROACTIVE ask/plan (posted by the agent via the
+  // live bridge, with no seller turn to toggle isStreaming) still surfaces its card.
+  const lastMessageId = activeThreadState?.messages.length
+    ? activeThreadState.messages[activeThreadState.messages.length - 1].id
+    : null;
   useEffect(() => {
     const cid = activeCampaignIdRef.current;
     if (!cid || !activeThreadId || isStreaming) return;
     void refreshPendingQuestion(cid, activeThreadId);
     void refreshPendingPlan(cid, activeThreadId);
-  }, [activeThreadId, isStreaming, refreshPendingQuestion, refreshPendingPlan]);
+  }, [activeThreadId, isStreaming, lastMessageId, refreshPendingQuestion, refreshPendingPlan]);
 
   const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {
     const campaignId = activeCampaignIdRef.current;
@@ -903,6 +920,17 @@ export const useLiquidationConversationController = ({
             continue;
           }
         }
+        const liveImages = (() => {
+          const md = rm.metadata as any;
+          const cands = [md?.imageUrls, md?.image_urls, md?.images, md?.photos];
+          for (const c of cands) {
+            if (Array.isArray(c)) {
+              const urls = c.map((u: any) => (typeof u === 'string' ? u : u?.url)).filter((u: unknown): u is string => typeof u === 'string' && !!u);
+              if (urls.length) return urls;
+            }
+          }
+          return [] as string[];
+        })();
         next = appendMessage(next, {
           id: rm.id,
           serverMessageId: rm.id,
@@ -913,6 +941,7 @@ export const useLiquidationConversationController = ({
           createdAt: rm.createdAt,
           deliveryState: 'sent',
           kind: (rm.metadata as any)?.type === 'action' ? 'action' : 'text',
+          ...(liveImages.length ? { imageUrls: liveImages } : {}),
           metadata: rm.metadata || {},
         });
         changed = true;
