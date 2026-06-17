@@ -401,9 +401,10 @@ export function selectCounts() {
 
 // --- legacy bulk-items adapter ---------------------------------------------
 // These project cart$ into the exact shapes AddProductScreen's pre-cart state
-// used, and reconcile its setX(prev => next) updates back into cart$. The legacy
-// "processed" items are retained in cart$ but filtered out of these views, so the
-// old screen behaves identically while the new cart UI can still see them.
+// used, and reconcile its setX(prev => next) updates back into cart$. "Processed"
+// items are filtered out of the active bulk-items LIST (selectLegacyBulkItems) but
+// their match/confirmed data stays exposed (selectLegacyQuickScanStore/Confirmed)
+// so navigating back to an already-matched item still shows its match.
 
 export const selectProcessedSet = (): Set<string> => new Set(cart$.processedItemIds.get());
 
@@ -423,10 +424,11 @@ export function selectLegacyBulkItems(): LegacyBulkItem[] {
 }
 
 export function selectLegacyQuickScanStore(): Record<string, { matchData: any; serpApiData: any[] }> {
-  const processed = selectProcessedSet();
+  // Processed items are INCLUDED here on purpose: their match data lives in cart$
+  // and must stay readable so navigating back to an already-matched item still
+  // shows its match (it's filtered only from the active bulk-items list, above).
   const out: Record<string, { matchData: any; serpApiData: any[] }> = {};
   for (const it of selectAllItems()) {
-    if (processed.has(it.id)) continue;
     if (it.match?.response || it.match?.serpApiData) {
       out[it.id] = { matchData: it.match.response, serpApiData: it.match.serpApiData ?? [] };
     }
@@ -435,10 +437,10 @@ export function selectLegacyQuickScanStore(): Record<string, { matchData: any; s
 }
 
 export function selectLegacyConfirmed(): Record<string, QuickMatchSelection> {
-  const processed = selectProcessedSet();
+  // Processed items included (see selectLegacyQuickScanStore) so a confirmed/auto
+  // selection survives navigate-back.
   const out: Record<string, QuickMatchSelection> = {};
   for (const it of selectAllItems()) {
-    if (processed.has(it.id)) continue;
     if (it.match?.confirmed) out[it.id] = it.match.confirmed;
   }
   return out;
@@ -481,8 +483,14 @@ export function reconcileQuickScanStore(
     const v = next[id];
     setItemMatch(id, { response: v?.matchData, serpApiData: v?.serpApiData ?? [] });
   }
+  // Clear match data ONLY for a live, non-processed item the screen explicitly
+  // dropped from the map (e.g. a re-scan reset). Processed items keep their match
+  // in cart$ (navigate-back); fully removed items are cleared via removeEntry.
+  // Without the processed-guard, markItemsProcessed's map-prune wiped the match
+  // that we now want to retain — the "go back and the data is gone" bug.
+  const processed = selectProcessedSet();
   for (const id of Object.keys(prev)) {
-    if (!(id in next) && getEntry(id)) {
+    if (!(id in next) && getEntry(id) && !processed.has(id)) {
       setItemMatch(id, { response: undefined, serpApiData: undefined });
     }
   }
@@ -496,8 +504,12 @@ export function reconcileConfirmed(
     if (!getEntry(id)) continue;
     setItemConfirmedMatch(id, next[id], { markMatched: false });
   }
+  // Same guard as reconcileQuickScanStore: a re-research on a LIVE, non-processed
+  // item legitimately drops its confirmed selection so fresh results surface, but
+  // a processed item must keep its confirmed match for navigate-back.
+  const processed = selectProcessedSet();
   for (const id of Object.keys(prev)) {
-    if (!(id in next) && getEntry(id)) {
+    if (!(id in next) && getEntry(id) && !processed.has(id)) {
       const it = selectItem(id);
       if (it?.match) updateItem(id, { match: { ...it.match, confirmed: undefined } });
     }

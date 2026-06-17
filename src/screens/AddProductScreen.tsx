@@ -3396,13 +3396,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.debug('[ADD NEW ITEM] Enabling bulk mode');
       setIsBulkMode(true);
       if (capturedPhotos.length > 0) {
-        // Create first item with existing photos
-        const firstItemId = generateItemId();
+        // REUSE the existing first item's id (the single-mode scan already created
+        // a real item + stored its match under that id). Minting a NEW id here made
+        // reconcileBulkItems removeEntry the old one — wiping its match BEFORE the
+        // migration below could run (which then read empty data and no-op'd), so the
+        // first item's match was lost the moment you added a second item. Keeping the
+        // id stable preserves the match with no migration needed.
+        const existingFirst = bulkItemsRef.current?.[0];
+        const firstItemId = existingFirst?.id ?? generateItemId();
+        const firstPhotos = existingFirst?.photos?.length ? existingFirst.photos : capturedPhotos;
         const newItems = [
           {
             id: firstItemId,
-            photos: capturedPhotos,
-            title: undefined,
+            photos: firstPhotos,
+            title: existingFirst?.title,
             isActive: false
           },
           {
@@ -3415,18 +3422,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         log.debug('[ADD NEW ITEM] Creating items with existing photos:', newItems);
         setBulkItems(newItems);
         setActiveItemId(newItemId);
-
-        // Migrate quick scan store from single-item session to firstItemId if present
-        setQuickScanStore(prev => {
-          const keys = Object.keys(prev);
-          if (keys.length === 1 && !prev[firstItemId]) {
-            const oldKey = keys[0];
-            const entry = prev[oldKey];
-            const { [oldKey]: _removed, ...rest } = prev;
-            return { ...rest, [firstItemId]: entry };
-          }
-          return prev;
-        });
       } else {
         const newItems = [{
           id: newItemId,
