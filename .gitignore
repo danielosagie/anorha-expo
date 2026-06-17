@@ -53,6 +53,7 @@ ts_errors.txt
 diff.txt
 
 # ─────────────────────── Scratch / debug scripts ────────────────────────
+.sim-shots/
 test-braces*.js
 test-jsx*.js
 test-platform-filtering.js

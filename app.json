@@ -61,12 +61,6 @@
         }
       ],
       [
-        "react-native-vision-camera",
-        {
-          "enableCodeScanner": true
-        }
-      ],
-      [
         "expo-local-authentication",
         {
           "faceIDPermission": "Allow Anorha to use Face ID for quick and secure access to your account."

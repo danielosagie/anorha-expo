@@ -53,12 +53,6 @@ export default {
       }
     ],
     [
-      "react-native-vision-camera",
-      {
-        enableCodeScanner: true
-      }
-    ],
-    [
       "expo-splash-screen",
       {
         backgroundColor: "#FFF9EB",
