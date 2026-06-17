@@ -2851,11 +2851,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }))
         };
 
-        // Seed the pricing card with the FREE live range the match already computed (eBay Browse),
-        // so "listed right now" prices show instantly; the sold-comp fetch below enriches it. No
-        // extra call for the live range — consolidated into the match (one flow).
-        if (streamResult.livePricing && nextMatchData.rankedCandidates?.[0] && !nextMatchData.rankedCandidates[0].pricingResearch) {
-          (nextMatchData.rankedCandidates[0] as any).pricingResearch = { livePricing: streamResult.livePricing };
+        // Seed the pricing card with the FREE live range + COMPS the match already computed from its
+        // eBay results — so price range AND "recent comps" show INSTANTLY with the match instead of
+        // waiting on the slow post-match SerpAPI fetch. That fetch (below) still runs to enrich with
+        // true sold-comp data, overwriting this seed when it lands.
+        const lp: any = streamResult.livePricing;
+        if (lp && nextMatchData.rankedCandidates?.[0] && !nextMatchData.rankedCandidates[0].pricingResearch) {
+          (nextMatchData.rankedCandidates[0] as any).pricingResearch = {
+            low: lp.low, high: lp.high, median: lp.median, sampleCount: lp.sampleCount,
+            samples: lp.samples, livePricing: lp,
+          };
         }
 
         if (rerankerMeta) {
