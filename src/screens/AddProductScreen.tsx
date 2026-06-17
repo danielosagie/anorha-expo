@@ -943,8 +943,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (id && text) researchItemWithText(id, text);
       }}
       onAddPhoto={() => {
-        // Inline in-app camera (not the OS gallery) targeting this item; on capture it
-        // re-runs the full match and returns here. Keep previewItemId so we land back.
+        // Inline in-app camera (not the OS gallery) targeting this item — a plain gallery
+        // add: it does NOT re-run the match (rescan defaults false) unless it's the item's
+        // first/cover photo. Keep previewItemId so we land back.
         if (previewItemId) openPhotoCaptureForItem(previewItemId);
       }}
       sellLabel="Confirm item"
@@ -989,8 +990,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onBack={() => setAddDetailsItemId(null)}
         onCaptureTag={() => {
           // Inline camera overlay ON TOP of this sheet (no cart teardown, no Fabric unmount
-          // race): captures one tag shot and re-runs the full match for this item, then returns.
-          openPhotoCaptureForItem(id);
+          // race): captures one tag shot and re-runs the full match for this item (explicit
+          // correction → rescan), then returns.
+          openPhotoCaptureForItem(id, { rescan: true });
         }}
         onImportTag={() => {
           // Gallery import stays as the explicit "Import" action; targets this item + re-matches.
@@ -1627,12 +1629,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               const activeIndex = prev.findIndex(it => it.isActive);
               if (activeIndex >= 0) {
                 const activeItemIdLocal = prev[activeIndex].id;
+                const wasEmpty = prev[activeIndex].photos.length === 0;
                 const next = prev.map((it, idx) => {
                   if (idx !== activeIndex) return it;
-                  const updated = { ...it, photos: [...it.photos, newPhoto] };
-                  // Always re-research on a new photo (incl. a wrong-item tag shot on an
-                  // item that already has photos), not only the first — run the full match.
-                  setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
+                  // First photo of the item is its cover; later snaps are gallery shots.
+                  const updated = { ...it, photos: [...it.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] };
+                  // Scan ONLY on the cover (first) photo. Adding more gallery photos to an
+                  // already-scanned item must NOT each fire a full (billable ~15s) re-match —
+                  // re-check happens when the COVER changes (setBulkItemCoverPhoto), not per add.
+                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
                   return updated;
                 });
                 return next;
@@ -1642,11 +1647,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               if (!canAddAnotherItem(prev.length)) {
                 if (prev[0]) {
                   const fallbackId = prev[0].id;
+                  const wasEmpty = prev[0].photos.length === 0;
                   setActiveItemId(fallbackId);
-                  setTimeout(() => performQuickScan(newPhoto, fallbackId), 500);
+                  // Scan only when this is the item's cover (first) photo — not a gallery add.
+                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, fallbackId), 500);
                   return prev.map((it, idx) => {
                     if (idx === 0) {
-                      return { ...it, isActive: true, photos: [...it.photos, newPhoto] };
+                      return { ...it, isActive: true, photos: [...it.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] };
                     }
                     return { ...it, isActive: false };
                   });
@@ -3107,20 +3114,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Attach a freshly captured photo to a specific item and re-run the full match. First
   // photo becomes the cover. Mirrors the live-camera capture branch, target-id explicit.
-  const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto) => {
+  const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean }) => {
+    const wasEmpty = (bulkItemsRef.current.find((i) => i.id === itemId)?.photos.length ?? 0) === 0;
     setBulkItems((prev) => prev.map((item) => {
       if (item.id !== itemId) return item;
-      const wasEmpty = item.photos.length === 0;
-      return { ...item, photos: [...item.photos, { ...photo, isCover: wasEmpty ? true : photo.isCover }] };
+      const empty = item.photos.length === 0;
+      return { ...item, photos: [...item.photos, { ...photo, isCover: empty ? true : photo.isCover }] };
     }));
     setCapturedPhotos((prev) => [...prev, photo]);
-    // Always re-research on the new photo (incl. a wrong-item correction) via the full match.
-    setTimeout(() => performQuickScan(photo, itemId), 500);
+    // Scan when this is the cover (first) photo OR an explicit correction/re-match (wrong-item,
+    // add-details tag). A plain "add another photo" to an already-matched item does NOT re-match.
+    if (wasEmpty || opts?.rescan) setTimeout(() => performQuickScan(photo, itemId), 500);
   }, [performQuickScan]);
 
-  // Open / close the inline capture overlay for a target item.
-  const openPhotoCaptureForItem = useCallback((itemId: string) => {
+  // Open / close the inline capture overlay for a target item. `rescan` marks an explicit
+  // correction (wrong-item / add-details tag) so the captured shot re-runs the full match;
+  // a plain "add photo" leaves it false (gallery add → no re-match unless it's the cover).
+  const photoCaptureRescanRef = useRef(false);
+  const openPhotoCaptureForItem = useCallback((itemId: string, opts?: { rescan?: boolean }) => {
     if (photoCaptureTargetId) return; // overlay already open — ignore re-entrant taps
+    photoCaptureRescanRef.current = !!opts?.rescan;
     setOverlayFacing('back');
     setOverlayFlash('off');
     setPhotoCaptureTargetId(itemId);
@@ -3142,7 +3155,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           height: shot.height || SCREEN_HEIGHT,
           timestamp: Date.now(),
           isCover: false,
-        });
+        }, { rescan: photoCaptureRescanRef.current });
         setPhotoCaptureTargetId(null); // success only → dismiss back to where the user was
       }
     } catch (err) {
@@ -3617,21 +3630,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
   }, []);
 
-  // Set cover photo in bulk item
+  // Set cover photo in bulk item. Changing the cover RE-CHECKS the match against the new
+  // cover image (the user's intent: reorder/retake the cover → re-scan), but only when the
+  // cover actually changes — re-selecting the current cover is a no-op (no wasted re-match).
   const setBulkItemCoverPhoto = useCallback((itemId: string, photoId: string) => {
-    setBulkItems(prev => prev.map(item => {
-      if (item.id === itemId) {
-        return {
-          ...item,
-          photos: item.photos.map(photo => ({
-            ...photo,
-            isCover: photo.id === photoId
-          }))
-        };
-      }
-      return item;
-    }));
-  }, []);
+    const item = bulkItemsRef.current.find(i => i.id === itemId);
+    const prevCoverId = item ? (item.photos.find(p => p.isCover) || item.photos[0])?.id : undefined;
+    const coverChanged = !!item && prevCoverId !== photoId;
+    const newCoverPhoto = item?.photos.find(p => p.id === photoId);
+    setBulkItems(prev => prev.map(it => it.id === itemId
+      ? { ...it, photos: it.photos.map(photo => ({ ...photo, isCover: photo.id === photoId })) }
+      : it));
+    if (coverChanged && newCoverPhoto) {
+      setTimeout(() => performQuickScan(newCoverPhoto as CapturedPhoto, itemId), 300);
+    }
+  }, [performQuickScan]);
 
   // Remove photo from bulk item
   const removeBulkItemPhoto = useCallback((itemId: string, photoId: string) => {
