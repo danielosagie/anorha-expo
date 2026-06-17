@@ -2722,9 +2722,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // 402, so a payment failure surfaces as a connection error (rare — preflight catches it).
       quickScanStreamRef.current?.close();
       quickScanStreamRef.current = null;
-      const streamResult = await new Promise<{ matches: any[]; confidence: any } | null>((resolve, reject) => {
+      const streamResult = await new Promise<{ matches: any[]; confidence: any; livePricing?: any } | null>((resolve, reject) => {
         let latestMatches: any[] = [];
         let latestConfidence: any = 'medium';
+        let latestLivePricing: any = null;
         let settled = false;
         const finish = (run: () => void) => {
           if (settled) return;
@@ -2765,10 +2766,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               latestMatches = seen;
               latestConfidence = evt.result?.confidence ?? evt.data?.overallConfidence ?? latestConfidence;
             }
+            // Free live price range the match already computed from its eBay results.
+            if (evt.result?.livePricing) latestLivePricing = evt.result.livePricing;
+            else if (evt.data?.results?.[0]?.livePricing) latestLivePricing = evt.data.results[0].livePricing;
             // Resolve on a terminal event (COMPLETE / NO_ITEMS) or as soon as a terminal data
             // payload (evt.data.results) lands — even under a non-standard terminal type.
             if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || Array.isArray(evt.data?.results)) {
-              finish(() => resolve({ matches: latestMatches, confidence: latestConfidence }));
+              finish(() => resolve({ matches: latestMatches, confidence: latestConfidence, livePricing: latestLivePricing }));
             } else if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
               finish(() => reject(new Error(evt.message || 'Match failed.')));
             }
@@ -2846,6 +2850,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             pricingResearch: match.pricingResearch,
           }))
         };
+
+        // Seed the pricing card with the FREE live range the match already computed (eBay Browse),
+        // so "listed right now" prices show instantly; the sold-comp fetch below enriches it. No
+        // extra call for the live range — consolidated into the match (one flow).
+        if (streamResult.livePricing && nextMatchData.rankedCandidates?.[0] && !nextMatchData.rankedCandidates[0].pricingResearch) {
+          (nextMatchData.rankedCandidates[0] as any).pricingResearch = { livePricing: streamResult.livePricing };
+        }
 
         if (rerankerMeta) {
           nextMatchData.reranker = rerankerMeta;
