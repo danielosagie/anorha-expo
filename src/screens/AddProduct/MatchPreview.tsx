@@ -53,6 +53,8 @@ export interface MatchPreviewData {
   description?: string;
   // The full pricing shape the card renders (live + sold comps + history + time-to-sell).
   pricing?: PricingGuidanceData;
+  // Pricing research still in flight → card shows "Finding comps…" instead of blank dashes.
+  pricingLoading?: boolean;
 }
 
 export interface MatchPreviewProps {
@@ -137,7 +139,7 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
 
         {/* Pricing guidance + recent comps — the one shared pricing overview */}
        <View style={{marginHorizontal: 12 }}>
-            <PricingGuidanceCard pricing={p} onOpenComp={onOpenComp} />
+            <PricingGuidanceCard pricing={p} loading={data.pricingLoading} onOpenComp={onOpenComp} />
         </View>
       </ScrollView>
 

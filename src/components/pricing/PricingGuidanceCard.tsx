@@ -8,7 +8,7 @@
 // `onApplyPrice` chips so a tap can fill the price field.
 
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet, Linking } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PriceHistorySlider, HistoryPoint } from './PriceHistorySlider';
 
@@ -56,6 +56,8 @@ export interface PricingGuidanceCardProps {
   onApplyPrice?: (price: number, kind: 'fast' | 'recommended' | 'max') => void;
   /** 'screen' renders the big section headers (preview page); 'none' for modals with their own title. */
   headers?: 'screen' | 'none';
+  /** Pricing research is still in flight — show a "Finding comps…" state instead of blank dashes. */
+  loading?: boolean;
 }
 
 const money = (n?: number | null) => (typeof n === 'number' && isFinite(n) ? `$${Math.round(n)}` : '—');
@@ -87,6 +89,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   onOpenComp,
   onApplyPrice,
   headers = 'screen',
+  loading = false,
 }) => {
   const p = pricing ?? {};
   const samples = p.samples ?? [];
@@ -129,6 +132,32 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
         { kind: 'max' as const, label: 'Max profit', price: high! },
       ])
     : null;
+
+  // Nothing usable to show yet: either still fetching ("Finding comps…") or the
+  // research genuinely came back empty ("No recent comps found"). Either way, show
+  // an explicit state instead of a card full of silent "—" dashes.
+  const hasLive = !!(p.livePricing && (typeof p.livePricing.median === 'number' || typeof p.livePricing.low === 'number'));
+  const hasAnyData = hasRange || typeof median === 'number' || samples.length > 0 || hasLive;
+  if (!hasAnyData) {
+    return (
+      <View>
+        {headers === 'screen' ? <Text style={styles.sectionHeader}>Pricing guidance</Text> : null}
+        <View style={[styles.priceCard, styles.emptyState]}>
+          {loading ? (
+            <>
+              <ActivityIndicator size="small" color={GREEN} />
+              <Text style={styles.emptyText}>Finding comps…</Text>
+            </>
+          ) : (
+            <>
+              <Icon name="tag-search-outline" size={22} color="#C7C7CC" />
+              <Text style={styles.emptyText}>No recent comps found</Text>
+            </>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View>
@@ -212,7 +241,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
           </View>
         ) : null}
 
-        {/* 90-day sold-comp median history */}
+        {/* Sold-comp median history (up to ~1 year, as data accrues) */}
         {p.history?.dataPoints && p.history.dataPoints.length >= 2 ? (
           <>
             <View style={styles.divider} />
@@ -293,6 +322,8 @@ const styles = StyleSheet.create({
   },
 
   priceCard: { marginHorizontal: 0, padding: 16, borderRadius: 16, backgroundColor: COLORS.card },
+  emptyState: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 22 },
+  emptyText: { color: COLORS.label, fontSize: 13.5, fontFamily: FONT.medium },
   kicker: { color: COLORS.label, fontSize: 10.5, fontFamily: FONT.semibold, letterSpacing: 0.8 },
   bigValue: { color: COLORS.text, fontSize: 26, fontFamily: FONT.bold, letterSpacing: -0.5, marginTop: 4 },
   metaLine: { color: COLORS.label, fontSize: 11.5, fontFamily: FONT.regular, marginTop: 4 },

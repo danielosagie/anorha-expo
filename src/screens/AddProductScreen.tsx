@@ -735,6 +735,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       photoUri,
       title: chosen?.title || item?.title || 'Item',
       description: chosen?.description,
+      // Match chosen but pricing not yet stored → still researching ("Finding comps…").
+      pricingLoading: !!chosen && pr === undefined,
       pricing: pr
         ? {
             low: pr.low,
@@ -1262,6 +1264,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Camera ref
   const cameraRef = useRef<CameraView>(null);
+  // When the camera preview last became ready (onCameraReady). handleCapture waits
+  // out the sensor's exposure/focus ramp from this point so the FIRST frame after a
+  // cold start isn't the dark/unfocused capture that made first scans misfire.
+  const cameraReadyAtRef = useRef(0);
   const isFocused = useIsFocused();
   isFocusedRef.current = isFocused;
 
@@ -1549,6 +1555,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         flashOpacity.value = withTiming(1, { duration: 100 }, () => {
           flashOpacity.value = withTiming(0, { duration: 200 });
         });
+      }
+
+      // Let the sensor finish ramping exposure/focus before grabbing the frame.
+      // A cold camera (new item / just returned to the screen) hands back a dark,
+      // unfocused first frame — the root of "first photo is garbage, second works".
+      const CAMERA_SETTLE_MS = 650;
+      const readyAt = cameraReadyAtRef.current;
+      const sinceReady = readyAt > 0 ? Date.now() - readyAt : 0; // not-yet-ready → wait full settle
+      if (sinceReady < CAMERA_SETTLE_MS) {
+        await new Promise((r) => setTimeout(r, CAMERA_SETTLE_MS - sinceReady));
       }
 
       const photo = await cameraRef.current.takePictureAsync({
@@ -2846,7 +2862,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return updated;
         });
 
-        const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
+        // Guard against confidently showing a junk match from a bad first frame.
+        // A hallucinated query (dark/blurry capture) can FTS-match a keyword-stuffed
+        // flywheel listing whose title repeats itself ("Patriot HD Glass Truck Body
+        // Patriot HD Glass Truck Body patriot hd glass…"). Detect that low unique-word
+        // ratio + a low-confidence verdict and refuse to auto-confirm — prompt a retake.
+        const topTitleForGuard = String(nextMatchData.rankedCandidates?.[0]?.title || '');
+        const guardWords = topTitleForGuard.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
+        const isKeywordSoup = guardWords.length >= 6 && (new Set(guardWords).size / guardWords.length) < 0.5;
+        const looksUnidentified = isKeywordSoup || matchConfidenceLabel === 'low';
+
+        const shouldAutoConfirmTopMatch = !looksUnidentified && shouldAutoSelectQuickMatch({
           totalMatches: allMatches.length,
           recommendedAction: quickScanResult?.recommendedAction,
           rerankerConfidence: rerankerMeta?.confidence,
@@ -2876,6 +2902,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
         setMatchData(nextMatchData);
         setCurrentInstruction(shouldAutoConfirmTopMatch ? 'matched' : 'matches_found');
+        if (looksUnidentified) {
+          showNotificationMessage('Couldn’t identify this clearly — try a closer, well-lit photo.', 3500);
+        }
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
         // to populate price range and shipping data from real market data.
@@ -2893,11 +2922,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 body: JSON.stringify({ title: cleanedTitle, condition: 'new', limit: 20 }),
               });
 
-              const priceData = priceRes.ok ? await priceRes.json() : null;
-              if (!priceData || priceData.error) {
-                log.warn('[QUICK SCAN] pricing research returned no data or error');
-                return;
-              }
+              // Store the response even when sold-comps "error": it can still carry
+              // livePricing, and storing it ends the card's loading state with an
+              // honest empty state instead of spinning forever. Only a failed request
+              // is a hard miss (still stored as a marker so loading resolves).
+              const priceData = priceRes.ok ? await priceRes.json() : { error: 'request_failed' };
               const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low ?? 0);
 
               setQuickScanStore(prev => {
@@ -4010,6 +4039,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           facing={facing}
           flash={flash}
           active={isFocused && !isAnySheetVisible} // Disable camera when sheets are open
+          onCameraReady={() => { cameraReadyAtRef.current = Date.now(); }}
           onBarcodeScanned={handleBarCodeScanned}
           barcodeScannerSettings={{
             barcodeTypes: ['qr', 'ean13', 'upc_a', 'upc_e', 'code128'],
