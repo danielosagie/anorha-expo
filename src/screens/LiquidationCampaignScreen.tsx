@@ -302,17 +302,26 @@ const LiquidationCampaignScreen = () => {
         // Flat new price for every selected item.
         await adapter.updateCampaignItems(cid, ids, { price: Math.round(flat * 100) / 100 });
       } else if (repriceDropPct != null) {
-        // Percentage drop is per-item (each starts from its own price, clamped to its floor).
+        // Percentage drop starts from each item's own price (clamped to its floor), so items
+        // can land on different targets. Group by the computed price and issue one call per
+        // distinct price instead of one per item.
         const byId = new Map(items.map((it: any) => [it.id, it]));
-        await Promise.all(ids.map(id => {
+        const idsByPrice = new Map<number, string[]>();
+        for (const id of ids) {
           const it: any = byId.get(id);
           const cur = Number(it?.currentPrice || 0);
-          if (!cur) return Promise.resolve({ updated: 0 });
+          if (!cur) continue;
           let next = Math.round(cur * (1 - repriceDropPct / 100) * 100) / 100;
           const floor = Number(it?.floorPrice || 0);
           if (floor && next < floor) next = floor;
-          return adapter.updateCampaignItems(cid, [id], { price: next });
-        }));
+          const bucket = idsByPrice.get(next);
+          if (bucket) bucket.push(id); else idsByPrice.set(next, [id]);
+        }
+        await Promise.all(
+          Array.from(idsByPrice.entries()).map(([price, groupIds]) =>
+            adapter.updateCampaignItems(cid, groupIds, { price }),
+          ),
+        );
       } else {
         Alert.alert('Enter a new price or pick a drop %');
         return;
