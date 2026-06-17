@@ -22,7 +22,11 @@ export default {
   ios: {
     bundleIdentifier: "anorha.alpha",
     supportsTablet: true,
-    buildNumber: "2",
+    // Config-driven build number: with appVersionSource "local", BOTH the app and the
+    // expo-widgets ExpoWidgetsTarget read this same value, so their CFBundleVersions match
+    // (remote autoIncrement only stamped the app target → widget stayed at "2" → ITMS-90473).
+    // Bump this each App Store submission. (Was on remote autoIncrement at build 55.)
+    buildNumber: "56",
     icon: "./src/assets/1024_anorha.png",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,

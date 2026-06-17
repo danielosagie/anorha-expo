@@ -1,7 +1,7 @@
 {
   "cli": {
     "version": ">= 16.0.1",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -15,7 +15,7 @@
     },
     "production": {
       "distribution": "store",
-      "autoIncrement": true,
+      "autoIncrement": false,
       "node": "22.11.0",
       "env": {
         "EXPO_PUBLIC_SENTRY_DSN": "https://5e714aa70799af9c558d5861a72d188c@o4510591966642176.ingest.us.sentry.io/4511574746005504",
