@@ -46,6 +46,8 @@ export interface PricingGuidanceData {
   timeToSell?: { fastSaleAvgDays?: number; recommendedAvgDays?: number; maxProfitAvgDays?: number; basis?: string };
   /** 90-day sold-comp median history for the sparkline. */
   history?: { dataPoints: HistoryPoint[] };
+  /** The exact product wasn't listed — these comps are SIMILAR items (ballpark), not the item itself. */
+  isSimilar?: boolean;
 }
 
 export interface PricingGuidanceCardProps {
@@ -254,9 +256,9 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
       {samples.length > 0 && (
         <>
           {headers === 'screen' ? (
-            <Text style={styles.sectionHeader}>Recent comps (${sampleCount})</Text>
+            <Text style={styles.sectionHeader}>{p.isSimilar ? "Couldn't find exact — similar item comps" : `Recent comps (${sampleCount})`}</Text>
           ) : (
-            <Text style={styles.compsKicker}>RECENT COMPS (${sampleCount})</Text>
+            <Text style={styles.compsKicker}>{p.isSimilar ? `SIMILAR ITEM COMPS (${sampleCount})` : `RECENT COMPS (${sampleCount})`}</Text>
           )}
           <View style={styles.compsCard}>
             {samples.map((c, i) => (

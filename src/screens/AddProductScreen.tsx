@@ -481,6 +481,27 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // The swipe-back ring anchors to this button's real measured rect (device-independent).
   const backButtonRef = useRef<any>(null);
   useEffect(() => () => { publishBackButtonRect(null); }, []); // clear anchor on unmount
+  // Re-measure the back button whenever the screen regains focus. This tab stays MOUNTED,
+  // so onLayout doesn't re-fire when arriving from the chat cart card — and a single
+  // measure taken mid-transition (or before the deep-search sheet settles) is what left
+  // the ring "randomly placed" when entering from chat. Re-measure across a few frames
+  // once focused so the anchor always reflects the button's real resting position.
+  useFocusEffect(
+    useCallback(() => {
+      const measure = () =>
+        backButtonRef.current?.measureInWindow((x: number, y: number, w: number, h: number) => {
+          if (w && h) publishBackButtonRect({ x, y, width: w, height: h });
+        });
+      const raf = requestAnimationFrame(measure);
+      const t1 = setTimeout(measure, 250);
+      const t2 = setTimeout(measure, 650);
+      return () => {
+        cancelAnimationFrame(raf);
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }, []),
+  );
   const saveDraftTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
   const hasAutoOpenedFtuxRef = useRef(false);
@@ -2900,6 +2921,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           (nextMatchData.rankedCandidates[0] as any).pricingResearch = {
             low: lp.low, high: lp.high, median: lp.median, sampleCount: lp.sampleCount,
             samples: lp.samples, livePricing: lp,
+            // Exact product wasn't listed → these are SIMILAR-item comps; the card titles
+            // the section "Couldn't find exact — similar item comps".
+            isSimilar: !!lp.isSimilar,
           };
         }
 
@@ -2980,9 +3004,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
-        // to populate price range and shipping data from real market data.
+        // to populate price range and shipping data from real market data. SKIP when the comps are
+        // already SIMILAR-item comps (the exact product isn't listed) — researching the identity
+        // title returns nothing and would clobber the ballpark similar comps the backend supplied.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
-        if (topTitle) {
+        if (topTitle && !lp?.isSimilar) {
           const rawApiBase = API_BASE_URL;
           const API_BASE = rawApiBase;
           (async () => {
@@ -4166,9 +4192,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           activeOpacity={0.8}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           onPress={() => {
+            // Mirror the swipe-back ring's onBack exactly so tap + swipe behave the same.
             const nav = navigation as any;
-            if (nav.canGoBack?.()) nav.goBack();
-            else nav.navigate('Inventory');
+            if (nav.canGoBack?.()) { nav.goBack(); return; }
+            const parent = nav.getParent?.();
+            if (parent?.canGoBack?.()) { parent.goBack(); return; }
+            nav.navigate('Clearouts');
           }}
         >
           <MaterialIcons name="arrow-back" size={24} color="#FFF" />
