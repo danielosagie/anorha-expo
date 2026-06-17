@@ -527,6 +527,28 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     return { added: res.added || 0, skipped: res.skipped || 0 };
   }
 
+  /** Remove items from a campaign by campaign-item id (these are CampaignItem.id values). */
+  async removeCampaignItems(campaignId: string, itemIds: string[]): Promise<{ removed: number }> {
+    const res = await this.requestNest<{ success: boolean; removed: number }>(
+      `/api/agent/sessions/${campaignId}/items`,
+      { method: 'DELETE', body: JSON.stringify({ itemIds }) },
+    );
+    return { removed: res.removed || 0 };
+  }
+
+  /** Update campaign items in place (new price, per-item floor, and/or status). */
+  async updateCampaignItems(
+    campaignId: string,
+    itemIds: string[],
+    changes: { price?: number; floorPrice?: number; status?: string },
+  ): Promise<{ updated: number }> {
+    const res = await this.requestNest<{ success: boolean; updated: number }>(
+      `/api/agent/sessions/${campaignId}/items`,
+      { method: 'PATCH', body: JSON.stringify({ itemIds, ...changes }) },
+    );
+    return { updated: res.updated || 0 };
+  }
+
   async createThread(campaignId: string, input: CreateThreadInput): Promise<CampaignThreadSummary> {
     const threadId = `thread-${Date.now()}`;
     const created = await this.requestNest<{ success: boolean; thread: NestThread }>(

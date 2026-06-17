@@ -117,7 +117,9 @@ const InventoryOrdersScreen = observer(() => {
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
-  const [filterStatus, setFilterStatus] = useState('all');
+  // Default to live/active items so drafts (which often shadow an already-published item and
+  // look like duplicates) stay out of the way until the seller explicitly filters for them.
+  const [filterStatus, setFilterStatus] = useState('active');
   const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [lowStockOnly, setLowStockOnly] = useState(false);
@@ -2145,7 +2147,7 @@ const InventoryOrdersScreen = observer(() => {
         platformConnections={platformConnections}
         selectedLocationIds={selectedLocationIds}
         onLocationChange={setSelectedLocationIds}
-        onReset={() => { setSortBy('date'); setFilterStatus('all'); setSelectedLocationIds([]); }}
+        onReset={() => { setSortBy('date'); setFilterStatus('active'); setSelectedLocationIds([]); }}
       />
 
       {/* More Actions Modal - Cleaner "Lowkey" Design */}

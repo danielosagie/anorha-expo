@@ -42,6 +42,12 @@ export interface ConversationDataAdapter {
   findSlowMovers(campaignId: string): Promise<{ count: number; items: Array<Record<string, unknown>> }>;
   getCampaignItems(campaignId: string): Promise<CampaignItem[]>;
   addCampaignItems(campaignId: string, variantIds: string[]): Promise<{ added: number; skipped: number }>;
+  removeCampaignItems(campaignId: string, itemIds: string[]): Promise<{ removed: number }>;
+  updateCampaignItems(
+    campaignId: string,
+    itemIds: string[],
+    changes: { price?: number; floorPrice?: number; status?: string },
+  ): Promise<{ updated: number }>;
   runFlashCampaign(campaignId: string, input: RunFlashCampaignInput): Promise<{ updated: number }>;
   submitNegotiationDecision(campaignId: string, input: NegotiationDecisionInput): Promise<{ status: string }>;
 }
