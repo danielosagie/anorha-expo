@@ -3452,36 +3452,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [uploadImageToSupabase, showNotificationMessage]);
 
-  // Toggle bulk mode
-  const toggleBulkMode = useCallback(() => {
-    // If we are trying to TURN OFF bulk mode...
-    if (isBulkMode) {
-      // ...and there are multiple items, prevent it.
-      if (bulkItems.length > 1) {
-        showNotificationMessage("Can't disable bulk mode with multiple items. Delete items until only one remains.", 4000);
-        return;
-      }
-      // Otherwise, it's safe to turn off.
-      setIsBulkMode(false);
-    } else {
-      // If the user is trying to TURN ON bulk mode...
-      setIsBulkMode(true);
-
-      // If there are existing photos that haven't been put into an item yet,
-      // create the first item with them. This handles the transition from non-bulk to bulk.
-      if (capturedPhotos.length > 0 && bulkItems.length === 0) {
-        const firstItem = {
-          id: `item-${Date.now()}`,
-          photos: capturedPhotos,
-          title: undefined,
-          isActive: true
-        };
-        setBulkItems([firstItem]);
-        setActiveItemId(firstItem.id);
-      }
-    }
-  }, [isBulkMode, bulkItems.length, capturedPhotos, showNotificationMessage]);
-
   // Add new bulk item
   const addNewBulkItem = useCallback(() => {
     if (!canAddAnotherItem(bulkItems.length)) {
@@ -3551,12 +3521,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return newItems;
       });
       setActiveItemId(newItemId);
-    }
-
-    if (isBulkMode && bulkItems.length > 0) {
-      log.debug("You can't disable bulk mode when there are items in the list");
-      showNotificationMessage('You can\'t disable bulk mode when there are items in the list', 3000);
-      setIsBulkMode(true);
     }
   }, [isBulkMode, capturedPhotos, bulkItems.length, canAddAnotherItem, generateItemId]);
 
