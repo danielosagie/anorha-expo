@@ -4,17 +4,21 @@ export default {
   owner: process.env.EAS_BUILD ? "dosagie" : undefined,
   version: "1.0.3",
   scheme: "anorhaapp",
-  // EAS Update (OTA): JS-only fixes can be pushed to installed builds via `eas update --channel
-  // production` — no rebuild. fallbackToCacheTimeout:0 = never block launch on the update check
-  // (use the embedded bundle immediately, fetch in the background for next launch). The
-  // "fingerprint" runtimeVersion ties an update to the native fingerprint, so a JS update only
-  // lands on builds with matching native code; adding a native dep changes the fingerprint and
-  // correctly forces a new build instead of pushing incompatible JS.
+  // EAS Update (OTA): JS-only fixes ship to installed builds via `eas update --channel production`
+  // — no rebuild. fallbackToCacheTimeout:0 = never block launch on the update check (embedded
+  // bundle now, fetch in background for next launch).
+  // runtimeVersion uses the "appVersion" policy (= the marketing `version`, "1.0.3") instead of
+  // "fingerprint": fingerprint is computed twice with `eas build --local` (local CLI vs the build's
+  // copied file set) and the two diverge → "Runtime version calculated on local machine not equal
+  // to ... during build" build failure. appVersion is deterministic everywhere. CAVEAT: an OTA then
+  // targets ALL builds of this marketing version, so if you ADD/CHANGE A NATIVE DEPENDENCY you MUST
+  // bump `version` (new runtime) before publishing an OTA, or the JS update could land on a build
+  // without the native module. JS-only fixes are always safe to OTA.
   updates: {
     url: "https://u.expo.dev/b69b9883-c163-494e-aa0a-54b0e70feb3b",
     fallbackToCacheTimeout: 0,
   },
-  runtimeVersion: { policy: "fingerprint" },
+  runtimeVersion: { policy: "appVersion" },
   icon: "./src/assets/1024_anorha.png",
   orientation: "portrait",
   android: {
