@@ -1495,7 +1495,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return getShelfProgressPresentation(shelfProgress).title;
       }
       if (instruction === 'matches_found' || instruction === 'matched') return 'Matched';
-      if (instruction === 'no_matches' || instruction === 'needs_review') return 'Needs review';
+      if (instruction === 'needs_review') return 'Add a detail';
+      if (instruction === 'no_matches') return 'Needs review';
       if (
         instruction === 'processing' ||
         instruction === 'analyzing' ||
@@ -2598,11 +2599,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         throw new Error('User not authenticated');
       }
 
-      // Light compression before upload (0.9 quality, max 1920px) - reduces size with minimal quality loss
+      // Compress before upload — this image is BOTH the scan input and the listing cover. 1440px @
+      // 0.8 (~halves the 1920@0.9 payload) uploads ~2x faster, stays a clean cover, and is plenty
+      // of detail for the VLM + Lens. Upload is on the scan's critical path, so the smaller the faster.
       const compressed = await ImageManipulator.manipulateAsync(
         localUri,
-        [{ resize: { width: 1920 } }], // Only downscale if wider than 1920px
-        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+        [{ resize: { width: 1440 } }], // only downscale if wider than 1440px
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
       );
 
       // React Native fetch() does not support file:// URIs on Android - use expo-file-system
@@ -2989,17 +2992,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
         setMatchData(nextMatchData);
-        setCurrentInstruction(shouldAutoConfirmTopMatch ? 'matched' : 'matches_found');
-        if (looksUnidentified) {
-          // We DID surface candidates here (allMatches.length > 0). Nudge honestly by state: a
-          // genuine couldn't-verify (no photo / reranker never ran / nothing found) suggests a
-          // retake; otherwise it's "review the candidates and pick the right one".
-          const retakeState = !backendOwnsQuality || backendState === 'NOT_RUN' || backendState === 'NO_PHOTO' || backendState === 'NO_CANDIDATES';
+        // Backend not confident (needs-review / identified-but-not-exact, e.g. "Dell laptop charger"
+        // with no exact listing) → 'needs_review', NOT 'matched'. The banner becomes an "add a detail"
+        // CTA (tap → add-details for the tag) instead of dropping into a product as if it were found.
+        const needsReview = backendOwnsQuality && !backendAutoConfirm;
+        setCurrentInstruction(shouldAutoConfirmTopMatch ? 'matched' : (needsReview ? 'needs_review' : 'matches_found'));
+        if (looksUnidentified || needsReview) {
+          const retakeState = backendState === 'NOT_RUN' || backendState === 'NO_PHOTO' || backendState === 'NO_CANDIDATES';
+          const identity = String(nextMatchData.rankedCandidates?.[0]?.title || '').trim();
           showNotificationMessage(
             retakeState
-              ? 'Couldn’t identify this clearly — try a closer, well-lit photo.'
-              : 'Found possible matches — tap to review and pick the right one.',
-            3500,
+              ? 'Couldn’t identify this clearly — tap to add a clearer photo of the label.'
+              : identity
+                ? `Likely a ${identity.slice(0, 40)} — tap to add a detail (model/tag) to confirm.`
+                : 'Add a little more detail to confirm — tap to add a photo of the label or a note.',
+            3800,
           );
         }
 
@@ -3564,13 +3571,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           showNotificationMessage('Quick matches are still loading for this item.', 2000);
           return;
         }
-        // Open the full-screen MatchPreview (hosted as an overlay inside the cart
-        // Modal) instead of the retired half-height MatchResultsSheet. Use the ref
-        // because openBulkItemsSheet is declared later in the component body.
         setMatchData(itemMatches.matchData);
         setCurrentMatchItemId(activeItemId);
         openBulkItemsSheetRef.current();
-        setPreviewItemId(activeItemId);
+        // Needs-review (low-confidence / identified-but-not-exact, e.g. "Dell laptop charger" with no
+        // exact listing) → open the ADD-DETAIL sheet to ask for the tag/model, instead of dropping
+        // into the match preview as if it were a confident found product.
+        if (currentInstruction === 'needs_review') {
+          setAddDetailsItemId(activeItemId);
+        } else {
+          // Open the full-screen MatchPreview (hosted as an overlay inside the cart Modal).
+          setPreviewItemId(activeItemId);
+        }
       } else {
         // Retry: re-trigger quick scan for this item if no matches yet
         if (currentInstruction === 'processing') {
