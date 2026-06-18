@@ -200,7 +200,8 @@ type CameraInstruction =
   | 'capturing'
   | 'recognizing'
   | 'matched'
-  | 'needs_review';
+  | 'needs_review'
+  | 'inventory_dedup';
 type ShelfProgressStatus = 'idle' | 'streaming' | 'completed' | 'no_items' | 'timeout' | 'error';
 
 type ShelfProgressState = {
@@ -538,6 +539,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [scannedBarcode, setScannedBarcode] = useState<string | null>(null);
   const [barcodeNotificationCount, setBarcodeNotificationCount] = useState(0);
   const [barcodeSearchResult, setBarcodeSearchResult] = useState<any | null>(null);
+  // Items that strongly matched something the user already owns → the Update-vs-Add-new prompt.
+  // Keyed by itemId so it works for single scans and per-item in shelf/multi. fallbackInstruction
+  // is the verdict the banner would otherwise show, restored when the user picks "Add as new".
+  const [inventoryDedupByItemId, setInventoryDedupByItemId] = useState<Record<string, { match: any; fallbackInstruction: CameraInstruction }>>({});
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
   const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string; connectionId: string }[]>([]);
@@ -1501,6 +1506,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       if (instruction === 'matches_found' || instruction === 'matched') return 'Matched';
       if (instruction === 'needs_review') return 'Add a detail';
+      if (instruction === 'inventory_dedup') return 'Already in inventory';
       if (instruction === 'no_matches') return 'Needs review';
       if (
         instruction === 'processing' ||
@@ -2006,6 +2012,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   }));
                 }
               }
+
+              // Per-item inventory dedup signal (shelf/multi) — the "Already in Inventory" badge
+              // already renders off the prepended isLocalMatch candidate; this stores the explicit
+              // match so the badge tap can offer the Update-vs-Add-new choice with a clean id.
+              if (res?.alreadyInInventory && res?.inventoryMatch) {
+                setInventoryDedupByItemId((prev) => ({ ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } }));
+              }
             }
 
             setCurrentInstruction('searching');
@@ -2137,6 +2150,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 delete next[itemId];
                 return next;
               });
+            }
+            // Per-item inventory dedup signal (re-research) — store the explicit match so the
+            // "Already in Inventory" badge tap can offer Update-vs-Add-new.
+            if (res?.alreadyInInventory && res?.inventoryMatch) {
+              setInventoryDedupByItemId((prev) => ({ ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } }));
             }
           } else if (parsed.type === 'COMPLETE') {
             setItemLoadingStates((prev) => {
@@ -2767,11 +2785,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         confidenceScore?: number;
         reasonCode?: string;
         rerankerAnalysis?: any;
+        alreadyInInventory?: boolean;
+        inventoryMatch?: any;
       } | null>((resolve, reject) => {
         let latestMatches: any[] = [];
         let latestConfidence: any = 'medium';
         let latestLivePricing: any = null;
-        let latestVerdict: { canAutoConfirm?: boolean; confidenceState?: string; confidenceScore?: number; reasonCode?: string; rerankerAnalysis?: any } = {};
+        let latestVerdict: { canAutoConfirm?: boolean; confidenceState?: string; confidenceScore?: number; reasonCode?: string; rerankerAnalysis?: any; alreadyInInventory?: boolean; inventoryMatch?: any } = {};
         let settled = false;
         const finish = (run: () => void) => {
           if (settled) return;
@@ -2827,6 +2847,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 confidenceScore: verdictSrc.confidenceScore,
                 reasonCode: verdictSrc.reasonCode,
                 rerankerAnalysis: verdictSrc.rerankerAnalysis ?? latestVerdict.rerankerAnalysis,
+                alreadyInInventory: verdictSrc.alreadyInInventory ?? latestVerdict.alreadyInInventory,
+                inventoryMatch: verdictSrc.inventoryMatch ?? latestVerdict.inventoryMatch,
               };
             }
             // Resolve on a terminal event (COMPLETE / NO_ITEMS) or as soon as a terminal data
@@ -3001,8 +3023,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // with no exact listing) → 'needs_review', NOT 'matched'. The banner becomes an "add a detail"
         // CTA (tap → add-details for the tag) instead of dropping into a product as if it were found.
         const needsReview = backendOwnsQuality && !backendAutoConfirm;
-        setCurrentInstruction(shouldAutoConfirmTopMatch ? 'matched' : (needsReview ? 'needs_review' : 'matches_found'));
-        if (looksUnidentified || needsReview) {
+        const realInstruction: CameraInstruction = shouldAutoConfirmTopMatch ? 'matched' : (needsReview ? 'needs_review' : 'matches_found');
+        // INVENTORY DEDUP — this scan strongly matched an item the user ALREADY owns. Surface it so
+        // they can Update the existing item (restock) instead of silently re-adding a duplicate.
+        const dupMatch = (streamResult.alreadyInInventory && streamResult.inventoryMatch) ? streamResult.inventoryMatch : null;
+        if (dupMatch) {
+          setInventoryDedupByItemId(prev => ({ ...prev, [itemId]: { match: dupMatch, fallbackInstruction: realInstruction } }));
+          setCurrentInstruction('inventory_dedup');
+          showNotificationMessage(`You already have "${String(dupMatch.title || 'this item').slice(0, 40)}" — tap to update it or add as new.`, 4500);
+        } else {
+          setCurrentInstruction(realInstruction);
+        }
+        if (!dupMatch && (looksUnidentified || needsReview)) {
           const retakeState = backendState === 'NOT_RUN' || backendState === 'NO_PHOTO' || backendState === 'NO_CANDIDATES';
           const identity = String(nextMatchData.rankedCandidates?.[0]?.title || '').trim();
           showNotificationMessage(
@@ -3020,7 +3052,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // already SIMILAR-item comps (the exact product isn't listed) — researching the identity
         // title returns nothing and would clobber the ballpark similar comps the backend supplied.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
-        if (topTitle && !lp?.isSimilar) {
+        // Skip the slow external pricing fetch when comps are similar-item comps (exact product not
+        // listed) OR they came from the cache on a repeat scan AND actually carry priced samples.
+        // fromCache with NO usable samples still fetches, so the user always gets a price.
+        const cachedCompsUsable = !!lp?.fromCache && (((lp?.sampleCount || 0) > 0) || ((lp?.samples?.length || 0) > 0));
+        if (topTitle && !lp?.isSimilar && !cachedCompsUsable) {
           const rawApiBase = API_BASE_URL;
           const API_BASE = rawApiBase;
           (async () => {
@@ -3308,47 +3344,88 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setPreviewItemId(itemId);
   }, [quickScanStore, showNotificationMessage, isProcessingShelfScan]);
 
-  const openExistingInventoryMatch = useCallback((itemId: string) => {
-    const localMatch = getLocalInventoryCandidateForItem(itemId, confirmedQuickMatchByItemId, quickScanStore) as any;
-    if (!localMatch) {
-      showNotificationMessage('No inventory match is ready for this item yet.', 2000);
-      return;
-    }
-
-    const variantId = String(localMatch.variantId || localMatch.ProductVariantId || localMatch.id || '');
-    const productId = String(localMatch.productId || localMatch.ProductId || '');
-    if (!variantId && !productId) {
-      showNotificationMessage('Inventory match is missing its item id.', 2000);
-      return;
-    }
-
+  // Open the EXISTING inventory item in the quick editor (the Update path) — reuses the barcode-mode
+  // QuickProductDetailSheet. Shared by the single-scan prompt and the shelf/cart "Already in Inventory"
+  // tap. `match` is the normalized inventory shape ({ ProductVariantId, productId, title, price, imageUrl }).
+  const openInventoryEditor = useCallback((itemId: string, match: any) => {
+    const variantId = String(match?.ProductVariantId || match?.variantId || match?.id || '');
+    const productId = String(match?.productId || match?.ProductId || '');
+    if (!variantId && !productId) { showNotificationMessage('Inventory item is missing its id.', 2000); return; }
     setBarcodeSearchResult({
-      product: {
-        Id: productId || variantId,
-        id: productId || variantId,
-      },
+      product: { Id: productId || variantId, id: productId || variantId },
       variant: {
         Id: variantId || productId,
         id: variantId || productId,
-        Title: localMatch.title,
-        Price: typeof localMatch.price === 'number'
-          ? localMatch.price
-          : localMatch.price?.extracted_value,
+        Title: match.title,
+        Price: typeof match.price === 'number' ? match.price : match.price?.extracted_value,
       },
-      images: localMatch.imageUrl
-        ? [{ ImageUrl: localMatch.imageUrl }]
-        : undefined,
+      images: match.imageUrl ? [{ ImageUrl: match.imageUrl }] : undefined,
     } as any);
-    // Sequence the modal handoff: dismiss the cart Modal first, then present the
-    // barcode-result Modal and unmount the cart row in later commits — batching a
-    // sibling present + dismiss + child teardown into one commit races UIKit/Fabric.
+    // Sequence the modal handoff: dismiss the cart Modal first, then present the barcode-result Modal
+    // and unmount the cart row in later commits — batching present + dismiss + teardown races Fabric.
     setCurrentInstruction('ready');
     closeBulkItemsSheetRef.current?.();
     setTimeout(() => {
       setShowBarcodeResultModal(true);
       markItemsProcessed([{ id: itemId }], 'existing_inventory');
     }, 520);
-  }, [confirmedQuickMatchByItemId, markItemsProcessed, quickScanStore, showNotificationMessage]);
+  }, [markItemsProcessed, showNotificationMessage]);
+
+  // INVENTORY DEDUP prompt — the scan matched an item the user already owns. Ask: Update the existing
+  // item or add this as a new product. Outcome-only copy — never names how the match was found.
+  // opts.onAddAsNew lets the shelf/cart path de-link the existing item; single mode just restores the
+  // banner via opts.fallbackInstruction.
+  const promptInventoryDedup = useCallback((itemId: string, match: any, opts?: { fallbackInstruction?: CameraInstruction; onAddAsNew?: () => void }) => {
+    if (!match) return;
+    const title = String(match.title || 'this item').slice(0, 60);
+    Alert.alert(
+      'Already in your inventory',
+      `You already have "${title}". Update the existing item, or add this as a new product?`,
+      [
+        { text: 'Update inventory', onPress: () => openInventoryEditor(itemId, match) },
+        {
+          text: 'Add as new',
+          onPress: () => {
+            setInventoryDedupByItemId(prev => { const next = { ...prev }; delete next[itemId]; return next; });
+            if (opts?.onAddAsNew) opts.onAddAsNew();
+            else if (opts?.fallbackInstruction) setCurrentInstruction(opts.fallbackInstruction);
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  }, [openInventoryEditor]);
+
+  // Shelf/cart "Already in Inventory" badge tap (onOpenLocalMatch). Resolve the match from the explicit
+  // dedup signal if present, else the stored local candidate, then present the SAME Update-vs-Add-new
+  // choice as single mode. "Add as new" de-links the inventory candidate so the item commits as NEW.
+  const openExistingInventoryMatch = useCallback((itemId: string) => {
+    const stored = inventoryDedupByItemId[itemId]?.match;
+    const local = stored || (getLocalInventoryCandidateForItem(itemId, confirmedQuickMatchByItemId, quickScanStore) as any);
+    if (!local) { showNotificationMessage('No inventory match is ready for this item yet.', 2000); return; }
+    const match = stored ? stored : {
+      ProductVariantId: local.variantId || local.ProductVariantId || local.id,
+      productId: local.productId || local.ProductId,
+      title: local.title,
+      price: typeof local.price === 'number' ? local.price : local.price?.extracted_value,
+      imageUrl: local.imageUrl,
+    };
+    promptInventoryDedup(itemId, match, {
+      onAddAsNew: () => {
+        // De-link: drop the inventory (isLocalMatch) candidate + any confirmed selection so the item
+        // commits as a NEW product instead of the existing one.
+        setConfirmedQuickMatchByItemId(prev => { if (!prev[itemId]) return prev; const next = { ...prev }; delete next[itemId]; return next; });
+        setQuickScanStore(prev => {
+          const cur = prev[itemId];
+          if (!cur?.matchData?.rankedCandidates?.length) return prev;
+          const keep = (c: any) => !c?.isLocalMatch && !c?.inInventory;
+          const filtered = cur.matchData.rankedCandidates.filter(keep);
+          return { ...prev, [itemId]: { ...cur, matchData: { ...cur.matchData, rankedCandidates: filtered, totalMatches: filtered.length }, serpApiData: (cur.serpApiData || []).filter(keep) } };
+        });
+        showNotificationMessage('Will add as a new product.', 1800);
+      },
+    });
+  }, [inventoryDedupByItemId, confirmedQuickMatchByItemId, quickScanStore, promptInventoryDedup, showNotificationMessage]);
 
   // Send payload of first photos for analysis/matching
   const performAnalyze = useCallback(async (
@@ -3529,6 +3606,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (activeItemId) {
       log.debug('[MATCH CLICK] Indicator pressed for item:', activeItemId);
 
+      // Already-in-inventory: tapping the banner asks Update vs Add-new.
+      const dedup = inventoryDedupByItemId[activeItemId];
+      if (currentInstruction === 'inventory_dedup' && dedup) {
+        promptInventoryDedup(activeItemId, dedup.match, { fallbackInstruction: dedup.fallbackInstruction });
+        return;
+      }
+
       const itemMatches = quickScanStore[activeItemId];
       const hasMatches = (itemMatches?.matchData?.totalMatches || 0) > 0;
 
@@ -3570,7 +3654,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } else {
       showNotificationMessage('Select an item first', 1500);
     }
-  }, [activeItemId, quickScanStore, currentInstruction, showNotificationMessage, bulkItems, performQuickScan]);
+  }, [activeItemId, quickScanStore, currentInstruction, showNotificationMessage, bulkItems, performQuickScan, inventoryDedupByItemId, promptInventoryDedup]);
 
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
