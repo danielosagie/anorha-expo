@@ -59,6 +59,7 @@
     "expo-secure-store": "~55.0.8",
     "expo-sharing": "~55.0.11",
     "expo-splash-screen": "~55.0.10",
+    "expo-updates": "~55.0.24",
     "expo-web-browser": "~55.0.9",
     "expo-widgets": "^55.0.4",
     "lucide-react-native": "^0.487.0",
