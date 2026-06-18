@@ -749,9 +749,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     const confirmed = confirmedQuickMatchByItemId[previewItemId];
     const candidates = qs?.matchData?.rankedCandidates || [];
     const chosenIdx = confirmed?.preSelectedIndices?.[0] ?? 0;
+    const matchedCandidate: any = candidates[chosenIdx] || candidates[0];
     const chosen: any =
-      (confirmed?.serpApiData && confirmed.serpApiData[chosenIdx]) || candidates[chosenIdx] || candidates[0];
-    const pr: any = chosen?.pricingResearch;
+      (confirmed?.serpApiData && confirmed.serpApiData[chosenIdx]) || matchedCandidate;
+    // pricingResearch (the instant livePricing seed AND the enriched sold comps) is stored on the
+    // matchData ranked candidate — NOT on confirmed.serpApiData. For an AUTO-CONFIRMED match `chosen`
+    // is the confirmed entry, which has no pricingResearch → without this fallback pricingLoading
+    // stays true forever ("Finding comps…" that never resolves, even though the price is right here).
+    const pr: any = chosen?.pricingResearch ?? matchedCandidate?.pricingResearch ?? candidates[0]?.pricingResearch;
     return {
       photoUri,
       title: chosen?.title || item?.title || 'Item',
