@@ -40,11 +40,13 @@ const WAVE_BARS = 32;
 // rather than hovering at a uniform mid height.
 const FLOOR_DB = -55;
 const CEIL_DB = -10;
+// Resting waveform amplitude (silence / no reading) — bars sit just above the baseline.
+const BASE_LEVEL = 0.05;
 const meterToLevel = (db: number | undefined): number => {
-  if (db == null || Number.isNaN(db)) return 0.05;
+  if (db == null || Number.isNaN(db)) return BASE_LEVEL;
   const clamped = Math.max(FLOOR_DB, Math.min(CEIL_DB, db));
   const n = (clamped - FLOOR_DB) / (CEIL_DB - FLOOR_DB); // 0..1 across the voice band
-  return Math.max(0.05, Math.pow(n, 1.4));
+  return Math.max(BASE_LEVEL, Math.pow(n, 1.4));
 };
 
 export const MessageComposer = ({
@@ -72,11 +74,11 @@ export const MessageComposer = ({
   // failures (audio session, prepare) shouldn't blame the mic permission.
   const [voiceErrorSettings, setVoiceErrorSettings] = useState(false);
   // Rolling levels (0..1) that drive the live waveform bars.
-  const [levels, setLevels] = useState<number[]>(() => new Array(WAVE_BARS).fill(0.05));
+  const [levels, setLevels] = useState<number[]>(() => new Array(WAVE_BARS).fill(BASE_LEVEL));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const meterRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Last waveform level, used for the fast-attack/quick-decay envelope.
-  const peakRef = useRef(0.05);
+  const peakRef = useRef(BASE_LEVEL);
   // Latest draft/setter so transcription appends correctly even on crash-resume.
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -218,7 +220,7 @@ export const MessageComposer = ({
       await recorder.prepareToRecordAsync();
       recorder.record();
       setDuration(0);
-      setLevels(new Array(WAVE_BARS).fill(0.05));
+      setLevels(new Array(WAVE_BARS).fill(BASE_LEVEL));
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
       // Poll the recorder's metering to drive a live, scrolling waveform. Sample fast
@@ -226,14 +228,14 @@ export const MessageComposer = ({
       // snaps the bar up instantly, a quieter one eases down — so peaks pop with the
       // voice instead of getting smoothed into a sluggish blob.
       if (meterRef.current) clearInterval(meterRef.current);
-      peakRef.current = 0.05;
+      peakRef.current = BASE_LEVEL;
       meterRef.current = setInterval(() => {
-        let level = 0.05;
+        let level = BASE_LEVEL;
         try {
           const status: any = recorder.getStatus?.();
           level = meterToLevel(status?.metering);
         } catch {
-          level = 0.05;
+          level = BASE_LEVEL;
         }
         const prevPeak = peakRef.current;
         const next = level >= prevPeak ? level : prevPeak * 0.7 + level * 0.3;
