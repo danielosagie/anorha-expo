@@ -165,7 +165,9 @@ const CampaignInventorySelectScreen = () => {
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
       if (!perm.granted) return;
-      await AudioModule.setAudioModeAsync({ allowsRecording: true });
+      // playsInSilentMode is required on iOS — without it recording can fail or capture
+      // silence even when the mic permission is granted.
+      await AudioModule.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
