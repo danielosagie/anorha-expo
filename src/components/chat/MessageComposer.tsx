@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, Animated, Image, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActionSheetIOS, ActivityIndicator, Alert, Animated, Image, Linking, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -31,6 +31,14 @@ type Props = {
 
 const BRAND = '#93C822';
 const FONT = { medium: 'Inter_500Medium', semibold: 'Inter_600SemiBold' };
+const WAVE_BARS = 32;
+
+// Map a metering reading (dBFS, roughly -60 → 0) to a 0..1 amplitude for the waveform.
+const meterToLevel = (db: number | undefined): number => {
+  if (db == null || Number.isNaN(db)) return 0.12;
+  const clamped = Math.max(-60, Math.min(0, db));
+  return Math.max(0.08, (clamped + 60) / 60);
+};
 
 export const MessageComposer = ({
   value,
@@ -44,20 +52,28 @@ export const MessageComposer = ({
   maxImages = 8,
   autoFocus = false,
 }: Props) => {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  // Metering on, so the waveform reacts to the seller's actual voice level (Claude-style)
+  // instead of a canned pulse.
+  const recordOptions = useMemo(() => ({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true }), []);
+  const recorder = useAudioRecorder(recordOptions);
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
   const [imageUris, setImageUris] = useState<string[]>([]);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  // When the failure is a denied permission we offer a jump to Settings; other
+  // failures (audio session, prepare) shouldn't blame the mic permission.
+  const [voiceErrorSettings, setVoiceErrorSettings] = useState(false);
+  // Rolling levels (0..1) that drive the live waveform bars.
+  const [levels, setLevels] = useState<number[]>(() => new Array(WAVE_BARS).fill(0.12));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const meterRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Latest draft/setter so transcription appends correctly even on crash-resume.
   const valueRef = useRef(value);
   valueRef.current = value;
   const onChangeRef = useRef(onChangeText);
   onChangeRef.current = onChangeText;
   const resumedRef = useRef(false);
-  const pulse = useRef(new Animated.Value(1)).current;
   const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
 
   const hasText = value.trim().length > 0;
@@ -68,6 +84,7 @@ export const MessageComposer = ({
 
   useEffect(() => () => {
     if (timerRef.current) clearInterval(timerRef.current);
+    if (meterRef.current) clearInterval(meterRef.current);
   }, []);
 
   // Clear a transient voice error a few seconds after it shows.
@@ -154,54 +171,82 @@ export const MessageComposer = ({
     }
   }, [pickFromCamera, pickFromLibrary, pickFile]);
 
-  const startWave = () => {
-    pulseLoop.current = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.4, duration: 450, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 1, duration: 450, useNativeDriver: true }),
-      ]),
-    );
-    pulseLoop.current.start();
-  };
-
   const stopWave = () => {
     pulseLoop.current?.stop();
-    pulse.setValue(1);
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (meterRef.current) {
+      clearInterval(meterRef.current);
+      meterRef.current = null;
+    }
+    setLevels(new Array(WAVE_BARS).fill(0.12));
   };
 
-  // Start capturing audio. Returns whether capture actually began.
-  const beginCapture = useCallback(async () => {
+  // Start capturing audio. Distinguishes a denied permission from a capture failure so
+  // the message we show is honest: a granted mic that fails to start is NOT a permission
+  // problem. Returns 'ok' | 'denied' | 'error'.
+  const beginCapture = useCallback(async (): Promise<'ok' | 'denied' | 'error'> => {
+    // Don't re-prompt if it's already granted — check first, only request when needed.
+    let granted = false;
     try {
-      const perm = await AudioModule.requestRecordingPermissionsAsync();
-      if (!perm.granted) return false;
-      await AudioModule.setAudioModeAsync({ allowsRecording: true });
+      const current = await AudioModule.getRecordingPermissionsAsync();
+      granted = current.granted;
+      if (!granted && current.canAskAgain) {
+        granted = (await AudioModule.requestRecordingPermissionsAsync()).granted;
+      }
+    } catch {
+      granted = false;
+    }
+    if (!granted) return 'denied';
+
+    try {
+      // playsInSilentMode is required on iOS — without it prepare/record can fail or
+      // capture silence even when the mic permission is granted. This was the actual
+      // cause of the misleading "microphone access is needed" message.
+      await AudioModule.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
       setDuration(0);
+      setLevels(new Array(WAVE_BARS).fill(0.12));
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-      startWave();
-      return true;
-    } catch {
-      return false;
+      // Poll the recorder's metering to drive a live, scrolling waveform.
+      if (meterRef.current) clearInterval(meterRef.current);
+      meterRef.current = setInterval(() => {
+        let level = 0.12;
+        try {
+          const status: any = recorder.getStatus?.();
+          level = meterToLevel(status?.metering);
+        } catch {
+          level = 0.12;
+        }
+        setLevels(prev => [...prev.slice(1), level]);
+      }, 90);
+      return 'ok';
+    } catch (e) {
+      // Surface the real reason in logs without blaming the mic permission.
+      console.warn('[MessageComposer] recording failed to start:', e);
+      return 'error';
     }
   }, [recorder]);
 
-  // Tap the mic to start a voice memo (shows the recording bar). Simple and reliable —
-  // no push-to-talk gesture. The seller taps ✓ to finish (transcribe) or ✕ to discard.
+  // Tap the mic to start a voice memo (shows the recording bar). The seller taps ✓ to
+  // finish (transcribe) or ✕ to discard.
   const startRecording = useCallback(async () => {
     if (recording || transcribing) return;
     tap(Haptics.ImpactFeedbackStyle.Medium);
     setVoiceError(null);
-    const ok = await beginCapture();
-    if (ok) {
+    setVoiceErrorSettings(false);
+    const result = await beginCapture();
+    if (result === 'ok') {
       setRecording(true);
+    } else if (result === 'denied') {
+      setVoiceError('Microphone access is off. Turn it on in Settings to record.');
+      setVoiceErrorSettings(true);
     } else {
-      setVoiceError('Microphone access is needed to record a voice memo.');
+      setVoiceError('Couldn’t start recording — please try again.');
     }
   }, [beginCapture, recording, transcribing]);
 
@@ -319,6 +364,11 @@ export const MessageComposer = ({
       {voiceError ? (
         <View style={styles.voiceErrorBanner}>
           <Text style={styles.voiceErrorText}>{voiceError}</Text>
+          {voiceErrorSettings ? (
+            <TouchableOpacity onPress={() => Linking.openSettings().catch(() => undefined)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <Text style={styles.voiceErrorAction}>Settings</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : null}
 
@@ -328,23 +378,12 @@ export const MessageComposer = ({
             <X size={20} color="#6B7280" />
           </TouchableOpacity>
           <View style={styles.recCenter}>
+            <View style={styles.recDot} />
             <View style={styles.waveRow}>
-              {[0.5, 0.8, 1.2, 0.7, 1.4, 0.9, 0.6, 1.3, 0.8, 1.1, 0.5, 0.9, 1.2, 0.7, 1.0, 1.3, 0.6, 0.9].map((s, i) => (
-                <Animated.View
+              {levels.map((lv, i) => (
+                <View
                   key={i}
-                  style={[
-                    styles.waveBar,
-                    {
-                      transform: [
-                        {
-                          scaleY: pulse.interpolate({
-                            inputRange: [1, 1.4],
-                            outputRange: [s, s * (i % 3 === 0 ? 1.6 : 1.25)],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
+                  style={[styles.waveBar, { height: 4 + Math.round(lv * 22) }]}
                 />
               ))}
             </View>
@@ -450,8 +489,13 @@ const styles = StyleSheet.create({
     borderColor: '#FECACA',
     paddingHorizontal: 12,
     paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
   },
-  voiceErrorText: { color: '#B91C1C', fontFamily: FONT.medium, fontSize: 12 },
+  voiceErrorText: { flex: 1, color: '#B91C1C', fontFamily: FONT.medium, fontSize: 12 },
+  voiceErrorAction: { color: '#B91C1C', fontFamily: FONT.semibold, fontSize: 12, textDecorationLine: 'underline' },
 
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: 9 },
   attachBtn: {
@@ -535,8 +579,9 @@ const styles = StyleSheet.create({
   },
   recCancel: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F1F2EE', alignItems: 'center', justifyContent: 'center' },
   recCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  waveRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 26, gap: 2 },
-  waveBar: { width: 3, height: 14, backgroundColor: BRAND, borderRadius: 1.5 },
+  recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#EF4444' },
+  waveRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 28, gap: 2 },
+  waveBar: { width: 3, minHeight: 4, backgroundColor: BRAND, borderRadius: 1.5 },
   recTimer: { fontFamily: FONT.semibold, fontSize: 13, color: '#EF4444', fontVariant: ['tabular-nums'] },
   recDone: { width: 40, height: 40, borderRadius: 20, backgroundColor: BRAND, alignItems: 'center', justifyContent: 'center' },
 });
