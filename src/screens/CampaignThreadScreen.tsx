@@ -221,8 +221,17 @@ const CampaignThreadScreen = () => {
   // When Sprout asks a structured question (or proposes a plan), drop the keyboard so the
   // card takes its place at the bottom instead of stacking on top of the keyboard. Tapping
   // the card's "type your own answer" field brings the keyboard back when the seller wants it.
+  // Fire only on the none→pending transition: pendingQuestion/pendingPlan are fresh object
+  // refs on every refresh, so keying off truthiness alone would dismiss the keyboard mid-typing
+  // whenever a new message lands.
+  const prevPendingRef = useRef({ question: false, plan: false });
   useEffect(() => {
-    if (controller.pendingQuestion || controller.pendingPlan) Keyboard.dismiss();
+    const nowQuestion = !!controller.pendingQuestion;
+    const nowPlan = !!controller.pendingPlan;
+    if ((nowQuestion && !prevPendingRef.current.question) || (nowPlan && !prevPendingRef.current.plan)) {
+      Keyboard.dismiss();
+    }
+    prevPendingRef.current = { question: nowQuestion, plan: nowPlan };
   }, [controller.pendingQuestion, controller.pendingPlan]);
 
   // ── Threads drawer: swipe left→right (or tap) to open, like the chat template ──

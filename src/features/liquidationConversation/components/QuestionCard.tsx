@@ -14,7 +14,8 @@ interface QuestionCardProps {
   onSubmit: (answers: Record<string, string[]>, other?: string) => void;
 }
 
-const keyFor = (q: QuestionItem, i: number) => q.header?.trim() || `q${i + 1}`;
+// Always index-scoped so two questions sharing a header don't collide in `selected`.
+const keyFor = (q: QuestionItem, i: number) => `${i}:${q.header?.trim() || 'q'}`;
 
 const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmit }) => {
   const total = prompt.questions.length;
