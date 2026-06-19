@@ -515,7 +515,8 @@ const SproutHomeScreen: React.FC = () => {
         targetRevenue: input.targetRevenue,
         timeframeDays: input.timeframeDays,
         aggressiveness: input.aggressiveness,
-        inventoryScope: 'all',
+        inventoryScope: input.productIds.length ? 'specific' : 'all',
+        productIds: input.productIds,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       setCreateOpen(false);

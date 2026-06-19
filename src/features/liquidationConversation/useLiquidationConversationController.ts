@@ -121,6 +121,10 @@ export const useLiquidationConversationController = ({
   const activeMessages = useMemo(
     () => (activeThreadState?.messages || [])
       .filter(message => {
+        // System messages are internal scaffolding (e.g. the "Session created with
+        // goal: {…}" record the backend writes on creation) — never conversation the
+        // seller should see. Drop them so raw config JSON never surfaces in the chat.
+        if (message.role === 'system') return false;
         // Keep user + still-streaming bubbles always. Drop phantom EMPTY agent
         // bubbles (no text, no tool steps, no decision, not an action) — those were
         // rendering as blank space and leaving a gap above the real reply.
