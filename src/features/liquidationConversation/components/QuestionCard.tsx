@@ -1,11 +1,11 @@
 // QuestionCard — renders a Sprout ask_seller_question pending action as tappable
-// options (single or multi select) with a recommended badge and per-option
-// "what this means" descriptions. Single-select with one question auto-submits on
-// tap; otherwise a Send button submits once every question has a selection.
+// options (single or multi select) with a recommended badge and a short "what this
+// means" line per option. Questions are paged one at a time with a "N of M" stepper to
+// the left of the title; a single single-select question answers instantly on tap.
 
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { Check } from 'lucide-react-native';
+import { Check, ChevronLeft } from 'lucide-react-native';
 import type { QuestionItem, QuestionPrompt } from '../types';
 
 interface QuestionCardProps {
@@ -17,15 +17,23 @@ interface QuestionCardProps {
 const keyFor = (q: QuestionItem, i: number) => q.header?.trim() || `q${i + 1}`;
 
 const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmit }) => {
+  const total = prompt.questions.length;
+  const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [other, setOther] = useState('');
 
-  const autoSubmit = prompt.questions.length === 1 && !prompt.questions[0].multiSelect;
+  const current = Math.min(idx, total - 1);
+  const q = prompt.questions[current];
+  const k = keyFor(q, current);
+  const picks = selected[k] || [];
+  const isLast = current >= total - 1;
+  // One single-select question → tap an option to answer instantly (no Send button).
+  const instant = total === 1 && !q.multiSelect;
 
-  const toggle = (q: QuestionItem, i: number, label: string) => {
-    const k = keyFor(q, i);
+  const choose = (label: string) => {
+    if (submitting) return;
     if (!q.multiSelect) {
-      if (autoSubmit) {
+      if (instant) {
         onSubmit({ [k]: [label] }, other.trim() || undefined);
         return;
       }
@@ -34,63 +42,74 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
     }
     setSelected((prev) => {
       const cur = prev[k] || [];
-      const next = cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label];
-      return { ...prev, [k]: next };
+      const nextPicks = cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label];
+      return { ...prev, [k]: nextPicks };
     });
   };
 
-  const ready = useMemo(
+  const currentAnswered = picks.length > 0 || other.trim().length > 0;
+  const allAnswered = useMemo(
     () =>
-      prompt.questions.every((q, i) => (selected[keyFor(q, i)] || []).length > 0) ||
+      prompt.questions.every((qq, i) => (selected[keyFor(qq, i)] || []).length > 0) ||
       other.trim().length > 0,
     [prompt.questions, selected, other],
   );
 
+  const goNext = () => setIdx((i) => Math.min(total - 1, i + 1));
+  const goBack = () => setIdx((i) => Math.max(0, i - 1));
   const submit = () => {
     if (submitting) return;
     onSubmit(selected, other.trim() || undefined);
   };
 
+  const primaryDisabled = (isLast ? !allAnswered : !currentAnswered) || !!submitting;
+
   return (
     <View style={s.card}>
-      {prompt.questions.map((q, qi) => {
-        const k = keyFor(q, qi);
-        const picks = selected[k] || [];
-        return (
-          <View key={k} style={qi > 0 ? s.qSpacer : undefined}>
-            {!!q.header && (
-              <Text style={s.chip}>
-                {q.header}
-                {q.multiSelect ? ' · pick any' : ''}
-              </Text>
-            )}
-            <Text style={s.question}>{q.question}</Text>
-            {q.options.map((opt, oi) => {
-              const on = picks.includes(opt.label);
-              return (
-                <TouchableOpacity
-                  key={`${opt.label}-${oi}`}
-                  style={[s.option, (on || opt.recommended) && s.optionAccent, on && s.optionOn]}
-                  activeOpacity={0.75}
-                  disabled={submitting}
-                  onPress={() => toggle(q, qi, opt.label)}
-                >
-                  <View style={[s.mark, q.multiSelect ? s.markBox : s.markRadio, on && s.markOn]}>
-                    {on && <Check size={13} color="#FFFFFF" />}
-                  </View>
-                  <View style={s.optBody}>
-                    <View style={s.optLabelRow}>
-                      <Text style={[s.optLabel, (on || opt.recommended) && s.optLabelAccent]}>{opt.label}</Text>
-                      {opt.recommended && <Text style={s.recPill}>Recommended</Text>}
-                    </View>
-                    {!!opt.description && (
-                      <Text style={[s.optDesc, (on || opt.recommended) && s.optDescAccent]}>{opt.description}</Text>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
+      <View style={s.head}>
+        {total > 1 ? (
+          <View style={s.stepper}>
+            <TouchableOpacity
+              onPress={goBack}
+              disabled={current === 0 || submitting}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <ChevronLeft size={16} color={current === 0 ? '#D4D4D8' : '#71717A'} />
+            </TouchableOpacity>
+            <Text style={s.stepText}>{current + 1} of {total}</Text>
           </View>
+        ) : null}
+        <Text style={[s.question, s.questionFlex]}>{q.question}</Text>
+      </View>
+
+      {q.options.map((opt, oi) => {
+        const on = picks.includes(opt.label);
+        return (
+          <TouchableOpacity
+            key={`${opt.label}-${oi}`}
+            style={[s.option, (on || opt.recommended) && s.optionAccent, on && s.optionOn]}
+            activeOpacity={0.75}
+            disabled={submitting}
+            onPress={() => choose(opt.label)}
+          >
+            <View style={[s.mark, q.multiSelect ? s.markBox : s.markRadio, on && s.markOn]}>
+              {on && <Check size={13} color="#FFFFFF" />}
+            </View>
+            <View style={s.optBody}>
+              <View style={s.optLabelRow}>
+                <Text style={[s.optLabel, (on || opt.recommended) && s.optLabelAccent]}>{opt.label}</Text>
+                {opt.recommended && <Text style={s.recPill}>Recommended</Text>}
+              </View>
+              {!!opt.description && (
+                <Text
+                  style={[s.optDesc, (on || opt.recommended) && s.optDescAccent]}
+                  numberOfLines={2}
+                >
+                  {opt.description}
+                </Text>
+              )}
+            </View>
+          </TouchableOpacity>
         );
       })}
 
@@ -103,14 +122,14 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
         editable={!submitting}
       />
 
-      {!autoSubmit && (
+      {!instant && (
         <TouchableOpacity
-          style={[s.send, (!ready || submitting) && { opacity: 0.5 }]}
-          disabled={!ready || submitting}
-          onPress={submit}
+          style={[s.send, primaryDisabled && { opacity: 0.5 }]}
+          disabled={primaryDisabled}
+          onPress={isLast ? submit : goNext}
           activeOpacity={0.85}
         >
-          <Text style={s.sendText}>{submitting ? 'Sending…' : 'Send'}</Text>
+          <Text style={s.sendText}>{submitting ? 'Sending…' : isLast ? 'Send' : 'Next'}</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -119,13 +138,11 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
 
 const s = StyleSheet.create({
   card: { backgroundColor: '#FFFFFF', borderWidth: 0.5, borderColor: '#ECEBE6', borderRadius: 18, padding: 14 },
-  qSpacer: { marginTop: 16 },
-  chip: {
-    alignSelf: 'flex-start', fontSize: 12, color: '#71717A', backgroundColor: '#F1F1EE',
-    paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999, overflow: 'hidden', marginBottom: 10,
-    fontFamily: 'Inter_500Medium',
-  },
-  question: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', lineHeight: 21, marginBottom: 12 },
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 12 },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 1 },
+  stepText: { fontSize: 12, color: '#71717A', fontFamily: 'Inter_600SemiBold' },
+  question: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', lineHeight: 21 },
+  questionFlex: { flex: 1 },
   option: {
     flexDirection: 'row', gap: 10, alignItems: 'flex-start', padding: 11, marginBottom: 8,
     borderWidth: 0.5, borderColor: '#D4D4D8', borderRadius: 12,
