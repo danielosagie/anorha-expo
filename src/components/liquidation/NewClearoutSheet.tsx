@@ -134,6 +134,9 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
         const all: InventoryRow[] = [];
         let from = 0;
         const size = 200;
+        // Hard cap so a very large inventory can't fan out into unbounded
+        // sequential requests (the picker only needs a workable list to choose from).
+        const MAX_ITEMS = 2000;
         // eslint-disable-next-line no-constant-condition
         while (true) {
           const to = from + size - 1;
@@ -146,7 +149,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
           if (error) throw error;
           const r = (data as InventoryRow[]) || [];
           all.push(...r);
-          if (r.length < size) break;
+          if (r.length < size || all.length >= MAX_ITEMS) break;
           from += size;
         }
         if (!cancelled) setRows(all.filter(r => r.VariantType !== 'option' && !r.IsArchived));
