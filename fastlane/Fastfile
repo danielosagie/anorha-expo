@@ -1,0 +1,211 @@
+# fastlane/Fastfile — Anorha (sssync) iOS — App Store Connect management
+#
+# Auth: App Store Connect API key (App Manager role). Configured in fastlane/.env:
+#   ASC_KEY_ID        default BB23N5JB9M
+#   ASC_ISSUER_ID     required (per-account UUID, set in fastlane/.env)
+#   ASC_KEY_FILEPATH  default ~/.appstoreconnect/private_keys/AuthKey_BB23N5JB9M.p8
+#   ASC_APP_ID        default 6755371742
+#   ASC_BUNDLE_ID     default anorha.alpha
+#
+# Run from the repo root, e.g.:
+#   fastlane test_auth
+#   fastlane builds limit:20
+#   fastlane groups
+#   fastlane testers group:"External"
+#   fastlane whats_to_test text:"Fixed the scan crash" build:56
+#   fastlane release_notes text:"Bug fixes" version:1.0.3
+#   fastlane move_tester email:a@b.com from:"Old" to:"New"
+#   fastlane expire_build build:54
+#   fastlane expire_build keep_latest:true
+
+require "spaceship"
+
+ASC_KEY_ID     = ENV["ASC_KEY_ID"]    || "BB23N5JB9M"
+ASC_KEY_PATH   = File.expand_path(ENV["ASC_KEY_FILEPATH"] || "~/.appstoreconnect/private_keys/AuthKey_BB23N5JB9M.p8")
+ASC_APP_ID     = ENV["ASC_APP_ID"]    || "6755371742"
+ASC_BUNDLE_ID  = ENV["ASC_BUNDLE_ID"] || "anorha.alpha"
+DEFAULT_LOCALE = ENV["ASC_LOCALE"]    || "en-US"
+
+default_platform(:ios)
+
+platform :ios do
+  # -------- helpers ------------------------------------------------------
+
+  def asc_login!
+    issuer = ENV["ASC_ISSUER_ID"]
+    if issuer.nil? || issuer.strip.empty? || issuer.include?("REPLACE")
+      UI.user_error!("ASC_ISSUER_ID is not set. Put the Issuer ID in fastlane/.env (see .env.example).")
+    end
+    UI.user_error!("ASC key not found at #{ASC_KEY_PATH}") unless File.exist?(ASC_KEY_PATH)
+
+    # high-level helper — reused by upload_to_testflight / deliver
+    api_key = app_store_connect_api_key(
+      key_id: ASC_KEY_ID,
+      issuer_id: issuer,
+      key_filepath: ASC_KEY_PATH,
+      duration: 1200,
+      in_house: false
+    )
+    # direct Spaceship token for custom Connect API calls
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: ASC_KEY_ID,
+      issuer_id: issuer,
+      filepath: ASC_KEY_PATH
+    )
+    api_key
+  end
+
+  def find_app
+    app = (Spaceship::ConnectAPI::App.get(app_id: ASC_APP_ID) rescue nil)
+    app ||= Spaceship::ConnectAPI::App.find(ASC_BUNDLE_ID)
+    UI.user_error!("App not found (id=#{ASC_APP_ID}, bundle=#{ASC_BUNDLE_ID}). Does this key have access?") unless app
+    app
+  end
+
+  def recent_builds(app, limit: 15)
+    app.get_builds(includes: "preReleaseVersion", sort: "-uploadedDate", limit: limit)
+  end
+
+  def pick_build(app, version)
+    return recent_builds(app, limit: 1).first if version.nil?
+    recent_builds(app, limit: 100).find { |b| b.version.to_s == version.to_s }
+  end
+
+  # -------- read-only lanes ---------------------------------------------
+
+  desc "Verify the ASC API key works (prints app + latest build)"
+  lane :test_auth do
+    asc_login!
+    app = find_app
+    UI.success("Authenticated as App Manager ✅")
+    UI.message("App:   #{app.name}  (#{app.bundle_id})  asc_id=#{app.id}")
+    latest = recent_builds(app, limit: 1).first
+    if latest
+      v = latest.pre_release_version&.version
+      UI.message("Latest build: v#{v} (build #{latest.version})  state=#{latest.processing_state}  expired=#{latest.expired}")
+    else
+      UI.message("No builds uploaded yet.")
+    end
+  end
+
+  desc "List recent TestFlight builds. Usage: fastlane builds [limit:20]"
+  lane :builds do |options|
+    asc_login!
+    app = find_app
+    rows = recent_builds(app, limit: (options[:limit] || 15).to_i).map do |b|
+      ver = b.pre_release_version&.version || "?"
+      "v#{ver.ljust(7)} build #{b.version.to_s.ljust(5)} #{b.processing_state.to_s.ljust(12)} #{b.expired ? 'EXPIRED' : 'active '}  #{b.uploaded_date}"
+    end
+    UI.message("Recent builds (newest first):\n" + rows.join("\n"))
+  end
+
+  desc "List TestFlight (beta) groups"
+  lane :groups do
+    asc_login!
+    app = find_app
+    grps = app.get_beta_groups
+    UI.message("Beta groups:\n" + grps.map { |g| "- #{g.name}#{g.is_internal_group ? ' (internal)' : ''}  id=#{g.id}" }.join("\n"))
+  end
+
+  desc "List TestFlight testers. Usage: fastlane testers [group:\"Name\"]"
+  lane :testers do |options|
+    asc_login!
+    app = find_app
+    testers =
+      if options[:group]
+        grp = app.get_beta_groups.find { |g| g.name == options[:group] }
+        UI.user_error!("Group '#{options[:group]}' not found") unless grp
+        grp.get_beta_testers
+      else
+        Spaceship::ConnectAPI::BetaTester.all(filter: { apps: app.id }, limit: 200)
+      end
+    UI.message("Testers (#{testers.size}):\n" + testers.map { |t| "- #{[t.first_name, t.last_name].compact.join(' ')} <#{t.email}>" }.join("\n"))
+  end
+
+  # -------- write lanes --------------------------------------------------
+
+  desc "Set 'What to Test' on a build. Usage: fastlane whats_to_test text:\"...\" [build:56] [file:notes.txt] [locale:en-US]"
+  lane :whats_to_test do |options|
+    asc_login!
+    text = options[:file] ? File.read(File.expand_path(options[:file])) : options[:text]
+    UI.user_error!("Provide text:\"...\" or file:path") if text.nil? || text.strip.empty?
+    locale = options[:locale] || DEFAULT_LOCALE
+    app = find_app
+    build = pick_build(app, options[:build])
+    UI.user_error!("Build not found (build:#{options[:build]})") unless build
+    loc = build.get_beta_build_localizations.find { |l| l.locale == locale }
+    if loc
+      Spaceship::ConnectAPI.patch_beta_build_localizations(localization_id: loc.id, attributes: { whatsNew: text })
+    else
+      Spaceship::ConnectAPI.post_beta_build_localizations(build_id: build.id, attributes: { locale: locale, whatsNew: text })
+    end
+    UI.success("Set 'What to Test' (#{locale}) on build #{build.version} ✅")
+  end
+
+  desc "Set App Store release notes (What's New). Usage: fastlane release_notes text:\"...\" [version:1.0.3] [locale:en-US]"
+  lane :release_notes do |options|
+    api_key = asc_login!
+    text = options[:file] ? File.read(File.expand_path(options[:file])) : options[:text]
+    UI.user_error!("Provide text:\"...\" or file:path") if text.nil? || text.strip.empty?
+    locale = options[:locale] || DEFAULT_LOCALE
+    deliver(
+      api_key: api_key,
+      app_identifier: ASC_BUNDLE_ID,
+      app_version: options[:version],
+      release_notes: { locale => text },
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      skip_metadata: false,
+      force: true,
+      run_precheck_before_submit: false
+    )
+    UI.success("Set release notes ✅")
+  end
+
+  desc "Move a tester between TestFlight groups. Usage: fastlane move_tester email:a@b.com [from:\"GroupA\"] to:\"GroupB\""
+  lane :move_tester do |options|
+    asc_login!
+    app = find_app
+    email   = options[:email] or UI.user_error!("email: required")
+    to_name = options[:to]    or UI.user_error!("to: (target group) required")
+    grps = app.get_beta_groups
+    to_group = grps.find { |g| g.name == to_name } or UI.user_error!("Target group '#{to_name}' not found")
+    from_group = options[:from] ? grps.find { |g| g.name == options[:from] } : nil
+    UI.user_error!("Source group '#{options[:from]}' not found") if options[:from] && from_group.nil?
+
+    tester = Spaceship::ConnectAPI::BetaTester.find(email: email)
+    UI.user_error!("Tester #{email} not found") unless tester
+
+    to_group.add_beta_testers(beta_tester_ids: [tester.id])
+    tester.delete_from_beta_groups(beta_groups: [from_group]) if from_group
+    UI.success("Moved #{email} → '#{to_name}'#{options[:from] ? " (removed from '#{options[:from]}')" : ''} ✅")
+  end
+
+  desc "Add a tester to a group. Usage: fastlane add_tester email:a@b.com group:\"Name\" [first:Jane] [last:Doe]"
+  lane :add_tester do |options|
+    asc_login!
+    app = find_app
+    email = options[:email] or UI.user_error!("email: required")
+    grp = app.get_beta_groups.find { |g| g.name == options[:group] } or UI.user_error!("Group '#{options[:group]}' not found")
+    grp.post_bulk_beta_tester_assignments(beta_testers: [{ email: email, firstName: options[:first], lastName: options[:last] }])
+    UI.success("Added #{email} → '#{options[:group]}' ✅")
+  end
+
+  desc "Expire build(s). Usage: fastlane expire_build build:54  |  fastlane expire_build keep_latest:true"
+  lane :expire_build do |options|
+    asc_login!
+    app = find_app
+    if options[:keep_latest]
+      active = recent_builds(app, limit: 100).reject(&:expired)
+      to_expire = active.drop(1) # keep the newest active build
+      UI.user_error!("Nothing to expire (≤1 active build).") if to_expire.empty?
+      to_expire.each { |b| b.expire!; UI.message("Expired build #{b.version}") }
+      UI.success("Expired #{to_expire.size} build(s); kept #{active.first&.version} ✅")
+    else
+      ver = options[:build] or UI.user_error!("build: (number) or keep_latest:true required")
+      b = pick_build(app, ver) or UI.user_error!("Build #{ver} not found")
+      b.expire!
+      UI.success("Expired build #{ver} ✅")
+    end
+  end
+end

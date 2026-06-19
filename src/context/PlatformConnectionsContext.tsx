@@ -7,7 +7,9 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('PlatformConnectionsContext');
 
 
-export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot' | 'etsy';
+// Mirrors the canonical registry key set (src/config/platforms.ts). 'etsy' was a
+// ghost — never in the registry, no adapter, no column — removed.
+export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot';
 
 export interface PlatformConnectionRow {
   Id: string;

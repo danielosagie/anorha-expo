@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { listPlatforms } from '../config/platforms';
 import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
 import {
@@ -917,7 +918,7 @@ const InventoryOrdersScreen = observer(() => {
       });
 
       // Pick PRIMARY platform only (priority order) - include 'pool' at end for partners
-      const platformPriority = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook', 'pool'];
+      const platformPriority = [...listPlatforms({ connectableOnly: true }).map((d) => d.key), 'pool'];
       for (const plat of platformPriority) {
         if (byPlatform[plat] !== undefined && byPlatform[plat] > 0) {
           return byPlatform[plat];
@@ -1472,7 +1473,7 @@ const InventoryOrdersScreen = observer(() => {
     );
   };
 
-  const platformsForChips = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook']
+  const platformsForChips = listPlatforms({ connectableOnly: true }).map((d) => d.key)
     .map(platformType => {
       const connectionCount = platformConnections.filter((conn: PlatformConnection) =>
         conn.PlatformType.toLowerCase() === platformType && conn.IsEnabled

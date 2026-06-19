@@ -3,6 +3,8 @@
  * Maps phrases like "under 50 dollars", "low stock", "on ebay" to filter state.
  */
 
+import { listPlatforms } from '../config/platforms';
+
 export interface ParsedFilterState {
   priceMax?: number | null;
   lowStockOnly?: boolean;
@@ -10,7 +12,8 @@ export interface ParsedFilterState {
   triggerSlowMovers?: boolean;
 }
 
-const PLATFORMS = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook'];
+// Derived from the canonical registry — connectable platforms only (no amazon/planned).
+const PLATFORMS = listPlatforms({ connectableOnly: true }).map((d) => d.key);
 
 function extractPriceMax(text: string): number | null {
   const lower = text.toLowerCase();

@@ -460,6 +460,13 @@ const SproutHomeScreen: React.FC = () => {
     setSelectedIds(new Set([id]));
   }, []);
 
+  // While selecting, the floating action pill takes the navigator's place — hide
+  // the tab bar so the two don't stack at the bottom.
+  useEffect(() => {
+    navigation.setOptions({ tabBarStyle: selectMode ? { display: 'none' } : undefined });
+    return () => { navigation.setOptions({ tabBarStyle: undefined }); };
+  }, [selectMode, navigation]);
+
   const onCardPress = useCallback((c: CampaignSummary) => {
     if (selectMode) {
       tap();
@@ -882,24 +889,29 @@ const SproutHomeScreen: React.FC = () => {
         onSubmit={handleCreate}
       />
 
-      {/* Selection action bar — appears on long-press; bulk pause / delete. */}
+      {/* Selection action pill — floats in the navigator's spot on long-press
+          (the tab bar hides while selecting). Bulk pause / delete. */}
       {selectMode ? (
-        <View style={[styles.selectBar, { paddingBottom: insets.bottom + 12 }]}>
-          <TouchableOpacity style={styles.selectCancel} onPress={exitSelect} activeOpacity={0.7}>
-            <Icon name="close" size={18} color="#52525B" />
+        <View style={[styles.selectBar, isNight && styles.selectBarNight, { bottom: Math.max(18, insets.bottom) }]}>
+          <TouchableOpacity
+            style={[styles.selectCancel, isNight && styles.selectCancelNight]}
+            onPress={exitSelect}
+            activeOpacity={0.7}
+          >
+            <Icon name="close" size={18} color={isNight ? '#E4E4E7' : '#52525B'} />
           </TouchableOpacity>
-          <Text style={styles.selectCount}>
+          <Text style={[styles.selectCount, isNight && styles.selectCountNight]}>
             {selectedIds.size} selected
           </Text>
           <View style={styles.selectActions}>
             <TouchableOpacity
-              style={[styles.selectAction, selectedIds.size === 0 && styles.selectActionDisabled]}
+              style={[styles.selectAction, isNight && styles.selectActionNight, selectedIds.size === 0 && styles.selectActionDisabled]}
               onPress={pauseSelected}
               disabled={selectedIds.size === 0}
               activeOpacity={0.8}
             >
-              <Icon name="pause" size={16} color="#3F3F46" />
-              <Text style={styles.selectActionText}>Pause</Text>
+              <Icon name="pause" size={16} color={isNight ? '#E4E4E7' : '#3F3F46'} />
+              <Text style={[styles.selectActionText, isNight && styles.selectActionTextNight]}>Pause</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.selectAction, styles.selectActionDanger, selectedIds.size === 0 && styles.selectActionDisabled]}
@@ -1101,24 +1113,31 @@ const styles = StyleSheet.create({
     borderColor: BRAND,
     backgroundColor: BRAND,
   },
+  // Floats in the navigator's spot (rounded on all sides, detached from the
+  // edges) — not a full-width bottom sheet. `bottom` is set inline to match the
+  // tab bar's safe-area offset.
   selectBar: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+    left: 16,
+    right: 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: 'rgba(0, 0, 0, 0.07)',
     shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: -4 },
-    elevation: 16,
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 24,
+  },
+  selectBarNight: {
+    backgroundColor: 'rgba(28, 30, 24, 0.94)',
+    borderColor: 'rgba(255, 255, 255, 0.10)',
   },
   selectCancel: {
     width: 36,
@@ -1128,11 +1147,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F1F1EE',
   },
+  selectCancelNight: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
   selectCount: {
     flex: 1,
     fontSize: 14,
     color: '#18181B',
     fontFamily: 'Inter_600SemiBold',
+  },
+  selectCountNight: {
+    color: '#F4F4EE',
   },
   selectActions: {
     flexDirection: 'row',
@@ -1148,10 +1173,16 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#F1F1EE',
   },
+  selectActionNight: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
   selectActionText: {
     fontSize: 13,
     color: '#3F3F46',
     fontFamily: 'Inter_600SemiBold',
+  },
+  selectActionTextNight: {
+    color: '#E4E4E7',
   },
   selectActionDanger: {
     backgroundColor: '#DC2626',

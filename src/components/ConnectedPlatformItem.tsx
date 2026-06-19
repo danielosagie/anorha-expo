@@ -16,7 +16,7 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('ConnectedPlatformItem');
 
 // --- Types ---
-export type PlatformId = 'shopify' | 'amazon' | 'clover' | 'square' | 'ebay' | 'facebook' | 'depop' | 'whatnot' | 'etsy';
+export type PlatformId = 'shopify' | 'amazon' | 'clover' | 'square' | 'ebay' | 'facebook' | 'depop' | 'whatnot';
 
 export interface PlatformConnection {
     Id: string;

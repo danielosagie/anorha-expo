@@ -1,0 +1,8 @@
+# fastlane Appfile — Anorha (sssync) iOS
+# Authentication is via an App Store Connect API key, NOT Apple-ID login.
+# Secrets live in fastlane/.env (gitignored) and ~/.appstoreconnect/ (outside the repo).
+# See fastlane/.env.example and fastlane/README.md.
+
+app_identifier(ENV["ASC_BUNDLE_ID"] || "anorha.alpha")
+apple_id(ENV["ASC_APPLE_ID"] || "danielosagie0@gmail.com")
+team_id("5TD6S2T34N") # Apple Developer Portal team

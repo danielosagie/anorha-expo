@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
+import { listPlatforms } from '../config/platforms';
 import {
   View,
   Text,
@@ -665,7 +666,7 @@ const ActivityFeedScreen = observer(() => {
     productVariantsMap,
   ]);
 
-  const platformsForChips = ['shopify', 'square', 'clover', 'amazon', 'ebay', 'facebook']
+  const platformsForChips = listPlatforms({ connectableOnly: true }).map((d) => d.key)
     .map(platformType => {
       const connectionCount = platformConnections.filter((conn: PlatformConnection) =>
         conn.PlatformType.toLowerCase() === platformType && conn.IsEnabled

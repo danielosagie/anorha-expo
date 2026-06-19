@@ -160,14 +160,8 @@ function mapEbayConditionIdToGeneric(conditionId: string): string {
   return EBAY_CONDITION_TO_GENERIC[String(conditionId)] || 'good';
 }
 
-const PLATFORM_META: Record<string, { label: string; icon: string }> = {
-  shopify: { label: 'Shopify', icon: 'shopping' },
-  amazon: { label: 'Amazon', icon: 'amazon' },
-  ebay: { label: 'eBay', icon: 'shopping' },
-  clover: { label: 'Clover', icon: 'leaf' },
-  square: { label: 'Square', icon: 'square-outline' },
-  facebook: { label: 'Facebook', icon: 'facebook' },
-};
+// Platform labels resolve from the canonical registry (config/platforms.ts) via
+// getPlatform(). The old local PLATFORM_META map (stale 6-entry copy) was removed.
 
 // Inventory behavior mapping
 export type InventoryType = 'LOCATION_VARIANT_WITH_OPTIONS' | 'VARIANT_WITH_OPTIONS' | 'BASIC';
@@ -1648,7 +1642,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 getPlatform(key) ? <PlatformLogo type={key} size={12} /> : null
               )}
               <Text style={[styles.pillText, activeTab === key && styles.pillTextActive, generatingPlatforms.has(key) && styles.pillTextGenerating]}>
-                {PLATFORM_META[key]?.label || key}
+                {getPlatform(key)?.label || key}
                 {generatingPlatforms.has(key) && ' (Generating...)'}
               </Text>
               
@@ -2509,7 +2503,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F8F9FA' }}
                 >
                   <Text style={{ fontSize: 11, fontWeight: '600', color: '#000' }}>
-                    {PLATFORM_META[platformKey]?.label || platformKey}
+                    {getPlatform(platformKey)?.label || platformKey}
                   </Text>
                 </TouchableOpacity>
               ))} */}

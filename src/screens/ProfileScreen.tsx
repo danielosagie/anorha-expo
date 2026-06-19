@@ -72,7 +72,7 @@ type ProfileScreenRouteParams = {
 type ProfileScreenNavigationProp = StackNavigationProp<AppStackParamList>;
 
 // Define available platforms centrally (or import if moved)
-type PlatformId = PlatformKey | 'etsy';
+type PlatformId = PlatformKey;
 
 // --- Backend Connection Type (ASSUMPTION - Adjust as needed) ---
 interface PlatformConnection {
@@ -542,28 +542,9 @@ const ProfileScreen = () => {
     return () => clearTimeout(timer);
   }, [user, currentOrg]);
 
-  const integrations = [
-    {
-      id: 'shopify',
-      name: 'Shopify',
-      isConnected: true,
-    },
-    {
-      id: 'amazon',
-      name: 'Amazon',
-      isConnected: true,
-    },
-    {
-      id: 'clover',
-      name: 'Clover',
-      isConnected: true,
-    },
-    {
-      id: 'square',
-      name: 'Square',
-      isConnected: false,
-    },
-  ];
+  // (Removed unused hardcoded `integrations` mock array — it was never rendered
+  // and falsely showed Amazon/Shopify/Clover as connected. Real connection state
+  // comes from platformConnections / refreshConnections below.)
 
   // Refresh platform connections on focus / refresh trigger
   useFocusEffect(

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { listPlatforms } from '../config/platforms';
 import {
   ActivityIndicator,
   Alert,
@@ -35,14 +36,11 @@ const BRAND = '#93C822';
 const SELECT_COLS =
   'Id, Title, Sku, Price, Tags, PrimaryImageUrl, VariantType, IsArchived, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook';
 
-const PLATFORM_FLAGS: Array<{ key: string; label: string }> = [
-  { key: 'OnShopify', label: 'Shopify' },
-  { key: 'OnEbay', label: 'eBay' },
-  { key: 'OnAmazon', label: 'Amazon' },
-  { key: 'OnFacebook', label: 'Facebook' },
-  { key: 'OnSquare', label: 'Square' },
-  { key: 'OnClover', label: 'Clover' },
-];
+// Derived from the canonical registry — connectable platforms with an On* column
+// (no amazon/planned). key = the ProductVariants boolean column name.
+const PLATFORM_FLAGS: Array<{ key: string; label: string }> = listPlatforms({ connectableOnly: true })
+  .filter((d) => !!d.onColumn)
+  .map((d) => ({ key: d.onColumn as string, label: d.label }));
 
 // Words that carry no selection signal — stripped before keyword matching.
 const STOPWORDS = new Set([
