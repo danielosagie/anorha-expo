@@ -10,13 +10,17 @@ import DeliveryShippingSheet from './DeliveryShippingSheet';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, Plus } from 'lucide-react-native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
 import { AppMenuSelect } from './ui/AppMenuSelect';
 import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, Field, ChipsField, LocationDropdown } from './ListingEditor';
+import FieldSheet from './ListingEditor/FieldSheet';
+import FieldRow from './ListingEditor/FieldRow';
+import SheetTextField from './ListingEditor/SheetTextField';
+import { getRequiredFieldUnion } from '../utils/fieldVisibility';
 import InteractiveMapModal from './InteractiveMapModal';
 import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
 import { overlay } from 'react-native-paper';
@@ -47,6 +51,147 @@ const PRICING_RESEARCH_CACHE = new Map<string, { data: any; ts: number }>();
 const PRICING_RESEARCH_TTL = 30 * 60 * 1000; // 30 min — refetch only if older
 const pricingCacheKey = (input: { title: string; categoryId?: string; condition?: string }) =>
   `${input.title}|${input.categoryId ?? ''}|${input.condition ?? ''}`.trim().toLowerCase();
+
+// Coerce any saved price (which may be a non-numeric string, '', or 'NaN') to a finite
+// number, defaulting to 0. Prevents the "$NaN" the inventory editor showed for base products.
+const toPrice = (v: any): number => {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
+// Styles for the row→sheet redesign (clickable detail rows + focused field sheets).
+const rowStyles = StyleSheet.create({
+  detailsCard: {
+    backgroundColor: CHAT_COLORS.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: CHAT_COLORS.border,
+    overflow: 'hidden',
+  },
+  rowScanBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: CHAT_COLORS.bubble,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  moreToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    marginTop: 4,
+  },
+  moreToggleText: {
+    fontSize: 14,
+    fontFamily: CHAT_FONT.semibold,
+    color: CHAT_COLORS.dim,
+  },
+  priceInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: CHAT_COLORS.brand,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    height: 64,
+  },
+  priceCurrency: {
+    fontSize: 22,
+    fontFamily: CHAT_FONT.medium,
+    color: CHAT_COLORS.dim,
+    marginRight: 6,
+  },
+  priceInput: {
+    flex: 1,
+    fontSize: 30,
+    fontFamily: CHAT_FONT.bold,
+    color: CHAT_COLORS.ink,
+    padding: 0,
+  },
+  researchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 18,
+    alignSelf: 'flex-start',
+  },
+  researchBtnText: {
+    color: CHAT_COLORS.brandDeep,
+    fontSize: 14,
+    fontFamily: CHAT_FONT.semibold,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontFamily: CHAT_FONT.semibold,
+    color: CHAT_COLORS.dim,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  groupLabel: {
+    fontSize: 11,
+    fontFamily: CHAT_FONT.semibold,
+    color: CHAT_COLORS.dim,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginTop: 22,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  radioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    marginBottom: 4,
+  },
+  radioRowSel: {
+    backgroundColor: CHAT_COLORS.brandSoft,
+  },
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: CHAT_COLORS.faint,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  radioOuterSel: {
+    borderColor: CHAT_COLORS.brand,
+  },
+  radioInner: {
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: CHAT_COLORS.brand,
+  },
+  radioLabel: {
+    fontSize: 16,
+    fontFamily: CHAT_FONT.medium,
+    color: CHAT_COLORS.ink,
+  },
+  sheetFootnote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+  },
+  sheetFootnoteText: {
+    fontSize: 12,
+    fontFamily: CHAT_FONT.regular,
+    color: CHAT_COLORS.dim,
+    flex: 1,
+  },
+});
 
 type Props = {
   platforms: PlatformsData;
@@ -81,7 +226,12 @@ type Props = {
   allMissingCount?: number;
 };
 
-export type ListingEditorFormRef = { openPlatformPicker: () => void };
+export type ListingEditorFormRef = {
+  openPlatformPicker: () => void;
+  /** Open a specific field's edit sheet (optionally on a given platform tab). Used by the
+   *  action-bar "needs you" pill and the missing-fields checklist to jump straight to the gap. */
+  openFieldSheet: (field: string, platform?: string) => void;
+};
 
 type Variant = {
   id: string;
@@ -232,6 +382,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
   const [newOptionName, setNewOptionName] = useState<string>('');
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
+  // Which field's edit sheet is open (row → sheet redesign). null = none.
+  const [openField, setOpenField] = useState<string | null>(null);
+  // "More details" expander for the publish-optional long-tail fields.
+  const [moreOpen, setMoreOpen] = useState<boolean>(false);
 
   useEffect(() => {
     // Auto-scroll to highlighted field
@@ -241,6 +395,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       }, 300);
     }
   }, [highlightedField, activeTab]);
+
+  // NOTE: opening a field's sheet from a "needs you" jump is event-driven via the
+  // imperative openFieldSheet ref (called on an explicit tap), NOT a highlightedField
+  // effect — otherwise the sheet would auto-pop on screen entry whenever a required
+  // field is empty. highlightedField still drives the quiet auto-scroll above + the
+  // per-row error state.
 
   const recordFieldLayout = (field: string) => (event: any) => {
     fieldYOffsets.current[field] = event.nativeEvent.layout.y;
@@ -339,7 +499,25 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   useImperativeHandle(ref, () => ({
     openPlatformPicker: () => platformPickerOverlay.show(),
-  }), [platformPickerOverlay]);
+    openFieldSheet: (field: string, platform?: string) => {
+      let plat = platform;
+      // Category only renders on a taxonomy platform tab (Shopify/eBay), never on 'all' —
+      // so jumping to it from Overview must switch to one, else it's a dead tap.
+      if (!plat && field === 'category') {
+        plat = ['shopify', 'ebay'].find((k) => (platforms as any)[k]) || undefined;
+      }
+      if (plat) {
+        const key = String(plat).toLowerCase();
+        if (key && (platforms as any)[key]) setActiveTab(key);
+      }
+      const map: Record<string, string> = {
+        'price (either flat or all variants)': 'price',
+        title: 'title', sku: 'sku', category: 'category', description: 'description',
+        barcode: 'barcode', weight: 'weight', tags: 'tags', condition: 'condition',
+      };
+      setOpenField(map[field] || field);
+    },
+  }), [platformPickerOverlay, platforms]);
 
   const lastPlatformRef = useRef<string>('');
   const lastOptionsRef = useRef<string>('');
@@ -689,6 +867,16 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setPricingResearchLoading(false);
     }
   }, [pricingResearchInput]);
+
+  // Auto-load sold-comps pricing research the moment the Price sheet opens, so the
+  // going-rate bar + recent comps are there waiting (matches the Paper Price sheet),
+  // instead of hiding behind a "See what it sells for" tap.
+  useEffect(() => {
+    if (openField === 'price' && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
+      fetchPricingResearch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openField, titleForPricingResearch]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
@@ -1479,6 +1667,520 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const insets = useSafeAreaInsets();
   const bottomSafePadding = isGenerationMode ? ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16 : 20;
 
+  // ── Row→sheet redesign helpers ───────────────────────────────────────────
+  // The detail rows (a tappable summary of each field) + the focused field sheets
+  // they open. All editing routes through the SAME handlers as before
+  // (patchField / patchPlatform / fetchPricingResearch / taxonomy / etc.) — the
+  // sheets just relocate the editors out of the inline form. Nothing is dropped.
+  const refilledIncludes = (k: string) =>
+    Array.isArray((platforms as any)[activePlatformKey]?.__refilled) &&
+    (platforms as any)[activePlatformKey].__refilled.includes(k);
+
+  const conditionDisplay = (() => {
+    if (activePlatformKeyLower === 'ebay' && (activeData as any).conditionID) {
+      const c = ebayConditions.find((cc: any) => String(cc.conditionId) === String((activeData as any).conditionID));
+      if (c) return c.conditionName;
+    }
+    const v = (activeData as any).condition;
+    const map: Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair', used: 'Used', refurbished: 'Refurbished', for_parts: 'For Parts' };
+    return v ? (map[v] || v) : null;
+  })();
+
+  // camelCase / snake_case → "Title Case" for arbitrary platform field labels.
+  const humanizeKey = (k: string) =>
+    k.replace(/[_-]+/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()).trim();
+
+  // Every field already shown as a dedicated row/sheet (or handled elsewhere) — excluded from
+  // the generic "additional fields" rows so nothing double-renders and no JSON blob appears.
+  const STANDARD_FIELD_KEYS = new Set([
+    'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode', 'images', 'imageUris',
+    'options', 'variants', 'locations', 'locationQuantities', 'inventoryType', 'condition', 'conditionID',
+    'category', 'categoryId', 'productCategoryId', 'productCategory', 'categoryPath', 'taxonomyConfidence',
+    'taxonomySource', 'itemSpecifics', 'brand', 'vendor', 'compareAtPrice', 'productType', 'seoTitle',
+    'seoDescription', 'seo', 'aiPriceRecommendation', 'aiRecommendedPrice', 'pickupLocation', 'deliveryMethod',
+    'shippingCost', 'shippingOptions', 'shippingTier', 'estimatedDimensions', 'estimatedWeight', 'imageUrls',
+    '__refilled', '__variantSuggestions', '_rawResponse', '_parseError', '_extractedJson',
+  ]);
+
+  // Any remaining platform-specific string/number fields, rendered as clean rows (no JSON).
+  const renderAdditionalRows = () => {
+    const extra = Object.entries(activeData || {}).filter(([k, v]) =>
+      !STANDARD_FIELD_KEYS.has(k) && !k.startsWith('_') && v != null && (typeof v === 'string' || typeof v === 'number')
+    );
+    if (extra.length === 0) return null;
+    return (
+      <>
+        <Text style={rowStyles.groupLabel}>{`${getPlatform(activePlatformKey)?.label || activePlatformKey} fields`}</Text>
+        <View style={rowStyles.detailsCard}>
+          {extra.map(([k, v], i) => (
+            <FieldRow key={k} label={humanizeKey(k)} value={String(v)} placeholder="Add" onPress={() => setOpenField(`extra:${k}`)} last={i === extra.length - 1} />
+          ))}
+        </View>
+      </>
+    );
+  };
+
+  // Long-tail detail rows shown inline under MORE DETAILS (no JSON, no tap-to-expand).
+  const renderExtraDetailRows = () => {
+    const compareAt = (activeData as any).compareAtPrice;
+    const productType = (activeData as any).productType;
+    const seoTitle = (activeData as any).seoTitle ?? (activeData as any).seo?.seoTitle;
+    const seoDescription = (activeData as any).seoDescription ?? (activeData as any).seo?.seoDescription;
+    const photoCount = (images || []).filter(Boolean).length;
+    return (
+      <>
+        <FieldRow label="Photos" value={photoCount ? `${photoCount} photo${photoCount > 1 ? 's' : ''}` : null} placeholder="Add photos" onPress={() => setOpenField('photos')} />
+        <FieldRow label="Compare-at price" value={compareAt != null && String(compareAt) !== '' ? `$${compareAt}` : null} placeholder="Optional" onPress={() => setOpenField('compareAtPrice')} />
+        <FieldRow label="Product type" value={productType} placeholder="Optional" onPress={() => setOpenField('productType')} />
+        <FieldRow label="SEO title" value={seoTitle} placeholder="Optional" onPress={() => setOpenField('seoTitle')} />
+        <FieldRow label="SEO description" value={seoDescription} placeholder="Optional" onPress={() => setOpenField('seoDescription')} last />
+      </>
+    );
+  };
+
+  const renderDetailsCard = () => {
+    const fieldVis = getRequiredFieldUnion(platformKeys);
+    const showDescriptionTop = fieldVis.required.includes('description') || !!((activeData as any).description && String((activeData as any).description).trim());
+    const hasVariantsWithOptions = ((activeData as any).options || []).length > 0 && ((activeData as any).variants || []).length > 0;
+    const allVariantsHavePrice = hasVariantsWithOptions && ((activeData as any).variants || []).every((v: any) => v.price != null && v.price !== '' && Number(v.price) > 0);
+    // When every variant is priced, show a min–max RANGE instead of a confusing single
+    // "base price". The scalar price stays editable underneath (platforms still send it).
+    const variantPrices = ((activeData as any).variants || []).map((v: any) => Number(v.price)).filter((n: number) => Number.isFinite(n) && n > 0);
+    const priceRange = allVariantsHavePrice && variantPrices.length ? { min: Math.min(...variantPrices), max: Math.max(...variantPrices) } : null;
+    const rangeDisplay = priceRange ? (priceRange.min === priceRange.max ? `$${priceRange.min.toFixed(2)}` : `$${priceRange.min.toFixed(2)} – $${priceRange.max.toFixed(2)}`) : null;
+    const priceRequired = requiredFields?.includes?.('price') && !allVariantsHavePrice;
+    const priceError = priceRequired && ((activeData as any).price == null || String((activeData as any).price) === '' || Number((activeData as any).price) === 0);
+    const titleError = requiredFields?.includes?.('title') && !(activeData as any).title;
+    const skuError = requiredFields?.includes?.('sku') && !(activeData as any).sku;
+    const categoryDisplay = (activeData as any).categoryPath || (activeData as any).category || (activeData as any).productCategory || null;
+    const priceVal = (activeData as any).price;
+    const priceDisplay = priceVal != null && String(priceVal) !== '' ? `$${priceVal}` : null;
+    const tagsArr = Array.isArray((activeData as any).tags) ? (activeData as any).tags : [];
+
+    return (
+      <View style={{ paddingTop: 18 }}>
+        <View style={rowStyles.detailsCard}>
+          <View onLayout={recordFieldLayout('title')}>
+            <FieldRow label="Title" layout="stacked" required value={(activeData as any).title} placeholder="Add a title" error={!!titleError} externalUpdate={hasExternalUpdate('title')} refilled={refilledIncludes('title')} onPress={() => setOpenField('title')} />
+          </View>
+          <FieldRow label="Description" layout="stacked" value={(activeData as any).description} placeholder="Add a description" externalUpdate={hasExternalUpdate('description')} refilled={refilledIncludes('description')} onPress={() => setOpenField('description')} />
+
+          <View onLayout={recordFieldLayout('price (either flat or all variants)')}>
+            <FieldRow label={rangeDisplay ? 'Price range' : (hasVariantsWithOptions ? 'Base price' : 'Price')} layout="stacked" required={!!priceRequired} value={rangeDisplay ?? priceDisplay} placeholder="Set a price" error={!!priceError} externalUpdate={hasExternalUpdate('price')} refilled={refilledIncludes('price')} onPress={() => setOpenField('price')} />
+          </View>
+          <View onLayout={recordFieldLayout('sku')}>
+            <FieldRow label="SKU" required value={(activeData as any).sku} placeholder="Add a SKU" error={!!skuError} externalUpdate={hasExternalUpdate('sku')} refilled={refilledIncludes('sku')} onPress={() => setOpenField('sku')} />
+          </View>
+          {supportsTaxonomy && (
+            <View onLayout={recordFieldLayout('category')}>
+              <FieldRow label="Category" value={categoryDisplay} placeholder={categoryRequired ? 'Add a category' : 'Optional'} required={!!categoryRequired} error={!!categoryMissing} onPress={() => setOpenField('category')} />
+            </View>
+          )}
+          <FieldRow label="Condition" value={conditionDisplay} placeholder="Select condition" onPress={() => setOpenField('condition')} />
+          <FieldRow
+            label="Barcode"
+            value={(activeData as any).barcode}
+            placeholder="Add or scan"
+            externalUpdate={hasExternalUpdate('barcode')}
+            onPress={() => setOpenField('barcode')}
+            trailing={
+              <TouchableOpacity
+                style={rowStyles.rowScanBtn}
+                onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}
+              >
+                <Icon name="qrcode-scan" size={18} color={CHAT_COLORS.dim} />
+              </TouchableOpacity>
+            }
+          />
+          <FieldRow label="Tags" value={tagsArr.length ? `${tagsArr.length} tag${tagsArr.length > 1 ? 's' : ''}` : null} placeholder="Add tags" refilled={refilledIncludes('tags')} onPress={() => setOpenField('tags')} last />
+        </View>
+
+        {/* More details — always visible (no tap-to-expand), rendered as rows. */}
+        <Text style={rowStyles.groupLabel}>MORE DETAILS</Text>
+        <View style={rowStyles.detailsCard}>
+          <FieldRow label="Brand" value={(activeData as any).brand || (activeData as any).vendor} placeholder="Add brand" onPress={() => setOpenField('brand')} />
+          <FieldRow label="Weight" value={(activeData as any).weight ? `${(activeData as any).weight} ${(activeData as any).weightUnit || 'oz'}` : null} placeholder="Add weight" onPress={() => setOpenField('weight')} />
+          {renderExtraDetailRows()}
+        </View>
+      </View>
+    );
+  };
+
+  const renderFieldSheets = () => {
+    const platformBadge = activeTab === 'all' ? 'All channels' : (getPlatform(activePlatformKey)?.label || activePlatformKey);
+    const scopeText = activeTab === 'all' ? 'Changes everywhere' : `Only ${getPlatform(activePlatformKey)?.label || activePlatformKey}`;
+    const apr = (activeData as any).aiPriceRecommendation;
+    const legacy = (activeData as any).aiRecommendedPrice;
+    const research = pricingResearchResult;
+    const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
+      ? { low: apr.low, recommended: apr.recommended, high: apr.high }
+      : (typeof legacy === 'number' && legacy > 0
+        ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
+        // Fall back to the live sold-comps research so the Fast sale / Recommended / Max profit pills show.
+        : (research && typeof research.low === 'number'
+          ? { low: research.low, recommended: research.recommended ?? research.median ?? research.low, high: research.high ?? research.low }
+          : null));
+    const currentPrice = Number((activeData as any).price) || 0;
+
+    return (
+      <>
+        {/* Title */}
+        <FieldSheet visible={openField === 'title'} title="Title" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('title') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" helper="A clear, specific name sells best" maxLength={80} showCount onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('title')} />
+        </FieldSheet>
+
+        {/* Description */}
+        <FieldSheet visible={openField === 'description'} title="Description" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('description') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe the item, its condition, and what's included…" onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('description')} />
+        </FieldSheet>
+
+        {/* SKU */}
+        <FieldSheet visible={openField === 'sku'} title="SKU" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('sku') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" helper="Your internal code to track this item" onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('sku')} />
+        </FieldSheet>
+
+        {/* Barcode */}
+        <FieldSheet visible={openField === 'barcode'} title="Barcode" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('barcode') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN / code128" scope={scopeText} externalUpdate={hasExternalUpdate('barcode')} />
+          <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
+            <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
+            <Text style={rowStyles.researchBtnText}>Scan barcode</Text>
+          </TouchableOpacity>
+        </FieldSheet>
+
+        {/* Tags */}
+        <FieldSheet visible={openField === 'tags'} title="Tags" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('tags') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
+          <ChipsField label="Tags" valueArray={(activeData as any).tags} onChangeArray={(arr) => patchField('tags', arr)} onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined} refilled={refilledIncludes('tags')} />
+        </FieldSheet>
+
+        {/* Price — number + sold-comps research (never a bare number to defend) */}
+        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('price') : undefined} onClose={() => { setOpenField(null); setPricingResearchModalVisible(false); }} onSave={() => { setOpenField(null); setPricingResearchModalVisible(false); }}>
+          <View style={rowStyles.priceInputWrap}>
+            <Text style={rowStyles.priceCurrency}>$</Text>
+            <TextInput style={rowStyles.priceInput} value={String((activeData as any).price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
+          </View>
+
+          {enableAIRefill && activeTab !== 'all' && (
+            <TouchableOpacity style={[rowStyles.researchBtn, { marginTop: 12 }]} onPress={() => onRegenerateField?.(activePlatformKey, 'price')}>
+              <Sparkles size={15} color={BRAND_PRIMARY} />
+              <Text style={rowStyles.researchBtnText}>Re-suggest with AI</Text>
+            </TouchableOpacity>
+          )}
+
+          {band && band.recommended > 0 && (
+            <View style={[styles.suggestRow, { marginTop: 14 }]}>
+              {([{ label: 'Fast sale', price: band.low }, { label: 'Recommended', price: band.recommended, hi: true }, { label: 'Max profit', price: band.high }] as any[]).map((o) => {
+                const sel = Math.abs(currentPrice - o.price) < 0.02;
+                return (
+                  <TouchableOpacity key={o.label} style={[styles.suggestChip, (sel || o.hi) && styles.suggestChipHi]} activeOpacity={0.8} onPress={() => patchField('price', String(o.price.toFixed(2)))}>
+                    <Text style={styles.suggestChipLabel}>{o.label}</Text>
+                    <Text style={styles.suggestChipPrice}>${o.price.toFixed(2)}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
+            <View style={{ marginTop: 16 }}>
+              <PricingGuidanceCard
+                headers="none"
+                pricing={pricingResearchResult}
+                onApplyPrice={(price) => {
+                  const low = pricingResearchResult.low ?? 0;
+                  const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
+                  const high = pricingResearchResult.high ?? 0;
+                  patchField('price', price.toFixed(2));
+                  patchPlatform((prev) => ({ ...prev, aiPriceRecommendation: { low, recommended, high } }));
+                }}
+              />
+            </View>
+          ) : titleForPricingResearch ? (
+            <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={rowStyles.researchBtn}>
+              {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={15} color={BRAND_PRIMARY} />}
+              <Text style={rowStyles.researchBtnText}>{pricingResearchLoading ? 'Researching…' : 'See what it sells for'}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </FieldSheet>
+
+        {/* Category — per-platform taxonomy search + suggested */}
+        {supportsTaxonomy && (
+          <FieldSheet visible={openField === 'category'} title="Category" badge={activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} badgeTone="neutral" onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
+            {!(activeData as any).category && (
+              <TouchableOpacity onPress={() => suggestTaxonomy(true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
+                {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
+                <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding…' : 'Auto-find from title'}</Text>
+              </TouchableOpacity>
+            )}
+            {typeof (activeData as any).taxonomyConfidence === 'number' && (activeData as any).taxonomyConfidence >= 0.5 && (
+              <View style={{ alignSelf: 'flex-start', backgroundColor: (activeData as any).taxonomyConfidence > 0.8 ? CHAT_COLORS.brandSoft : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 12 }}>
+                <Text style={{ color: (activeData as any).taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 11, fontWeight: '600' }}>
+                  {['llm', 'groq', 'tree', 'rerank'].includes((activeData as any).taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round((activeData as any).taxonomyConfidence * 100)}%
+                </Text>
+              </View>
+            )}
+            <AppDropdown
+              style={[styles.input, { height: 54, paddingHorizontal: 14, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
+              data={taxonomyDropdownData.slice(0, 12)}
+              maxHeight={280}
+              value={selectedCategoryId}
+              placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
+              search
+              searchPlaceholder="Type to search..."
+              onChangeText={(text: string) => { setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text })); }}
+              renderItem={(item: TaxonomyOption) => (
+                <View style={{ paddingVertical: 10, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
+                    {item.score && item.score > 0.8 && (
+                      <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                        <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST MATCH</Text>
+                      </View>
+                    )}
+                  </View>
+                  {item.path && item.path !== item.label && (
+                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
+                  )}
+                </View>
+              )}
+              onChange={(item: any) => {
+                const path = item.path || item.label || item.value;
+                if (activePlatformKeyLower === 'shopify') {
+                  patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                } else {
+                  patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                }
+              }}
+            />
+            {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
+              <View style={{ marginTop: 16 }}>
+                <Text style={rowStyles.sectionLabel}>Item Specifics</Text>
+                {aspectsLoading ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 }}>
+                    <ActivityIndicator size="small" color="#9CA3AF" />
+                    <Text style={{ fontSize: 12, color: '#6B7280' }}>Loading required fields...</Text>
+                  </View>
+                ) : aspects.length > 0 ? (
+                  <View style={{ gap: 12 }}>
+                    {aspects.filter((a) => a.isRequired).map((asp) => (
+                      <View key={asp.aspectName}>
+                        <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>{asp.aspectName} *</Text>
+                        {asp.allowedValues?.length > 0 ? (
+                          <AppDropdown
+                            style={[styles.input, { height: 44, paddingHorizontal: 10 }]}
+                            data={asp.allowedValues.map((v) => ({ label: v, value: v }))}
+                            placeholder={`Select ${asp.aspectName}...`}
+                            value={((activeData as any).itemSpecifics || {})[asp.aspectName]}
+                            onChange={(item) => patchPlatform((prev) => ({ ...prev, itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: item.value } }))}
+                          />
+                        ) : (
+                          <TextInput
+                            style={[styles.input, { height: 44 }]}
+                            placeholder={`Enter ${asp.aspectName}...`}
+                            value={((activeData as any).itemSpecifics || {})[asp.aspectName] || ''}
+                            onChangeText={(t) => patchPlatform((prev) => ({ ...prev, itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: t } }))}
+                          />
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            )}
+          </FieldSheet>
+        )}
+
+        {/* Condition — radio picker */}
+        <FieldSheet visible={openField === 'condition'} title="Condition" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
+          {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
+            ebayConditionsLoading ? (
+              <ActivityIndicator color={BRAND_PRIMARY} style={{ marginVertical: 16 }} />
+            ) : (
+              ebayConditions.map((c: any) => {
+                const sel = String((activeData as any).conditionID || ebayConditions[0]?.conditionId) === String(c.conditionId);
+                return (
+                  <TouchableOpacity
+                    key={c.conditionId}
+                    style={[rowStyles.radioRow, sel && rowStyles.radioRowSel]}
+                    onPress={() => {
+                      const condId = parseInt(String(c.conditionId), 10);
+                      const generic = mapEbayConditionIdToGeneric(String(c.conditionId)) as PlatformState['condition'];
+                      patchPlatform((prev) => ({ ...prev, conditionID: Number.isFinite(condId) ? condId : undefined, condition: generic }));
+                      setOpenField(null);
+                    }}
+                  >
+                    <View style={[rowStyles.radioOuter, sel && rowStyles.radioOuterSel]}>{sel && <View style={rowStyles.radioInner} />}</View>
+                    <Text style={rowStyles.radioLabel}>{c.conditionName}</Text>
+                  </TouchableOpacity>
+                );
+              })
+            )
+          ) : (
+            ([{ label: 'New', value: 'new' }, { label: 'Like New', value: 'like_new' }, { label: 'Good', value: 'good' }, { label: 'Fair', value: 'fair' }, { label: 'Used', value: 'used' }, { label: 'Refurbished', value: 'refurbished' }, { label: 'For Parts', value: 'for_parts' }] as any[]).map((opt) => {
+              const sel = ((activeData as any).condition || 'good') === opt.value;
+              return (
+                <TouchableOpacity key={opt.value} style={[rowStyles.radioRow, sel && rowStyles.radioRowSel]} onPress={() => { patchField('condition', opt.value); setOpenField(null); }}>
+                  <View style={[rowStyles.radioOuter, sel && rowStyles.radioOuterSel]}>{sel && <View style={rowStyles.radioInner} />}</View>
+                  <Text style={rowStyles.radioLabel}>{opt.label}</Text>
+                </TouchableOpacity>
+              );
+            })
+          )}
+          {platformKeys.length > 0 && (
+            <View style={[rowStyles.sheetFootnote, { marginTop: 12 }]}>
+              <Icon name="information-outline" size={14} color={CHAT_COLORS.dim} />
+              <Text style={rowStyles.sheetFootnoteText}>
+                Each channel ({platformKeys.map((pk) => getPlatform(pk)?.label || pk).join(', ')}) maps this to its own condition grade.
+              </Text>
+            </View>
+          )}
+        </FieldSheet>
+
+        {/* Weight */}
+        <FieldSheet visible={openField === 'weight'} title="Weight" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('weight') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={String((activeData as any).weight ?? '')} onChangeText={(t) => patchField('weight', t)} keyboardType="decimal-pad" autoFocus placeholder="0" helper="Used for shipping estimates" />
+          <View style={{ marginTop: 16 }}>
+            <Text style={rowStyles.sectionLabel}>Unit</Text>
+            <AppMenuSelect options={["oz", "lb", "g", "kg"].map((u) => ({ label: u, value: u }))} placeholder="oz" value={(activeData as any).weightUnit || 'oz'} onChange={(value) => patchField('weightUnit', value)} menuWidth={160} />
+          </View>
+        </FieldSheet>
+
+        {/* Brand */}
+        <FieldSheet visible={openField === 'brand'} title="Brand" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).brand ?? (activeData as any).vendor ?? ''} onChangeText={(t) => patchField('brand', t)} autoFocus placeholder="e.g. Adidas" scope={scopeText} />
+        </FieldSheet>
+
+        {/* Compare-at price */}
+        <FieldSheet visible={openField === 'compareAtPrice'} title="Compare-at price" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={String((activeData as any).compareAtPrice ?? '')} onChangeText={(t) => patchField('compareAtPrice', t)} keyboardType="decimal-pad" autoFocus placeholder="0.00" helper="Original price shown struck-through" />
+        </FieldSheet>
+
+        {/* Product type */}
+        <FieldSheet visible={openField === 'productType'} title="Product type" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).productType ?? ''} onChangeText={(t) => patchField('productType', t)} autoFocus placeholder="e.g. Sneakers" scope={scopeText} />
+        </FieldSheet>
+
+        {/* SEO title */}
+        <FieldSheet visible={openField === 'seoTitle'} title="SEO title" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).seoTitle ?? (activeData as any).seo?.seoTitle ?? ''} onChangeText={(t) => patchField('seoTitle', t)} autoFocus placeholder="Search-result title" helper="How it appears in search results" />
+        </FieldSheet>
+
+        {/* SEO description */}
+        <FieldSheet visible={openField === 'seoDescription'} title="SEO description" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).seoDescription ?? (activeData as any).seo?.seoDescription ?? ''} onChangeText={(t) => patchField('seoDescription', t)} multiline autoFocus placeholder="Search-result description" helper="The snippet shown under the title in search results" />
+        </FieldSheet>
+
+        {/* Photos — grid with cover, add, remove (the inline strip's full editor) */}
+        <FieldSheet visible={openField === 'photos'} title="Photos" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+            {(images || []).filter((u): u is string => typeof u === 'string' && u.trim().length > 0).map((uri, i, arr) => (
+              <View key={`${uri}-${i}`} style={{ position: 'relative' }}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    if (i <= 0) return;
+                    const next = arr.slice();
+                    const [chosen] = next.splice(i, 1);
+                    next.unshift(chosen);
+                    onChangeImages?.(next);
+                  }}
+                >
+                  <Image source={{ uri }} style={{ width: 100, height: 100, borderRadius: 14, borderWidth: i === 0 ? 2 : 1, borderColor: i === 0 ? BRAND_PRIMARY : '#E5E7EB' }} />
+                  {i === 0 && (
+                    <View style={{ position: 'absolute', bottom: 6, left: 6, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Icon name="star" size={11} color="#fff" />
+                      <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>Cover</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => onChangeImages?.(arr.filter((_, idx) => idx !== i))}
+                  style={{ position: 'absolute', top: -7, right: -7, width: 24, height: 24, borderRadius: 12, backgroundColor: '#EF4444', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Icon name="close" size={12} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={{ width: 100, height: 100, borderRadius: 14, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', backgroundColor: '#F9FAFB', alignItems: 'center', justifyContent: 'center' }}
+              onPress={() => onOpenImageCapture?.((uris) => {
+                const cur = (images || []).filter((u): u is string => typeof u === 'string' && u.trim().length > 0);
+                if (uris && uris.length > 0) onChangeImages?.([...cur, ...uris]);
+              })}
+            >
+              <Icon name="plus" size={24} color="#9CA3AF" />
+              <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 4, fontWeight: '600' }}>Add</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={[rowStyles.sheetFootnote, { marginTop: 14 }]}>
+            <Icon name="information-outline" size={14} color={CHAT_COLORS.dim} />
+            <Text style={rowStyles.sheetFootnoteText}>Tap a photo to make it the cover · ✕ to remove</Text>
+          </View>
+
+          {/* Per-size cover photos (data model is one cover image per variant) */}
+          {supportsVariants && Array.isArray((activeData as any).variants) && (activeData as any).variants.length > 0 && (() => {
+            const useForAll = (activeData as any).useImagesForAllVariants !== false;
+            const vlist = (activeData as any).variants as any[];
+            return (
+              <View style={{ marginTop: 20 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 15, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.ink, flex: 1 }}>Use these photos for all sizes</Text>
+                  <TouchableOpacity
+                    onPress={() => patchPlatform((prev) => ({ ...prev, useImagesForAllVariants: !useForAll }))}
+                    style={{ width: 46, height: 28, borderRadius: 999, padding: 3, backgroundColor: useForAll ? BRAND_PRIMARY : '#E5E7EB' }}
+                    activeOpacity={0.85}
+                  >
+                    <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', alignSelf: useForAll ? 'flex-end' : 'flex-start' }} />
+                  </TouchableOpacity>
+                </View>
+                {!useForAll && (
+                  <View style={{ marginTop: 16, gap: 12 }}>
+                    <Text style={rowStyles.sectionLabel}>Cover photo per size</Text>
+                    {vlist.map((v: any) => {
+                      const vName = Object.values(v.optionValues || {}).join(' / ') || v.sku || 'Variant';
+                      const vImg = v.image || (images || []).filter(Boolean)[0];
+                      return (
+                        <View key={v.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                          {vImg ? (
+                            <Image source={{ uri: vImg }} style={{ width: 52, height: 52, borderRadius: 10 }} />
+                          ) : (
+                            <View style={{ width: 52, height: 52, borderRadius: 10, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+                              <Icon name="image-outline" size={20} color="#C4C8CE" />
+                            </View>
+                          )}
+                          <Text style={{ flex: 1, fontSize: 15, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.ink }} numberOfLines={1}>{vName}</Text>
+                          <TouchableOpacity
+                            onPress={() => onOpenImageCapture?.((uris) => {
+                              const u = uris && uris[0];
+                              if (u) patchPlatform((prev) => ({ ...prev, variants: (prev.variants || []).map((x: any) => x.id === v.id ? { ...x, image: u } : x) }));
+                            })}
+                            style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: '#E5E7EB' }}
+                          >
+                            <Text style={{ fontSize: 13, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.inkSoft }}>Change</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            );
+          })()}
+        </FieldSheet>
+
+        {/* Generic additional platform field (status, seoDescription, etc.) */}
+        {!!openField && openField.startsWith('extra:') && (() => {
+          const key = openField.slice(6);
+          return (
+            <FieldSheet visible title={humanizeKey(key)} badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+              <SheetTextField value={String((activeData as any)[key] ?? '')} onChangeText={(t) => patchPlatform((prev) => ({ ...prev, [key]: t }))} autoFocus placeholder="Value" scope={scopeText} />
+            </FieldSheet>
+          );
+        })()}
+      </>
+    );
+  };
+
   return (
     <View style={{ paddingBottom: bottomSafePadding }}>
       {/* Media — drag to reorder, tap to set cover, ✕ to remove */}
@@ -1669,370 +2371,710 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </TouchableOpacity>
         </View>
       )}
-      {/* Core fields (optimized for conversion) */}
-      <View style={{ paddingTop: 18, gap: 9 }}>
-        <View onLayout={recordFieldLayout('title')} style={highlightedField === 'title' ? { borderRadius: 8, borderWidth: 2, borderColor: '#ef4444', backgroundColor: '#FEF2F2', padding: 2 } : undefined}>
-          <Field
-            label="Title"
-            required
-            value={activeData.title}
-            multiline
-            onChangeText={(t) => patchField('title', t)}
-            onInfo={() => onOpenFieldPanel?.('title')}
-            onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined}
-            refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('title')}
-            error={requiredFields?.includes?.('title') && !activeData.title}
-            externalUpdate={hasExternalUpdate('title')}
-          />
-        </View>
+      {/* Inventory summary (auto-decided per platform) */}
+      <View style={styles.darkerCard}>
+        <View style={{ marginVertical: 8, flexDirection: 'column', gap: 8 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={styles.sectionTitle}>Inventory{activeTab === 'all' ? ' (All Platforms)' : ''}</Text>
+            {/* DEBUG: Log LocationDropdown condition */}
+            {(() => {
+              log.debug(`[LocationDropdown DEBUG] activeTab=${activeTab}, selectedInventoryType=${selectedInventoryType}, shouldShow=${selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'}, locationsCount=${locations?.length}`);
+              return null;
+            })()}
+            {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
+            {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (() => {
+              // Filter locations to only show the active platform's locations
+              const rawPlatformLocs = platformLocations?.[activePlatformKey.toLowerCase()] || [];
+              const platformLocs = collapseSingleLocationLocs(activePlatformKey, rawPlatformLocs).map((loc: any) => ({
+                id: loc.id,
+                name: loc.name || 'Unknown Location',
+                platformType: activePlatformKey.toLowerCase()
+              }));
+              log.debug(`[LocationDropdown FILTERED] platform=${activePlatformKey}, count=${platformLocs.length}`);
+              if (platformLocs.length === 0) return null;
+              return (
+                <LocationDropdown
+                  locations={platformLocs}
+                  selectedId={selectedLocationId}
+                  onChange={(id) => {
+                    log.debug(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
+                    setSelectedLocationId(id);
+                  }}
+                />
+              );
+            })()}
+          </View>
 
-        <Field
-          label="Description"
-          value={activeData.description}
-          multiline
-          onChangeText={(t) => patchField('description', t)}
-          onInfo={() => onOpenFieldPanel?.('description')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('description')}
-          externalUpdate={hasExternalUpdate('description')}
-        />
+          {/* PRICE · ALL CHANNELS — the canonical price + Change all (opens the Price sheet) */}
+          {(() => {
+            const pv = (activeData as any).price;
+            const priceText = pv != null && String(pv) !== '' ? `$${pv}` : 'Set a price';
+            return (
+              <TouchableOpacity style={styles.priceAllChannels} onPress={() => setOpenField('price')} activeOpacity={0.7}>
+                <View>
+                  <Text style={styles.priceAllChannelsLabel}>PRICE · ALL CHANNELS</Text>
+                  <Text style={styles.priceAllChannelsValue}>{priceText}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+                  <Text style={styles.priceAllChannelsChange}>Change all</Text>
+                  <ChevronRight size={16} color={CHAT_COLORS.dim} />
+                </View>
+              </TouchableOpacity>
+            );
+          })()}
 
-        <ChipsField
-          label="Tags"
-          valueArray={activeData.tags}
-          onChangeArray={(arr) => patchField('tags', arr)}
-          onInfo={() => onOpenFieldPanel?.('tags')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
-        />
-
-        {supportsTaxonomy && (
-          <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('category')}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={styles.fieldLabel}>Category{categoryRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-                {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
-                  <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
-                      {['llm', 'groq', 'tree', 'rerank'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              {!activeData.category && (
+          {/* Copy inventory from another platform */}
+          {activeTab !== 'all' && platformKeys.length > 1 && (
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              {/*
+              <Text style={{ color: '#71717A', fontSize: 12 }}>Copy from:</Text>
+              {platformKeys.filter(k => k !== activePlatformKey).map(platformKey => (
                 <TouchableOpacity
-                  onPress={() => suggestTaxonomy(true)}
-                  disabled={taxonomyLoading[activePlatformKeyLower]}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  key={platformKey}
+                  onPress={() => {
+                    const sourcePlatform = platforms[platformKey] as PlatformState;
+                    const sourceVariants = sourcePlatform?.variants || [];
+
+                    if (sourceVariants.length === 0) {
+                      alert(`No inventory data found on ${platformKey}`);
+                      return;
+                    }
+
+                    // Copy inventory from source platform to current platform
+                    patchPlatform(prev => {
+                      const currentVariants = prev.variants || [];
+                      const updatedVariants = currentVariants.map(variant => {
+                        // Find matching variant by name
+                        const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
+                        const sourceVariant = sourceVariants.find(sv =>
+                          Object.values(sv.optionValues || {}).join(' / ') === variantName
+                        );
+
+                        if (sourceVariant && sourceVariant.inventoryByLocation) {
+                          return {
+                            ...variant,
+                            inventoryByLocation: { ...sourceVariant.inventoryByLocation }
+                          };
+                        }
+                        return variant;
+                      });
+
+                      return { ...prev, variants: updatedVariants };
+                    });
+
+                    alert(`Copied inventory from ${platformKey} to ${activePlatformKey}`);
+                  }}
+                  style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F8F9FA' }}
                 >
-                  {taxonomyLoading[activePlatformKeyLower] ? (
-                    <ActivityIndicator size="small" color={BRAND_PRIMARY} />
-                  ) : (
-                    <Sparkles size={14} color={BRAND_PRIMARY} />
-                  )}
-                  <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>
-                    {taxonomyLoading[activePlatformKeyLower] ? 'Finding...' : 'Auto-Find'}
+                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#000' }}>
+                    {getPlatform(platformKey)?.label || platformKey}
                   </Text>
                 </TouchableOpacity>
-              )}
-            </View>
-
-            <AppDropdown
-              style={[styles.input, { height: 54, paddingHorizontal: 14, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
-              data={taxonomyDropdownData.slice(0, 12)}
-              maxHeight={280}
-              value={selectedCategoryId}
-              placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
-              search
-              searchPlaceholder="Type to search..."
-              onChangeText={(text: string) => {
-                setTaxonomyQueries(prev => ({ ...prev, [activePlatformKeyLower]: text }));
-              }}
-              renderItem={(item: TaxonomyOption) => (
-                <View style={{ paddingVertical: 10, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
-                    {item.score && item.score > 0.8 && (
-                      <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                        <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST MATCH</Text>
-                      </View>
-                    )}
-                  </View>
-                  {item.path && item.path !== item.label && (
-                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
-                  )}
-                </View>
-              )}
-              onChange={(item: any) => {
-                const path = item.path || item.label || item.value;
-                if (activePlatformKeyLower === 'shopify') {
-                  patchPlatform(prev => ({
-                    ...prev,
-                    productCategoryId: item.value,
-                    productCategory: path,
-                    categoryPath: path,
-                    taxonomyConfidence: item.score || 1.0, // Manual selection = 100% or source score
-                    taxonomySource: 'manual'
-                  }));
-                } else {
-                  patchPlatform(prev => ({
-                    ...prev,
-                    categoryId: item.value,
-                    category: path,
-                    categoryPath: path,
-                    taxonomyConfidence: item.score || 1.0,
-                    taxonomySource: 'manual'
-                  }));
-                }
-              }}
-            />
-
-            {taxonomyLoading[activePlatformKeyLower] && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                <ActivityIndicator size="small" color="#9CA3AF" />
-                <Text style={{ fontSize: 12, color: '#6B7280' }}>Analyzing product to find best category...</Text>
-              </View>
-            )}
-
-            {!taxonomyLoading[activePlatformKeyLower] && !selectedCategoryId && taxonomyDropdownData.length > 0 && (
-              <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Icon name="information-outline" size={14} color="#6B7280" />
-                <Text style={{ fontSize: 12, color: '#6B7280' }}>
-                  Use the search or tap "Auto-Find" to detect category.
+              ))} */}
+              {/* Pricing capability indicator moved here */}
+              <View style={{ marginLeft: 'auto', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, backgroundColor: activePlatformKey === 'shopify' ? '#E3F2FD' : '' }}>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: activePlatformKey === 'shopify' ? '#1976D2' : '' }}>
+                  {activePlatformKey === 'shopify' ? 'Global Price' : ''}
                 </Text>
               </View>
-            )}
-
-            {/* Selected category indicator removed - the dropdown already shows the current selection */}
-
-            {/* eBay Item Specifics - when category selected */}
-            {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
-              <View style={{ marginTop: 16 }}>
-                <Text style={styles.fieldLabel}>Item Specifics</Text>
-                {aspectsLoading ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 }}>
-                    <ActivityIndicator size="small" color="#9CA3AF" />
-                    <Text style={{ fontSize: 12, color: '#6B7280' }}>Loading required fields...</Text>
-                  </View>
-                ) : aspects.length > 0 ? (
-                  <View style={{ gap: 12 }}>
-                    {aspects.filter(a => a.isRequired).map((asp) => (
-                      <View key={asp.aspectName}>
-                        <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>{asp.aspectName} *</Text>
-                        {asp.allowedValues?.length > 0 ? (
-                          <AppDropdown
-                            style={[styles.input, { height: 44, paddingHorizontal: 10 }]}
-                            data={asp.allowedValues.map(v => ({ label: v, value: v }))}
-                            placeholder={`Select ${asp.aspectName}...`}
-                            value={(activeData.itemSpecifics || {})[asp.aspectName]}
-                            onChange={(item) => patchPlatform(prev => ({
-                              ...prev,
-                              itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: item.value },
-                            }))}
-                          />
-                        ) : (
-                          <TextInput
-                            style={[styles.input, { height: 44 }]}
-                            placeholder={`Enter ${asp.aspectName}...`}
-                            value={(activeData.itemSpecifics || {})[asp.aspectName] || ''}
-                            onChangeText={(t) => patchPlatform(prev => ({
-                              ...prev,
-                              itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: t },
-                            }))}
-                          />
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Suggested-price pills moved BELOW the price field and gated on focus — see below. */}
-
-        {/* Price field - custom row so Research Pricing sits on same line as label + (i) */}
-        {(() => {
-          const hasVariantsWithOptions = (activeData.options || []).length > 0 && (activeData.variants || []).length > 0;
-          const allVariantsHavePrice = hasVariantsWithOptions && (activeData.variants || []).every((v: any) =>
-            v.price != null && v.price !== '' && Number(v.price) > 0
-          );
-          const priceRequired = requiredFields?.includes?.('price') && !allVariantsHavePrice;
-          const priceError = priceRequired && ((activeData as any).price == null || String((activeData as any).price) === '' || Number((activeData as any).price) === 0);
-          const priceLabel = hasVariantsWithOptions ? 'Base Price (optional with variants)' : 'Price';
-          const showResearchPricing = !!titleForPricingResearch;
-
-          return (
-            <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('price (either flat or all variants)')}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
-                  <Text style={styles.fieldLabel}>{priceLabel}{priceRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-                  {hasExternalUpdate('price') ? (
-                    <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                      <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
-                    </View>
-                  ) : Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price') ? (
-                    <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                      <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
-                    </View>
-                  ) : null}
-                  {enableAIRefill && activeTab !== 'all' && (
-                    <TouchableOpacity onPress={() => onRegenerateField?.(activePlatformKey, 'price')} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-                      <Sparkles size={14} color={'#000'} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {showResearchPricing && (
-                    <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={14} color={BRAND_PRIMARY} />}
-                      <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
-                    </TouchableOpacity>
-                  )}
-                  {onOpenFieldPanel && (
-                    <TouchableOpacity onPress={() => onOpenFieldPanel('price')}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
-                  )}
-                </View>
-              </View>
-              <TextInput
-                style={[
-                  styles.input,
-                  priceError ? { borderColor: '#ef4444' } : null,
-                  hasExternalUpdate('price') ? { borderColor: BRAND_PRIMARY, borderWidth: 2 } : null,
-                  highlightedField === 'price (either flat or all variants)' ? { borderColor: '#ef4444', borderWidth: 2, backgroundColor: '#FEF2F2' } : null
-                ]}
-                value={String((activeData as any).price ?? '')}
-                onChangeText={(t) => patchField('price', t)}
-                onFocus={() => setPriceFocused(true)}
-                onBlur={() => setTimeout(() => setPriceFocused(false), 200)}
-                placeholder=""
-                placeholderTextColor="#999999"
-                keyboardType="decimal-pad"
-              />
-
-              {/* Suggested-price pills — only while the price field is focused. */}
-              {priceFocused && (() => {
-                const apr = (activeData as any).aiPriceRecommendation;
-                const legacy = (activeData as any).aiRecommendedPrice;
-                const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
-                  ? { low: apr.low, recommended: apr.recommended, high: apr.high }
-                  : (typeof legacy === 'number' && legacy > 0
-                    ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
-                    : null);
-                const currentPrice = Number((activeData as any).price) || 0;
-                if (!band || band.recommended <= 0) {
-                  return showResearchPricing ? (
-                    <Text style={styles.priceHint}>Tap “Research Pricing” above for sold comps & a suggested range.</Text>
-                  ) : null;
-                }
-                const applyPrice = (p: number) => patchField('price', String(p.toFixed(2)));
-                const opts = [
-                  { label: 'Fast sale', price: band.low },
-                  { label: 'Recommended', price: band.recommended, hi: true },
-                  { label: 'Max profit', price: band.high },
-                ];
-                return (
-                  <View style={styles.suggestRow}>
-                    {opts.map((o) => {
-                      const sel = Math.abs(currentPrice - o.price) < 0.02;
-                      return (
-                        <TouchableOpacity
-                          key={o.label}
-                          style={[styles.suggestChip, (sel || o.hi) && styles.suggestChipHi]}
-                          activeOpacity={0.8}
-                          onPress={() => applyPrice(o.price)}
-                        >
-                          <Text style={styles.suggestChipLabel}>{o.label}</Text>
-                          <Text style={styles.suggestChipPrice}>${o.price.toFixed(2)}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                );
-              })()}
             </View>
-          );
-        })()}
-
-        <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-end', }}>
-          <View style={{ flex: 1 }}>
-            <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
-          </View>
-          <View style={{ width: 140, marginBottom: 12 }}>
-            <AppMenuSelect
-              options={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
-              placeholder="oz"
-              value={activeData.weightUnit || 'oz'}
-              onChange={(value) => patchField('weightUnit', value)}
-              menuWidth={160}
-            />
-          </View>
-        </View>
-
-        <View onLayout={recordFieldLayout('sku')} style={highlightedField === 'sku' ? { borderRadius: 8, borderWidth: 2, borderColor: '#ef4444', backgroundColor: '#FEF2F2', padding: 2 } : undefined}>
-          <Field
-            label="SKU"
-            required
-            value={activeData.sku}
-            onChangeText={(t) => patchField('sku', t)}
-            onInfo={() => onOpenFieldPanel?.('sku')}
-            onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
-            refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
-            error={requiredFields?.includes?.('sku') && !activeData.sku}
-            externalUpdate={hasExternalUpdate('sku')}
-          />
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={{ flex: 1 }}>
-            <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} externalUpdate={hasExternalUpdate('barcode')} />
-          </View>
-          <TouchableOpacity style={[styles.scanBtn, {}]} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
-            <Icon name="qrcode-scan" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Condition - eBay uses category-specific conditions; others use generic */}
-        <View style={{ marginBottom: 16 }}>
-          <Text style={styles.fieldLabel}>Condition</Text>
-          {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
-            <AppMenuSelect
-              options={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
-              placeholder={ebayConditionsLoading ? "Loading conditions..." : "Select condition..."}
-              value={activeData.conditionID ? String(activeData.conditionID) : (ebayConditions[0]?.conditionId ?? '')}
-              onChange={(value) => {
-                const condId = parseInt(value, 10);
-                const generic = mapEbayConditionIdToGeneric(value) as PlatformState['condition'];
-                patchPlatform(prev => ({
-                  ...prev,
-                  conditionID: Number.isFinite(condId) ? condId : undefined,
-                  condition: generic,
-                }));
-              }}
-            />
-          ) : (
-            <AppMenuSelect
-              options={[
-                { label: 'New', value: 'new' },
-                { label: 'Like New', value: 'like_new' },
-                { label: 'Good', value: 'good' },
-                { label: 'Fair', value: 'fair' },
-                { label: 'Used', value: 'used' },
-                { label: 'Refurbished', value: 'refurbished' },
-                { label: 'For Parts', value: 'for_parts' },
-              ]}
-              placeholder="Select condition..."
-              value={activeData.condition || 'good'}
-              onChange={(value) => patchField('condition', value)}
-            />
           )}
         </View>
 
-      </View>
+        {(() => {
+          log.debug('[Inventory Render] supportsVariants:', supportsVariants, 'variants count:', (activeData.variants || []).length);
+          return null;
+        })()}
+        {supportsVariants ? (
+          <>
+            {/* Suggested Price Tag - Apply to All */}
+            {activeTab === 'all' && (() => {
+              // Get suggested price from any platform: prefer aiPriceRecommendation.recommended, else aiRecommendedPrice
+              const suggestedPrice = (() => {
+                for (const pk of platformKeys) {
+                  const pd = platforms[pk] as PlatformState;
+                  if (pd?.aiPriceRecommendation?.recommended) return pd.aiPriceRecommendation!.recommended;
+                  if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
+                }
+                return null;
+              })();
 
-      {/* Pricing Research Modal - stocks-style with chart, sources, accuracy */}
-      <Modal visible={pricingResearchModalVisible} transparent animationType="slide">
+              // Function to apply suggested price to ALL variants across ALL platforms
+              const applySuggestedPriceToAll = () => {
+                if (!suggestedPrice) return;
+                const nextPlatforms = { ...platforms };
+                for (const pk of platformKeys) {
+                  const pd = nextPlatforms[pk] || {};
+                  const isShopify = pk === 'shopify';
+                  const newVariants = (pd.variants || []).map((v: any) => {
+                    if (isShopify) {
+                      // Shopify: set variant.price (global)
+                      return { ...v, price: suggestedPrice };
+                    } else {
+                      // Square/Clover: set price in all inventoryByLocation entries
+                      const updatedInv = { ...(v.inventoryByLocation || {}) };
+                      Object.keys(updatedInv).forEach(locId => {
+                        updatedInv[locId] = { ...updatedInv[locId], price: suggestedPrice };
+                      });
+                      return { ...v, price: suggestedPrice, inventoryByLocation: updatedInv };
+                    }
+                  });
+                  nextPlatforms[pk] = { ...pd, price: suggestedPrice, variants: newVariants };
+                }
+                onChangePlatforms(nextPlatforms);
+              };
+
+              return suggestedPrice ? (
+                <TouchableOpacity
+                  onPress={applySuggestedPriceToAll}
+                  style={{ backgroundColor: '#FFF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#rgb(201, 204, 210)', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                >
+                  <Sparkles size={18} color="#000" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#000' }}>Our Suggested Price</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#6B7280' }}>${suggestedPrice.toFixed(2)}</Text>
+                  </View>
+                  <View style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null;
+            })()}
+
+            {/* Use VariantInventoryEditor for both "All" and Specific Platform tabs */}
+            {(() => {
+              // 1. Build locations list based on active tab
+              let allLocs: Array<{ id: string; locationId?: string; name: string; platformKey: string; connectionId?: string; connectionName?: string; isGlobal?: boolean }>;
+
+              if (activeTab === 'all') {
+                // All tab: show all locations from all platforms
+                // Match the logic for NON-VARIANT case:
+                // 1. Start with explicit locations from platformLocations
+                const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
+                  (locs || []).map((l: any) => {
+                    const locationId = l.locationId || l.id;
+                    return {
+                      ...l,
+                      id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
+                      locationId,
+                      platformKey: pk,
+                      isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
+                    };
+                  })
+                );
+
+                // 2. ROBUSTNESS FIX: Only add virtual default for platforms that have at least one location in platformLocations (i.e. actually connected). Do not add a row for unconnected platforms (e.g. Shopify from platformSpecificData only).
+                const platformsWithLocs = Object.keys(platforms).filter((pk) => (platformLocations || {})[pk]?.length > 0);
+                platformsWithLocs.forEach(pk => {
+                  const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
+                  if (!hasLocation) {
+                    const locationId = `default-${pk}`;
+                    allLocsRaw.push({
+                      id: buildAllTabLocationId({ platformKey: pk, connectionId: undefined, locationId }),
+                      locationId,
+                      name: 'Default Location',
+                      platformKey: pk,
+                      isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
+                    });
+                    log.debug(`[ListingEditorForm] Auto-added virtual location for missing platform: ${pk}`);
+                  }
+                });
+
+                const locsByPlatform = allLocsRaw.reduce<Record<string, Array<{ id: string; name: string; platformKey: string; isGlobal?: boolean }>>>((acc, loc) => {
+                  if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
+                  acc[loc.platformKey].push(loc);
+                  return acc;
+                }, {});
+
+                const collapsedAllLocsRaw = Object.entries(locsByPlatform).flatMap(([pk, locs]) =>
+                  collapseSingleLocationLocs(pk, locs)
+                );
+
+                // Filter to unique location IDs - keep first occurrence
+                const seenIds = new Set<string>();
+                allLocs = collapsedAllLocsRaw.filter(loc => {
+                  if (seenIds.has(loc.id)) {
+                    log.warn(`[ListingEditorForm] Filtered duplicate location: ${loc.id} (${loc.name})`);
+                    return false;
+                  }
+                  seenIds.add(loc.id);
+                  return true;
+                });
+              } else {
+                // Platform tab: filter to only this platform's locations
+                const platformKey = activeTab.toLowerCase();
+                const rawPlatformLocs = platformLocations?.[platformKey] || [];
+                const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
+                  ...l,
+                  locationId: l.locationId || l.id
+                }));
+
+                // If dropdown is active (LOCATION_VARIANT_WITH_OPTIONS) and a location is selected,
+                // filter to just that location
+                if (selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && selectedLocationId) {
+                  const selectedLoc = platformLocs.find((l: any) => l.id === selectedLocationId);
+                  allLocs = selectedLoc
+                    ? [{
+                      id: selectedLoc.id,
+                      locationId: selectedLoc.locationId || selectedLoc.id,
+                      name: selectedLoc.name || 'Unknown',
+                      platformKey,
+                      connectionId: selectedLoc.connectionId,
+                      isGlobal: isShopifyGlobalLocation({ id: selectedLoc.id, name: selectedLoc.name, platformKey })
+                    }]
+                    : platformLocs.map((l: any) => ({
+                      ...l,
+                      platformKey,
+                      isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
+                    }));
+                } else {
+                  allLocs = platformLocs.map((l: any) => ({
+                    ...l,
+                    platformKey,
+                    isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
+                  }));
+                }
+              }
+
+              log.debug(`[VariantInventoryEditor LOCS] activeTab=${activeTab}, selectedLocId=${selectedLocationId}, locsCount=${allLocs.length}`);
+
+              // 2. Prepare Variants based on Active Tab
+              let preparedVariants: VariantInventoryEditorProps['variants'] = [];
+
+              if (activeTab === 'all') {
+                const locsByPlatform = allLocs.reduce<Record<string, Array<{ id: string; locationId?: string; connectionId?: string }>>>((acc, loc) => {
+                  if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
+                  acc[loc.platformKey].push(loc);
+                  return acc;
+                }, {});
+
+                const locKeyMaps = Object.entries(locsByPlatform).reduce<Record<string, Map<string, string>>>((acc, [pk, locs]) => {
+                  const map = new Map<string, string>();
+                  locs.forEach(loc => {
+                    const rawId = loc.locationId || loc.id;
+                    const connId = loc.connectionId || '';
+                    map.set(`${rawId}::${connId}`, loc.id);
+                    if (!map.has(`${rawId}::`)) map.set(`${rawId}::`, loc.id);
+                  });
+                  acc[pk] = map;
+                  return acc;
+                }, {});
+
+                // Aggregate variants from all platforms
+                const variantMap = new Map<string, any>();
+
+                platformKeys.forEach(pk => {
+                  const pData = platforms[pk];
+                  if (!pData || !pData.variants) return;
+
+                  pData.variants.forEach((v: any) => {
+                    // FIX: Use optionValues as the unique key to properly merge variants across platforms
+                    // Using v.id causes duplicates when each platform has different IDs for same variant
+                    const optionKey = Object.entries(v.optionValues || {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, val]) => `${k}:${val}`).join('/') || v.sku || 'default';
+                    const vId = optionKey;
+                    const existing = variantMap.get(vId);
+
+                    log.debug(`[ListingEditorForm] Aggregating variant: platform=${pk}, optionKey=${optionKey}, existingEntry=${!!existing}`);
+
+                    const inv: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }> = existing ? { ...existing.inventory } : {};
+                    const platformPrice = typeof v.price === 'number' ? v.price : undefined;
+
+                    // Add this platform's inventory data
+                    const vInv = v.inventoryByLocation || {};
+                    const locKeyMap = locKeyMaps[pk] || new Map<string, string>();
+                    const priceByConnection = new Map<string, number>();
+
+                    Object.entries(vInv).forEach(([locId, data]: [string, any]) => {
+                      const connId = data?.connectionId;
+                      if (connId && typeof data?.price === 'number' && !priceByConnection.has(connId)) {
+                        priceByConnection.set(connId, data.price);
+                      }
+                      const compositeId = locKeyMap.get(`${locId}::${connId || ''}`) || locKeyMap.get(`${locId}::`) || locId;
+                      inv[compositeId] = {
+                        quantity: data.quantity,
+                        price: data.price ?? platformPrice,
+                        image: data.image,
+                        connectionId: connId
+                      };
+                    });
+
+                    // Ensure every location for this platform has a price fallback from this platform
+                    const platformLocs = locsByPlatform[pk] || [];
+                    platformLocs.forEach((loc) => {
+                      const fallbackPrice = loc.connectionId && priceByConnection.has(loc.connectionId)
+                        ? priceByConnection.get(loc.connectionId)
+                        : platformPrice;
+
+                      if (!inv[loc.id]) {
+                        inv[loc.id] = { quantity: 0, price: fallbackPrice, connectionId: loc.connectionId };
+                      } else if (inv[loc.id].price === undefined && fallbackPrice !== undefined) {
+                        inv[loc.id] = { ...inv[loc.id], price: fallbackPrice };
+                      }
+                    });
+
+                    variantMap.set(vId, {
+                      id: vId,
+                      name: Object.values(v.optionValues || {}).join(' / ') || v.title || v.sku || 'Variant',
+                      image: v.image || existing?.image,
+                      defaultPrice: v.price || existing?.defaultPrice,
+                      inventory: inv
+                    });
+                  });
+                });
+                preparedVariants = Array.from(variantMap.values());
+
+                // CRITICAL FIX: Filter out empty "Variant" placeholders when real named variants exist
+                // This handles the case where a base variant with no optionValues is mixed with option variants
+                const hasRealVariants = preparedVariants.some(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                if (hasRealVariants) {
+                  preparedVariants = preparedVariants.filter(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                }
+
+              } else {
+                // Specific Platform
+                const pData = activeData; // activeData is platforms[activeTab]
+                if (pData && pData.variants) {
+                  preparedVariants = pData.variants.map((v: any) => ({
+                    id: v.id,
+                    name: Object.values(v.optionValues || {}).join(' / ') || v.title || v.sku || 'Variant',
+                    image: v.image,
+                    defaultPrice: Number(v.price ?? pData.price ?? 0),
+                    inventory: v.inventoryByLocation || {}
+                  }));
+
+                  // CRITICAL FIX: Filter out empty "Variant" placeholders when real named variants exist
+                  const hasRealVariants = preparedVariants.some(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                  if (hasRealVariants) {
+                    preparedVariants = preparedVariants.filter(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
+                  }
+                }
+              }
+
+              // CRITICAL FIX: If no variants exist, create a virtual "Base Product" variant
+              // This ensures ALL products (variant or not) show per-platform/location inventory
+              if (preparedVariants.length === 0) {
+                const baseVariant: VariantInventoryEditorProps['variants'][0] = {
+                  id: '_base',
+                  name: 'Base Product',
+                  defaultPrice: toPrice(activeData.price),
+                  inventory: {},
+                };
+
+                // Populate inventory from locationQuantities (non-variant data)
+                allLocs.forEach(loc => {
+                  const rawLocationId = loc.locationId || loc.id;
+                  const qty = (activeData.locationQuantities || {})[rawLocationId] ?? 0;
+                  baseVariant.inventory[loc.id] = {
+                    quantity: qty,
+                    price: toPrice(activeData.price),
+                  };
+                });
+
+                // Fallback if no locations
+                if (allLocs.length === 0) {
+                  const defaultQty = (activeData.locationQuantities || {})['default'] ?? 0;
+                  baseVariant.inventory['default'] = {
+                    quantity: defaultQty,
+                    price: toPrice(activeData.price),
+                  };
+                }
+
+                preparedVariants = [baseVariant];
+                log.debug('[ListingEditorForm] Injected Base Product variant for non-variant product');
+              }
+
+              // 3. Callback - per-location pricing for non-Shopify, global for Shopify
+              const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+                if (field === 'price') value = toPrice(value); // never let a NaN price enter platform data
+                const resolvedLoc = allLocs.find(l => l.id === locationId);
+                const rawLocationId = resolvedLoc?.locationId || locationId;
+                const resolvedConnectionId = resolvedLoc?.connectionId;
+
+                // HANDLE BASE PRODUCT (non-variant product)
+                if (variantId === '_base') {
+                  if (field === 'quantity') {
+                    // Store per-location quantity in locationQuantities
+                    setLocationQuantity(rawLocationId, value);
+                  } else if (field === 'price') {
+                    // Price changes update the base product price for this platform
+                    patchPlatform(prev => ({ ...prev, price: value }));
+                  }
+                  return;
+                }
+
+                const nextPlatforms = { ...platforms };
+
+                let targetPlatform = activeTab;
+                if (activeTab === 'all') {
+                  if (resolvedLoc) targetPlatform = resolvedLoc.platformKey;
+                }
+
+                // If the seller edits inventory for an enabled platform that has no data yet
+                // (e.g. Amazon enabled but never hydrated), seed it from the canonical platform
+                // so the edit actually applies instead of being silently dropped.
+                let pData = nextPlatforms[targetPlatform];
+                if (!pData) {
+                  const src: any = nextPlatforms[canonicalKey] || activeData || {};
+                  pData = { ...src };
+                  nextPlatforms[targetPlatform] = pData;
+                }
+
+                const isShopify = targetPlatform === 'shopify';
+                const targetLoc = resolvedLoc && resolvedLoc.platformKey === targetPlatform ? resolvedLoc : allLocs.find(l => l.id === locationId && l.platformKey === targetPlatform);
+                const isShopifyGlobal = isShopify && (targetLoc?.isGlobal || isShopifyGlobalLocation({ id: rawLocationId, name: targetLoc?.name, platformKey: targetPlatform }));
+
+                // Helper to compute optionKey for a variant (used for matching in 'all' tab)
+                const getOptionKey = (v: any) => Object.entries(v.optionValues || {})
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([k, val]) => `${k}:${val}`)
+                  .join('/') || v.sku || 'default';
+
+                // Update the target platform
+                const newVariants = (pData.variants || []).map((v: any) => {
+                  // CRITICAL FIX: In 'all' tab, variantId is an optionKey (e.g. 'State:Broken')
+                  // In platform tabs, variantId is the actual variant ID
+                  const matchesById = v.id === variantId;
+                  const matchesByOptionKey = activeTab === 'all' && getOptionKey(v) === variantId;
+
+                  if (matchesById || matchesByOptionKey) {
+                    log.debug(`[handleUpdateInventory] ✅ Matched variant: id=${v.id.slice(0, 8)}, optionKey=${getOptionKey(v)}, variantId=${variantId}, field=${field}, value=${value}, isShopify=${isShopify}`);
+
+                    if (field === 'price') {
+                      if (isShopify && isShopifyGlobal) {
+                        // Shopify: GLOBAL price - update ALL SHOPIFY locations for this connection
+                        const updatedInv = { ...(v.inventoryByLocation || {}) };
+                        // Get ALL Shopify location IDs for the SAME connection (avoid cross-account bleed)
+                        const shopifyLocs = allLocs.filter(l =>
+                          l.platformKey === 'shopify' && (!resolvedConnectionId || l.connectionId === resolvedConnectionId)
+                        );
+
+                        // Apply price to ALL Shopify locations, creating entries if they don't exist
+                        shopifyLocs.forEach(loc => {
+                          const locId = loc.locationId || loc.id;
+                          updatedInv[locId] = {
+                            ...(updatedInv[locId] || {}),
+                            connectionId: loc.connectionId ?? (updatedInv[locId] as any)?.connectionId,
+                            price: value
+                          };
+                        });
+
+                        log.debug(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocs.length} locations`);
+                        log.debug(`[ListingEditorForm] Updated inventoryByLocation prices:`, Object.entries(updatedInv).map(([k, v]: [string, any]) => `${k}=$${v.price}`).join(', '));
+                        return {
+                          ...v,
+                          price: value,
+                          inventoryByLocation: updatedInv
+                        };
+                      } else {
+                        // Per-location price - only update THIS location
+                        const oldInv = v.inventoryByLocation || {};
+                        const oldLocData = oldInv[rawLocationId] || {};
+                        return {
+                          ...v,
+                          inventoryByLocation: {
+                            ...oldInv,
+                            [rawLocationId]: {
+                              ...oldLocData,
+                              connectionId: oldLocData.connectionId ?? resolvedConnectionId,
+                              price: value
+                            }
+                          }
+                        };
+                      }
+                    }
+
+                    // For quantity, only update the specific location (same for all platforms)
+                    const oldInv = v.inventoryByLocation || {};
+                    const oldLocData = oldInv[rawLocationId] || {};
+
+                    return {
+                      ...v,
+                      inventoryByLocation: {
+                        ...oldInv,
+                        [rawLocationId]: {
+                          ...oldLocData,
+                          connectionId: oldLocData.connectionId ?? resolvedConnectionId,
+                          [field]: value
+                        }
+                      }
+                    };
+                  }
+                  return v;
+                });
+
+                nextPlatforms[targetPlatform] = { ...pData, variants: newVariants };
+
+                // NOTE: Removed cross-platform price sync - prices are now independent per platform
+                // Each platform manages its own pricing (Shopify=global, others=per-location)
+
+                onChangePlatforms(nextPlatforms);
+              };
+
+              const handleSelectImage = (variantId: string) => {
+                onOpenImageCapture?.(async (uris) => {
+                  if (!uris || uris.length === 0) return;
+
+                  const uri = uris[0];
+                  const nextPlatforms = { ...platforms };
+
+                  platformKeys.forEach(pk => {
+                    const pd = nextPlatforms[pk];
+                    if (pd && pd.variants) {
+                      pd.variants = pd.variants.map((v: any) =>
+                        v.id === variantId ? { ...v, image: uri } : v
+                      );
+                    }
+                  });
+                  onChangePlatforms(nextPlatforms);
+                });
+              };
+
+              return (
+                <VariantInventoryEditor
+                  variants={preparedVariants}
+                  locations={allLocs}
+                  activeTab={activeTab === 'all' ? 'all' : activeTab}
+                  isGenerationMode={true} // This is the GenerateDetailsScreen context
+                  onUpdateInventory={handleUpdateInventory}
+                  onSelectImage={handleSelectImage}
+                  hasExternalUpdateQuantity={hasExternalInventoryUpdateQuantity}
+                  hasExternalUpdatePrice={hasExternalInventoryUpdatePrice}
+                />
+              );
+            })()}
+          </>
+        ) : (
+          /* NON-VARIANT PRODUCT: Use VariantInventoryEditor with a virtual "Base Product" variant
+           * This ensures all products (variant or not) have per-platform/location inventory fields
+           */
+          (() => {
+            // Build locations list (same logic as variant case)
+            let allLocs: Array<{ id: string; locationId?: string; name: string; platformKey: string; connectionId?: string; connectionName?: string; isGlobal?: boolean }>;
+
+            if (activeTab === 'all') {
+              // All tab: show all locations from all platforms
+              const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
+                (locs || []).map((l: any) => {
+                  const locationId = l.locationId || l.id;
+                  return {
+                    ...l,
+                    id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
+                    locationId,
+                    platformKey: pk,
+                    isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
+                  };
+                })
+              );
+
+              // ROBUSTNESS FIX: Ensure every active platform has at least one location
+              Object.keys(platforms).forEach(pk => {
+                const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
+                if (!hasLocation) {
+                  const locationId = `default-${pk}`;
+                  allLocsRaw.push({
+                    id: buildAllTabLocationId({ platformKey: pk, connectionId: undefined, locationId }),
+                    locationId,
+                    name: 'Default Location',
+                    platformKey: pk,
+                    isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
+                  });
+                }
+              });
+
+              const locsByPlatform = allLocsRaw.reduce<Record<string, Array<{ id: string; name: string; platformKey: string; isGlobal?: boolean; locationId?: string }>>>((acc, loc) => {
+                if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
+                acc[loc.platformKey].push(loc);
+                return acc;
+              }, {});
+
+              const collapsedAllLocsRaw = Object.entries(locsByPlatform).flatMap(([pk, locs]) =>
+                collapseSingleLocationLocs(pk, locs)
+              );
+
+              const seenIds = new Set<string>();
+              allLocs = collapsedAllLocsRaw.filter(loc => {
+                if (seenIds.has(loc.id)) return false;
+                seenIds.add(loc.id);
+                return true;
+              });
+            } else {
+              // Platform tab: filter to only this platform's locations
+              const platformKey = activeTab.toLowerCase();
+              const rawPlatformLocs = platformLocations?.[platformKey] || [];
+              const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
+                ...l,
+                locationId: l.locationId || l.id
+              }));
+              allLocs = platformLocs.map((l: any) => ({
+                ...l,
+                platformKey,
+                isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
+              }));
+            }
+
+            // Create virtual "Base Product" variant with locationQuantities data
+            const baseVariant = {
+              id: '_base',
+              name: 'Base Product',
+              defaultPrice: toPrice(activeData.price),
+              inventory: {} as Record<string, { quantity: number; price?: number }>,
+            };
+
+            // Populate inventory from locationQuantities (per-location) or use base price
+            allLocs.forEach(loc => {
+              const rawLocationId = (loc as any).locationId || loc.id;
+              const qty = (activeData.locationQuantities || {})[rawLocationId] ?? 0;
+              baseVariant.inventory[loc.id] = {
+                quantity: qty,
+                price: toPrice(activeData.price),
+              };
+            });
+
+            // If no locations exist yet, create a default inventory entry
+            if (allLocs.length === 0 && activeTab !== 'all') {
+              const qty = (activeData.locationQuantities || {})['default'] ?? 0;
+              baseVariant.inventory['default'] = {
+                quantity: qty,
+                price: toPrice(activeData.price),
+              };
+            }
+
+            const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+              const resolvedLoc = allLocs.find(l => l.id === locationId);
+              const rawLocationId = resolvedLoc?.locationId || locationId;
+              if (field === 'quantity') {
+                // Store per-location quantity in locationQuantities
+                setLocationQuantity(rawLocationId, value);
+              } else if (field === 'price') {
+                // Price changes update the base product price
+                patchPlatform(prev => ({ ...prev, price: value }));
+              }
+            };
+
+            return (
+              <VariantInventoryEditor
+                variants={[baseVariant]}
+                activeTab={activeTab}
+                locations={allLocs.length > 0 ? allLocs : [{ id: 'default', name: 'Default', platformKey: activeTab }]}
+                isGenerationMode={isGenerationMode}
+                onUpdateInventory={handleBaseInventoryUpdate}
+                hasExternalUpdateQuantity={hasExternalInventoryUpdateQuantity}
+                hasExternalUpdatePrice={hasExternalInventoryUpdatePrice}
+              />
+            );
+          })()
+        )}
+
+
+
+      </View>
+      {/* Details — clickable rows; each opens its focused field sheet */}
+      {renderDetailsCard()}
+      {renderFieldSheets()}
+
+      {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
+          Suppressed while the Price sheet is open — that sheet inlines the same card. */}
+      <Modal visible={pricingResearchModalVisible && openField !== 'price'} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
           <Pressable style={{ backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingTop: 20, paddingBottom: 12 }}>
@@ -2425,746 +3467,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </View>
       </BaseModal>
 
-      {/* Inventory summary (auto-decided per platform) */}
-      <View style={styles.darkerCard}>
-        <View style={{ marginVertical: 8, flexDirection: 'column', gap: 8 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text style={styles.sectionTitle}>Inventory{activeTab === 'all' ? ' (All Platforms)' : ''}</Text>
-            {/* DEBUG: Log LocationDropdown condition */}
-            {(() => {
-              log.debug(`[LocationDropdown DEBUG] activeTab=${activeTab}, selectedInventoryType=${selectedInventoryType}, shouldShow=${selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'}, locationsCount=${locations?.length}`);
-              return null;
-            })()}
-            {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
-            {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (() => {
-              // Filter locations to only show the active platform's locations
-              const rawPlatformLocs = platformLocations?.[activePlatformKey.toLowerCase()] || [];
-              const platformLocs = collapseSingleLocationLocs(activePlatformKey, rawPlatformLocs).map((loc: any) => ({
-                id: loc.id,
-                name: loc.name || 'Unknown Location',
-                platformType: activePlatformKey.toLowerCase()
-              }));
-              log.debug(`[LocationDropdown FILTERED] platform=${activePlatformKey}, count=${platformLocs.length}`);
-              if (platformLocs.length === 0) return null;
-              return (
-                <LocationDropdown
-                  locations={platformLocs}
-                  selectedId={selectedLocationId}
-                  onChange={(id) => {
-                    log.debug(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
-                    setSelectedLocationId(id);
-                  }}
-                />
-              );
-            })()}
-          </View>
-
-          {/* Copy inventory from another platform */}
-          {activeTab !== 'all' && platformKeys.length > 1 && (
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-              {/*
-              <Text style={{ color: '#71717A', fontSize: 12 }}>Copy from:</Text>
-              {platformKeys.filter(k => k !== activePlatformKey).map(platformKey => (
-                <TouchableOpacity
-                  key={platformKey}
-                  onPress={() => {
-                    const sourcePlatform = platforms[platformKey] as PlatformState;
-                    const sourceVariants = sourcePlatform?.variants || [];
-
-                    if (sourceVariants.length === 0) {
-                      alert(`No inventory data found on ${platformKey}`);
-                      return;
-                    }
-
-                    // Copy inventory from source platform to current platform
-                    patchPlatform(prev => {
-                      const currentVariants = prev.variants || [];
-                      const updatedVariants = currentVariants.map(variant => {
-                        // Find matching variant by name
-                        const variantName = Object.values(variant.optionValues || {}).join(' / ') || 'Variant';
-                        const sourceVariant = sourceVariants.find(sv =>
-                          Object.values(sv.optionValues || {}).join(' / ') === variantName
-                        );
-
-                        if (sourceVariant && sourceVariant.inventoryByLocation) {
-                          return {
-                            ...variant,
-                            inventoryByLocation: { ...sourceVariant.inventoryByLocation }
-                          };
-                        }
-                        return variant;
-                      });
-
-                      return { ...prev, variants: updatedVariants };
-                    });
-
-                    alert(`Copied inventory from ${platformKey} to ${activePlatformKey}`);
-                  }}
-                  style={{ paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F8F9FA' }}
-                >
-                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#000' }}>
-                    {getPlatform(platformKey)?.label || platformKey}
-                  </Text>
-                </TouchableOpacity>
-              ))} */}
-              {/* Pricing capability indicator moved here */}
-              <View style={{ marginLeft: 'auto', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, backgroundColor: activePlatformKey === 'shopify' ? '#E3F2FD' : '' }}>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: activePlatformKey === 'shopify' ? '#1976D2' : '' }}>
-                  {activePlatformKey === 'shopify' ? 'Global Price' : ''}
-                </Text>
-              </View>
-            </View>
-          )}
-        </View>
-
-        {(() => {
-          log.debug('[Inventory Render] supportsVariants:', supportsVariants, 'variants count:', (activeData.variants || []).length);
-          return null;
-        })()}
-        {supportsVariants ? (
-          <>
-            {/* Suggested Price Tag - Apply to All */}
-            {activeTab === 'all' && (() => {
-              // Get suggested price from any platform: prefer aiPriceRecommendation.recommended, else aiRecommendedPrice
-              const suggestedPrice = (() => {
-                for (const pk of platformKeys) {
-                  const pd = platforms[pk] as PlatformState;
-                  if (pd?.aiPriceRecommendation?.recommended) return pd.aiPriceRecommendation!.recommended;
-                  if (pd?.aiRecommendedPrice) return pd.aiRecommendedPrice;
-                }
-                return null;
-              })();
-
-              // Function to apply suggested price to ALL variants across ALL platforms
-              const applySuggestedPriceToAll = () => {
-                if (!suggestedPrice) return;
-                const nextPlatforms = { ...platforms };
-                for (const pk of platformKeys) {
-                  const pd = nextPlatforms[pk] || {};
-                  const isShopify = pk === 'shopify';
-                  const newVariants = (pd.variants || []).map((v: any) => {
-                    if (isShopify) {
-                      // Shopify: set variant.price (global)
-                      return { ...v, price: suggestedPrice };
-                    } else {
-                      // Square/Clover: set price in all inventoryByLocation entries
-                      const updatedInv = { ...(v.inventoryByLocation || {}) };
-                      Object.keys(updatedInv).forEach(locId => {
-                        updatedInv[locId] = { ...updatedInv[locId], price: suggestedPrice };
-                      });
-                      return { ...v, price: suggestedPrice, inventoryByLocation: updatedInv };
-                    }
-                  });
-                  nextPlatforms[pk] = { ...pd, price: suggestedPrice, variants: newVariants };
-                }
-                onChangePlatforms(nextPlatforms);
-              };
-
-              return suggestedPrice ? (
-                <TouchableOpacity
-                  onPress={applySuggestedPriceToAll}
-                  style={{ backgroundColor: '#FFF', borderRadius: 8, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#rgb(201, 204, 210)', flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                >
-                  <Sparkles size={18} color="#000" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#000' }}>Our Suggested Price</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#6B7280' }}>${suggestedPrice.toFixed(2)}</Text>
-                  </View>
-                  <View style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
-                    <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Apply to All</Text>
-                  </View>
-                </TouchableOpacity>
-              ) : null;
-            })()}
-
-            {/* Use VariantInventoryEditor for both "All" and Specific Platform tabs */}
-            {(() => {
-              // 1. Build locations list based on active tab
-              let allLocs: Array<{ id: string; locationId?: string; name: string; platformKey: string; connectionId?: string; connectionName?: string; isGlobal?: boolean }>;
-
-              if (activeTab === 'all') {
-                // All tab: show all locations from all platforms
-                // Match the logic for NON-VARIANT case:
-                // 1. Start with explicit locations from platformLocations
-                const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
-                  (locs || []).map((l: any) => {
-                    const locationId = l.locationId || l.id;
-                    return {
-                      ...l,
-                      id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
-                      locationId,
-                      platformKey: pk,
-                      isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
-                    };
-                  })
-                );
-
-                // 2. ROBUSTNESS FIX: Only add virtual default for platforms that have at least one location in platformLocations (i.e. actually connected). Do not add a row for unconnected platforms (e.g. Shopify from platformSpecificData only).
-                const platformsWithLocs = Object.keys(platforms).filter((pk) => (platformLocations || {})[pk]?.length > 0);
-                platformsWithLocs.forEach(pk => {
-                  const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
-                  if (!hasLocation) {
-                    const locationId = `default-${pk}`;
-                    allLocsRaw.push({
-                      id: buildAllTabLocationId({ platformKey: pk, connectionId: undefined, locationId }),
-                      locationId,
-                      name: 'Default Location',
-                      platformKey: pk,
-                      isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
-                    });
-                    log.debug(`[ListingEditorForm] Auto-added virtual location for missing platform: ${pk}`);
-                  }
-                });
-
-                const locsByPlatform = allLocsRaw.reduce<Record<string, Array<{ id: string; name: string; platformKey: string; isGlobal?: boolean }>>>((acc, loc) => {
-                  if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
-                  acc[loc.platformKey].push(loc);
-                  return acc;
-                }, {});
-
-                const collapsedAllLocsRaw = Object.entries(locsByPlatform).flatMap(([pk, locs]) =>
-                  collapseSingleLocationLocs(pk, locs)
-                );
-
-                // Filter to unique location IDs - keep first occurrence
-                const seenIds = new Set<string>();
-                allLocs = collapsedAllLocsRaw.filter(loc => {
-                  if (seenIds.has(loc.id)) {
-                    log.warn(`[ListingEditorForm] Filtered duplicate location: ${loc.id} (${loc.name})`);
-                    return false;
-                  }
-                  seenIds.add(loc.id);
-                  return true;
-                });
-              } else {
-                // Platform tab: filter to only this platform's locations
-                const platformKey = activeTab.toLowerCase();
-                const rawPlatformLocs = platformLocations?.[platformKey] || [];
-                const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
-                  ...l,
-                  locationId: l.locationId || l.id
-                }));
-
-                // If dropdown is active (LOCATION_VARIANT_WITH_OPTIONS) and a location is selected,
-                // filter to just that location
-                if (selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && selectedLocationId) {
-                  const selectedLoc = platformLocs.find((l: any) => l.id === selectedLocationId);
-                  allLocs = selectedLoc
-                    ? [{
-                      id: selectedLoc.id,
-                      locationId: selectedLoc.locationId || selectedLoc.id,
-                      name: selectedLoc.name || 'Unknown',
-                      platformKey,
-                      connectionId: selectedLoc.connectionId,
-                      isGlobal: isShopifyGlobalLocation({ id: selectedLoc.id, name: selectedLoc.name, platformKey })
-                    }]
-                    : platformLocs.map((l: any) => ({
-                      ...l,
-                      platformKey,
-                      isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
-                    }));
-                } else {
-                  allLocs = platformLocs.map((l: any) => ({
-                    ...l,
-                    platformKey,
-                    isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
-                  }));
-                }
-              }
-
-              log.debug(`[VariantInventoryEditor LOCS] activeTab=${activeTab}, selectedLocId=${selectedLocationId}, locsCount=${allLocs.length}`);
-
-              // 2. Prepare Variants based on Active Tab
-              let preparedVariants: VariantInventoryEditorProps['variants'] = [];
-
-              if (activeTab === 'all') {
-                const locsByPlatform = allLocs.reduce<Record<string, Array<{ id: string; locationId?: string; connectionId?: string }>>>((acc, loc) => {
-                  if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
-                  acc[loc.platformKey].push(loc);
-                  return acc;
-                }, {});
-
-                const locKeyMaps = Object.entries(locsByPlatform).reduce<Record<string, Map<string, string>>>((acc, [pk, locs]) => {
-                  const map = new Map<string, string>();
-                  locs.forEach(loc => {
-                    const rawId = loc.locationId || loc.id;
-                    const connId = loc.connectionId || '';
-                    map.set(`${rawId}::${connId}`, loc.id);
-                    if (!map.has(`${rawId}::`)) map.set(`${rawId}::`, loc.id);
-                  });
-                  acc[pk] = map;
-                  return acc;
-                }, {});
-
-                // Aggregate variants from all platforms
-                const variantMap = new Map<string, any>();
-
-                platformKeys.forEach(pk => {
-                  const pData = platforms[pk];
-                  if (!pData || !pData.variants) return;
-
-                  pData.variants.forEach((v: any) => {
-                    // FIX: Use optionValues as the unique key to properly merge variants across platforms
-                    // Using v.id causes duplicates when each platform has different IDs for same variant
-                    const optionKey = Object.entries(v.optionValues || {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, val]) => `${k}:${val}`).join('/') || v.sku || 'default';
-                    const vId = optionKey;
-                    const existing = variantMap.get(vId);
-
-                    log.debug(`[ListingEditorForm] Aggregating variant: platform=${pk}, optionKey=${optionKey}, existingEntry=${!!existing}`);
-
-                    const inv: Record<string, { quantity: number; price?: number; image?: string; connectionId?: string }> = existing ? { ...existing.inventory } : {};
-                    const platformPrice = typeof v.price === 'number' ? v.price : undefined;
-
-                    // Add this platform's inventory data
-                    const vInv = v.inventoryByLocation || {};
-                    const locKeyMap = locKeyMaps[pk] || new Map<string, string>();
-                    const priceByConnection = new Map<string, number>();
-
-                    Object.entries(vInv).forEach(([locId, data]: [string, any]) => {
-                      const connId = data?.connectionId;
-                      if (connId && typeof data?.price === 'number' && !priceByConnection.has(connId)) {
-                        priceByConnection.set(connId, data.price);
-                      }
-                      const compositeId = locKeyMap.get(`${locId}::${connId || ''}`) || locKeyMap.get(`${locId}::`) || locId;
-                      inv[compositeId] = {
-                        quantity: data.quantity,
-                        price: data.price ?? platformPrice,
-                        image: data.image,
-                        connectionId: connId
-                      };
-                    });
-
-                    // Ensure every location for this platform has a price fallback from this platform
-                    const platformLocs = locsByPlatform[pk] || [];
-                    platformLocs.forEach((loc) => {
-                      const fallbackPrice = loc.connectionId && priceByConnection.has(loc.connectionId)
-                        ? priceByConnection.get(loc.connectionId)
-                        : platformPrice;
-
-                      if (!inv[loc.id]) {
-                        inv[loc.id] = { quantity: 0, price: fallbackPrice, connectionId: loc.connectionId };
-                      } else if (inv[loc.id].price === undefined && fallbackPrice !== undefined) {
-                        inv[loc.id] = { ...inv[loc.id], price: fallbackPrice };
-                      }
-                    });
-
-                    variantMap.set(vId, {
-                      id: vId,
-                      name: Object.values(v.optionValues || {}).join(' / ') || v.title || v.sku || 'Variant',
-                      image: v.image || existing?.image,
-                      defaultPrice: v.price || existing?.defaultPrice,
-                      inventory: inv
-                    });
-                  });
-                });
-                preparedVariants = Array.from(variantMap.values());
-
-                // CRITICAL FIX: Filter out empty "Variant" placeholders when real named variants exist
-                // This handles the case where a base variant with no optionValues is mixed with option variants
-                const hasRealVariants = preparedVariants.some(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
-                if (hasRealVariants) {
-                  preparedVariants = preparedVariants.filter(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
-                }
-
-              } else {
-                // Specific Platform
-                const pData = activeData; // activeData is platforms[activeTab]
-                if (pData && pData.variants) {
-                  preparedVariants = pData.variants.map((v: any) => ({
-                    id: v.id,
-                    name: Object.values(v.optionValues || {}).join(' / ') || v.title || v.sku || 'Variant',
-                    image: v.image,
-                    defaultPrice: Number(v.price ?? pData.price ?? 0),
-                    inventory: v.inventoryByLocation || {}
-                  }));
-
-                  // CRITICAL FIX: Filter out empty "Variant" placeholders when real named variants exist
-                  const hasRealVariants = preparedVariants.some(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
-                  if (hasRealVariants) {
-                    preparedVariants = preparedVariants.filter(v => v.name && v.name !== 'Variant' && v.name.trim() !== '');
-                  }
-                }
-              }
-
-              // CRITICAL FIX: If no variants exist, create a virtual "Base Product" variant
-              // This ensures ALL products (variant or not) show per-platform/location inventory
-              if (preparedVariants.length === 0) {
-                const baseVariant: VariantInventoryEditorProps['variants'][0] = {
-                  id: '_base',
-                  name: 'Base Product',
-                  defaultPrice: Number(activeData.price ?? 0),
-                  inventory: {},
-                };
-
-                // Populate inventory from locationQuantities (non-variant data)
-                allLocs.forEach(loc => {
-                  const rawLocationId = loc.locationId || loc.id;
-                  const qty = (activeData.locationQuantities || {})[rawLocationId] ?? 0;
-                  baseVariant.inventory[loc.id] = {
-                    quantity: qty,
-                    price: Number(activeData.price ?? 0),
-                  };
-                });
-
-                // Fallback if no locations
-                if (allLocs.length === 0) {
-                  const defaultQty = (activeData.locationQuantities || {})['default'] ?? 0;
-                  baseVariant.inventory['default'] = {
-                    quantity: defaultQty,
-                    price: Number(activeData.price ?? 0),
-                  };
-                }
-
-                preparedVariants = [baseVariant];
-                log.debug('[ListingEditorForm] Injected Base Product variant for non-variant product');
-              }
-
-              // 3. Callback - per-location pricing for non-Shopify, global for Shopify
-              const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
-                const resolvedLoc = allLocs.find(l => l.id === locationId);
-                const rawLocationId = resolvedLoc?.locationId || locationId;
-                const resolvedConnectionId = resolvedLoc?.connectionId;
-
-                // HANDLE BASE PRODUCT (non-variant product)
-                if (variantId === '_base') {
-                  if (field === 'quantity') {
-                    // Store per-location quantity in locationQuantities
-                    setLocationQuantity(rawLocationId, value);
-                  } else if (field === 'price') {
-                    // Price changes update the base product price for this platform
-                    patchPlatform(prev => ({ ...prev, price: value }));
-                  }
-                  return;
-                }
-
-                const nextPlatforms = { ...platforms };
-
-                let targetPlatform = activeTab;
-                if (activeTab === 'all') {
-                  if (resolvedLoc) targetPlatform = resolvedLoc.platformKey;
-                }
-
-                const pData = nextPlatforms[targetPlatform];
-                if (!pData) return;
-
-                const isShopify = targetPlatform === 'shopify';
-                const targetLoc = resolvedLoc && resolvedLoc.platformKey === targetPlatform ? resolvedLoc : allLocs.find(l => l.id === locationId && l.platformKey === targetPlatform);
-                const isShopifyGlobal = isShopify && (targetLoc?.isGlobal || isShopifyGlobalLocation({ id: rawLocationId, name: targetLoc?.name, platformKey: targetPlatform }));
-
-                // Helper to compute optionKey for a variant (used for matching in 'all' tab)
-                const getOptionKey = (v: any) => Object.entries(v.optionValues || {})
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .map(([k, val]) => `${k}:${val}`)
-                  .join('/') || v.sku || 'default';
-
-                // Update the target platform
-                const newVariants = (pData.variants || []).map((v: any) => {
-                  // CRITICAL FIX: In 'all' tab, variantId is an optionKey (e.g. 'State:Broken')
-                  // In platform tabs, variantId is the actual variant ID
-                  const matchesById = v.id === variantId;
-                  const matchesByOptionKey = activeTab === 'all' && getOptionKey(v) === variantId;
-
-                  if (matchesById || matchesByOptionKey) {
-                    log.debug(`[handleUpdateInventory] ✅ Matched variant: id=${v.id.slice(0, 8)}, optionKey=${getOptionKey(v)}, variantId=${variantId}, field=${field}, value=${value}, isShopify=${isShopify}`);
-
-                    if (field === 'price') {
-                      if (isShopify && isShopifyGlobal) {
-                        // Shopify: GLOBAL price - update ALL SHOPIFY locations for this connection
-                        const updatedInv = { ...(v.inventoryByLocation || {}) };
-                        // Get ALL Shopify location IDs for the SAME connection (avoid cross-account bleed)
-                        const shopifyLocs = allLocs.filter(l =>
-                          l.platformKey === 'shopify' && (!resolvedConnectionId || l.connectionId === resolvedConnectionId)
-                        );
-
-                        // Apply price to ALL Shopify locations, creating entries if they don't exist
-                        shopifyLocs.forEach(loc => {
-                          const locId = loc.locationId || loc.id;
-                          updatedInv[locId] = {
-                            ...(updatedInv[locId] || {}),
-                            connectionId: loc.connectionId ?? (updatedInv[locId] as any)?.connectionId,
-                            price: value
-                          };
-                        });
-
-                        log.debug(`[ListingEditorForm] Shopify global price update: ${value}, synced to ${shopifyLocs.length} locations`);
-                        log.debug(`[ListingEditorForm] Updated inventoryByLocation prices:`, Object.entries(updatedInv).map(([k, v]: [string, any]) => `${k}=$${v.price}`).join(', '));
-                        return {
-                          ...v,
-                          price: value,
-                          inventoryByLocation: updatedInv
-                        };
-                      } else {
-                        // Per-location price - only update THIS location
-                        const oldInv = v.inventoryByLocation || {};
-                        const oldLocData = oldInv[rawLocationId] || {};
-                        return {
-                          ...v,
-                          inventoryByLocation: {
-                            ...oldInv,
-                            [rawLocationId]: {
-                              ...oldLocData,
-                              connectionId: oldLocData.connectionId ?? resolvedConnectionId,
-                              price: value
-                            }
-                          }
-                        };
-                      }
-                    }
-
-                    // For quantity, only update the specific location (same for all platforms)
-                    const oldInv = v.inventoryByLocation || {};
-                    const oldLocData = oldInv[rawLocationId] || {};
-
-                    return {
-                      ...v,
-                      inventoryByLocation: {
-                        ...oldInv,
-                        [rawLocationId]: {
-                          ...oldLocData,
-                          connectionId: oldLocData.connectionId ?? resolvedConnectionId,
-                          [field]: value
-                        }
-                      }
-                    };
-                  }
-                  return v;
-                });
-
-                nextPlatforms[targetPlatform] = { ...pData, variants: newVariants };
-
-                // NOTE: Removed cross-platform price sync - prices are now independent per platform
-                // Each platform manages its own pricing (Shopify=global, others=per-location)
-
-                onChangePlatforms(nextPlatforms);
-              };
-
-              const handleSelectImage = (variantId: string) => {
-                onOpenImageCapture?.(async (uris) => {
-                  if (!uris || uris.length === 0) return;
-
-                  const uri = uris[0];
-                  const nextPlatforms = { ...platforms };
-
-                  platformKeys.forEach(pk => {
-                    const pd = nextPlatforms[pk];
-                    if (pd && pd.variants) {
-                      pd.variants = pd.variants.map((v: any) =>
-                        v.id === variantId ? { ...v, image: uri } : v
-                      );
-                    }
-                  });
-                  onChangePlatforms(nextPlatforms);
-                });
-              };
-
-              return (
-                <VariantInventoryEditor
-                  variants={preparedVariants}
-                  locations={allLocs}
-                  activeTab={activeTab === 'all' ? 'all' : activeTab}
-                  isGenerationMode={true} // This is the GenerateDetailsScreen context
-                  onUpdateInventory={handleUpdateInventory}
-                  onSelectImage={handleSelectImage}
-                  hasExternalUpdateQuantity={hasExternalInventoryUpdateQuantity}
-                  hasExternalUpdatePrice={hasExternalInventoryUpdatePrice}
-                />
-              );
-            })()}
-          </>
-        ) : (
-          /* NON-VARIANT PRODUCT: Use VariantInventoryEditor with a virtual "Base Product" variant
-           * This ensures all products (variant or not) have per-platform/location inventory fields
-           */
-          (() => {
-            // Build locations list (same logic as variant case)
-            let allLocs: Array<{ id: string; locationId?: string; name: string; platformKey: string; connectionId?: string; connectionName?: string; isGlobal?: boolean }>;
-
-            if (activeTab === 'all') {
-              // All tab: show all locations from all platforms
-              const allLocsRaw = Object.entries(platformLocations || {}).flatMap(([pk, locs]) =>
-                (locs || []).map((l: any) => {
-                  const locationId = l.locationId || l.id;
-                  return {
-                    ...l,
-                    id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
-                    locationId,
-                    platformKey: pk,
-                    isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
-                  };
-                })
-              );
-
-              // ROBUSTNESS FIX: Ensure every active platform has at least one location
-              Object.keys(platforms).forEach(pk => {
-                const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
-                if (!hasLocation) {
-                  const locationId = `default-${pk}`;
-                  allLocsRaw.push({
-                    id: buildAllTabLocationId({ platformKey: pk, connectionId: undefined, locationId }),
-                    locationId,
-                    name: 'Default Location',
-                    platformKey: pk,
-                    isGlobal: isShopifyGlobalLocation({ id: locationId, name: 'Default Location', platformKey: pk })
-                  });
-                }
-              });
-
-              const locsByPlatform = allLocsRaw.reduce<Record<string, Array<{ id: string; name: string; platformKey: string; isGlobal?: boolean; locationId?: string }>>>((acc, loc) => {
-                if (!acc[loc.platformKey]) acc[loc.platformKey] = [];
-                acc[loc.platformKey].push(loc);
-                return acc;
-              }, {});
-
-              const collapsedAllLocsRaw = Object.entries(locsByPlatform).flatMap(([pk, locs]) =>
-                collapseSingleLocationLocs(pk, locs)
-              );
-
-              const seenIds = new Set<string>();
-              allLocs = collapsedAllLocsRaw.filter(loc => {
-                if (seenIds.has(loc.id)) return false;
-                seenIds.add(loc.id);
-                return true;
-              });
-            } else {
-              // Platform tab: filter to only this platform's locations
-              const platformKey = activeTab.toLowerCase();
-              const rawPlatformLocs = platformLocations?.[platformKey] || [];
-              const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
-                ...l,
-                locationId: l.locationId || l.id
-              }));
-              allLocs = platformLocs.map((l: any) => ({
-                ...l,
-                platformKey,
-                isGlobal: isShopifyGlobalLocation({ id: l.id, name: l.name, platformKey })
-              }));
-            }
-
-            // Create virtual "Base Product" variant with locationQuantities data
-            const baseVariant = {
-              id: '_base',
-              name: 'Base Product',
-              defaultPrice: Number(activeData.price ?? 0),
-              inventory: {} as Record<string, { quantity: number; price?: number }>,
-            };
-
-            // Populate inventory from locationQuantities (per-location) or use base price
-            allLocs.forEach(loc => {
-              const rawLocationId = (loc as any).locationId || loc.id;
-              const qty = (activeData.locationQuantities || {})[rawLocationId] ?? 0;
-              baseVariant.inventory[loc.id] = {
-                quantity: qty,
-                price: Number(activeData.price ?? 0),
-              };
-            });
-
-            // If no locations exist yet, create a default inventory entry
-            if (allLocs.length === 0 && activeTab !== 'all') {
-              const qty = (activeData.locationQuantities || {})['default'] ?? 0;
-              baseVariant.inventory['default'] = {
-                quantity: qty,
-                price: Number(activeData.price ?? 0),
-              };
-            }
-
-            const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
-              const resolvedLoc = allLocs.find(l => l.id === locationId);
-              const rawLocationId = resolvedLoc?.locationId || locationId;
-              if (field === 'quantity') {
-                // Store per-location quantity in locationQuantities
-                setLocationQuantity(rawLocationId, value);
-              } else if (field === 'price') {
-                // Price changes update the base product price
-                patchPlatform(prev => ({ ...prev, price: value }));
-              }
-            };
-
-            return (
-              <VariantInventoryEditor
-                variants={[baseVariant]}
-                activeTab={activeTab}
-                locations={allLocs.length > 0 ? allLocs : [{ id: 'default', name: 'Default', platformKey: activeTab }]}
-                isGenerationMode={isGenerationMode}
-                onUpdateInventory={handleBaseInventoryUpdate}
-                hasExternalUpdateQuantity={hasExternalInventoryUpdateQuantity}
-                hasExternalUpdatePrice={hasExternalInventoryUpdatePrice}
-              />
-            );
-          })()
-        )}
-
-
-
-      </View>
-      {/* Additional fields basic toggle */}
-      {
-        activeTab !== 'all' && (
-          <>
-            <TouchableOpacity style={styles.toggleRow} onPress={() => setShowAdditionalFields(v => !v)}>
-              <Icon name={showAdditionalFields ? 'chevron-down' : 'chevron-right'} size={18} color="#000" />
-              <Text style={styles.sectionTitle}>Additional Fields</Text>
-            </TouchableOpacity>
-            {
-              showAdditionalFields && (
-                <>
-                  {(() => {
-                    const standardFields = new Set([
-                      'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode',
-                      'images', 'options', 'variants', 'locations', 'locationQuantities', 'inventoryType',
-                      '__refilled', '_rawResponse', '_parseError', '_extractedJson' // Exclude internal fields
-                    ]);
-
-                    const additionalFields = Object.entries(activeData || {})
-                      .filter(([key, value]) =>
-                        !standardFields.has(key) &&
-                        value !== undefined &&
-                        value !== null &&
-                        !key.startsWith('_') // Skip internal fields
-                      );
-
-                    if (additionalFields.length === 0) {
-                      return (
-                        <View style={{ padding: 16, alignItems: 'center' }}>
-                          <Text style={{ color: '#aaa', fontStyle: 'italic' }}>No additional fields found.</Text>
-                        </View>
-                      );
-                    }
-
-                    return (
-                      <View style={{ marginTop: 10, gap: 12 }}>
-                        {additionalFields.map(([key, value]) => {
-                          const isArray = Array.isArray(value);
-                          const isObject = typeof value === 'object' && !isArray;
-                          const displayValue = isObject ? JSON.stringify(value, null, 2) :
-                            isArray ? value.join(', ') : String(value);
-
-                          return (
-                            <View key={key}>
-                              <Field
-                                label={key}
-                                value={displayValue}
-                                onChangeText={(t) => {
-                                  // Simple string patch for generic fields
-                                  patchPlatform(prev => ({ ...prev, [key]: t } as any));
-                                }}
-                                onInfo={() => onOpenFieldPanel?.(key)}
-                                onRegenerate={enableAIRefill && onRegenerateField ? () => onRegenerateField(activePlatformKey, key) : undefined}
-                                refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes(key)}
-                              />
-                            </View>
-                          );
-                        })}
-                      </View>
-                    );
-                  })()}
-                </>
-              )
-            }
-
-
-          </>
-        )
-      }
+      {/* Additional platform fields — clean rows, no JSON, no collapse */}
+      {activeTab !== 'all' && renderAdditionalRows()}
 
     </View>
   );
@@ -3180,14 +3484,18 @@ const styles = StyleSheet.create({
   thumbCover: { borderColor: BRAND_PRIMARY, borderWidth: 2 },
   coverBadge: { position: 'absolute', bottom: 6, left: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, flexDirection: 'row', alignItems: 'center' },
   mediaHint: { textAlign: 'center', color: '#71717A', marginTop: 6 },
-  pill: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: '#E5E5E5', marginRight: 8 },
-  pillActive: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: BRAND_PRIMARY },
-  pillText: { color: '#000' },
-  pillTextActive: { fontWeight: '700' },
-  pillDashed: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E5E5' },
+  pill: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', marginRight: 8 },
+  pillActive: { backgroundColor: BRAND_PRIMARY, borderColor: BRAND_PRIMARY },
+  pillText: { color: '#3F3F46', fontWeight: '500' },
+  pillTextActive: { color: '#FFFFFF', fontWeight: '700' },
+  pillDashed: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', marginRight: 8 },
   // Flattened: sections are borderless now (stripped-down look).
-  card: { marginTop: 16 },
-  darkerCard: { marginTop: 16 },
+  card: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 14 },
+  darkerCard: { marginTop: 16, backgroundColor: '#F9FAFB', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 14 },
+  priceAllChannels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  priceAllChannelsLabel: { fontSize: 10.5, fontWeight: '700', color: '#71717A', letterSpacing: 0.5 },
+  priceAllChannelsValue: { fontSize: 18, fontWeight: '700', color: '#18181B', marginTop: 2 },
+  priceAllChannelsChange: { fontSize: 13, fontWeight: '600', color: '#5D7E16' },
   // --- STYLES REFACTOR ---
   fieldLabel: {
     fontSize: 12,

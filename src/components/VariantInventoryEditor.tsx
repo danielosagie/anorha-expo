@@ -49,112 +49,95 @@ export interface VariantInventoryEditorProps {
   hasExternalUpdatePrice?: (variantId: string, locationId: string) => boolean;
 }
 
-// Inline editable price/qty row for "All" tab
-const AllTabRow: React.FC<{
+// A debounced qty stepper (+ optional per-location price) for one location in the "All" tab.
+const LocationRow: React.FC<{
   variantId: string;
   locId: string;
   locName: string;
-  platformKey: string;
-  isGlobal?: boolean;
   quantity: number;
-  price: number;
+  price?: number; // undefined → price is shared at the platform-group level (hide it here)
   onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
   externalUpdateQuantity?: boolean;
   externalUpdatePrice?: boolean;
-}> = ({ variantId, locId, locName, platformKey, isGlobal, quantity, price, onUpdateInventory, externalUpdateQuantity, externalUpdatePrice }) => {
-  const isShopifyGlobal = platformKey === 'shopify' && !!isGlobal;
-  const displayName = locName?.length > 18 ? locName.slice(0, 18) + '…' : locName;
-
-  // Local state for smooth typing
+}> = ({ variantId, locId, locName, quantity, price, onUpdateInventory, externalUpdateQuantity, externalUpdatePrice }) => {
+  const showPrice = price !== undefined;
   const [localQty, setLocalQty] = useState(String(quantity));
-  const [localPrice, setLocalPrice] = useState(String(price));
+  const [localPrice, setLocalPrice] = useState(price == null ? '' : String(Number.isFinite(price) ? price : 0));
   const qtyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const priceTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync from props when they change externally
-  useEffect(() => {
-    setLocalQty(String(quantity));
-  }, [quantity]);
-
-  useEffect(() => {
-    setLocalPrice(String(price));
-  }, [price]);
+  useEffect(() => { setLocalQty(String(quantity)); }, [quantity]);
+  useEffect(() => { if (price != null) setLocalPrice(String(Number.isFinite(price) ? price : 0)); }, [price]);
 
   const handleQtyChange = (text: string) => {
     const num = text.replace(/[^0-9]/g, '');
     setLocalQty(num);
     if (qtyTimeout.current) clearTimeout(qtyTimeout.current);
-    qtyTimeout.current = setTimeout(() => {
-      onUpdateInventory(variantId, locId, 'quantity', Number(num || '0'));
-    }, 400);
+    qtyTimeout.current = setTimeout(() => onUpdateInventory(variantId, locId, 'quantity', Number(num || '0')), 400);
   };
-
   const handlePriceChange = (text: string) => {
-    // Allow digits and single decimal point
     const num = text.replace(/[^0-9.]/g, '');
     setLocalPrice(num);
     if (priceTimeout.current) clearTimeout(priceTimeout.current);
-    priceTimeout.current = setTimeout(() => {
-      onUpdateInventory(variantId, locId, 'price', Number(num || '0'));
-    }, 400);
+    priceTimeout.current = setTimeout(() => onUpdateInventory(variantId, locId, 'price', Number(num || '0')), 400);
   };
 
   return (
-    <View style={styles.allRowCard}>
-      {/* Line 1: platform logo + location name + GLOBAL */}
-      <View style={styles.allRowHeader}>
-        {getPlatform(platformKey) && <PlatformLogo type={platformKey} size={22} />}
-        <Text style={styles.locationName} numberOfLines={1}>{displayName}</Text>
-        {isShopifyGlobal && (
-          <View style={styles.globalBadge}>
-            <Text style={styles.globalBadgeText}>GLOBAL</Text>
+    <View style={styles.locRow}>
+      <Text style={styles.locName} numberOfLines={1}>{locName}</Text>
+      <View style={styles.locControls}>
+        <View style={[styles.qtyContainer, externalUpdateQuantity && styles.externalQty]}>
+          <TouchableOpacity
+            onPress={() => handleQtyChange(String(Math.max(0, Number(localQty || 0) - 1)))}
+            style={styles.qtyBtnLeft}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 5 }}
+          >
+            <Icon name="minus" size={16} color="#374151" />
+          </TouchableOpacity>
+          <TextInput style={styles.qtyInput} value={localQty} onChangeText={handleQtyChange} keyboardType="number-pad" selectTextOnFocus />
+          <TouchableOpacity
+            onPress={() => handleQtyChange(String(Number(localQty || 0) + 1))}
+            style={styles.qtyBtnRight}
+            hitSlop={{ top: 10, bottom: 10, left: 5, right: 10 }}
+          >
+            <Icon name="plus" size={16} color="#374151" />
+          </TouchableOpacity>
+        </View>
+
+        {showPrice && (
+          <View style={[styles.priceInputContainer, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}>
+            <Text style={styles.currencySymbol}>$</Text>
+            <TextInput style={styles.priceInput} value={localPrice} onChangeText={handlePriceChange} keyboardType="decimal-pad" selectTextOnFocus />
           </View>
         )}
       </View>
+    </View>
+  );
+};
 
-      {/* Line 2: Qty stepper (left) + Price (right) */}
-      <View style={styles.allRowControls}>
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Qty</Text>
-          <View style={styles.qtyContainer}>
-            <TouchableOpacity
-              onPress={() => handleQtyChange(String(Math.max(0, Number(localQty || 0) - 1)))}
-              style={styles.qtyBtnLeft}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 5 }}
-            >
-              <Icon name="minus" size={16} color="#374151" />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.qtyInput}
-              value={localQty}
-              onChangeText={handleQtyChange}
-              keyboardType="number-pad"
-              selectTextOnFocus
-            />
-            <TouchableOpacity
-              onPress={() => handleQtyChange(String(Number(localQty || 0) + 1))}
-              style={styles.qtyBtnRight}
-              hitSlop={{ top: 10, bottom: 10, left: 5, right: 10 }}
-            >
-              <Icon name="plus" size={16} color="#374151" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Price Input - Blue for Shopify global */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Price</Text>
-          <View style={[styles.priceInputContainer, isShopifyGlobal && styles.priceInputShopify]}>
-            <Text style={[styles.currencySymbol, isShopifyGlobal && { color: '#1976D2' }]}>$</Text>
-            <TextInput
-              style={[styles.priceInput, isShopifyGlobal && styles.priceInputTextShopify, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}
-              value={localPrice}
-              onChangeText={handlePriceChange}
-              keyboardType="decimal-pad"
-              selectTextOnFocus
-            />
-          </View>
-        </View>
+// A single shared price for a platform group whose stores all share one price (e.g. Shopify global).
+const GroupSharedPriceRow: React.FC<{
+  variantId: string;
+  locId: string; // any location in the group — parent propagates the price to all
+  price: number;
+  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
+  externalUpdatePrice?: boolean;
+}> = ({ variantId, locId, price, onUpdateInventory, externalUpdatePrice }) => {
+  const [local, setLocal] = useState(String(Number.isFinite(price) ? price : 0));
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { setLocal(String(Number.isFinite(price) ? price : 0)); }, [price]);
+  const handle = (text: string) => {
+    const num = text.replace(/[^0-9.]/g, '');
+    setLocal(num);
+    if (t.current) clearTimeout(t.current);
+    t.current = setTimeout(() => onUpdateInventory(variantId, locId, 'price', Number(num || '0')), 400);
+  };
+  return (
+    <View style={styles.groupPriceRow}>
+      <Text style={styles.groupPriceLabel}>Price · all locations</Text>
+      <View style={[styles.priceInputContainer, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}>
+        <Text style={styles.currencySymbol}>$</Text>
+        <TextInput style={styles.priceInput} value={local} onChangeText={handle} keyboardType="decimal-pad" selectTextOnFocus />
       </View>
     </View>
   );
@@ -206,29 +189,59 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
               {locations.length === 0 ? (
                 <Text style={styles.emptyText}>No locations available</Text>
               ) : (
-                locations.map((loc) => {
-                  const invKey = loc.id;
-                  const data = variant.inventory[invKey] || { quantity: 0, price: undefined };
+                (() => {
+                  // Group this variant's locations by platform so each channel reads as one
+                  // block with a quiet "share price" note, not a wall of GLOBAL badges.
+                  const groups: Array<{ platformKey: string; locs: typeof locations }> = [];
+                  for (const loc of locations) {
+                    let g = groups.find((x) => x.platformKey === loc.platformKey);
+                    if (!g) { g = { platformKey: loc.platformKey, locs: [] }; groups.push(g); }
+                    g.locs.push(loc);
+                  }
+                  return groups.map((group) => {
+                    const def = getPlatform(group.platformKey);
+                    // Shopify shares one price across all its stores ("global").
+                    const sharesPrice = group.platformKey.toLowerCase() === 'shopify' && group.locs.some((l) => l.isGlobal);
+                    const firstLoc = group.locs[0];
+                    const sharedPrice = (variant.inventory[firstLoc?.id]?.price) ?? variant.defaultPrice ?? 0;
+                    return (
+                      <View key={group.platformKey} style={styles.platformGroup}>
+                        <View style={styles.platformGroupHeader}>
+                          {def && <PlatformLogo type={group.platformKey} size={18} />}
+                          <Text style={styles.platformGroupName}>{def?.label || group.platformKey}</Text>
+                          {sharesPrice && <Text style={styles.shareNote}>· all stores share price</Text>}
+                        </View>
 
-                  // Use per-location price only in "all" tab to avoid cross-platform bleed
-                  const currentPrice = data.price ?? 0;
+                        {sharesPrice && firstLoc && (
+                          <GroupSharedPriceRow
+                            variantId={variant.id}
+                            locId={firstLoc.id}
+                            price={sharedPrice}
+                            onUpdateInventory={handleInventoryUpdate}
+                            externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, firstLoc.id)}
+                          />
+                        )}
 
-                  return (
-                    <AllTabRow
-                      key={`${variant.id}-${loc.id}`}
-                      variantId={variant.id}
-                      locId={loc.id}
-                      locName={loc.name}
-                      platformKey={loc.platformKey}
-                      isGlobal={loc.isGlobal}
-                      quantity={data.quantity}
-                      price={currentPrice}
-                      onUpdateInventory={handleInventoryUpdate}
-                      externalUpdateQuantity={hasExternalUpdateQuantity?.(variant.id, loc.id)}
-                      externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, loc.id)}
-                    />
-                  );
-                })
+                        {group.locs.map((loc) => {
+                          const data = variant.inventory[loc.id] || { quantity: 0, price: undefined };
+                          return (
+                            <LocationRow
+                              key={`${variant.id}-${loc.id}`}
+                              variantId={variant.id}
+                              locId={loc.id}
+                              locName={loc.name}
+                              quantity={data.quantity}
+                              price={sharesPrice ? undefined : (data.price ?? 0)}
+                              onUpdateInventory={handleInventoryUpdate}
+                              externalUpdateQuantity={hasExternalUpdateQuantity?.(variant.id, loc.id)}
+                              externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, loc.id)}
+                            />
+                          );
+                        })}
+                      </View>
+                    );
+                  });
+                })()
               )}
             </View>
           ))
@@ -319,6 +332,63 @@ const styles = StyleSheet.create({
     color: '#999',
     fontStyle: 'italic',
     fontSize: 13,
+  },
+  // Grouped "All" tab — one block per platform, quiet share-price note, no GLOBAL badge spam.
+  platformGroup: {
+    marginBottom: 6,
+  },
+  platformGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+  },
+  platformGroupName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#18181B',
+  },
+  shareNote: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#9CA3AF',
+  },
+  groupPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F1F3',
+  },
+  groupPriceLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#3F3F46',
+  },
+  locRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F1F3',
+  },
+  locName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#374151',
+    flex: 1,
+  },
+  locControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  externalQty: {
+    borderWidth: 2,
+    borderColor: BRAND_PRIMARY,
   },
   // All Tab Styles - Editable Rows
   // Flat 2-line row: name on top, controls below, hairline divider between rows.

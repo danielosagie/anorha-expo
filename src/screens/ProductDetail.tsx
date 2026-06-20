@@ -12,6 +12,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from '../components/PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
+import FieldRow from '../components/ListingEditor/FieldRow';
 import BottomActionBar from '../components/BottomActionBar';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
@@ -43,6 +44,20 @@ const log = createLogger('ProductDetail');
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
+
+// Compact relative time for the Active Listings status rows ("2h ago", "3d ago").
+const relTime = (ms: number): string => {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'just now';
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+};
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
@@ -218,7 +233,13 @@ const ProductDetailScreen = observer(
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
     const insets = useSafeAreaInsets();
-    const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+    // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
+    // Saved/Saving…/Unsaved/Retry chip is the only save model now, so the scroll
+    // content no longer needs to clear an 80px action bar.
+    const bottomSafePadding = insets.bottom + 28;
+    // Overview (read-only summary, the mockup's landing) vs Edit (the field form).
+    // Edit mode is the existing screen verbatim, so no functionality is lost.
+    const [mode, setMode] = useState<'overview' | 'edit'>('overview');
 
     // 🚨 DEBUG: Intercept all fetch calls from this component
     React.useEffect(() => {
@@ -509,6 +530,25 @@ const ProductDetailScreen = observer(
     const [updateCounter, setUpdateCounter] = useState(0);
     const [displayedPlatforms, setDisplayedPlatforms] = useState<Record<string, any>>({});
     const [, forceUpdate] = useState({});
+
+    // Seed a canonical platform from detailedItem the moment we have the product, so the
+    // Edit form is NEVER blank when Overview already shows Title/Price/Description. The full
+    // hydration effect (variants/inventory/per-platform) still runs and overlays its data on
+    // top — the spread order below lets that real data win once it arrives.
+    useEffect(() => {
+        if (!detailedItem) return;
+        const hasCanonical = Object.values(displayedPlatforms).some(
+            (p: any) => p && (p.title || p.price != null || p.description),
+        );
+        if (hasCanonical) return;
+        try {
+            const canonical = createCanonicalBase(detailedItem as any);
+            setDisplayedPlatforms(prev => ({ ...prev, shopify: { ...canonical, ...(prev.shopify || {}) } }));
+        } catch (e) {
+            log.warn('[ProductDetail] canonical seed failed', e);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailedItem?.Id]);
     const lastHydratedItemRef = useRef<string | null>(null);
     const lastSavedRef = useRef<string>('');
 
@@ -1459,11 +1499,37 @@ const ProductDetailScreen = observer(
         }
       });
 
+      // Also surface every platform the PRODUCT is enabled on (On{Platform}), even without a
+      // connected account, so the seller can set price/stock for each enabled channel — not
+      // just Shopify.
+      const enabledFlags: Record<string, boolean> = {
+        shopify: !!(detailedItem as any)?.OnShopify,
+        square: !!(detailedItem as any)?.OnSquare,
+        clover: !!(detailedItem as any)?.OnClover,
+        amazon: !!(detailedItem as any)?.OnAmazon,
+        ebay: !!(detailedItem as any)?.OnEbay,
+        facebook: !!(detailedItem as any)?.OnFacebook,
+      };
+      Object.entries(enabledFlags).forEach(([platform, on]) => {
+        if (!on) return;
+        if (locsByPlatform[platform] && locsByPlatform[platform].length > 0) return;
+        const conn = connections.find(c => c.PlatformType?.toLowerCase() === platform);
+        const label = platform.charAt(0).toUpperCase() + platform.slice(1);
+        const connectionName = conn?.DisplayName || `${label}`;
+        locsByPlatform[platform] = [{
+          id: conn ? `default-${conn.Id}` : `default-${platform}`,
+          name: `${connectionName} Inventory`,
+          connectionId: conn?.Id ?? '',
+          connectionName,
+          platformType: platform,
+        }];
+      });
+
       log.debug('[ProductDetail] buildPlatformLocations result:',
         Object.entries(locsByPlatform).map(([p, locs]) => `${p}: ${locs.length} locations`).join(', '));
 
       return locsByPlatform;
-    }, [allPlatformLocations, connections, groupedInventory, platformLocationNames]);
+    }, [allPlatformLocations, connections, groupedInventory, platformLocationNames, detailedItem]);
 
     // Auto-save function with proper API call
     // Note: Pricing validation is flexible - either flat price OR all variants have prices
@@ -3798,13 +3864,116 @@ const ProductDetailScreen = observer(
     }
 
 
+    // Read-only Overview summary (the mockup's landing). Tapping any detail row, or
+    // the header "Edit details" toggle, switches to the full field form (edit mode).
+    const renderOverviewSummary = () => {
+      const imgs = (editorImages || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+      const cover = imgs[0];
+      const thumbs = imgs.slice(1, 4);
+      const priceNum = Number(detailedItem!.Price);
+      const priceText = Number.isFinite(priceNum) && priceNum > 0 ? `$${priceNum.toFixed(2)}` : '—';
+      const realVariants = (allProductVariants || []).filter((v: any) => String(v?.VariantType || '').toLowerCase() !== 'base');
+      const sizeCount = realVariants.length;
+      const stockByVariant: Record<string, number> = {};
+      (rawInventoryLevels || []).forEach((l: any) => {
+        const id = l?.ProductVariantId;
+        if (!id) return;
+        stockByVariant[id] = (stockByVariant[id] || 0) + (Number(l?.Quantity) || 0);
+      });
+      const totalStock = (rawInventoryLevels || []).reduce((s: number, l: any) => s + (Number(l?.Quantity) || 0), 0);
+      const canon: any = (displayedPlatforms as any)?.shopify || Object.values(displayedPlatforms || {})[0] || {};
+      const categoryText = canon.categoryPath || canon.category || canon.productCategory || null;
+      const metaParts: string[] = [priceText];
+      if (totalStock > 0) metaParts.push(`${totalStock} in stock`);
+      if (sizeCount > 1) metaParts.push(`${sizeCount} sizes`);
+
+      // Tapping any read row jumps into Edit mode and opens that field's sheet.
+      const openInEdit = (field: string) => {
+        setMode('edit');
+        setTimeout(() => listingEditorRef.current?.openFieldSheet(field), 140);
+      };
+      const condMap: Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair', used: 'Used', refurbished: 'Refurbished', for_parts: 'For Parts' };
+      const condVal = canon.condition ? (condMap[canon.condition] || canon.condition) : null;
+      const tagsArr = Array.isArray(canon.tags) ? canon.tags : (Array.isArray(detailedItem!.Tags) ? (detailedItem!.Tags as any) : []);
+      const tagsVal = tagsArr.length ? `${tagsArr.length} tag${tagsArr.length > 1 ? 's' : ''}` : null;
+      const brandVal = canon.brand || canon.vendor || (detailedItem as any)?.Vendor || null;
+      const skuVal = canon.sku || detailedItem!.Sku || null;
+      const barcodeVal = canon.barcode || detailedItem!.Barcode || null;
+
+      return (
+        <View>
+          {cover ? (
+            <Image source={{ uri: cover }} style={styles.ovHero} />
+          ) : (
+            <View style={[styles.ovHero, styles.ovHeroEmpty]}>
+              <Icon name="image-outline" size={32} color="#C4C8CE" />
+            </View>
+          )}
+          {thumbs.length > 0 && (
+            <View style={styles.ovThumbRow}>
+              {thumbs.map((u: string, i: number) => (
+                <Image key={`${u}-${i}`} source={{ uri: u }} style={styles.ovThumb} />
+              ))}
+            </View>
+          )}
+
+          <Text style={styles.ovTitle}>{detailedItem!.Title || 'Untitled product'}</Text>
+          <Text style={styles.ovMetaLine}>{metaParts.join('   ·   ')}</Text>
+          {!!detailedItem!.Description && (
+            <Text style={styles.ovDesc} numberOfLines={3}>{detailedItem!.Description}</Text>
+          )}
+
+          {/* Inventory first (above details), tappable to edit price & stock */}
+          {sizeCount > 0 && (
+            <TouchableOpacity activeOpacity={0.7} onPress={() => setMode('edit')}>
+              <View style={styles.ovCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6, paddingTop: 4, paddingBottom: 2 }}>
+                  <Text style={styles.ovCardLabel}>INVENTORY</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: '#5D7E16' }}>Price & stock</Text>
+                    <ChevronRight size={15} color="#9CA3AF" />
+                  </View>
+                </View>
+                {realVariants.map((v: any, i: number) => {
+                  const vPrice = Number(v?.Price);
+                  const vPriceText = Number.isFinite(vPrice) && vPrice > 0 ? `$${vPrice.toFixed(2)}` : '—';
+                  const vStock = stockByVariant[v?.Id] ?? 0;
+                  const vName = v?.Title || v?.Sku || `Variant ${i + 1}`;
+                  return (
+                    <View key={v?.Id || i} style={[styles.ovInvRow, i < realVariants.length - 1 && styles.ovInvDivider]}>
+                      <Text style={styles.ovInvName} numberOfLines={1}>{vName}</Text>
+                      <Text style={styles.ovInvPrice}>{vPriceText}</Text>
+                      <Text style={styles.ovInvStock}>{vStock} in stock</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* All details as a read table — tap any row to edit it */}
+          <Text style={styles.ovSectionLabel}>DETAILS</Text>
+          <View style={styles.ovCard}>
+            <FieldRow label="Price" value={priceText} onPress={() => openInEdit('price')} />
+            <FieldRow label="SKU" value={skuVal} placeholder="Add a SKU" onPress={() => openInEdit('sku')} />
+            <FieldRow label="Category" value={categoryText} placeholder="Add a category" onPress={() => openInEdit('category')} />
+            <FieldRow label="Condition" value={condVal} placeholder="Select condition" onPress={() => openInEdit('condition')} />
+            <FieldRow label="Brand" value={brandVal} placeholder="Add brand" onPress={() => openInEdit('brand')} />
+            <FieldRow label="Barcode" value={barcodeVal} placeholder="Add or scan" onPress={() => openInEdit('barcode')} />
+            <FieldRow label="Tags" value={tagsVal} placeholder="Add tags" onPress={() => openInEdit('tags')} last />
+          </View>
+
+        </View>
+      );
+    };
+
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         {/* Non-blocking notification banner */}
         {bannerMessage && (
           <TouchableOpacity
             activeOpacity={bannerClickable ? 0.7 : 1}
-            onPress={bannerClickable ? scrollToFirstChangedField : undefined}
+            onPress={bannerClickable ? () => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => scrollToFirstChangedField(), 80); } else { scrollToFirstChangedField(); } } : undefined}
             disabled={!bannerClickable}
           >
             <Animated.View
@@ -3812,14 +3981,15 @@ const ProductDetailScreen = observer(
                 styles.notificationBanner,
                 {
                   opacity: bannerOpacity,
-                  backgroundColor: bannerClickable ? BRAND_PRIMARY + 'E6' : theme.colors.primary + 'E6', // Green for clickable
+                  borderColor: bannerClickable ? '#93C822' : '#E5E7EB',
                 }
               ]}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                <Text style={styles.notificationBannerText}>{bannerMessage}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: bannerClickable ? '#93C822' : '#71717A' }} />
+                <Text style={styles.notificationBannerText} numberOfLines={2}>{bannerMessage}</Text>
                 {bannerClickable && (
-                  <Icon name="arrow-down" size={16} color="#fff" />
+                  <Text style={styles.notificationBannerReview}>Review</Text>
                 )}
               </View>
             </Animated.View>
@@ -3832,8 +4002,10 @@ const ProductDetailScreen = observer(
         >
 
 
-          {/* Listing editor (edit mode) */}
+          {/* Overview = read table of all details (tap a row to edit); Edit = full form. */}
           <Card shadow="none" style={styles.basicSection}>
+            {mode === 'overview' && renderOverviewSummary()}
+            {mode === 'edit' && (
             <ListingEditorForm
               ref={listingEditorRef}
               platforms={displayedPlatforms}
@@ -3953,154 +4125,90 @@ const ProductDetailScreen = observer(
               onGeneratePlatform={handleGeneratePlatform}
               generatingPlatformKeys={generatingPlatformKeys}
             />
+            )}
 
             {/* Active Listings */}
             <Card shadow="none" style={styles.platformsSection}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
+              <Text style={styles.alTitle}>Active Listings</Text>
 
-              {mappings.length > 0 ? (
+              {(mappings.length > 0 || unpublishedPlatforms.length > 0 || partnerships.length > 0) ? (
                 <>
                   {mappings.map((mapping) => {
                     const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
                     const rawType = connection?.PlatformType || 'unknown';
-                    // capitalize first letter
                     const typeLabel = rawType.charAt(0).toUpperCase() + rawType.slice(1);
-
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
-                    const platformType = rawType;
-                    const lastSyncedAt = mapping.LastSyncedAt || null;
-                    const parsedSyncMs = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
+                    const parsedSyncMs = mapping.LastSyncedAt ? new Date(mapping.LastSyncedAt).getTime() : 0;
                     const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
+                    const statusColor = isStale ? '#BA7517' : '#16A34A';
+                    const statusText = isStale
+                      ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
+                      : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
                     return (
-                      <View key={mapping.Id} style={styles.platformRow}>
-                        <View style={styles.platformInfo}>
-                          <View style={styles.platformLogoContainer}>
-                            <PlatformLogo type={platformType} size={18} fallbackIcon="store" />
-                          </View>
-                          <View style={styles.platformDetails}>
-                            <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
-                            <Text style={[styles.platformStatus, { color: theme.colors.text }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
-                            <Text style={[styles.platformStatus, { color: isStale ? '#B45309' : theme.colors.textSecondary }]}>
-                              Last synced: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Unavailable'}
-                              {isStale ? ' • Stale' : ''}
-                            </Text>
+                      <View key={mapping.Id} style={styles.alRow}>
+                        <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.alName} numberOfLines={1}>{platformName}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: statusColor }]} />
+                            <Text style={[styles.alStatusText, { color: statusColor }]} numberOfLines={1}>{statusText}</Text>
                           </View>
                         </View>
-                        <TouchableOpacity
-                          style={styles.delistButton}
-                          onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}
-                        >
-                          <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
-                          <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
+                        <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
+                          <Text style={styles.alActionOutlineText}>Delist</Text>
                         </TouchableOpacity>
                       </View>
                     );
                   })}
 
-                  {/* Unpublished platforms - ready to publish */}
-                  {unpublishedPlatforms.length > 0 && (
-                    <>
-                      <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 12, marginBottom: 8 }}>
-                        Ready to publish:
-                      </Text>
-                      {unpublishedPlatforms.map((platform) => {
-                        const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
-                        const isCurrentlyPublishing = isPublishing === platform;
-
-                        return (
-                          <View key={platform} style={[styles.platformRow, { backgroundColor: '#FFFDF4', borderRadius: 8, marginBottom: 4 }]}>
-                            <View style={styles.platformInfo}>
-                              <View style={[styles.platformLogoContainer, { backgroundColor: '#ffffffff' }]}>
-                                {getPlatform(platform) ? (
-                                  <PlatformLogo type={platform} size={18} />
-                                ) : (
-                                  <Icon name="store" size={18} color={BRAND_PRIMARY} />
-                                )}
-                              </View>
-                              <View style={styles.platformDetails}>
-                                <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformLabel}</Text>
-                                <Text style={{ fontSize: 12, color: BRAND_PRIMARY }}>Ready to publish</Text>
-                              </View>
-                            </View>
-                            <TouchableOpacity
-                              style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 8 }]}
-                              onPress={() => handlePublishToPlatform(platform)}
-                              disabled={isCurrentlyPublishing}
-                            >
-                              {isCurrentlyPublishing ? (
-                                <ActivityIndicator size="small" color="#fff" />
-                              ) : (
-                                <>
-                                  <Icon name="rocket-launch-outline" size={14} color="#fff" style={{ marginRight: 6 }} />
-                                  <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>Publish</Text>
-                                </>
-                              )}
-                            </TouchableOpacity>
+                  {unpublishedPlatforms.map((platform) => {
+                    const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
+                    const isCurrentlyPublishing = isPublishing === platform;
+                    return (
+                      <View key={platform} style={styles.alRow}>
+                        <View style={styles.alLogo}>{getPlatform(platform) ? <PlatformLogo type={platform} size={20} /> : <Icon name="store" size={20} color={BRAND_PRIMARY} />}</View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.alName} numberOfLines={1}>{platformLabel}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: '#9CA3AF' }]} />
+                            <Text style={[styles.alStatusText, { color: '#71717A' }]}>Connected · not listed</Text>
                           </View>
-                        );
-                      })}
-                    </>
-                  )}
+                        </View>
+                        <TouchableOpacity style={styles.alActionGreen} onPress={() => handlePublishToPlatform(platform)} disabled={isCurrentlyPublishing}>
+                          {isCurrentlyPublishing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.alActionGreenText}>Publish</Text>}
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
 
-                  {/* Partner Sharing Section */}
                   {partnerships.length > 0 && (
                     <>
-                      <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 16, marginBottom: 8 }}>
-                        Partner Sharing:
-                      </Text>
+                      <Text style={styles.alSubLabel}>SHARED WITH</Text>
                       {partnerships.map((partnership) => {
                         const isLoading = partnershipActionLoading === partnership.inviteId || partnershipActionLoading === partnership.linkId;
-
                         return (
-                          <View
-                            key={partnership.inviteId}
-                            style={[
-                              styles.platformRow,
-                              {
-                                backgroundColor: partnership.isShared ? '#ffffffff' : '#F9FAFB',
-                                borderRadius: 8,
-                                marginBottom: 4,
-                              },
-                            ]}
-                          >
-                            <View style={styles.platformInfo}>
-                              <View style={styles.platformLogoContainer}>
-                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? BRAND_PRIMARY : '#FFF'} />
-                              </View>
-                              <View style={styles.platformDetails}>
-                                <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>
-                                  {partnership.partnerOrgName}
-                                </Text>
-                                <Text style={{ fontSize: 12, color: partnership.isShared ? BRAND_PRIMARY : theme.colors.textSecondary }}>
-                                  {partnership.isShared ? 'Shared' : 'Not shared'} • {partnership.poolName}
-                                </Text>
+                          <View key={partnership.inviteId} style={styles.alRow}>
+                            <View style={styles.alLogo}><Icon name="account-group-outline" size={20} color={partnership.isShared ? BRAND_PRIMARY : '#9CA3AF'} /></View>
+                            <View style={styles.alInfo}>
+                              <Text style={styles.alName} numberOfLines={1}>{partnership.partnerOrgName}</Text>
+                              <View style={styles.alStatusLine}>
+                                <View style={[styles.alDot, { backgroundColor: partnership.isShared ? '#16A34A' : '#9CA3AF' }]} />
+                                <Text style={[styles.alStatusText, { color: partnership.isShared ? '#16A34A' : '#71717A' }]} numberOfLines={1}>{partnership.isShared ? 'Shared' : 'Not shared'} · {partnership.poolName}</Text>
                               </View>
                             </View>
-
                             {isLoading ? (
-                              <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 12 }} />
+                              <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 8 }} />
                             ) : partnership.isShared ? (
                               partnership.canRevoke && partnership.linkId ? (
-                                <TouchableOpacity
-                                  style={[styles.delistButton, { backgroundColor: '#DC2626', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6 }]}
-                                  onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}
-                                >
-                                  <Icon name="link-off" size={14} color="#ffffffff" style={{ marginRight: 4 }} />
-                                  <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Remove</Text>
+                                <TouchableOpacity style={styles.alActionOutline} onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}>
+                                  <Text style={styles.alActionOutlineText}>Remove</Text>
                                 </TouchableOpacity>
                               ) : (
-                                <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}>
-                                  <Icon name="check" size={14} color={BRAND_PRIMARY} style={{ marginRight: 4 }} />
-                                  <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Shared</Text>
-                                </View>
+                                <View style={styles.alActionGhost}><Text style={styles.alActionGhostText}>Shared</Text></View>
                               )
                             ) : (
-                              <TouchableOpacity
-                                style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
-                                onPress={() => shareWithPartner(partnership.inviteId)}
-                              >
-                                <Icon name="share-variant-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
-                                <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Share</Text>
+                              <TouchableOpacity style={styles.alActionGreen} onPress={() => shareWithPartner(partnership.inviteId)}>
+                                <Text style={styles.alActionGreenText}>Share</Text>
                               </TouchableOpacity>
                             )}
                           </View>
@@ -4109,19 +4217,17 @@ const ProductDetailScreen = observer(
                     </>
                   )}
 
-                  <TouchableOpacity
-                    style={styles.addPlatformRow}
-                    onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
-                  >
-                    <Icon name="plus" size={16} color={theme.colors.textSecondary} style={{ marginRight: 8 }} />
-                    <Text style={[styles.addPlatformText, { color: theme.colors.textSecondary }]}>Add Platform</Text>
+                  <TouchableOpacity style={styles.alAddRow} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                    <Icon name="plus" size={16} color="#71717A" style={{ marginRight: 8 }} />
+                    <Text style={styles.alAddText}>Add a channel</Text>
                   </TouchableOpacity>
                 </>
               ) : (
                 <View style={styles.noPlatformsContainer}>
-                  <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>No active listings</Text>
-                  <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}>
-                    <Text style={{ color: '#fff', fontWeight: '600' }}>+ Add Platform</Text>
+                  <Text style={styles.noPlatformsText}>Not listed anywhere yet</Text>
+                  <TouchableOpacity style={styles.alAddRow} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                    <Icon name="plus" size={16} color="#71717A" style={{ marginRight: 8 }} />
+                    <Text style={styles.alAddText}>Add a channel</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -4147,22 +4253,32 @@ const ProductDetailScreen = observer(
             <TouchableOpacity style={styles.navCircle} onPress={navigation.goBack} activeOpacity={0.85}>
               <ChevronLeft size={22} color="#18181B" />
             </TouchableOpacity>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {isSaving ? (
-                <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
-              ) : saveError ? (
-                <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
-                  <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '700' }}>Save failed · Retry</Text>
-                </TouchableOpacity>
-              ) : hasUnsavedChanges ? (
-                <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
-              ) : lastSaveTime > 0 ? (
-                <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '600' }}>Saved</Text>
-              ) : null}
-              <TouchableOpacity onPress={() => setActionMenuVisible(true)} activeOpacity={0.85} style={styles.navCircle}>
-                <Icon name="dots-horizontal" size={22} color="#18181B" />
+            {/* Centered: Done (exit) with the live save state stacked under it. */}
+            <View style={{ alignItems: 'center', gap: 3 }}>
+              <TouchableOpacity
+                style={styles.modeToggle}
+                onPress={() => setMode((m) => (m === 'overview' ? 'edit' : 'overview'))}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.modeToggleText}>{mode === 'overview' ? 'Edit details' : 'Done'}</Text>
               </TouchableOpacity>
+              <View style={{ height: 14, justifyContent: 'center' }}>
+                {isSaving ? (
+                  <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '600' }}>Saving…</Text>
+                ) : saveError ? (
+                  <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
+                    <Text style={{ color: '#DC2626', fontSize: 11, fontWeight: '700' }}>Save failed · Retry</Text>
+                  </TouchableOpacity>
+                ) : hasUnsavedChanges ? (
+                  <Text style={{ color: '#D97706', fontSize: 11, fontWeight: '600' }}>Unsaved</Text>
+                ) : lastSaveTime > 0 ? (
+                  <Text style={{ color: theme.colors.success, fontSize: 11, fontWeight: '600' }}>Saved</Text>
+                ) : null}
+              </View>
             </View>
+            <TouchableOpacity onPress={() => setActionMenuVisible(true)} activeOpacity={0.85} style={styles.navCircle}>
+              <Icon name="dots-horizontal" size={22} color="#18181B" />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -4367,16 +4483,9 @@ const ProductDetailScreen = observer(
           </View>
         </BaseModal>
 
-        {/* Sync Status Indicator */}
-        {
-          hasUnsavedChanges && (
-            <BottomActionBar
-              primaryLabel={isSaving ? 'Saving…' : 'Save changes'}
-              primaryDisabled={isSaving}
-              onPrimary={() => performAutoSave()}
-            />
-          )
-        }
+        {/* Manual "Save changes" bar intentionally removed — autosave + the header
+            chip (Saved / Saving… / Unsaved / Save failed · Retry) is the single,
+            calm save model. Retry on failure lives in that header chip. */}
         {/* Barcode Scanner Modal */}
         {
           scannerMounted && (
@@ -4420,21 +4529,30 @@ const styles = StyleSheet.create({
     top: 50,
     left: 16,
     right: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
     borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     zIndex: 9999,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
   },
   notificationBannerText: {
-    color: '#fff',
+    color: '#3F3F46',
     fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  notificationBannerReview: {
+    color: '#4A7C00',
+    fontSize: 13,
+    fontWeight: '700',
+    marginLeft: 'auto',
   },
   scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
   scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
@@ -4450,6 +4568,35 @@ const styles = StyleSheet.create({
   glassHeader: { ...GLASS_HEADER_STYLES.header },
   glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
   navCircle: { ...GLASS_HEADER_STYLES.navCircle },
+  modeToggle: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  modeToggleText: { fontSize: 14, fontWeight: '700', color: '#18181B' },
+  ovHero: { width: '100%', height: 230, borderRadius: 18, backgroundColor: '#F3F4F6' },
+  ovHeroEmpty: { alignItems: 'center', justifyContent: 'center' },
+  ovThumbRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  ovThumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#F3F4F6' },
+  ovTitle: { fontSize: 22, fontWeight: '700', color: '#18181B', marginTop: 16, lineHeight: 28 },
+  ovMetaLine: { fontSize: 15, fontWeight: '600', color: '#3F3F46', marginTop: 8 },
+  ovDesc: { fontSize: 14, fontWeight: '400', color: '#71717A', marginTop: 10, lineHeight: 20 },
+  ovCard: { backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 6, marginTop: 16, overflow: 'hidden' },
+  ovCardLabel: { fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
+  ovInvRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12 },
+  ovInvDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  ovInvName: { flex: 1, fontSize: 15, fontWeight: '600', color: '#18181B' },
+  ovInvPrice: { fontSize: 15, fontWeight: '700', color: '#18181B', width: 90, textAlign: 'right' },
+  ovInvStock: { fontSize: 13, fontWeight: '500', color: '#71717A', width: 90, textAlign: 'right' },
+  ovSectionLabel: { fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginTop: 22, marginBottom: 8, marginLeft: 4 },
   header: {
     paddingTop: 60,
     flexDirection: 'row',
@@ -4675,6 +4822,67 @@ const styles = StyleSheet.create({
     margin: 0,
     marginTop: 0,
   },
+  // Active Listings — Paper status-row style (logo + name + dot·status + one verb)
+  alTitle: { fontSize: 18, fontWeight: '700', color: '#18181B', marginBottom: 4 },
+  alSubLabel: { fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginTop: 14, marginBottom: 4 },
+  alRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F2F4',
+  },
+  alLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  alInfo: { flex: 1, minWidth: 0 },
+  alName: { fontSize: 15, fontWeight: '700', color: '#18181B' },
+  alStatusLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  alDot: { width: 7, height: 7, borderRadius: 4 },
+  alStatusText: { fontSize: 13, fontWeight: '500', flexShrink: 1 },
+  alActionOutline: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+  },
+  alActionOutlineText: { fontSize: 14, fontWeight: '600', color: '#3F3F46' },
+  alActionGreen: {
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: BRAND_PRIMARY,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  alActionGreenText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  alActionGhost: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(147,200,34,0.12)',
+  },
+  alActionGhostText: { fontSize: 14, fontWeight: '600', color: '#4A7C00' },
+  alAddRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#D1D5DB',
+  },
+  alAddText: { fontSize: 14, fontWeight: '600', color: '#71717A' },
   platformRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

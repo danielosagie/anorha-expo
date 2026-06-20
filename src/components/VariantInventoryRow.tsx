@@ -47,7 +47,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
 
     // Local state for smooth typing
     const [localQty, setLocalQty] = useState(String(quantity));
-    const [localPrice, setLocalPrice] = useState(String(price));
+    const [localPrice, setLocalPrice] = useState(String(Number.isFinite(price) ? price : 0));
 
     const qtyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const priceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -60,8 +60,9 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
 
     useEffect(() => {
         log.debug(`[VariantInventoryRow] Price prop changed for variant ${variantId}: prop=${price}, localPrice=${localPrice}, willUpdate=${String(price) !== localPrice}`);
-        if (String(price) !== localPrice) {
-            setLocalPrice(String(price));
+        const safe = Number.isFinite(price) ? price : 0;
+        if (String(safe) !== localPrice) {
+            setLocalPrice(String(safe));
         }
     }, [price]);
 
@@ -91,18 +92,14 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
     // Override Style (Yellow): Only if isOverride AND isGenerationMode
     const showOverrideStyle = isOverride && isGenerationMode;
 
-    // Price Input Style - BLUE for Shopify global
-    const priceInputStyle = isGlobalPrice
-        ? {
-            backgroundColor: '#E3F2FD',
-            color: '#1976D2',
-            borderColor: '#1976D2',
-        } // Global/Blue
-        : {
-            backgroundColor: '#FFF',
-            color: '#000',
-            borderColor: '#E5E5E5',
-        }; // Standard
+    // Calm, neutral price field. The loud Shopify-global blue (#1976D2 on #E3F2FD)
+    // was softened to match the grouped "All" tab; editing still propagates to all
+    // shared Shopify locations via the parent's handleUpdateInventory.
+    const priceInputStyle = {
+        backgroundColor: '#FFF',
+        color: '#18181B',
+        borderColor: '#E5E7EB',
+    };
 
     const containerStyle = showOverrideStyle
         ? {
@@ -163,7 +160,7 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
                             </View>
                             <View style={styles.inputCol}>
                                 <View style={[styles.priceBox, priceInputStyle, externalUpdatePrice && { borderColor: BRAND_PRIMARY, borderWidth: 2 }]}>
-                                    <Text style={[styles.currencySymbol, isGlobalPrice && { color: '#1976D2' }]}>$</Text>
+                                    <Text style={styles.currencySymbol}>$</Text>
                                     <TextInput
                                         style={[styles.priceInputInner, { color: priceInputStyle.color }]}
                                         value={localPrice}
