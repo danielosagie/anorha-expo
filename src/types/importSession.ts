@@ -121,6 +121,12 @@ export interface MappingSuggestion {
   groupTitle?: string;
   /** The cover/master row of a combine group (others fold under it). */
   groupCover?: boolean;
+
+  // ── Resolver composer (client-captured) ────────────────────────────────────
+  /** Free-text reason captured when the seller explains a non-match. */
+  reasonNote?: string;
+  /** Quick reason tags chosen in the explain composer. */
+  reasonTags?: string[];
 }
 
 // ── The processed import draft (mirrors anorha-bknd import-draft.types.ts) ────

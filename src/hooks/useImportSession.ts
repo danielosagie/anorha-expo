@@ -729,6 +729,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
           platformProductId: s.platformProduct.id,
           sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
           action: s.action === 'LINK_EXISTING' ? 'link' : s.action === 'CREATE_NEW' ? 'create' : 'ignore',
+          // Resolver-composer extras — best effort; the backend ignores keys it
+          // doesn't know yet, so this is safe to send today.
+          ...(s.reasonNote ? { reasonNote: s.reasonNote } : {}),
+          ...(s.reasonTags && s.reasonTags.length ? { reasonTags: s.reasonTags } : {}),
         }));
         const token = await ensureSupabaseJwt();
         if (!token) return;

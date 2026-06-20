@@ -9,9 +9,11 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import {
   RC,
-  ResolveShell,
+  // The match deck renders the Paper J/H "deck card" chrome. Swapping the shell
+  // here re-skins all 13 resolvers; the optimize side keeps ResolveShell.
+  TinderShell as ResolveShell,
+  ResolveBadge,
   Row,
-  Check,
   Thumb,
   PlatTag,
   Chip,
@@ -261,9 +263,9 @@ function MR_Compare({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       note={c.note}
       topInset={topInset}
       onBack={onBack}
-      primary={c.kind === 'collision' ? 'Different — keep as 2' : 'Same item — merge'}
+      primary={c.kind === 'collision' ? 'Keep as 2' : 'Merge'}
       primaryIcon={c.kind === 'collision' ? 'check' : 'merge'}
-      alt={c.kind === 'collision' ? 'Same item — merge them' : 'Different — keep both'}
+      alt={c.kind === 'collision' ? 'Merge them' : 'Keep both'}
       onPrimary={() => onResolve('primary')}
       onAlt={() => onResolve('alt')}
       onIgnore={() => onResolve('alt', { ignore: true })}
@@ -275,60 +277,34 @@ function MR_Compare({ c, idx, total, topInset, onBack, onResolve }: RProps) {
 
 // ═══ CONSOLIDATE many→1 — select rows, ★ a master ═════════════════════════
 function MR_Consolidate({ c, idx, total, topInset, onBack, onResolve }: RProps) {
-  const initial = c.candidates || [];
-  const [sel, setSel] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(initial.map((x) => [x.id, x.on !== false])),
-  );
-  const [master, setMaster] = useState<string>(() => initial.find((x) => x.master)?.id || initial[0]?.id || '');
-  const count = Object.values(sel).filter(Boolean).length;
-
+  const items = c.candidates || [];
   return (
     <ResolveShell
       idx={idx}
       total={total}
       kind="combine"
-      title={c.title}
-      note={c.note || 'Tick the same product · ★ the master'}
+      title="Same product?"
+      note={c.note || `${items.length} listings look like one`}
       topInset={topInset}
       onBack={onBack}
-      primary={`Combine ${count} into 1`}
+      primary="Combine"
       primaryIcon="merge"
-      primaryReady={count >= 2}
-      primaryGate="Pick at least 2"
-      alt="All different — keep apart"
-      onPrimary={() =>
-        onResolve('primary', { selectedIds: initial.filter((x) => sel[x.id]).map((x) => x.id) })
-      }
+      alt="Keep apart"
+      onPrimary={() => onResolve('primary', { selectedIds: items.map((x) => x.id) })}
       onAlt={() => onResolve('alt')}
     >
-      {initial.map((x) => {
-        const on = !!sel[x.id];
-        return (
-          <Row key={x.id} active={on} onPress={() => setSel((p) => ({ ...p, [x.id]: !p[x.id] }))}>
-            <Check on={on} size={18} />
-            <Thumb uri={x.uri} size={26} radius={6} />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={mr.title} numberOfLines={1}>{x.title}</Text>
-              <View style={mr.metaRow}>
-                {!!x.plat && <PlatTag name={x.plat} />}
-                {!!x.sub && <Text style={mr.meta} numberOfLines={1}>{x.sub}</Text>}
-              </View>
-            </View>
-            {on && (
-              <TouchableOpacity onPress={() => setMaster(x.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                {master === x.id ? (
-                  <View style={mr.masterTag}>
-                    <MaterialCommunityIcons name="star" size={11} color={RC.greenDark} />
-                    <Text style={mr.masterText}>MASTER</Text>
-                  </View>
-                ) : (
-                  <MaterialCommunityIcons name="star-outline" size={18} color={RC.faint} />
-                )}
-              </TouchableOpacity>
-            )}
-          </Row>
-        );
-      })}
+      <Accordion flat label="SEPARATE NOW" title={`${items.length} listings`} count={items.length} defaultOpen>
+        {items.map((x) => (
+          <SeparateCard key={x.id} title={x.title} sub={x.sub} uri={x.uri} />
+        ))}
+      </Accordion>
+      <FlowArrow />
+      <Text style={mr.ioLabel}>BECOMES ONE PRODUCT</Text>
+      <ProductCard
+        title={items[0]?.title || 'Combined product'}
+        image={items.find((x) => x.uri)?.uri}
+        variants={items.map((x) => ({ label: variantOption(x.title), sub: x.sub, uri: x.uri }))}
+      />
     </ResolveShell>
   );
 }
@@ -365,9 +341,9 @@ function MR_Find({ c, idx, total, topInset, onBack, onResolve, onSearch }: RProp
       note={c.note || 'No SKU matched'}
       topInset={topInset}
       onBack={onBack}
-      primary={pickedItem ? `Link to ${trim(pickedItem.title, 16)}` : 'Add as new product'}
+      primary={pickedItem ? `Link to ${trim(pickedItem.title, 9)}` : 'Add as new'}
       primaryIcon={pickedItem ? 'link-variant' : 'plus'}
-      alt={pickedItem ? 'None of these — add as new' : undefined}
+      alt={pickedItem ? 'Add as new' : undefined}
       onPrimary={() => onResolve('primary', pickedItem ? { linkTo: pickedItem } : undefined)}
       onAlt={() => onResolve('alt')}
       onIgnore={() => onResolve('alt', { ignore: true })}
@@ -433,31 +409,30 @@ function MR_Split({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       note={c.note || 'One row holds several SKUs'}
       topInset={topInset}
       onBack={onBack}
-      primary={parts.length ? `Split into ${parts.length} items` : 'Split into pieces'}
+      primary={parts.length ? `Split into ${parts.length}` : 'Split'}
       primaryIcon="call-split"
-      alt="Keep as one kit"
+      alt="Keep as one"
       onPrimary={() => onResolve('primary')}
       onAlt={() => onResolve('alt')}
       onIgnore={() => onResolve('alt', { ignore: true })}
     >
-      <View style={[mr.bundleHead, { borderColor: RC.green, backgroundColor: RC.greenSoft }]}>
-        <MaterialCommunityIcons name="package-variant-closed" size={20} color={RC.greenDark} />
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={mr.bundleTitle} numberOfLines={1}>{c.itemTitle}</Text>
-          <Text style={[mr.meta, { color: RC.greenDark }]} numberOfLines={1}>{c.itemSub}</Text>
-        </View>
-        <MaterialCommunityIcons name="arrow-down" size={18} color={RC.greenDark} />
-      </View>
-      {parts.map((p, i) => (
-        <Row key={i}>
-          <Thumb size={24} radius={5} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={mr.title} numberOfLines={1}>{p.name}</Text>
-            <Text style={mr.meta} numberOfLines={1}>{p.sku} · qty {p.qty}</Text>
+      <InStatic label="ONE LISTING" title={c.itemTitle} sub={c.itemSub} uri={c.itemImage} />
+      <FlowArrow />
+      <Accordion label="SPLITS INTO" title={`${parts.length} products`} count={parts.length} defaultOpen>
+        {parts.map((p, i) => (
+          <View key={i}>
+            {i > 0 ? <View style={mr.varDivider} /> : null}
+            <View style={mr.varRow}>
+              <Thumb size={38} radius={9} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={mr.varTitle} numberOfLines={1}>{p.name}</Text>
+                <Text style={mr.varSub} numberOfLines={1}>{p.sku} · qty {p.qty}</Text>
+              </View>
+              {p.price !== '—' && <Text style={mr.price}>{p.price}</Text>}
+            </View>
           </View>
-          <Text style={mr.price}>{p.price}</Text>
-        </Row>
-      ))}
+        ))}
+      </Accordion>
     </ResolveShell>
   );
 }
@@ -467,52 +442,33 @@ function MR_Split({ c, idx, total, topInset, onBack, onResolve }: RProps) {
 // answer IS the answer: rows sit quiet and one tap confirms the lot. Tapping
 // a row EXCLUDES it — exceptions get the loud treatment, not the happy path.
 function MR_Variants({ c, idx, total, topInset, onBack, onResolve }: RProps) {
-  const initial = c.candidates || [];
-  const [out, setOut] = useState<Record<string, boolean>>({});
-  const excluded = initial.filter((x) => out[x.id]).length;
-  const inCount = initial.length - excluded;
-
+  const items = c.candidates || [];
   return (
     <ResolveShell
       idx={idx}
       total={total}
       kind="variants"
-      title={c.title || 'Group these together?'}
-      note={c.note || (c.parentTitle ? `Variants of ${c.parentTitle} · tap any that don’t belong` : 'Tap any that don’t belong')}
+      title={c.parentTitle || 'One product, many listings?'}
+      note={`${items.length} listings look like one product`}
       topInset={topInset}
       onBack={onBack}
-      primary={excluded === 0 ? `Yes — group all ${initial.length}` : `Group ${inCount} · leave ${excluded} out`}
-      primaryIcon="check"
-      primaryReady={inCount > 0}
-      primaryGate="Nothing left to group — use the grey button"
-      alt="No — keep them separate"
-      onPrimary={() =>
-        onResolve('primary', { selectedIds: initial.filter((x) => !out[x.id]).map((x) => x.id) })
-      }
+      primary="Group all"
+      alt="Keep split"
+      onPrimary={() => onResolve('primary', { selectedIds: items.map((x) => x.id) })}
       onAlt={() => onResolve('alt')}
     >
-      {!!c.parentTitle && (
-        <View style={mr.parentRow}>
-          <Text style={mr.parentTitle} numberOfLines={1}>{c.parentTitle}</Text>
-          <View style={mr.parentBadge}>
-            <Text style={mr.parentBadgeText}>{inCount} of {initial.length}</Text>
-          </View>
-        </View>
-      )}
-      {initial.map((x) => {
-        const off = !!out[x.id];
-        return (
-          <Row key={x.id} dim={off} onPress={() => setOut((p) => ({ ...p, [x.id]: !p[x.id] }))}>
-            <Check on={!off} size={20} />
-            <Thumb uri={x.uri} size={26} radius={5} />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={mr.mono} numberOfLines={1}>{x.title}</Text>
-              {!!x.sub && <Text style={mr.meta} numberOfLines={1}>{x.sub}</Text>}
-            </View>
-            {off && <Text style={[mr.placeTag, { color: RC.danger }]}>left out</Text>}
-          </Row>
-        );
-      })}
+      <Accordion flat label="SEPARATE NOW" title={`${items.length} listings`} count={items.length} defaultOpen>
+        {items.map((x) => (
+          <SeparateCard key={x.id} title={x.title} sub={x.sub} uri={x.uri} />
+        ))}
+      </Accordion>
+      <FlowArrow />
+      <Text style={mr.ioLabel}>BECOMES ONE PRODUCT</Text>
+      <ProductCard
+        title={c.parentTitle || 'One product'}
+        image={items.find((x) => x.uri)?.uri}
+        variants={items.map((x) => ({ label: variantOption(x.title), sub: x.sub, uri: x.uri }))}
+      />
     </ResolveShell>
   );
 }
@@ -535,7 +491,7 @@ function MR_OneSided({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       note={c.note || 'One platform has sizes, the other is a single listing'}
       topInset={topInset}
       onBack={onBack}
-      primary={strat === 0 ? 'Use the variants' : strat === 1 ? 'Flatten to one' : 'Keep separate'}
+      primary={strat === 0 ? 'Use variants' : strat === 1 ? 'Flatten' : 'Keep separate'}
       primaryIcon={strat === 0 ? 'plus' : strat === 1 ? 'arrow-collapse' : 'check'}
       alt="Decide later"
       onPrimary={() => onResolve('primary')}
@@ -559,48 +515,26 @@ function MR_OneSided({ c, idx, total, topInset, onBack, onResolve }: RProps) {
 // one" — so each row is a simple include/exclude toggle, defaulted to ON.
 function MR_Align({ c, idx, total, topInset, onBack, onResolve }: RProps) {
   const pairs = c.candidates || [];
-  const [skip, setSkip] = useState<Record<string, boolean>>({});
-  const skipped = pairs.filter((p) => skip[p.id]).length;
-  const count = pairs.length - skipped;
-
   return (
     <ResolveShell
       idx={idx}
       total={total}
       kind="variants"
-      title={c.title || 'Sync these sizes?'}
-      note={c.note || 'Both sides have sizes · tap a pair to skip it'}
+      title="Match these sizes?"
+      note={`Both sides have ${pairs.length} variants`}
       topInset={topInset}
       onBack={onBack}
-      primary={skipped === 0 ? `Yes — sync all ${pairs.length}` : `Sync ${count} · skip ${skipped}`}
+      primary="Sync all"
       primaryIcon="check"
-      primaryReady={count > 0}
-      primaryGate="Everything skipped — use the grey button"
-      alt="Skip all"
-      onPrimary={() =>
-        onResolve('primary', { selectedIds: pairs.filter((p) => !skip[p.id]).map((p) => p.id) })
-      }
+      alt="Skip"
+      onPrimary={() => onResolve('primary', { selectedIds: pairs.map((p) => p.id) })}
       onAlt={() => onResolve('alt')}
     >
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <SideMini plat={c.aLabel || 'A'} txt={c.aChip || 'set A'} tone="ok" />
-        <SideMini plat={c.bLabel || 'B'} txt={c.bChip || 'set B'} tone="ok" />
+        <SideMini plat={c.aLabel || 'Incoming'} txt={c.aChip || `${pairs.length} variants`} tone="ok" />
+        <SideMini plat={c.bLabel || 'In catalog'} txt={c.bChip || `${pairs.length} variants`} tone="ok" />
       </View>
-      {pairs.map((p) => {
-        const [a, b] = (p.title || '— · —').split('·').map((x) => x.trim());
-        const missing = a === '—' || b === '—';
-        const off = !!skip[p.id];
-        return (
-          <Row key={p.id} dim={off} onPress={() => setSkip((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}>
-            <VBox val={a} missing={a === '—'} />
-            <MaterialCommunityIcons name="swap-horizontal" size={14} color={RC.faint} />
-            <VBox val={b} missing={b === '—'} />
-            <Text style={[mr.placeTag, { color: off ? RC.danger : missing ? RC.muted : RC.greenDark }]}>
-              {off ? 'skipped' : missing ? 'will create' : 'will merge'}
-            </Text>
-          </Row>
-        );
-      })}
+      <MergeSummary count={pairs.length} outcome="variants synced both ways" />
     </ResolveShell>
   );
 }
@@ -637,9 +571,9 @@ function MR_Stale({ c, idx, total, topInset, onBack, onResolve, onSearch }: RPro
       note={c.note || 'The linked listing changed under it'}
       topInset={topInset}
       onBack={onBack}
-      primary={pickedItem ? 'Relink to this' : 'Unlink — keep my catalog item'}
+      primary={pickedItem ? 'Relink' : 'Unlink'}
       primaryIcon={pickedItem ? 'link-variant' : 'link-variant-off'}
-      alt={pickedItem ? 'Unlink instead' : undefined}
+      alt={pickedItem ? 'Unlink' : undefined}
       onPrimary={() => onResolve('primary', pickedItem ? { linkTo: pickedItem } : { unlink: true })}
       onAlt={() => onResolve('alt', { unlink: true })}
     >
@@ -712,9 +646,9 @@ function MR_Orphan({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       note={c.note || (c.platform ? `In your catalog · ${c.platform} didn’t send it back` : 'In your catalog · not in this import')}
       topInset={topInset}
       onBack={onBack}
-      primary={strat === 0 ? 'Keep listed' : 'Mark sold · delist'}
+      primary={strat === 0 ? 'Keep listed' : 'Delist'}
       primaryIcon={strat === 0 ? 'check' : 'cancel'}
-      alt="Decide later — ask again next sync"
+      alt="Decide later"
       onPrimary={() => onResolve('primary', strat === 1 ? { unlink: true } : undefined)}
       onAlt={() => onResolve('alt')}
     >
@@ -766,9 +700,9 @@ function MR_FuzzyBatch({ c, topInset, onBack, onResolve }: RProps) {
       topInset={topInset}
       onBack={onBack}
       scroll={false}
-      primary="Yes — same"
+      primary="Same"
       primaryIcon="check"
-      alt="No — different"
+      alt="Different"
       onPrimary={() => decide(true)}
       onAlt={() => decide(false)}
     >
@@ -814,48 +748,31 @@ function MR_FuzzyBatch({ c, topInset, onBack, onResolve }: RProps) {
 // cards. Nobody does that. Rows sit calm (kept by default); tapping one marks
 // it GONE — red, unmistakable. One green button answers the whole card.
 function MR_OrphanBatch({ c, idx, total, topInset, onBack, onResolve }: RProps) {
-  const initial = c.candidates || [];
-  const [gone, setGone] = useState<Record<string, boolean>>({});
-  const goneCount = initial.filter((x) => gone[x.id]).length;
-  const keepCount = initial.length - goneCount;
-
+  const items = c.candidates || [];
   return (
     <ResolveShell
       idx={idx}
       total={total}
       kind="missing"
-      title={c.title || 'Keep selling these?'}
-      note={c.note || 'This import didn’t send them back · tap what’s gone'}
+      title="Still selling these?"
+      note={`${items.length} weren’t in this import`}
       topInset={topInset}
       onBack={onBack}
-      primary={goneCount === 0 ? `Yes — keep all ${initial.length}` : `Keep ${keepCount} · remove ${goneCount}`}
+      primary="Keep all"
       primaryIcon="check"
       alt="Decide later"
-      onPrimary={() =>
-        onResolve('primary', { selectedIds: initial.filter((x) => !gone[x.id]).map((x) => x.id) })
-      }
+      onPrimary={() => onResolve('primary', { selectedIds: items.map((x) => x.id) })}
       onAlt={() => onResolve('alt')}
     >
-      {initial.map((x) => {
-        const off = !!gone[x.id];
-        return (
-          <Row key={x.id} danger={off} onPress={() => setGone((p) => ({ ...p, [x.id]: !p[x.id] }))}>
-            <Thumb uri={x.uri} size={32} radius={7} />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[mr.title, off && { color: RC.dangerInk, textDecorationLine: 'line-through' }]} numberOfLines={1}>
-                {x.title}
-              </Text>
-              {!!x.sub && <Text style={mr.meta} numberOfLines={1}>{x.sub}</Text>}
-            </View>
-            {off && (
-              <View style={mr.goneTag}>
-                <MaterialCommunityIcons name="close" size={12} color={RC.dangerInk} />
-                <Text style={mr.goneTagText}>gone</Text>
-              </View>
-            )}
-          </Row>
-        );
-      })}
+      {items.map((x) => (
+        <View key={x.id} style={mr.roRow}>
+          <Thumb uri={x.uri} size={36} radius={9} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={mr.roTitle} numberOfLines={1}>{x.title}</Text>
+            {!!x.sub && <Text style={mr.roSub} numberOfLines={1}>{x.sub}</Text>}
+          </View>
+        </View>
+      ))}
     </ResolveShell>
   );
 }
@@ -872,36 +789,18 @@ function MR_Kit({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       note={c.note || 'One platform sells the set, another the pieces'}
       topInset={topInset}
       onBack={onBack}
-      primary={parts.length ? `Link kit to ${parts.length} pieces` : 'Link kit to pieces'}
+      primary={parts.length ? `Link ${parts.length} pieces` : 'Link pieces'}
       primaryIcon="merge"
-      alt="Keep set & pieces apart"
+      alt="Keep apart"
       onPrimary={() => onResolve('primary')}
       onAlt={() => onResolve('alt')}
       onIgnore={() => onResolve('alt', { ignore: true })}
     >
-      <View style={[mr.bundleHead, { borderColor: RC.green, backgroundColor: RC.greenSoft }]}>
-        <MaterialCommunityIcons name="package-variant-closed" size={18} color={RC.greenDark} />
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={mr.bundleTitle} numberOfLines={1}>{c.itemTitle}</Text>
-          <Text style={[mr.meta, { color: RC.greenDark }]} numberOfLines={1}>{c.itemSub}</Text>
-        </View>
-        {!!c.platform && <PlatTag name={c.platform} />}
-      </View>
-      <View style={mr.divLabel}>
-        <View style={mr.divLine} />
-        <Text style={mr.divLabelText}>SAME STOCK AS</Text>
-        <View style={mr.divLine} />
-      </View>
-      {parts.map((p) => (
-        <Row key={p.id}>
-          <Thumb size={22} radius={5} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={mr.title} numberOfLines={1}>{p.title}</Text>
-            <Text style={mr.meta} numberOfLines={1}>{p.sub}</Text>
-          </View>
-          {!!p.plat && <PlatTag name={p.plat} />}
-        </Row>
-      ))}
+      <InStatic label="THE SET" title={c.itemTitle} sub={c.itemSub} uri={c.itemImage} />
+      <FlowArrow />
+      <Accordion label="SAME STOCK AS" title={`${parts.length} pieces`} count={parts.length} defaultOpen>
+        <ItemRows items={parts} />
+      </Accordion>
     </ResolveShell>
   );
 }
@@ -923,9 +822,172 @@ function VBox({ val, missing }: { val: string; missing?: boolean }) {
     </View>
   );
 }
+
+// ── In → Out flow — what you have vs what it becomes ───────────────────────
+// One collapsed accordion for the many-side (the listings/pieces), a static
+// block for the one-side (the product). Tap to expand and see the actuals.
+function Accordion({ label, title, count, defaultOpen, flat, children }: {
+  label?: string;
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  flat?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <View>
+      {!!label && <Text style={mr.ioLabel}>{label}</Text>}
+      <TouchableOpacity activeOpacity={0.7} onPress={() => setOpen((o) => !o)} style={mr.accHead}>
+        <Text style={mr.accTitle} numberOfLines={1}>{title}</Text>
+        {count != null && (
+          <View style={mr.accCount}><Text style={mr.accCountText}>{count}</Text></View>
+        )}
+        <View style={{ flex: 1 }} />
+        <MaterialCommunityIcons name={open ? 'chevron-up' : 'chevron-down'} size={22} color={RC.muted} />
+      </TouchableOpacity>
+      {open ? <View style={flat ? mr.accBodyFlat : mr.accBody}>{children}</View> : null}
+    </View>
+  );
+}
+
+// readable variant option from a noisy title ("THIA17-Weight:Md" → "Weight: Md")
+function variantOption(title: string): string {
+  if (title.includes(':')) {
+    const [k, v] = title.split(':');
+    const key = (k.split('-').pop() || k).trim();
+    return v ? `${key}: ${v.trim()}` : title;
+  }
+  return title;
+}
+
+// A standalone "separate listing" card — how an item looks on its own (before).
+function SeparateCard({ title, sub, uri }: { title: string; sub?: string; uri?: string | null }) {
+  return (
+    <View style={mr.sepCard}>
+      <Thumb uri={uri} size={40} radius={10} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={mr.sepTitle} numberOfLines={1}>{title}</Text>
+        {!!sub && <Text style={mr.sepSub} numberOfLines={1}>{sub}</Text>}
+      </View>
+    </View>
+  );
+}
+
+// The end product, inventory-list style: a product header with its variants
+// stacked underneath (indented rows, with images).
+function ProductCard({ title, image, variants }: {
+  title: string;
+  image?: string | null;
+  variants: { label: string; sub?: string; uri?: string | null }[];
+}) {
+  return (
+    <View style={mr.prodCard}>
+      <View style={mr.prodHead}>
+        <Thumb uri={image} size={50} radius={11} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={mr.prodTitle} numberOfLines={2}>{title}</Text>
+          <Text style={mr.prodMeta}>{variants.length} variant{variants.length === 1 ? '' : 's'}</Text>
+        </View>
+      </View>
+      <View style={mr.prodVarsWrap}>
+        {variants.map((v, i) => (
+          <View key={i} style={mr.prodVarRow}>
+            <Thumb uri={v.uri} size={30} radius={7} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={mr.prodVarLabel} numberOfLines={1}>{v.label}</Text>
+              {!!v.sub && <Text style={mr.prodVarSub} numberOfLines={1}>{v.sub}</Text>}
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function FlowArrow() {
+  return (
+    <View style={mr.flowArrow}>
+      <MaterialCommunityIcons name="arrow-down" size={20} color={RC.faint} />
+    </View>
+  );
+}
+
+function OutBlock({ label, title, sub }: { label: string; title: string; sub?: string }) {
+  return (
+    <View>
+      <Text style={mr.ioLabel}>{label}</Text>
+      <View style={mr.outBlock}>
+        <View style={mr.outIcon}>
+          <MaterialCommunityIcons name="package-variant-closed" size={20} color={RC.greenDark} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={mr.outTitle} numberOfLines={1}>{title}</Text>
+          {!!sub && <Text style={mr.outSub} numberOfLines={1}>{sub}</Text>}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function InStatic({ label, title, sub, uri }: { label: string; title?: string; sub?: string; uri?: string | null }) {
+  return (
+    <View>
+      <Text style={mr.ioLabel}>{label}</Text>
+      <View style={mr.inStatic}>
+        <Thumb uri={uri} size={38} radius={9} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={mr.roTitle} numberOfLines={1}>{title || 'Item'}</Text>
+          {!!sub && <Text style={mr.roSub} numberOfLines={1}>{sub}</Text>}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// The accordion's open content: ONE card, the items as rows divided by hairlines
+// (the Paper "Variants" card) — not flat separate boxes. accBody is the card.
+function ItemRows({ items }: { items: CandidateItem[] }) {
+  return (
+    <>
+      {items.map((x, i) => (
+        <View key={x.id}>
+          {i > 0 ? <View style={mr.varDivider} /> : null}
+          <View style={mr.varRow}>
+            <Thumb uri={x.uri} size={38} radius={9} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={mr.varTitle} numberOfLines={1}>{x.title}</Text>
+              {!!x.sub && <Text style={mr.varSub} numberOfLines={1}>{x.sub}</Text>}
+            </View>
+            {!!x.plat && <PlatTag name={x.plat} />}
+          </View>
+        </View>
+      ))}
+    </>
+  );
+}
 function trim(s: string, n: number) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
+
+// A read-only "N → 1" summary — what grouping/merging will do, no per-row taps.
+function MergeSummary({ count, outcome }: { count: number; outcome: string }) {
+  return (
+    <View style={mr.mergeWrap}>
+      <View style={mr.mergeBadge}>
+        <MaterialCommunityIcons name="layers-triple-outline" size={26} color={RC.greenDark} />
+        <Text style={mr.mergeCount}>{count}</Text>
+        <Text style={mr.mergeCountLabel}>listings</Text>
+      </View>
+      <MaterialCommunityIcons name="arrow-down" size={22} color={RC.faint} style={{ marginVertical: 10 }} />
+      <View style={mr.mergeResult}>
+        <MaterialCommunityIcons name="check-circle" size={18} color={RC.green} />
+        <Text style={mr.mergeResultText}>{outcome}</Text>
+      </View>
+    </View>
+  );
+}
+
 
 // ── Dispatcher ─────────────────────────────────────────────────────────────
 const REGISTRY: Record<MatchKind, (p: RProps) => React.ReactElement> = {
@@ -944,9 +1006,49 @@ const REGISTRY: Record<MatchKind, (p: RProps) => React.ReactElement> = {
   kit: MR_Kit,
 };
 
+// ── Five-card mental model ─────────────────────────────────────────────────
+// The 13 classifier kinds collapse into the five cards the seller reasons about.
+// Find splits by whether there's a catalog candidate: with one it's a Match
+// (link by hand), with none it's a Create (add as new).
+const CARD = {
+  create: { label: 'Create', color: '#16A34A' },
+  merge: { label: 'Split / Merge', color: '#7C3AED' },
+  verify: { label: 'Verify', color: '#2563EB' },
+  match: { label: 'Match', color: '#0891B2' },
+  ignore: { label: 'Ignore', color: '#6B7280' },
+} as const;
+
+export function cardBadgeFor(c: MatchCase): { label: string; color: string } {
+  switch (c.kind) {
+    case 'compare':
+    case 'collision':
+    case 'fuzzy':
+    case 'stale':
+      return CARD.verify;
+    case 'consolidate':
+    case 'split':
+    case 'kit':
+    case 'variants':
+    case 'onesided':
+    case 'align':
+      return CARD.merge;
+    case 'orphan':
+    case 'orphans':
+      return CARD.ignore;
+    case 'find':
+      return c.candidates && c.candidates.length ? CARD.match : CARD.create;
+    default:
+      return CARD.match;
+  }
+}
+
 export function MatchResolver(props: RProps) {
   const Comp = REGISTRY[props.c.kind] || MR_Find;
-  return <Comp {...props} />;
+  return (
+    <ResolveBadge.Provider value={cardBadgeFor(props.c)}>
+      <Comp {...props} />
+    </ResolveBadge.Provider>
+  );
 }
 
 const mr = StyleSheet.create({
@@ -955,6 +1057,67 @@ const mr = StyleSheet.create({
   mono: { fontSize: 15, fontWeight: '600', color: RC.ink },
   price: { fontSize: 15, fontWeight: '700', color: RC.greenDark },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
+
+  // clean tap-to-exclude row (replaces the double-checkbox motif)
+  pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 58, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#fff' },
+  pickRowOff: { backgroundColor: RC.surface, opacity: 0.7 },
+  pickTitle: { fontSize: 16, fontWeight: '600', color: RC.ink },
+  pickStruck: { color: RC.faint, textDecorationLine: 'line-through' },
+  pickSub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
+  removedChip: { backgroundColor: RC.surface2, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 5 },
+  removedChipText: { fontSize: 12.5, fontWeight: '700', color: RC.muted },
+
+  // read-only row (no tap) — shows what's being decided
+  roRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 58, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 11, backgroundColor: '#fff' },
+  roTitle: { fontSize: 15.5, fontWeight: '700', color: RC.ink },
+  roSub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
+
+  // in → out accordion flow
+  ioLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, color: RC.faint, marginBottom: 6, marginTop: 2 },
+  accHead: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 52, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: RC.surface },
+  accTitle: { fontSize: 16, fontWeight: '700', color: RC.ink },
+  accCount: { backgroundColor: RC.greenSoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 2 },
+  accCountText: { fontSize: 12.5, fontWeight: '800', color: RC.greenDark },
+  accBody: { marginTop: 8, borderWidth: 1, borderColor: RC.line, borderRadius: 14, backgroundColor: '#fff', overflow: 'hidden' },
+  varRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  varDivider: { height: 1, backgroundColor: '#F2F4F6' },
+  varTitle: { fontSize: 15.5, fontWeight: '700', color: RC.ink },
+  varSub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
+  flowArrow: { alignItems: 'center', paddingVertical: 8 },
+  outBlock: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 60, borderWidth: 1.5, borderColor: RC.greenLine, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: RC.greenSoft },
+  outIcon: { width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: RC.greenLine },
+  outTitle: { fontSize: 16, fontWeight: '800', color: RC.greenInk },
+  outSub: { fontSize: 13, fontWeight: '600', color: RC.greenDark, marginTop: 2 },
+  inStatic: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 60, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#fff' },
+  accBodyFlat: { marginTop: 8, gap: 8 },
+
+  // separate "before" cards
+  sepCard: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#fff' },
+  sepTitle: { fontSize: 15, fontWeight: '700', color: RC.ink },
+  sepSub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
+
+  // product "after" card — inventory style, variants stacked underneath
+  prodCard: { borderWidth: 1.5, borderColor: RC.greenLine, borderRadius: 16, backgroundColor: '#fff', overflow: 'hidden' },
+  prodHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13, backgroundColor: RC.greenSoft },
+  prodTitle: { fontSize: 16, fontWeight: '800', color: RC.greenInk, letterSpacing: -0.2 },
+  prodMeta: { fontSize: 13, fontWeight: '600', color: RC.greenDark, marginTop: 2 },
+  prodVarsWrap: { paddingLeft: 18, paddingRight: 12 },
+  prodVarRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#F2F4F6' },
+  prodVarLabel: { fontSize: 14.5, fontWeight: '600', color: RC.ink },
+  prodVarSub: { fontSize: 12.5, fontWeight: '500', color: RC.muted, marginTop: 1 },
+
+  // merge summary (N → 1)
+  mergeWrap: { alignItems: 'center', paddingVertical: 24 },
+  mergeBadge: { alignItems: 'center', justifyContent: 'center', width: 156, paddingVertical: 22, borderRadius: 20, borderWidth: 1, borderColor: RC.greenLine, backgroundColor: RC.greenSoft },
+  mergeCount: { fontSize: 36, fontWeight: '800', color: RC.greenInk, letterSpacing: -1, marginTop: 6 },
+  mergeCountLabel: { fontSize: 13, fontWeight: '600', color: RC.greenDark },
+  mergeResult: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 11, backgroundColor: '#fff' },
+  mergeResultText: { fontSize: 15, fontWeight: '700', color: RC.ink },
+
+  // merge outcome footer (under a list)
+  outcomeRow: { alignItems: 'center', gap: 6, marginTop: 6 },
+  outcomePill: { flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, borderColor: RC.greenLine, backgroundColor: RC.greenSoft, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  outcomeText: { fontSize: 14, fontWeight: '700', color: RC.greenDark },
 
   // compare — taller image row + side-by-side form-sized cells (ListingEditorForm scale)
   colHead: { fontSize: 12, fontWeight: '700', letterSpacing: 0.5, color: RC.muted },

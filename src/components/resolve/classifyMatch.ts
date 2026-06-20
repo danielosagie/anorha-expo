@@ -588,24 +588,51 @@ export function applyMatchDecision(
     isSelected: action !== 'IGNORE',
   });
 
+  // Every kind must commit a concrete action in BOTH branches — a card that
+  // resolves without setting one leaves the item ambiguous at commit time.
   if (decision === 'alt') {
-    if (kind === 'orphan') return set('IGNORE'); // delist / ignore
-    if (kind === 'collision') return set('LINK_EXISTING'); // "they're the same → merge"
-    if (kind === 'compare' || kind === 'consolidate') return set('CREATE_NEW'); // keep both / apart
-    if (kind === 'find') return set('CREATE_NEW'); // add as new
-    if (kind === 'variants') return set('CREATE_NEW'); // keep separate = its own product
-    return { ...s, resolved: true };
+    switch (kind) {
+      case 'orphan':
+      case 'orphans':
+        return set('LINK_EXISTING'); // "decide later" → keep it listed, revisit next sync
+      case 'collision':
+        return set('LINK_EXISTING'); // "actually the same → merge"
+      case 'stale':
+        return set('IGNORE'); // unlink the broken link (also via meta.unlink upstream)
+      case 'compare':
+      case 'consolidate':
+      case 'find':
+      case 'variants':
+      case 'split':
+      case 'kit':
+      case 'onesided':
+      case 'align':
+      case 'fuzzy':
+      default:
+        return set('CREATE_NEW'); // keep apart / keep as one / keep separate / add as new
+    }
   }
 
   // primary
   switch (kind) {
     case 'collision':
-      return set('CREATE_NEW'); // keep as 2 items
+      return set('CREATE_NEW'); // keep as 2 distinct items
     case 'find':
       return set(s.suggestedCanonicalProduct?.id ? 'LINK_EXISTING' : 'CREATE_NEW');
+    case 'split':
+      return set('CREATE_NEW'); // create the pieces as new products
     case 'orphan':
+    case 'orphans':
       return set('LINK_EXISTING'); // keep listed
+    case 'compare':
+    case 'consolidate':
+    case 'variants':
+    case 'onesided':
+    case 'align':
+    case 'stale':
+    case 'kit':
+    case 'fuzzy':
     default:
-      return set('LINK_EXISTING'); // compare/consolidate/variants/stale/kit/split/onesided/align
+      return set('LINK_EXISTING'); // link / merge / sync
   }
 }

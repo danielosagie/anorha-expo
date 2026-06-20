@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import SwipeCard from '../import/SwipeCard';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -60,6 +61,20 @@ export const RC = {
   neutralBtnDark: '#565A5E',
   path: '#C9CED1', // dashed trail on white
 } as const;
+
+// The five-card mental model: every resolver case carries one of these badges
+// so the seller always knows which of the five questions they're answering.
+// Match supplies it via <ResolveBadge.Provider>; the optimize side leaves it
+// null, so its shells render unchanged.
+export const ResolveBadge = React.createContext<{ label: string; color: string } | null>(null);
+
+// Per-card edit/explain entry points, provided by the deck. Cards that don't
+// supply them (the optimize side) render no affordance.
+export const ResolveActions = React.createContext<{ onEdit?: () => void; onExplain?: () => void } | null>(null);
+
+// Deck-level chrome (the ⋯ menu and the always-present ignore), provided by the
+// match deck so TinderShell's header/footer can reach them.
+export const DeckChrome = React.createContext<{ onMenu?: () => void; onIgnore?: () => void; onUndo?: () => void; canUndo?: boolean } | null>(null);
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'muted';
 export function toneColor(t?: Tone): string {
@@ -339,6 +354,8 @@ export function ResolveShell({
 }) {
   const pct = total ? Math.round((idx / total) * 100) : 0;
   const insets = useSafeAreaInsets();
+  const badge = React.useContext(ResolveBadge);
+  const actions = React.useContext(ResolveActions);
   return (
     <View style={[s.shell, { paddingTop: topInset + 8 }]}>
       <View style={s.progRow}>
@@ -351,16 +368,34 @@ export function ResolveShell({
         <Text style={s.progCount}>{idx}/{total}</Text>
       </View>
 
+      {!!badge && (
+        <View style={[s.cardBadge, { backgroundColor: `${badge.color}14` }]}>
+          <View style={[s.cardBadgeDot, { backgroundColor: badge.color }]} />
+          <Text style={[s.cardBadgeText, { color: badge.color }]} numberOfLines={1}>{badge.label.toUpperCase()}</Text>
+        </View>
+      )}
+
       <View style={s.titleRow}>
         <Text style={s.title} numberOfLines={1}>{title}</Text>
-        {onIgnore ? (
-          <TouchableOpacity onPress={onIgnore} hitSlop={HIT} activeOpacity={0.7} style={s.ignoreChip}>
-            <MaterialCommunityIcons name="trash-can-outline" size={13} color={RC.muted} />
-            <Text style={s.ignoreChipText}>Skip</Text>
-          </TouchableOpacity>
-        ) : null}
       </View>
       {!!note && <Text style={s.note}>{note}</Text>}
+
+      {actions && (actions.onEdit || actions.onExplain) ? (
+        <View style={s.actionsRow}>
+          {actions.onEdit ? (
+            <TouchableOpacity onPress={actions.onEdit} hitSlop={6} activeOpacity={0.7} style={s.actionLink}>
+              <MaterialCommunityIcons name="pencil-outline" size={15} color={RC.muted} />
+              <Text style={s.actionLinkText}>Edit details</Text>
+            </TouchableOpacity>
+          ) : null}
+          {actions.onExplain ? (
+            <TouchableOpacity onPress={actions.onExplain} hitSlop={6} activeOpacity={0.7} style={s.actionLink}>
+              <MaterialCommunityIcons name="comment-question-outline" size={15} color={RC.muted} />
+              <Text style={s.actionLinkText}>Explain</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
 
       {scroll ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={s.body} showsVerticalScrollIndicator={false}>
@@ -386,12 +421,221 @@ export function ResolveShell({
             <Text style={s.secondaryText} numberOfLines={1}>{alt}</Text>
           </TouchableOpacity>
         )}
+        {onIgnore ? (
+          <TouchableOpacity onPress={onIgnore} activeOpacity={0.7} style={s.ignoreBottom}>
+            <MaterialCommunityIcons name="trash-can-outline" size={14} color={RC.faint} />
+            <Text style={s.ignoreBottomText}>Ignore — don’t import</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </View>
   );
 }
 
 const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
+
+// ── TinderShell — the Paper J/H "deck card" chrome ─────────────────────────
+// Light-gray screen, a peek of the cards behind, then the white decision card:
+//   ✕ · green progress · "N left"   →  badge · title · note · body  →  a single
+//   horizontal action bar: ← back · secondary · green primary · ✕ ignore.
+// Same props as ResolveShell, so every match resolver renders this by swapping
+// one import. Optimize keeps ResolveShell.
+export function TinderShell({
+  idx,
+  total,
+  title,
+  note,
+  onBack,
+  children,
+  primary,
+  primaryIcon,
+  primaryReady = true,
+  primaryGate,
+  alt,
+  onPrimary,
+  onAlt,
+  onIgnore,
+  topInset = 0,
+  scroll = true,
+}: {
+  idx: number;
+  total: number;
+  kind?: string;
+  title: string;
+  note?: string;
+  onBack?: () => void;
+  children: React.ReactNode;
+  primary: string;
+  primaryIcon?: IconName;
+  primaryReady?: boolean;
+  primaryGate?: string;
+  alt?: string;
+  onPrimary?: () => void;
+  onAlt?: () => void;
+  onIgnore?: () => void;
+  topInset?: number;
+  scroll?: boolean;
+}) {
+  const insets = useSafeAreaInsets();
+  const badge = React.useContext(ResolveBadge);
+  const actions = React.useContext(ResolveActions);
+  const chrome = React.useContext(DeckChrome);
+  const pct = total ? Math.round((idx / total) * 100) : 0;
+  const left = Math.max(0, total - idx + 1);
+  const ignore = chrome?.onIgnore || onIgnore;
+  const noop = () => {};
+
+  return (
+    <View style={[ts.screen, { paddingTop: topInset + 10, paddingBottom: insets.bottom + 10 }]}>
+      {/* HEADER — outside the card, stays put while the card swipes */}
+      <View style={ts.header}>
+        <TouchableOpacity onPress={onBack} hitSlop={HIT} activeOpacity={0.7} style={ts.iconBtn}>
+          <MaterialCommunityIcons name="arrow-left" size={20} color={RC.muted} />
+        </TouchableOpacity>
+        <View style={ts.progTrack}>
+          <View style={[ts.progFill, { width: `${pct}%` }]} />
+        </View>
+        <View style={ts.leftPill}>
+          <Text style={ts.leftPillText}>{left} left</Text>
+        </View>
+        {chrome?.onMenu ? (
+          <TouchableOpacity onPress={chrome.onMenu} hitSlop={HIT} activeOpacity={0.7} style={ts.iconBtn}>
+            <MaterialCommunityIcons name="dots-horizontal" size={20} color={RC.muted} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {/* CARD — the only thing that swipes */}
+      <View style={ts.cardArea}>
+        <View style={ts.peek2} pointerEvents="none" />
+        <View style={ts.peek1} pointerEvents="none" />
+        <SwipeCard onYes={onPrimary || noop} onNo={onAlt || noop} onIgnore={ignore}>
+          <View style={ts.card}>
+            {!!badge && (
+              <View style={[ts.badge, { backgroundColor: `${badge.color}14` }]}>
+                <View style={[ts.badgeDot, { backgroundColor: badge.color }]} />
+                <Text style={[ts.badgeText, { color: badge.color }]}>{badge.label.toUpperCase()}</Text>
+              </View>
+            )}
+            <Text style={ts.title} numberOfLines={2}>{title}</Text>
+            {!!note && <Text style={ts.note}>{note}</Text>}
+
+            {actions && (actions.onEdit || actions.onExplain) ? (
+              <View style={ts.linksRow}>
+                {actions.onEdit ? (
+                  <TouchableOpacity onPress={actions.onEdit} hitSlop={6} activeOpacity={0.7} style={ts.link}>
+                    <MaterialCommunityIcons name="pencil-outline" size={15} color={RC.muted} />
+                    <Text style={ts.linkText}>Edit details</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {actions.onExplain ? (
+                  <TouchableOpacity onPress={actions.onExplain} hitSlop={6} activeOpacity={0.7} style={ts.link}>
+                    <MaterialCommunityIcons name="comment-question-outline" size={15} color={RC.muted} />
+                    <Text style={ts.linkText}>Explain</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : null}
+
+            {scroll ? (
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={ts.body} showsVerticalScrollIndicator={false}>
+                {children}
+              </ScrollView>
+            ) : (
+              <View style={[ts.body, { flex: 1 }]}>{children}</View>
+            )}
+          </View>
+        </SwipeCard>
+      </View>
+
+      {/* FOOTER — outside the card */}
+      {!primaryReady && !!primaryGate && <Text style={ts.gate}>{primaryGate}</Text>}
+      <View style={ts.bar}>
+        {chrome ? (
+          <TouchableOpacity
+            onPress={chrome.canUndo ? chrome.onUndo : undefined}
+            disabled={!chrome.canUndo}
+            hitSlop={HIT}
+            activeOpacity={0.7}
+            style={[ts.undoBtn, !chrome.canUndo && ts.undoBtnDim]}
+          >
+            <MaterialCommunityIcons name="undo-variant" size={20} color={chrome.canUndo ? RC.muted : RC.faint} />
+          </TouchableOpacity>
+        ) : null}
+        {!!alt && (
+          <TouchableOpacity onPress={onAlt} activeOpacity={0.85} style={ts.barSecondary}>
+            <Text style={ts.barSecondaryText} numberOfLines={1}>{alt}</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          onPress={primaryReady ? onPrimary : undefined}
+          activeOpacity={primaryReady ? 0.88 : 1}
+          disabled={!primaryReady}
+          style={[ts.barPrimary, !alt && { flex: 1 }, !primaryReady && ts.barPrimaryDim]}
+        >
+          <Text style={[ts.barPrimaryText, !primaryReady && { color: RC.faint }]} numberOfLines={1}>{primary}</Text>
+        </TouchableOpacity>
+        {ignore ? (
+          <TouchableOpacity onPress={ignore} hitSlop={HIT} activeOpacity={0.7} style={ts.trashBtn}>
+            <MaterialCommunityIcons name="trash-can-outline" size={20} color={RC.muted} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const ts = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#F4F5F7', paddingHorizontal: 16 },
+
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 40 },
+  iconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  progTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: '#E3E6EA', overflow: 'hidden' },
+  progFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: RC.green, borderRadius: 3 },
+  leftPill: { backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, flexShrink: 0 },
+  leftPillText: { fontSize: 13, fontWeight: '700', color: RC.muted, fontVariant: ['tabular-nums'] },
+
+  cardArea: { flex: 1, position: 'relative', paddingTop: 16, marginTop: 12 },
+  peek2: { position: 'absolute', top: 0, left: 34, right: 34, height: 40, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#E9EBEF' },
+  peek1: { position: 'absolute', top: 6, left: 24, right: 24, height: 40, backgroundColor: '#fff', borderRadius: 22, borderWidth: 1, borderColor: '#E1E4E9' },
+  card: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: RC.line,
+    padding: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.07,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+
+  badge: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  badgeDot: { width: 6, height: 6, borderRadius: 3 },
+  badgeText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+
+  title: { fontSize: 24, fontWeight: '800', color: RC.ink, letterSpacing: -0.4, marginTop: 12, lineHeight: 29 },
+  note: { fontSize: 15, fontWeight: '500', color: RC.muted, marginTop: 5 },
+
+  linksRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  link: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
+  linkText: { fontSize: 13, fontWeight: '600', color: RC.muted },
+
+  body: { paddingTop: 16, paddingBottom: 8, gap: 10 },
+
+  gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginTop: 10 },
+  bar: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  barSecondary: { flex: 1, height: 54, borderRadius: 27, borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', paddingHorizontal: 10 },
+  barSecondaryText: { fontSize: 16, fontWeight: '700', color: RC.muted },
+  barPrimary: { flex: 1.3, height: 54, borderRadius: 27, backgroundColor: RC.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10 },
+  barPrimaryDim: { backgroundColor: RC.surface2 },
+  barPrimaryText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  trashBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff', borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  undoBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff', borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  undoBtnDim: { opacity: 0.4 },
+});
 
 const s = StyleSheet.create({
   shell: { flex: 1, backgroundColor: RC.bg, paddingHorizontal: 16 },
@@ -411,6 +655,16 @@ const s = StyleSheet.create({
   title: { flex: 1, fontSize: 20, fontWeight: '700', color: RC.ink, letterSpacing: -0.3 },
   kind: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, color: RC.faint },
   note: { fontSize: 15, fontWeight: '500', color: RC.muted, marginTop: 4 },
+
+  // edit / explain quick links (under the note)
+  actionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  actionLink: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
+  actionLinkText: { fontSize: 13, fontWeight: '600', color: RC.muted },
+
+  // five-card badge — the question type, shown above the title
+  cardBadge: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8 },
+  cardBadgeDot: { width: 6, height: 6, borderRadius: 3 },
+  cardBadgeText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
 
   // body
   body: { paddingTop: 16, paddingBottom: 12, gap: 9 },
@@ -441,6 +695,10 @@ const s = StyleSheet.create({
   },
   secondaryText: { fontSize: 16, fontWeight: '600', color: '#71717A' },
   gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginBottom: 2 },
+
+  // ignore — the quiet bottom escape hatch (sits under the two decision buttons)
+  ignoreBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 16, marginTop: 2 },
+  ignoreBottomText: { fontSize: 13.5, fontWeight: '600', color: RC.faint },
 
   // skip pill — quiet per-item escape hatch, floating at the title row's right
   // (the design's "skip floats top-right, out of the decision row")
