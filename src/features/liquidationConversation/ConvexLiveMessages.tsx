@@ -15,14 +15,21 @@ type Props = {
   onMessages: (messages: RawMessage[]) => void;
 };
 
+// Session-wide kill switch for the live bridge. Flipped the first time the query
+// throws — most commonly because the `messages:listByThread` Convex function hasn't
+// been deployed to EXPO_PUBLIC_CONVEX_URL yet (`npx convex deploy`). Once flipped we
+// stop mounting the subscription so it can't re-throw on every thread open (which
+// would redbox in dev each time). Can also be pre-disabled via env until deploy.
+let liveDisabled = process.env.EXPO_PUBLIC_DISABLE_CONVEX_LIVE === '1';
+
 /**
  * Subscribes to a thread's messages via Convex and pushes them up to the
  * conversation controller, which appends anything new (agent-initiated digests,
  * proactive updates) to the open thread live. Renders nothing.
  *
- * Wrapped by a silent error boundary below: if the `messages:listByThread` Convex
- * function hasn't been deployed yet (`npx convex deploy`), useQuery throws, and the
- * boundary keeps the chat fully working via the existing fetch path.
+ * Wrapped by the silent boundary below: if the Convex function isn't deployed yet,
+ * useQuery throws, the boundary swallows it and disables the bridge for the session,
+ * and the chat keeps working via the existing fetch path.
  */
 function ConvexLiveMessagesInner({ threadId, onMessages }: Props) {
   // `(api as any)` until `npx convex codegen` types the new function.
@@ -40,14 +47,19 @@ class SilentBoundary extends React.Component<{ children: React.ReactNode }, { fa
   static getDerivedStateFromError() {
     return { failed: true };
   }
+  componentDidCatch() {
+    // Disable for the rest of the session so we don't loop on the same throw each
+    // time the thread screen remounts (the function isn't going to appear mid-session).
+    liveDisabled = true;
+  }
   render() {
-    // Once it fails (e.g. the Convex function isn't deployed yet), stay null until
-    // the app remounts — retrying in place would loop on the same throw.
     return this.state.failed ? null : (this.props.children as React.ReactElement);
   }
 }
 
 export function ConvexLiveMessages(props: Props) {
+  // Already failed (or pre-disabled) — never mount the subscription again this session.
+  if (liveDisabled) return null;
   return (
     <SilentBoundary>
       <ConvexLiveMessagesInner {...props} />
