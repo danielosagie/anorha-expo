@@ -1,16 +1,14 @@
-// MatchDeck — the Match review, one card at a time.
+// MatchDeck — the Match review. One card at a time, with full undo/redo and a
+// single searchable "All items" view (no tabs, no bottom sheets).
 //
-// This is the mounted surface for the 11 Match·Resolve v2 cases: it snapshots
-// the live mapping suggestions into an ordered deck via classifyMatch(), then
-// renders one MatchResolver card at a time (Create · Split/Merge · Verify ·
-// Match · Ignore — the five-card model badged in the shell). Every decision is
-// written straight back onto the suggestions, which the session hook persists
-// to /draft-mappings automatically. When the deck drains, we commit.
-//
-// Mirrors BackfillOptimizerScreen's optimize deck — same shape, match side.
+// Snapshots the live mapping suggestions into a deck via classifyMatch(), renders
+// one MatchResolver card at a time (Create · Split/Merge · Verify · Match · Ignore),
+// and writes every decision back onto the suggestions (persisted by the session
+// hook's /draft-mappings). You can undo/redo back and forth through every decision,
+// or pop into the All-items view to search, filter, jump, or undo any one.
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Pressable, Image, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, FlatList, Image, TextInput, Dimensions, Pressable } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -27,21 +25,19 @@ import {
 import { RC, ResolveActions, DeckChrome } from '../resolve/ResolveKit';
 import ResolveComposer, { ComposerMode, ComposerResult, ComposerField } from './ResolveComposer';
 import AppMenu from '../ui/AppMenu';
-import PillTabs from '../ui/PillTabs';
+import InventoryListCard from '../InventoryListCard';
+import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
+import { getPlatform } from '../../config/platforms';
 
 const SCREEN_W = Dimensions.get('window').width;
 
 interface MatchDeckProps {
   theme: any;
   insets: { top: number; bottom: number; left: number; right: number };
-  /** Live mapping suggestions — the deck is built from these and decisions
-   *  write back onto them (persisted via the session hook's draft-mappings). */
   suggestions: MappingSuggestion[];
   platformName?: string;
   setSuggestions: React.Dispatch<React.SetStateAction<MappingSuggestion[] | null>>;
-  /** Leave the deck (back out of the queue). */
   onClose: () => void;
-  /** Deck drained — every card answered, ready to commit. */
   onCommit: () => void;
 }
 
@@ -50,9 +46,7 @@ const money = (n?: number | string | null): string => {
   return typeof v === 'number' && !Number.isNaN(v) && v > 0 ? `$${v.toFixed(2)}` : '—';
 };
 
-// Apply one resolver's decision to a single suggestion it owns. The kit reports
-// the choice (primary/alt) plus meta (the exact item to link, a subset to keep,
-// or an outright ignore); we translate that to action + resolved + isSelected.
+// Apply one resolver's decision to a single suggestion it owns.
 function resolveSuggestion(
   s: MappingSuggestion,
   cur: MatchCase,
@@ -60,8 +54,6 @@ function resolveSuggestion(
   meta?: ResolveMeta,
 ): MappingSuggestion {
   const id = s.platformProduct.id;
-
-  // Explicit "link to THIS" wins over everything — the user hand-picked it.
   if (meta?.linkTo) {
     return {
       ...s,
@@ -78,39 +70,69 @@ function resolveSuggestion(
     };
   }
   if (meta?.ignore) return { ...s, action: 'IGNORE', isSelected: false, resolved: true };
-
-  // Batch cards: a per-row subset decision (kept rows vs the rest).
   if (meta?.selectedIds) {
     const inSel = meta.selectedIds.includes(id);
     switch (cur.kind) {
       case 'orphans':
-        // selected = kept listed · the rest are gone → delist.
         return inSel
           ? { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true }
           : { ...s, action: 'IGNORE', isSelected: false, resolved: true };
       case 'consolidate':
       case 'variants':
-        // selected = grouped/merged · the rest become their own product.
         return inSel
           ? { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true }
           : { ...s, action: 'CREATE_NEW', isSelected: true, resolved: true };
       case 'align':
-        // selected = synced · skipped rows are left exactly as they are.
         return inSel ? { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true } : { ...s, resolved: true };
       case 'fuzzy':
-        // "Yes" links them; "No" leaves the item open for a closer look later.
         return inSel ? { ...s, action: 'LINK_EXISTING', isSelected: true, resolved: true } : s;
       default:
         return applyMatchDecision(s, cur.kind, inSel ? 'primary' : 'alt');
     }
   }
-
-  // Unlink / delist (stale unlink · orphan "mark sold").
   if (meta?.unlink) return { ...s, action: 'IGNORE', isSelected: false, resolved: true };
-
-  // Single-item cards: the classifier's own write-back rules.
   return applyMatchDecision(s, cur.kind, decision);
 }
+
+type Status = { key: 'review' | 'linked' | 'new' | 'ignored' | 'catalog'; label: string; tone: 'review' | 'ok' | 'ignored' | 'catalog' };
+function statusOf(s: MappingSuggestion): Status {
+  // Catalog items the import didn't return aren't a "decision" — they sit in
+  // their own bucket so they never inflate the review queue or pop up as a card.
+  if (s.direction === 'anorha_to_platform' && !s.resolved) return { key: 'catalog', label: 'Incoming catalog', tone: 'catalog' };
+  if (!s.resolved) return { key: 'review', label: 'Needs review', tone: 'review' };
+  if (s.action === 'IGNORE') return { key: 'ignored', label: 'Ignored', tone: 'ignored' };
+  if (s.action === 'CREATE_NEW') return { key: 'new', label: 'Added new', tone: 'ok' };
+  return { key: 'linked', label: 'Linked', tone: 'ok' };
+}
+const STATUS_COLOR: Record<Status['tone'], string> = { review: '#B45309', ok: '#4A7C00', ignored: '#6B7280', catalog: '#0E7490' };
+
+const FILTERS: { key: string; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'review', label: 'Needs review' },
+  { key: 'linked', label: 'Linked' },
+  { key: 'new', label: 'New' },
+  { key: 'catalog', label: 'Incoming catalog' },
+  { key: 'ignored', label: 'Ignored' },
+];
+
+// The deck is the real match decisions — never the bulk "313 catalog items not in
+// this import" card (orphans). Those live only in the All-items view ("In catalog").
+const buildDeck = (sugs: MappingSuggestion[], platform?: string): MatchCase[] => {
+  // The swipe deck is ONLY for items that genuinely need a human decision. Already-
+  // linked items and "incoming catalog" (the seller's existing inventory, pulled in
+  // just so the matcher has something to match against) are not review work — they
+  // live in the All-items view. So keep a case only if it still contains an item that
+  // needs review; otherwise the deck balloons with hundreds of auto-handled items.
+  const reviewIds = new Set(
+    sugs.filter((s) => statusOf(s).key === 'review').map((s) => s.platformProduct.id),
+  );
+  return classifyMatch(sugs as any, platform).cases.filter(
+    (c) =>
+      c.kind !== 'orphan' &&
+      c.kind !== 'orphans' &&
+      (c.itemIds || []).some((id) => reviewIds.has(id)),
+  );
+};
 
 const MatchDeck: React.FC<MatchDeckProps> = ({
   theme,
@@ -121,17 +143,48 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
   onClose,
   onCommit,
 }) => {
-  // Snapshot the deck so resolving a card never re-clusters the remaining ones
-  // mid-pass. When the pass drains we re-classify once (a fuzzy "No" can leave an
-  // item open for a closer look) and continue if anything's left.
-  const [deck, setDeck] = useState<MatchCase[]>(() => classifyMatch(suggestions as any, platformName).cases);
+  const [deck, setDeck] = useState<MatchCase[]>(() => buildDeck(suggestions, platformName));
   const [idx, setIdx] = useState(0);
-  // The most recent decision's item ids — drives the footer Undo button.
-  const [lastDecided, setLastDecided] = useState<string[] | null>(null);
+  // Undo/redo: full back-and-forth through every decision.
+  const [past, setPast] = useState<MappingSuggestion[][]>([]);
+  const [future, setFuture] = useState<MappingSuggestion[][]>([]);
   const total = deck.length;
 
-  // Catalog index for the find/relink search boxes — built from every canonical
-  // and variant the suggestions already carry, so search never leaves the card.
+  // Platforms the user's anorha account currently has connected (canonical keys,
+  // e.g. 'ebay','shopify'). A LINKED item is an anorha-managed product, so its
+  // card shows the anorha mark + every connected channel — not just the single
+  // import source. (Per-product channel membership isn't in the import payload yet.)
+  const { connections } = usePlatformConnections();
+  const accountPlatformKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of connections || []) {
+      if (c?.IsEnabled === false) continue;
+      const def = getPlatform(c?.PlatformType);
+      if (def) set.add(def.key);
+    }
+    return Array.from(set);
+  }, [connections]);
+  // The single import-source platform (this connection), as a canonical key.
+  const sourcePlatformKey = useMemo(() => getPlatform(platformName)?.key ?? null, [platformName]);
+
+  // Live remaining cases — drives counts, the all-items "open", and re-decking.
+  const remainingLive = useMemo(
+    () => buildDeck(suggestions, platformName),
+    [suggestions, platformName],
+  );
+
+  // Record a change so it can be undone; clears the redo stack. Caps history so
+  // a huge import with thousands of decisions can't grow the stack unbounded.
+  const applyChange = useCallback(
+    (updated: MappingSuggestion[]) => {
+      setPast((p) => [...p, suggestions].slice(-100));
+      setFuture([]);
+      setSuggestions(updated);
+    },
+    [suggestions, setSuggestions],
+  );
+
+  // Catalog index for find/relink search.
   const catalog = useMemo<CandidateItem[]>(() => {
     const seen = new Set<string>();
     const out: CandidateItem[] = [];
@@ -139,26 +192,12 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
       const c = s.suggestedCanonicalProduct;
       if (c?.id && !seen.has(c.id)) {
         seen.add(c.id);
-        out.push({
-          id: c.id,
-          title: c.title || 'Item',
-          sub: [c.sku, money(c.price)].filter((x) => x && x !== '—').join(' · ') || undefined,
-          uri: c.imageUrl,
-          sku: c.sku || null,
-          price: typeof c.price === 'number' ? c.price : null,
-        });
+        out.push({ id: c.id, title: c.title || 'Item', sub: [c.sku, money(c.price)].filter((x) => x && x !== '—').join(' · ') || undefined, uri: c.imageUrl, sku: c.sku || null, price: typeof c.price === 'number' ? c.price : null });
       }
       const v = s.anorhaVariant;
       if (v?.id && !seen.has(v.id)) {
         seen.add(v.id);
-        out.push({
-          id: v.id,
-          title: v.title || 'Item',
-          sub: [v.sku, money(v.price)].filter((x) => x && x !== '—').join(' · ') || undefined,
-          uri: v.imageUrl,
-          sku: v.sku || null,
-          price: typeof v.price === 'number' ? v.price : null,
-        });
+        out.push({ id: v.id, title: v.title || 'Item', sub: [v.sku, money(v.price)].filter((x) => x && x !== '—').join(' · ') || undefined, uri: v.imageUrl, sku: v.sku || null, price: typeof v.price === 'number' ? v.price : null });
       }
     }
     return out;
@@ -168,28 +207,18 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
     (q: string): CandidateItem[] => {
       const qq = q.trim().toLowerCase();
       if (!qq) return [];
-      return catalog
-        .filter(
-          (c) =>
-            c.title.toLowerCase().includes(qq) ||
-            (c.sub || '').toLowerCase().includes(qq) ||
-            (c.sku || '').toLowerCase().includes(qq),
-        )
-        .slice(0, 30);
+      return catalog.filter((c) => c.title.toLowerCase().includes(qq) || (c.sub || '').toLowerCase().includes(qq) || (c.sku || '').toLowerCase().includes(qq)).slice(0, 30);
     },
     [catalog],
   );
 
-  // Advance after a decision: step to the next card; when the pass drains,
-  // re-classify off the fresh suggestions (a fuzzy "No" re-surfaces as its own
-  // card) and continue, else every item has a decision so commit.
   const advanceAfter = useCallback(
     (updated: MappingSuggestion[]) => {
       if (idx + 1 < deck.length) {
         setIdx(idx + 1);
         return;
       }
-      const next = classifyMatch(updated as any, platformName).cases;
+      const next = buildDeck(updated, platformName);
       if (next.length > 0) {
         setDeck(next);
         setIdx(0);
@@ -202,23 +231,18 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
 
   const handleResolve = useCallback(
     (decision: Decision, meta?: ResolveMeta) => {
-      const cur = deck[idx];
-      // Compute the updated suggestions synchronously so advanceAfter can
-      // re-classify off the fresh state (state updates haven't flushed yet).
+      const c = deck[idx];
       let updated = suggestions;
-      if (cur) {
-        const ids = new Set(cur.itemIds || []);
+      if (c) {
+        const ids = new Set(c.itemIds || []);
         if (ids.size > 0) {
-          updated = suggestions.map((s) =>
-            ids.has(s.platformProduct.id) ? resolveSuggestion(s, cur, decision, meta) : s,
-          );
-          setSuggestions(updated);
-          setLastDecided(cur.itemIds || []);
+          updated = suggestions.map((s) => (ids.has(s.platformProduct.id) ? resolveSuggestion(s, c, decision, meta) : s));
+          applyChange(updated);
         }
       }
       advanceAfter(updated);
     },
-    [deck, idx, suggestions, setSuggestions, advanceAfter],
+    [deck, idx, suggestions, applyChange, advanceAfter],
   );
 
   const handleBack = useCallback(() => {
@@ -226,13 +250,46 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
     else onClose();
   }, [idx, onClose]);
 
+  const handleIgnore = useCallback(() => {
+    const c = deck[idx];
+    let updated = suggestions;
+    if (c) {
+      const ids = new Set(c.itemIds || []);
+      if (ids.size > 0) {
+        updated = suggestions.map((s) => (ids.has(s.platformProduct.id) ? { ...s, action: 'IGNORE' as const, isSelected: false, resolved: true } : s));
+        applyChange(updated);
+      }
+    }
+    advanceAfter(updated);
+  }, [deck, idx, suggestions, applyChange, advanceAfter]);
+
+  // Undo / redo — read the stacks from the closure (deps keep them fresh) and
+  // fire each setState ONCE at top level (no nesting inside an updater, which
+  // would double-fire in StrictMode and corrupt the stacks).
+  const undo = useCallback(() => {
+    if (past.length === 0) return;
+    const prev = past[past.length - 1];
+    setPast(past.slice(0, -1));
+    setFuture([suggestions, ...future]);
+    setSuggestions(prev);
+    setDeck(buildDeck(prev, platformName));
+    setIdx(0);
+  }, [past, future, suggestions, platformName, setSuggestions]);
+
+  const redo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[0];
+    setFuture(future.slice(1));
+    setPast([...past, suggestions]);
+    setSuggestions(next);
+    setDeck(buildDeck(next, platformName));
+    setIdx(0);
+  }, [past, future, suggestions, platformName, setSuggestions]);
+
   // ── Edit / explain composer ────────────────────────────────────────────────
   const [composer, setComposer] = useState<ComposerMode | null>(null);
   const cur = deck[idx];
-  const curSug = useMemo(
-    () => suggestions.find((s) => s.platformProduct.id === cur?.itemIds?.[0]) || null,
-    [suggestions, cur],
-  );
+  const curSug = useMemo(() => suggestions.find((s) => s.platformProduct.id === cur?.itemIds?.[0]) || null, [suggestions, cur]);
   const editFields = useMemo<ComposerField[]>(() => {
     const p = curSug?.platformProduct;
     if (!p) return [];
@@ -251,113 +308,79 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
         return;
       }
       if (composer === 'explain') {
-        // Record the reason on the affected items AND resolve "not the same"
-        // (keep separate), then advance like any other decision.
         const ids = new Set(c.itemIds || []);
         const updated = suggestions.map((s) =>
-          ids.has(s.platformProduct.id)
-            ? { ...resolveSuggestion(s, c, 'alt'), reasonNote: result.note, reasonTags: result.tags }
-            : s,
+          ids.has(s.platformProduct.id) ? { ...resolveSuggestion(s, c, 'alt'), reasonNote: result.note, reasonTags: result.tags } : s,
         );
-        setSuggestions(updated);
-        setLastDecided(c.itemIds || []);
+        applyChange(updated);
         setComposer(null);
         advanceAfter(updated);
       } else {
-        // Edit — write the edited fields onto the incoming product and re-snapshot
-        // so the card shows them. Routing is stable, so idx stays on the same card.
         const f = result.fields || {};
         const id = curSug?.platformProduct.id;
-        const parsedPrice =
-          f.price != null && f.price !== '' && !Number.isNaN(parseFloat(f.price)) ? parseFloat(f.price) : null;
+        const parsedPrice = f.price != null && f.price !== '' && !Number.isNaN(parseFloat(f.price)) ? parseFloat(f.price) : null;
         const updated = suggestions.map((s) =>
           s.platformProduct.id === id
-            ? {
-                ...s,
-                platformProduct: {
-                  ...s.platformProduct,
-                  title: f.title ?? s.platformProduct.title,
-                  sku: f.sku ?? s.platformProduct.sku,
-                  price: parsedPrice != null ? parsedPrice : s.platformProduct.price,
-                },
-              }
+            ? { ...s, platformProduct: { ...s.platformProduct, title: f.title ?? s.platformProduct.title, sku: f.sku ?? s.platformProduct.sku, price: parsedPrice != null ? parsedPrice : s.platformProduct.price } }
             : s,
         );
-        setSuggestions(updated);
-        const next = classifyMatch(updated as any, platformName).cases;
+        applyChange(updated);
+        const next = buildDeck(updated, platformName);
         setDeck(next);
         setIdx((i) => Math.min(i, Math.max(next.length - 1, 0)));
         setComposer(null);
       }
     },
-    [deck, idx, composer, suggestions, curSug, platformName, setSuggestions, advanceAfter],
+    [deck, idx, composer, suggestions, curSug, platformName, applyChange],
   );
 
-  // ── Ignore (deck-level — trash button + swipe-down) ─────────────────────────
-  const handleIgnore = useCallback(() => {
-    const c = deck[idx];
-    let updated = suggestions;
-    if (c) {
-      const ids = new Set(c.itemIds || []);
-      if (ids.size > 0) {
-        updated = suggestions.map((s) =>
-          ids.has(s.platformProduct.id) ? { ...s, action: 'IGNORE' as const, isSelected: false, resolved: true } : s,
-        );
-        setSuggestions(updated);
-        setLastDecided(c.itemIds || []);
-      }
-    }
-    advanceAfter(updated);
-  }, [deck, idx, suggestions, setSuggestions, advanceAfter]);
-
-  // Undo the most recent decision: clear it and re-deck so it returns first.
-  const handleUndo = useCallback(() => {
-    if (!lastDecided || lastDecided.length === 0) return;
-    const ids = new Set(lastDecided);
-    const updated = suggestions.map((s) =>
-      ids.has(s.platformProduct.id) ? { ...s, resolved: false, action: 'UNMATCHED' as const, isSelected: false } : s,
-    );
-    setSuggestions(updated);
-    setDeck(classifyMatch(updated as any, platformName).cases);
-    setIdx(0);
-    setLastDecided(null);
-  }, [lastDecided, suggestions, platformName, setSuggestions]);
-
-  // ── Menu · list view · history / ignored ────────────────────────────────────
-  const [view, setView] = useState<'cards' | 'list'>('cards');
+  // ── All-items view (search · filter · jump · undo) ──────────────────────────
+  const [view, setView] = useState<'cards' | 'all'>('cards');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [overlay, setOverlay] = useState<null | 'history'>(null);
-  const [historyTab, setHistoryTab] = useState<'history' | 'ignored'>('history');
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const openAll = useCallback((f: string) => { setMenuOpen(false); setFilter(f); setView('all'); }, []);
+  const openDetail = useCallback((id: string) => setDetailId(id), []);
+  const detailSug = useMemo(() => (detailId ? suggestions.find((s) => s.platformProduct.id === detailId) || null : null), [detailId, suggestions]);
 
-  const ignored = useMemo(() => suggestions.filter((s) => s.resolved && s.action === 'IGNORE'), [suggestions]);
-  const history = useMemo(() => suggestions.filter((s) => s.resolved && s.action !== 'IGNORE'), [suggestions]);
-  // Live remaining cases — drives the list view and the "jump to card" target.
-  const remainingLive = useMemo(
-    () => classifyMatch(suggestions as any, platformName).cases,
-    [suggestions, platformName],
-  );
+  // id → its pending case (for the badge + jump target).
+  const caseByItem = useMemo(() => {
+    const m = new Map<string, { c: MatchCase; i: number }>();
+    remainingLive.forEach((c, i) => (c.itemIds || []).forEach((id) => { if (!m.has(id)) m.set(id, { c, i }); }));
+    return m;
+  }, [remainingLive]);
 
-  const decisionLabel = (s: MappingSuggestion): string =>
-    s.action === 'LINK_EXISTING' ? 'Linked' : s.action === 'CREATE_NEW' ? 'Added new' : s.action === 'IGNORE' ? 'Ignored' : 'Resolved';
+  const counts = useMemo(() => {
+    const out: Record<string, number> = { all: suggestions.length, review: 0, linked: 0, new: 0, catalog: 0, ignored: 0 };
+    for (const s of suggestions) out[statusOf(s).key] += 1;
+    return out;
+  }, [suggestions]);
 
-  // Undo / restore: clear the decision and re-deck so the item returns to review.
-  const restore = useCallback(
+  const allItems = useMemo(() => {
+    const qq = query.trim().toLowerCase();
+    return suggestions.filter((s) => {
+      const st = statusOf(s);
+      if (filter !== 'all' && st.key !== filter) return false;
+      if (!qq) return true;
+      const p = s.platformProduct;
+      return (p.title || '').toLowerCase().includes(qq) || (p.sku || '').toLowerCase().includes(qq);
+    });
+  }, [suggestions, query, filter]);
+
+  const undoOne = useCallback(
     (id: string) => {
-      const updated = suggestions.map((s) =>
-        s.platformProduct.id === id ? { ...s, resolved: false, action: 'UNMATCHED' as const, isSelected: false } : s,
-      );
-      setSuggestions(updated);
-      setDeck(classifyMatch(updated as any, platformName).cases);
-      setIdx(0);
-      setView('cards');
-      setOverlay(null);
+      const updated = suggestions.map((s) => (s.platformProduct.id === id ? { ...s, resolved: false, action: 'UNMATCHED' as const, isSelected: false } : s));
+      applyChange(updated);
+      setDeck(buildDeck(updated, platformName));
     },
-    [suggestions, platformName, setSuggestions],
+    [suggestions, platformName, applyChange],
   );
 
-  // Open a specific pending item from the list view (re-snapshot to live order).
-  const jumpTo = useCallback(
-    (i: number) => {
+  const openItem = useCallback(
+    (id: string) => {
+      const i = remainingLive.findIndex((c) => (c.itemIds || []).includes(id));
+      if (i < 0) return;
       setDeck(remainingLive);
       setIdx(i);
       setView('cards');
@@ -365,157 +388,240 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
     [remainingLive],
   );
 
+  // ── All-items full-screen view ──────────────────────────────────────────────
+  if (view === 'all') {
+    return (
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#F4F5F7' }}>
+        <View style={{ flex: 1, paddingTop: insets.top + 10, paddingHorizontal: 16 }}>
+          <View style={styles.allHeader}>
+            <TouchableOpacity onPress={() => setView('cards')} hitSlop={8} style={styles.iconBtn}>
+              <MaterialCommunityIcons name="arrow-left" size={20} color={RC.muted} />
+            </TouchableOpacity>
+            <Text style={styles.allTitle}>All items</Text>
+            <Text style={styles.allCount}>{suggestions.length}</Text>
+          </View>
+
+          <View style={styles.searchBox}>
+            <MaterialCommunityIcons name="magnify" size={18} color={RC.muted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search by name or SKU…"
+              placeholderTextColor={RC.faint}
+              style={styles.searchInput}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {!!query && (
+              <TouchableOpacity onPress={() => setQuery('')} hitSlop={8}>
+                <MaterialCommunityIcons name="close-circle" size={18} color={RC.faint} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow} style={{ flexGrow: 0 }}>
+            {FILTERS.map((f) => {
+              const on = filter === f.key;
+              return (
+                <TouchableOpacity key={f.key} activeOpacity={0.8} onPress={() => setFilter(f.key)} style={[styles.chip, on && styles.chipOn]}>
+                  <Text style={[styles.chipText, on && styles.chipTextOn]} numberOfLines={1}>{`${f.label} · ${counts[f.key] ?? 0}`}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Virtualized: the import can carry hundreds of items, so a plain
+              ScrollView mounted every card at once and made pill-switching / search
+              janky. FlatList renders only what's on screen. */}
+          <FlatList
+            data={allItems}
+            keyExtractor={(s) => s.platformProduct.id}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingTop: 6, paddingBottom: insets.bottom + 24, gap: 8 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            initialNumToRender={10}
+            maxToRenderPerBatch={8}
+            windowSize={7}
+            removeClippedSubviews
+            ListEmptyComponent={<Text style={styles.allEmpty}>Nothing here.</Text>}
+            renderItem={({ item: s }) => {
+              const st = statusOf(s);
+              const pending = st.key === 'review';
+              const badge = pending ? caseByItem.get(s.platformProduct.id)?.c : null;
+              const p = s.platformProduct;
+              // Linked → anorha mark + every connected channel; otherwise just the
+              // source platform (and only if it resolves to a known brand — a CSV /
+              // free-text source shows no avatar rather than a generic glyph).
+              const platformAvatars = st.key === 'linked'
+                ? Array.from(new Set(['anorha', ...accountPlatformKeys, ...(sourcePlatformKey ? [sourcePlatformKey] : [])]))
+                : (sourcePlatformKey ? [sourcePlatformKey] : []);
+              return (
+                <InventoryListCard
+                  id={p.id}
+                  title={p.title || p.sku || 'Item'}
+                  price={typeof p.price === 'number' ? p.price : undefined}
+                  sku={p.sku || undefined}
+                  imageUrl={p.imageUrl || s.suggestedCanonicalProduct?.imageUrl || s.anorhaVariant?.imageUrl || undefined}
+                  platformNames={platformAvatars}
+                  statusLabel={badge ? `${cardBadgeFor(badge).label} · ${st.label}` : st.label}
+                  statusColor={STATUS_COLOR[st.tone]}
+                  hideSync
+                  onPress={() => openDetail(p.id)}
+                />
+              );
+            }}
+          />
+        </View>
+
+        {detailSug ? (
+          <View style={[StyleSheet.absoluteFill, styles.detailOverlay]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setDetailId(null)} />
+            <View style={[styles.detailSheet, { paddingBottom: insets.bottom + 16 }]}>
+              <View style={styles.detailHandle} />
+              <View style={styles.detailHeader}>
+                <Text style={styles.detailTitle} numberOfLines={2}>{detailSug.platformProduct.title || detailSug.platformProduct.sku || 'Item'}</Text>
+                <TouchableOpacity onPress={() => setDetailId(null)} hitSlop={8} style={styles.iconBtn}>
+                  <MaterialCommunityIcons name="close" size={18} color={RC.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.detailPair}>
+                <View style={styles.detailSide}>
+                  <Text style={styles.detailSideLabel}>{(platformName || 'INCOMING').toUpperCase()}</Text>
+                  {detailSug.platformProduct.imageUrl ? (
+                    <Image source={{ uri: detailSug.platformProduct.imageUrl }} style={styles.detailImg} />
+                  ) : (
+                    <View style={styles.detailImg}><MaterialCommunityIcons name="package-variant" size={26} color={RC.faint} /></View>
+                  )}
+                  <Text style={styles.detailName} numberOfLines={2}>{detailSug.platformProduct.title || '—'}</Text>
+                  <Text style={styles.detailMeta} numberOfLines={1}>{[detailSug.platformProduct.sku, money(detailSug.platformProduct.price)].filter((x) => x && x !== '—').join(' · ') || '—'}</Text>
+                </View>
+                {detailSug.suggestedCanonicalProduct?.id ? (
+                  <>
+                    <View style={styles.detailArrow}><MaterialCommunityIcons name="arrow-right" size={18} color={RC.faint} /></View>
+                    <View style={styles.detailSide}>
+                      <Text style={styles.detailSideLabel}>YOUR CATALOG</Text>
+                      {detailSug.suggestedCanonicalProduct.imageUrl ? (
+                        <Image source={{ uri: detailSug.suggestedCanonicalProduct.imageUrl }} style={styles.detailImg} />
+                      ) : (
+                        <View style={styles.detailImg}><MaterialCommunityIcons name="package-variant" size={26} color={RC.faint} /></View>
+                      )}
+                      <Text style={styles.detailName} numberOfLines={2}>{detailSug.suggestedCanonicalProduct.title || '—'}</Text>
+                      <Text style={styles.detailMeta} numberOfLines={1}>{detailSug.suggestedCanonicalProduct.sku || '—'}</Text>
+                    </View>
+                  </>
+                ) : null}
+              </View>
+
+              {(() => {
+                const st = statusOf(detailSug);
+                const color = STATUS_COLOR[st.tone];
+                return (
+                  <View style={[styles.detailStatus, { borderColor: `${color}55`, backgroundColor: `${color}14` }]}>
+                    <Text style={[styles.detailStatusText, { color }]}>{st.label}</Text>
+                  </View>
+                );
+              })()}
+
+              {statusOf(detailSug).key === 'review' ? (
+                <TouchableOpacity style={styles.detailPrimary} activeOpacity={0.88} onPress={() => { const id = detailSug.platformProduct.id; setDetailId(null); openItem(id); }}>
+                  <Text style={styles.detailPrimaryText}>Review this</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.detailPrimary} activeOpacity={0.88} onPress={() => { undoOne(detailSug.platformProduct.id); setDetailId(null); }}>
+                  <Text style={styles.detailPrimaryText}>Undo decision</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        ) : null}
+
+        <ResolveComposer
+          visible={composer != null}
+          mode={composer || 'explain'}
+          item={{ title: curSug?.platformProduct.title || cur?.itemTitle || cur?.title || '', sub: curSug?.platformProduct.sku ? `SKU ${curSug.platformProduct.sku}` : cur?.itemSub, imageUrl: curSug?.platformProduct.imageUrl || cur?.itemImage }}
+          fields={editFields}
+          onCancel={() => setComposer(null)}
+          onSubmit={submitComposer}
+        />
+      </GestureHandlerRootView>
+    );
+  }
+
+  // ── All reviewed ────────────────────────────────────────────────────────────
   if (total === 0 || idx >= total) {
     return (
       <View style={[styles.screen, { backgroundColor: '#F4F5F7', paddingTop: insets.top + 24 }]}>
         <View style={styles.allClear}>
           <MaterialCommunityIcons name="check-circle-outline" size={40} color={RC.green} />
-          <Text style={[styles.allClearTitle, { color: theme.colors.text }]}>All reviewed</Text>
-          <Text style={[styles.allClearSub, { color: theme.colors.textSecondary }]}>
-            Every item has a decision. Finish to apply it everywhere.
-          </Text>
+          <Text style={[styles.allClearTitle, { color: theme.colors.text }]}>All caught up</Text>
+          <Text style={[styles.allClearSub, { color: theme.colors.textSecondary }]}>Nothing needs your review — everything else matched automatically. Finish to apply, or browse all items.</Text>
           <TouchableOpacity onPress={onCommit} style={styles.doneBtn} activeOpacity={0.88}>
-            <MaterialCommunityIcons name="check" size={18} color="#fff" />
             <Text style={styles.doneBtnText}>Done</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={onClose} style={styles.backLink} hitSlop={8}>
-            <Text style={[styles.backLinkText, { color: theme.colors.textSecondary }]}>Back</Text>
+          <TouchableOpacity onPress={() => setView('all')} style={styles.backLink} hitSlop={8}>
+            <Text style={[styles.backLinkText, { color: theme.colors.textSecondary }]}>See all items</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // Explain only fits the "is this the same?" cards; edit fits any incoming item.
   const canExplain = ['compare', 'collision', 'fuzzy', 'stale'].includes(cur.kind);
   const canEdit = !!curSug && curSug.direction !== 'anorha_to_platform';
-
-  // Progress + "N left" reflect ACTUAL remaining (not deck position), so the bar,
-  // the count, and the list view always agree — even after going back or undoing.
-  const decidedCount = suggestions.filter((s) => s.resolved).length;
-  const displayTotal = Math.max(decidedCount + remainingLive.length, 1);
-  const displayIdx = Math.min(decidedCount + 1, displayTotal);
-
-  const menuSections = [
-    [
-      {
-        key: 'view',
-        label: view === 'cards' ? 'Switch to list' : 'Switch to cards',
-        icon: view === 'cards' ? 'format-list-bulleted' : 'cards-outline',
-        onPress: () => { setMenuOpen(false); setView(view === 'cards' ? 'list' : 'cards'); },
-      },
-    ],
-    [
-      { key: 'history', label: `History${history.length ? ` (${history.length})` : ''}`, icon: 'history', onPress: () => { setMenuOpen(false); setHistoryTab('history'); setOverlay('history'); } },
-      { key: 'ignored', label: `Ignored${ignored.length ? ` (${ignored.length})` : ''}`, icon: 'trash-can-outline', onPress: () => { setMenuOpen(false); setHistoryTab('ignored'); setOverlay('history'); } },
-    ],
-  ];
+  // Progress reflects ONLY the genuine-review workload (the filtered deck), not the
+  // hundreds of auto-linked / catalog items. `past.length` = decisions made this
+  // session; `remainingLive.length` = review cases still pending. (Previously this used
+  // every resolved suggestion as the denominator, so the bar sat near 100% from the
+  // start and "N left" counted catalog items.)
+  const helpRemaining = remainingLive.length;
+  const displayTotal = Math.max(past.length + helpRemaining, 1);
+  const displayIdx = Math.min(past.length + 1, displayTotal);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#F4F5F7' }}>
-      {view === 'list' ? (
-        <View style={{ flex: 1, paddingTop: insets.top + 10, paddingHorizontal: 16 }}>
-          <View style={styles.listHeader}>
-            <TouchableOpacity onPress={() => setView('cards')} hitSlop={8} style={styles.listIconBtn}>
-              <MaterialCommunityIcons name="arrow-left" size={20} color={RC.muted} />
-            </TouchableOpacity>
-            <Text style={styles.listTitle}>{remainingLive.length} to review</Text>
-            <TouchableOpacity onPress={() => setMenuOpen(true)} hitSlop={8} style={styles.listIconBtn}>
-              <MaterialCommunityIcons name="dots-horizontal" size={20} color={RC.muted} />
-            </TouchableOpacity>
-          </View>
-          <ScrollView contentContainerStyle={{ paddingVertical: 12, gap: 10, paddingBottom: insets.bottom + 24 }} showsVerticalScrollIndicator={false}>
-            {remainingLive.map((rc, i) => {
-              const b = cardBadgeFor(rc);
-              return (
-                <TouchableOpacity key={rc.id} activeOpacity={0.7} onPress={() => jumpTo(i)} style={styles.listRow}>
-                  <View style={[styles.listDot, { backgroundColor: b.color }]} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.listRowTitle} numberOfLines={1}>{rc.itemTitle || rc.title}</Text>
-                    {!!rc.note && <Text style={styles.listRowSub} numberOfLines={1}>{rc.note}</Text>}
-                  </View>
-                  <View style={[styles.listBadge, { backgroundColor: `${b.color}14` }]}>
-                    <Text style={[styles.listBadgeText, { color: b.color }]}>{b.label}</Text>
-                  </View>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color={RC.faint} />
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      ) : (
-        <DeckChrome.Provider
+      <DeckChrome.Provider
+        value={{
+          onMenu: () => setMenuOpen(true),
+          onIgnore: handleIgnore,
+          onUndo: undo,
+          canUndo: past.length > 0,
+          onRedo: redo,
+          canRedo: future.length > 0,
+        }}
+      >
+        <ResolveActions.Provider
           value={{
-            onMenu: () => setMenuOpen(true),
-            onIgnore: handleIgnore,
-            onUndo: handleUndo,
-            canUndo: !!(lastDecided && lastDecided.length),
+            onEdit: canEdit ? () => setComposer('edit') : undefined,
+            onExplain: canExplain ? () => setComposer('explain') : undefined,
           }}
         >
-          <ResolveActions.Provider
-            value={{
-              onEdit: canEdit ? () => setComposer('edit') : undefined,
-              onExplain: canExplain ? () => setComposer('explain') : undefined,
-            }}
-          >
-            <MatchResolver
-              key={cur.id}
-              c={cur}
-              idx={displayIdx}
-              total={displayTotal}
-              topInset={insets.top}
-              onBack={handleBack}
-              onResolve={handleResolve}
-              onSearch={searchCatalog}
-            />
-          </ResolveActions.Provider>
-        </DeckChrome.Provider>
-      )}
+          <MatchResolver
+            key={cur.id}
+            c={cur}
+            idx={displayIdx}
+            total={displayTotal}
+            topInset={insets.top}
+            onBack={handleBack}
+            onResolve={handleResolve}
+            onSearch={searchCatalog}
+          />
+        </ResolveActions.Provider>
+      </DeckChrome.Provider>
 
       <AppMenu
         visible={menuOpen}
         onClose={() => setMenuOpen(false)}
-        anchor={{ top: insets.top + 84, left: SCREEN_W - 312 }}
-        sections={menuSections}
+        width={232}
+        anchor={{ top: insets.top + 54, left: SCREEN_W - 248 }}
+        sections={[
+          [
+            { key: 'review', label: 'Review list', icon: 'format-list-bulleted', onPress: () => openAll('review') },
+            { key: 'all', label: 'All items', icon: 'view-grid-outline', onPress: () => openAll('all') },
+          ],
+        ]}
       />
-
-      {overlay === 'history' ? (
-        <Pressable style={[StyleSheet.absoluteFill, styles.sheetOverlay, { zIndex: 50 }]} onPress={() => setOverlay(null)}>
-          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.sheetHandle} />
-            <PillTabs
-              tabs={[
-                { key: 'history', label: 'History', count: history.length },
-                { key: 'ignored', label: 'Ignored', count: ignored.length, tone: 'danger' },
-              ]}
-              value={historyTab}
-              onChange={(k) => setHistoryTab(k as 'history' | 'ignored')}
-            />
-            <ScrollView style={{ maxHeight: 440 }} contentContainerStyle={{ padding: 16, gap: 10 }} showsVerticalScrollIndicator={false}>
-              {(historyTab === 'history' ? history : ignored).map((s) => (
-                <View key={s.platformProduct.id} style={styles.histRow}>
-                  {s.platformProduct.imageUrl ? (
-                    <Image source={{ uri: s.platformProduct.imageUrl }} style={styles.histThumb} />
-                  ) : (
-                    <View style={styles.histThumb}><MaterialCommunityIcons name="package-variant" size={16} color={RC.faint} /></View>
-                  )}
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.histTitle} numberOfLines={1}>{s.platformProduct.title}</Text>
-                    <Text style={styles.histSub} numberOfLines={1}>{decisionLabel(s)}</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => restore(s.platformProduct.id)} hitSlop={8} style={styles.histRestore}>
-                    <MaterialCommunityIcons name="undo-variant" size={15} color={RC.muted} />
-                    <Text style={styles.histRestoreText}>{historyTab === 'ignored' ? 'Restore' : 'Undo'}</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-              {(historyTab === 'history' ? history : ignored).length === 0 && (
-                <Text style={styles.sheetEmpty}>{historyTab === 'ignored' ? 'Nothing ignored yet.' : 'No decisions yet.'}</Text>
-              )}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      ) : null}
 
       <ResolveComposer
         visible={composer != null}
@@ -538,43 +644,50 @@ const styles = StyleSheet.create({
   allClear: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   allClearTitle: { fontSize: 22, marginTop: 14, fontFamily: 'Inter_700Bold', letterSpacing: -0.3 },
   allClearSub: { fontSize: 14, marginTop: 6, textAlign: 'center', fontFamily: 'Inter_500Medium', lineHeight: 20 },
-  doneBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 22,
-    paddingHorizontal: 34,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: RC.green,
-  },
+  doneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 22, paddingHorizontal: 40, height: 52, borderRadius: 26, backgroundColor: RC.green },
   doneBtnText: { color: '#fff', fontSize: 16, fontFamily: 'Inter_700Bold' },
   backLink: { marginTop: 16, paddingVertical: 8 },
   backLinkText: { fontSize: 14, fontFamily: 'Inter_500Medium' },
 
-  // list view
-  listHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 40 },
-  listIconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center' },
-  listTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: RC.ink, letterSpacing: -0.3 },
-  listRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 14 },
-  listDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-  listRowTitle: { fontSize: 15, fontWeight: '700', color: RC.ink },
-  listRowSub: { fontSize: 12.5, fontWeight: '500', color: RC.muted, marginTop: 2 },
-  listBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, flexShrink: 0 },
-  listBadgeText: { fontSize: 10.5, fontWeight: '800', letterSpacing: 0.3 },
+  // all-items view
+  allHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 40 },
+  iconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center' },
+  allTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: RC.ink, letterSpacing: -0.3 },
+  allCount: { fontSize: 15, fontWeight: '700', color: RC.muted },
+  searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 46, borderWidth: 1.5, borderColor: RC.line, borderRadius: 13, paddingHorizontal: 12, backgroundColor: '#fff', marginTop: 12 },
+  searchInput: { flex: 1, fontSize: 15, fontWeight: '500', color: RC.ink, paddingVertical: 0 },
+  chipsRow: { gap: 8, marginVertical: 12,  paddingRight: 16 },
+  chip: { borderWidth: 1, borderColor: RC.line, borderRadius: 16, paddingHorizontal: 13, paddingVertical: 8, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  chipOn: { borderColor: RC.green, backgroundColor: RC.greenSoft },
+  chipText: { fontSize: 13, lineHeight: 18, fontWeight: '700', color: RC.muted },
+  chipTextOn: { color: RC.greenDark },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 11 },
+  itemThumb: { width: 40, height: 40, borderRadius: 10, backgroundColor: RC.surface2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  itemTitle: { fontSize: 15, fontWeight: '700', color: RC.ink },
+  itemStatus: { fontSize: 12.5, fontWeight: '600', marginTop: 2 },
+  platChip: { backgroundColor: RC.surface2, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, flexShrink: 0 },
+  platChipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4, color: RC.muted },
+  undoChip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7, flexShrink: 0 },
+  undoChipText: { fontSize: 12.5, fontWeight: '700', color: RC.muted },
+  allEmpty: { fontSize: 14, fontWeight: '500', color: RC.faint, textAlign: 'center', paddingVertical: 40 },
 
-  // history / ignored sheet
-  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, paddingTop: 8 },
-  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: RC.line, alignSelf: 'center', marginBottom: 6 },
-  histRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 11 },
-  histThumb: { width: 38, height: 38, borderRadius: 9, backgroundColor: RC.surface2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  histTitle: { fontSize: 14.5, fontWeight: '700', color: RC.ink },
-  histSub: { fontSize: 12.5, fontWeight: '600', color: RC.muted, marginTop: 2 },
-  histRestore: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7, flexShrink: 0 },
-  histRestoreText: { fontSize: 12.5, fontWeight: '700', color: RC.muted },
-  sheetEmpty: { fontSize: 14, fontWeight: '500', color: RC.faint, textAlign: 'center', paddingVertical: 28 },
+  // item detail (product + incoming platform, preview of the import)
+  detailOverlay: { backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  detailSheet: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, paddingHorizontal: 18, paddingTop: 8 },
+  detailHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: RC.line, alignSelf: 'center', marginBottom: 12 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
+  detailTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: RC.ink, letterSpacing: -0.3 },
+  detailPair: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
+  detailSide: { flex: 1, alignItems: 'center', gap: 6, borderWidth: 1, borderColor: RC.line, borderRadius: 14, padding: 12, backgroundColor: '#fff' },
+  detailSideLabel: { fontSize: 10.5, fontWeight: '800', letterSpacing: 0.5, color: RC.faint },
+  detailImg: { width: 72, height: 72, borderRadius: 14, backgroundColor: RC.surface2, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  detailName: { fontSize: 14, fontWeight: '700', color: RC.ink, textAlign: 'center' },
+  detailMeta: { fontSize: 12.5, fontWeight: '500', color: RC.muted, textAlign: 'center' },
+  detailArrow: { width: 22, alignItems: 'center' },
+  detailStatus: { alignSelf: 'center', borderWidth: 1, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 6, marginBottom: 16 },
+  detailStatusText: { fontSize: 13, fontWeight: '800' },
+  detailPrimary: { height: 52, borderRadius: 26, backgroundColor: RC.green, alignItems: 'center', justifyContent: 'center' },
+  detailPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
 
 export default MatchDeck;

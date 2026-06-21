@@ -1,7 +1,11 @@
 import React from 'react';
-import { StyleProp, ViewStyle } from 'react-native';
+import { StyleProp, ViewStyle, ImageStyle, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { getPlatform } from '../config/platforms';
+
+// anorha's own brand mark isn't a sales channel, so it lives outside the platform
+// registry (which is SVG-only); render the existing PNG directly.
+const ANORHA_LOGO = require('../assets/anorha_logo.png');
 
 interface PlatformLogoProps {
   /** Any platform spelling — key, label, or free-text PlatformType. */
@@ -30,6 +34,16 @@ const PlatformLogo: React.FC<PlatformLogoProps> = ({
   style,
   fallbackIcon,
 }) => {
+  if (typeof type === 'string' && type.trim().toLowerCase() === 'anorha') {
+    return (
+      <Image
+        source={ANORHA_LOGO}
+        style={[{ width: size, height: size }, style as StyleProp<ImageStyle>]}
+        resizeMode="contain"
+      />
+    );
+  }
+
   const def = getPlatform(type);
 
   if (def?.logo) {

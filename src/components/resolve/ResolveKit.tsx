@@ -23,6 +23,7 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SwipeCard from '../import/SwipeCard';
+import Animated, { useSharedValue, useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -74,7 +75,7 @@ export const ResolveActions = React.createContext<{ onEdit?: () => void; onExpla
 
 // Deck-level chrome (the ⋯ menu and the always-present ignore), provided by the
 // match deck so TinderShell's header/footer can reach them.
-export const DeckChrome = React.createContext<{ onMenu?: () => void; onIgnore?: () => void; onUndo?: () => void; canUndo?: boolean } | null>(null);
+export const DeckChrome = React.createContext<{ onMenu?: () => void; onIgnore?: () => void; onUndo?: () => void; canUndo?: boolean; onRedo?: () => void; canRedo?: boolean } | null>(null);
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'muted';
 export function toneColor(t?: Tone): string {
@@ -485,6 +486,11 @@ export function TinderShell({
   const ignore = chrome?.onIgnore || onIgnore;
   const noop = () => {};
 
+  // Down-drag progress (0→1): fades the action bar out and the ignore tray in.
+  const downV = useSharedValue(0);
+  const barFade = useAnimatedStyle(() => ({ opacity: interpolate(downV.value, [0, 0.6], [1, 0], Extrapolation.CLAMP) }));
+  const trayFade = useAnimatedStyle(() => ({ opacity: interpolate(downV.value, [0.05, 0.7], [0, 1], Extrapolation.CLAMP) }));
+
   return (
     <View style={[ts.screen, { paddingTop: topInset + 10, paddingBottom: insets.bottom + 10 }]}>
       {/* HEADER — outside the card, stays put while the card swipes */}
@@ -509,7 +515,7 @@ export function TinderShell({
       <View style={ts.cardArea}>
         <View style={ts.peek2} pointerEvents="none" />
         <View style={ts.peek1} pointerEvents="none" />
-        <SwipeCard onYes={onPrimary || noop} onNo={onAlt || noop} onIgnore={ignore}>
+        <SwipeCard onYes={onPrimary || noop} onNo={onAlt || noop} onIgnore={ignore} downShared={downV}>
           <View style={ts.card}>
             {!!badge && (
               <View style={[ts.badge, { backgroundColor: `${badge.color}14` }]}>
@@ -548,37 +554,53 @@ export function TinderShell({
         </SwipeCard>
       </View>
 
-      {/* FOOTER — outside the card */}
+      {/* FOOTER — the action bar; dragging the card down swaps it for the tray */}
       {!primaryReady && !!primaryGate && <Text style={ts.gate}>{primaryGate}</Text>}
-      <View style={ts.bar}>
-        {chrome ? (
-          <TouchableOpacity
-            onPress={chrome.canUndo ? chrome.onUndo : undefined}
-            disabled={!chrome.canUndo}
-            hitSlop={HIT}
-            activeOpacity={0.7}
-            style={[ts.undoBtn, !chrome.canUndo && ts.undoBtnDim]}
-          >
-            <MaterialCommunityIcons name="undo-variant" size={20} color={chrome.canUndo ? RC.muted : RC.faint} />
-          </TouchableOpacity>
-        ) : null}
-        {!!alt && (
-          <TouchableOpacity onPress={onAlt} activeOpacity={0.85} style={ts.barSecondary}>
-            <Text style={ts.barSecondaryText} numberOfLines={1}>{alt}</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity
-          onPress={primaryReady ? onPrimary : undefined}
-          activeOpacity={primaryReady ? 0.88 : 1}
-          disabled={!primaryReady}
-          style={[ts.barPrimary, !alt && { flex: 1 }, !primaryReady && ts.barPrimaryDim]}
-        >
-          <Text style={[ts.barPrimaryText, !primaryReady && { color: RC.faint }]} numberOfLines={1}>{primary}</Text>
-        </TouchableOpacity>
+      <View style={ts.footerWrap}>
+        <Animated.View style={barFade}>
+          <View style={ts.bar}>
+            {chrome ? (
+              <TouchableOpacity
+                onPress={chrome.canUndo ? chrome.onUndo : undefined}
+                disabled={!chrome.canUndo}
+                hitSlop={HIT}
+                activeOpacity={0.7}
+                style={[ts.undoBtn, !chrome.canUndo && ts.undoBtnDim]}
+              >
+                <MaterialCommunityIcons name="undo-variant" size={20} color={chrome.canUndo ? RC.muted : RC.faint} />
+              </TouchableOpacity>
+            ) : null}
+            {!!alt && (
+              <TouchableOpacity onPress={onAlt} activeOpacity={0.85} style={ts.barSecondary}>
+                <Text style={ts.barSecondaryText} numberOfLines={1}>{alt}</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              onPress={primaryReady ? onPrimary : undefined}
+              activeOpacity={primaryReady ? 0.88 : 1}
+              disabled={!primaryReady}
+              style={[ts.barPrimary, !alt && { flex: 1 }, !primaryReady && ts.barPrimaryDim]}
+            >
+              <Text style={[ts.barPrimaryText, !primaryReady && { color: RC.faint }]} numberOfLines={1}>{primary}</Text>
+            </TouchableOpacity>
+            {chrome ? (
+              <TouchableOpacity
+                onPress={chrome.canRedo ? chrome.onRedo : undefined}
+                disabled={!chrome.canRedo}
+                hitSlop={HIT}
+                activeOpacity={0.7}
+                style={[ts.undoBtn, !chrome.canRedo && ts.undoBtnDim]}
+              >
+                <MaterialCommunityIcons name="redo-variant" size={20} color={chrome.canRedo ? RC.muted : RC.faint} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </Animated.View>
         {ignore ? (
-          <TouchableOpacity onPress={ignore} hitSlop={HIT} activeOpacity={0.7} style={ts.trashBtn}>
-            <MaterialCommunityIcons name="trash-can-outline" size={20} color={RC.muted} />
-          </TouchableOpacity>
+          <Animated.View pointerEvents="none" style={[ts.ignoreTray, trayFade]}>
+            <MaterialCommunityIcons name="trash-can-outline" size={20} color="#B91C1C" />
+            <Text style={ts.ignoreTrayText}>Release to ignore</Text>
+          </Animated.View>
         ) : null}
       </View>
     </View>
@@ -626,7 +648,7 @@ const ts = StyleSheet.create({
   body: { paddingTop: 16, paddingBottom: 8, gap: 10 },
 
   gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginTop: 10 },
-  bar: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  bar: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   barSecondary: { flex: 1, height: 54, borderRadius: 27, borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', paddingHorizontal: 10 },
   barSecondaryText: { fontSize: 16, fontWeight: '700', color: RC.muted },
   barPrimary: { flex: 1.3, height: 54, borderRadius: 27, backgroundColor: RC.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10 },
@@ -635,6 +657,9 @@ const ts = StyleSheet.create({
   trashBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff', borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   undoBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff', borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   undoBtnDim: { opacity: 0.4 },
+  footerWrap: { marginTop: 12, position: 'relative' },
+  ignoreTray: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 27, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
+  ignoreTrayText: { color: '#B91C1C', fontSize: 15, fontWeight: '800' },
 });
 
 const s = StyleSheet.create({

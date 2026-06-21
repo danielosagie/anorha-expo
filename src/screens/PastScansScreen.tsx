@@ -94,7 +94,7 @@ const PastScansScreen = () => {
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(140);
 
-  const [activeTab, setActiveTab] = useState<'drafts' | 'matches' | 'listings'>('listings');
+  const [activeTab, setActiveTab] = useState<'drafts' | 'matches' | 'listings'>('drafts');
   const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [draftScans, setDraftScans] = useState<DraftScan[]>([]);

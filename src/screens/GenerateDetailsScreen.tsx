@@ -503,9 +503,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       normalized.shopify = {
         title: firstPlatformData.title || firstPlatformData.name || '',
         description: firstPlatformData.description || '',
-        price: typeof firstPlatformData.price === 'string'
-          ? parseFloat(firstPlatformData.price.replace(/[^0-9.]/g, '')) || 0
-          : (firstPlatformData.price || 0),
+        // price intentionally omitted — we don't autofill a price from generation.
         sku: firstPlatformData.sku || '',
         barcode: firstPlatformData.barcode || '',
         weight: firstPlatformData.weight || 0,
@@ -513,6 +511,33 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         tags: firstPlatformData.tags || [],
         images: imageUrls,
       };
+    }
+
+    // Do NOT autofill price from generation. Strip the backend price (and per-variant /
+    // per-location price) from the incoming data BEFORE the merge, so any price the seller
+    // already set is preserved while no generated price is introduced. The AI/research
+    // suggestion metadata (aiPriceRecommendation / aiRecommendedPrice) is kept so the Price
+    // sheet can still OFFER a suggestion on demand — the seller pulls it when ready.
+    for (const key of Object.keys(normalized)) {
+      const pd = normalized[key];
+      if (!pd || typeof pd !== 'object') continue;
+      delete pd.price;
+      if (Array.isArray(pd.variants)) {
+        pd.variants = pd.variants.map((v: any) => {
+          if (!v || typeof v !== 'object') return v;
+          const { price: _vp, ...restV } = v;
+          if (restV.inventoryByLocation && typeof restV.inventoryByLocation === 'object') {
+            restV.inventoryByLocation = Object.fromEntries(
+              Object.entries(restV.inventoryByLocation).map(([locId, loc]: [string, any]) => {
+                if (!loc || typeof loc !== 'object') return [locId, loc];
+                const { price: _lp, ...restLoc } = loc;
+                return [locId, restLoc];
+              }),
+            );
+          }
+          return restV;
+        });
+      }
     }
 
     // Hydrate into platformsRef (preserves user edits)
@@ -1256,8 +1281,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
 
-  // Readiness step-through: compute all missing required fields across all non-ignored platforms
-  const [missingFieldNavIndex, setMissingFieldNavIndex] = useState(0);
+  // Missing required fields across all non-ignored platforms (drives the "All" pill badge
+  // + highlights the first gap). The old < > field-stepper was removed with the XTX-0 bar.
   const allMissingRequiredFields = useMemo(() => {
     const missing: Array<{ platform: string; field: string; label: string }> = [];
     const seenLabels = new Set<string>();
@@ -2598,8 +2623,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <View onLayout={(e) => setListingEditorY(e.nativeEvent.layout.y)}>
                 <ListingEditorForm
                   ref={listingEditorRef}
-                  highlightedField={allMissingRequiredFields[missingFieldNavIndex]?.field}
-                  highlightedPlatform={allMissingRequiredFields[missingFieldNavIndex]?.platform}
+                  highlightedField={allMissingRequiredFields[0]?.field}
+                  highlightedPlatform={allMissingRequiredFields[0]?.platform}
                   onScrollToOffset={(y) => {
                     mainScrollRef.current?.scrollTo({ y: Math.max(0, listingEditorY + y - 80), animated: true });
                   }}
@@ -2913,46 +2938,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               }
               primaryDisabled={!canPublish}
               onPrimary={doPublish}
-              stepNav={!canPublish && allMissingRequiredFields.length > 0 ? {
-                currentLabel: allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length]?.label || 'Field',
-                currentIndex: (missingFieldNavIndex % allMissingRequiredFields.length) + 1,
-                totalCount: allMissingRequiredFields.length,
-                onPrev: () => {
-                  setMissingFieldNavIndex(i => {
-                    const next = i <= 0 ? allMissingRequiredFields.length - 1 : i - 1;
-                    // Auto-scroll after index changes by scheduling after re-render
-                    setTimeout(() => {
-                      mainScrollRef.current?.scrollTo({
-                        y: Math.max(0, listingEditorY - 40),
-                        animated: true,
-                      });
-                    }, 350);
-                    return next;
-                  });
-                },
-                onNext: () => {
-                  setMissingFieldNavIndex(i => {
-                    const next = (i + 1) % allMissingRequiredFields.length;
-                    setTimeout(() => {
-                      mainScrollRef.current?.scrollTo({
-                        y: Math.max(0, listingEditorY - 40),
-                        animated: true,
-                      });
-                    }, 350);
-                    return next;
-                  });
-                },
-                onTapField: () => {
-                  // "Needs you" → jump to the gap: open that field's edit sheet directly.
-                  const cur = allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length];
-                  if (cur) {
-                    listingEditorRef.current?.openFieldSheet(cur.field, cur.platform);
-                  } else {
-                    mainScrollRef.current?.scrollTo({ y: Math.max(0, listingEditorY - 40), animated: true });
-                  }
-                },
-              } : undefined}
-              secondaryLabel={'Save to Inventory'}
+              secondaryLabel={'Save Draft'}
               onSecondary={doSaveToInventory}
               tertiaryContent={hasMultipleResults ? (
                 <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Tap the item pill up top to switch items, then Publish each</Text>

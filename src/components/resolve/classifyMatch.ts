@@ -58,8 +58,10 @@ export function classifyMatch(suggestions: DraftItem[], platformName?: string): 
       candidates: group.map((g, i) => ({
         id: g.platformProduct.id,
         title: g.platformProduct.title || g.platformProduct.sku,
-        sub: g.platformProduct.sku,
+        sub: [g.platformProduct.sku || null, money(g.platformProduct.price) !== '—' ? money(g.platformProduct.price) : null].filter(Boolean).join(' · ') || undefined,
         plat: g.matchType && g.matchType !== 'NONE' ? g.matchType : 'row',
+        sku: g.platformProduct.sku || null,
+        price: typeof g.platformProduct.price === 'number' ? g.platformProduct.price : null,
         on: true,
         master: i === 0,
       })),
@@ -423,19 +425,16 @@ function variantsCase(pid: string, group: DraftItem[]): MatchCase {
     itemIds: group.map((g) => g.platformProduct.id),
     candidates: group.map((g) => {
       const p = g.platformProduct;
-      // One human line per row: the variant's own title when it has one,
-      // otherwise its SKU — and the sub never repeats what the title shows.
       const title = (p.title && p.title !== parentTitle ? p.title : '') || p.sku || 'Variant';
-      const price = money(p.price);
-      const sub =
-        title === p.sku
-          ? price !== '—' ? price : undefined
-          : [p.sku, price !== '—' ? price : null].filter(Boolean).join(' · ') || undefined;
+      // Always carry SKU · price so the variant row can show both.
+      const sub = [p.sku || null, money(p.price) !== '—' ? money(p.price) : null].filter(Boolean).join(' · ') || undefined;
       return {
         id: p.id,
         title,
         sub,
         uri: p.imageUrl,
+        sku: p.sku || null,
+        price: typeof p.price === 'number' ? p.price : null,
         hint: g.suggestedCanonicalProduct?.id ? `→ ${trim(g.suggestedCanonicalProduct.title, 12)}` : undefined,
       };
     }),

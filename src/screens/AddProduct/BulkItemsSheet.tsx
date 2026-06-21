@@ -73,6 +73,9 @@ export const BulkItemsSheet: React.FC<{
   onUpdateItemQuantity?: (id: string, quantity: number) => void;
   onSubmitItemsForProcessing?: (items: Array<{ id: string }>) => void;
   onSaveDraft?: () => void;
+  /** Fired when the seller taps the checkout button to create listings — drives the
+   *  "Creating your listings" card on the parent. */
+  onListingCreationStarted?: (info: { photoUri?: string | null; count: number }) => void;
   cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
   /** Item ids set aside via "Save for later" (excluded from list/subtotal/checkout). */
   savedForLaterIds?: string[];
@@ -83,7 +86,7 @@ export const BulkItemsSheet: React.FC<{
   freemium?: { usageCount: number; freeLimit: number; exhausted: boolean } | null;
   onUpgrade?: () => void;
   onAddCredits?: () => void;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
 
 
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
@@ -136,6 +139,16 @@ export const BulkItemsSheet: React.FC<{
   }
 
   const totalItems = displayItems.length;
+  // Checkout target = the selection (if any) else the whole active cart.
+  const checkoutTargets = displayItems.filter((i) => !selectionActive || selectedIds.has(i.id));
+  // Only NOT-yet-created items are eligible to checkout. Excluding already-'generated' rows
+  // (a) stops re-generating finished items (dupe listing / wasted credits on a mixed cart),
+  // and (b) means a restored all-generated cart unlocks the moment a new item is added.
+  const ungeneratedTargets = checkoutTargets.filter((i) => itemStageById?.[i.id] !== 'generated');
+  const checkoutCount = ungeneratedTargets.length;
+  // "Already created" = there are targets but none left to create. Button locks + reads
+  // "Listing created"; the per-row "Review listing" pill is how they proceed from here.
+  const allGenerated = checkoutTargets.length > 0 && ungeneratedTargets.length === 0;
   // Subtotal = sum of matched prices × qty (for the Ruggable-style subtotal row).
   // Candidate price arrives as a number (ranked candidates) OR a serpApi object
   // ({ value, extracted_value, currency }) once a match is confirmed — accept both.
@@ -1004,17 +1017,22 @@ export const BulkItemsSheet: React.FC<{
             <TouchableOpacity
               style={[
                 styles.searchForProductButton,
-                { backgroundColor: hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : '#93C822' },
+                { backgroundColor: hasLoadingItems || allGenerated || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : '#93C822' },
               ]}
-              disabled={hasLoadingItems || (cameraMode !== 'shelf' && totalItems === 0)}
+              disabled={hasLoadingItems || allGenerated || (cameraMode !== 'shelf' && totalItems === 0)}
               onPress={() => {
                 if (cameraMode === 'shelf' && totalItems > 0) {
                   // Direct transition from shelf to camera mode
                   onStartBroadSearch(); // We'll hijack this prop or close modal
                 } else {
-                  // Checkout the selection, or the whole active cart — never saved-for-later items.
+                  // Tell the parent to show the "Creating your listings" card.
+                  onListingCreationStarted?.({ photoUri: ungeneratedTargets[0]?.photos?.[0]?.uri ?? null, count: checkoutCount });
+                  // Create listings IN PLACE — keep the cart open so the items show their
+                  // own "Creating listing" spinner; nothing pushes the view up/away.
+                  // Already-generated items are excluded so we never re-create them.
                   handleAnalyzeAndNavigate(
-                    bulkItems.filter((i) => !savedSet.has(i.id) && (!selectionActive || selectedIds.has(i.id))),
+                    bulkItems.filter((i) => !savedSet.has(i.id) && itemStageById?.[i.id] !== 'generated' && (!selectionActive || selectedIds.has(i.id))),
+                    { keepSheetOpen: true },
                   );
                 }
               }}
@@ -1033,8 +1051,12 @@ export const BulkItemsSheet: React.FC<{
                     : cameraMode !== 'shelf' && totalItems === 0
                       ? 'Take a photo to continue'
                       : hasLoadingItems
-                        ? 'Analyzing...'
-                        : `Checkout ${selectionActive ? selectedIds.size : totalItems} Item${(selectionActive ? selectedIds.size : totalItems) === 1 ? '' : 's'}`}
+                        ? 'Creating listing'
+                        : allGenerated
+                          ? 'Listing created'
+                          : checkoutCount === 1
+                            ? 'Sell this item'
+                            : `Sell these ${checkoutCount} items`}
               </Text>
             </TouchableOpacity>
           </View>

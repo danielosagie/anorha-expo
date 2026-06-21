@@ -742,3 +742,25 @@ export function persistCartSnapshot(opts?: { immediate?: boolean }) {
 export function startCartSnapshotAutosave(): () => void {
   return cart$.onChange(() => persistCartSnapshot());
 }
+
+/** Peek the saved snapshot's UNFINISHED item count WITHOUT mutating cart$ — drives the
+ *  resume prompt. Excludes already-processed items so an all-resolved cart doesn't re-prompt. */
+export async function peekCartSnapshot(): Promise<{ count: number } | null> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CartState;
+    const order = Array.isArray(parsed?.order) ? parsed.order : Object.keys(parsed?.entries ?? {});
+    const processed = new Set(Array.isArray(parsed?.processedItemIds) ? parsed.processedItemIds : []);
+    const count = order.filter((id) => !processed.has(id)).length;
+    return count > 0 ? { count } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drop the saved snapshot (used by "Start fresh"). */
+export async function clearCartSnapshot(): Promise<void> {
+  if (snapshotTimer) { clearTimeout(snapshotTimer); snapshotTimer = null; }
+  try { await AsyncStorage.removeItem(STORAGE_KEY); } catch { /* best-effort */ }
+}

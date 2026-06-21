@@ -170,6 +170,7 @@ export function CompareBody({
       )}
 
       {/* Only the fields that actually DIFFER become choices. */}
+      {!!(rows && rows.some((r) => !r.same)) && <Text style={mr.pickHint}>TAP THE VALUE TO KEEP</Text>}
       <FieldRows rows={rows} />
     </>
   );
@@ -303,7 +304,7 @@ function MR_Consolidate({ c, idx, total, topInset, onBack, onResolve }: RProps) 
       <ProductCard
         title={items[0]?.title || 'Combined product'}
         image={items.find((x) => x.uri)?.uri}
-        variants={items.map((x) => ({ label: variantOption(x.title), sub: x.sub, uri: x.uri }))}
+        variants={items.map((x) => ({ label: x.title, sub: x.sub, uri: x.uri }))}
       />
     </ResolveShell>
   );
@@ -467,7 +468,11 @@ function MR_Variants({ c, idx, total, topInset, onBack, onResolve }: RProps) {
       <ProductCard
         title={c.parentTitle || 'One product'}
         image={items.find((x) => x.uri)?.uri}
-        variants={items.map((x) => ({ label: variantOption(x.title), sub: x.sub, uri: x.uri }))}
+        variants={items.map((x) => ({
+          label: `${c.parentTitle || 'Product'} — ${variantOption(x.title)}`,
+          sub: x.sub,
+          uri: x.uri,
+        }))}
       />
     </ResolveShell>
   );
@@ -1016,6 +1021,8 @@ const CARD = {
   verify: { label: 'Verify', color: '#2563EB' },
   match: { label: 'Match', color: '#0891B2' },
   ignore: { label: 'Ignore', color: '#6B7280' },
+  // Catalog items missing from this import — a keep/delist call, not "ignore".
+  catalog: { label: 'Incoming catalog', color: '#0E7490' },
 } as const;
 
 export function cardBadgeFor(c: MatchCase): { label: string; color: string } {
@@ -1034,7 +1041,7 @@ export function cardBadgeFor(c: MatchCase): { label: string; color: string } {
       return CARD.merge;
     case 'orphan':
     case 'orphans':
-      return CARD.ignore;
+      return CARD.catalog;
     case 'find':
       return c.candidates && c.candidates.length ? CARD.match : CARD.create;
     default:
@@ -1126,6 +1133,7 @@ const mr = StyleSheet.create({
   whyChip: { backgroundColor: RC.greenSoft, borderWidth: 1, borderColor: RC.greenLine, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   whyChipText: { fontSize: 12.5, fontWeight: '600', color: RC.greenDark },
   cmpFieldLabel: { fontSize: 12, fontWeight: '600', color: '#374151', letterSpacing: 0.5, marginBottom: 6, textTransform: 'uppercase' },
+  pickHint: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, color: RC.faint, marginTop: 16 },
   cmpCell: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, minHeight: 48, borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
   cmpCellText: { fontSize: 15, fontWeight: '600', flexShrink: 1, textAlign: 'center' },
 

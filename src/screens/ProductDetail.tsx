@@ -13,6 +13,7 @@ import PlatformLogo from '../components/PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import FieldRow from '../components/ListingEditor/FieldRow';
+import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import BottomActionBar from '../components/BottomActionBar';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
@@ -279,7 +280,7 @@ const ProductDetailScreen = observer(
         const productImages = obs?.productImages$?.get?.() ?? {};
         const forVariant = Object.values(productImages).filter((img: any) => img.ProductVariantId === detailedItem.Id);
         if (forVariant.length > 0) {
-          return forVariant.sort((a: any, b: any) => (a.Position ?? 0) - (b.Position ?? 0)).map((img: any) => img.ImageUrl);
+          return forVariant.sort((a: any, b: any) => (a.Position ?? 0) - (b.Position ?? 0)).map((img: any) => img.ImageUrl).filter((u: any): u is string => typeof u === 'string' && u.trim().length > 0);
         }
       } catch { /* Legend may not be ready */ }
       return detailedItem?.PrimaryImageUrl ? [detailedItem.PrimaryImageUrl] : [];
@@ -402,6 +403,8 @@ const ProductDetailScreen = observer(
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Quiet "Saved" confirmation that fades out ~5s after the last save (no persistent badge).
+    const savedOpacity = useRef(new Animated.Value(0)).current;
     const editVersionRef = useRef(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
@@ -587,6 +590,36 @@ const ProductDetailScreen = observer(
     const [clearoutLoading, setClearoutLoading] = useState(false);
     const [clearoutBusy, setClearoutBusy] = useState<string | null>(null);
     const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
+    // Campaigns this product is currently IN (the "In a campaign" overview card).
+    const [productCampaigns, setProductCampaigns] = useState<Array<{ id: string; title: string; soldCount?: number; totalCount?: number }>>([]);
+    const loadedProductCampaignsRef = useRef<string | null>(null);
+
+    // Determine which active campaigns this product belongs to (once per product, deferred,
+    // capped). Checks each active campaign's items for this variant/product id.
+    useEffect(() => {
+      const variantId = detailedItem?.Id;
+      const productId = (detailedItem as any)?.ProductId;
+      if (!variantId || loadedProductCampaignsRef.current === variantId) return;
+      loadedProductCampaignsRef.current = variantId;
+      let cancelled = false;
+      (async () => {
+        try {
+          const all = await campaignAdapter.listCampaigns().catch(() => []);
+          const active = (all || []).filter((c: any) => ['active', 'waiting_user', 'paused'].includes(c.status)).slice(0, 15);
+          const matches: Array<{ id: string; title: string; soldCount?: number; totalCount?: number }> = [];
+          await Promise.all(active.map(async (c: any) => {
+            try {
+              const items = await campaignAdapter.getCampaignItems(c.id);
+              const inIt = (items || []).some((it: any) => it.productId === variantId || (productId && it.productId === productId));
+              if (inIt) matches.push({ id: c.id, title: c.title, soldCount: c.stats?.soldCount, totalCount: c.stats?.totalCount });
+            } catch { /* skip this campaign */ }
+          }));
+          if (!cancelled) setProductCampaigns(matches);
+        } catch { /* ignore — card just won't show */ }
+      })();
+      return () => { cancelled = true; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailedItem?.Id]);
 
     const openClearout = useCallback(async () => {
       setActionMenuVisible(false);
@@ -1683,6 +1716,20 @@ const ProductDetailScreen = observer(
         }
       };
     }, [hasUnsavedChanges, isSaving, saveError, performAutoSave]);
+
+    // Show a quiet "Saved" then fade it out after 5s of no changes. While saving or with
+    // unsaved edits it stays hidden (the header shows "Saving…" instead).
+    useEffect(() => {
+      if (isSaving || hasUnsavedChanges || saveError || lastSaveTime <= 0) {
+        savedOpacity.setValue(0);
+        return;
+      }
+      savedOpacity.setValue(1);
+      const hideTimer = setTimeout(() => {
+        Animated.timing(savedOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start();
+      }, 5000);
+      return () => clearTimeout(hideTimer);
+    }, [lastSaveTime, isSaving, hasUnsavedChanges, saveError, savedOpacity]);
 
     // Restore a previous saved version as the working draft (R3 versions UI).
     const restoreDraftVersion = useCallback(async (versionId: string) => {
@@ -3883,86 +3930,160 @@ const ProductDetailScreen = observer(
       const totalStock = (rawInventoryLevels || []).reduce((s: number, l: any) => s + (Number(l?.Quantity) || 0), 0);
       const canon: any = (displayedPlatforms as any)?.shopify || Object.values(displayedPlatforms || {})[0] || {};
       const categoryText = canon.categoryPath || canon.category || canon.productCategory || null;
-      const metaParts: string[] = [priceText];
-      if (totalStock > 0) metaParts.push(`${totalStock} in stock`);
-      if (sizeCount > 1) metaParts.push(`${sizeCount} sizes`);
 
       // Tapping any read row jumps into Edit mode and opens that field's sheet.
       const openInEdit = (field: string) => {
         setMode('edit');
         setTimeout(() => listingEditorRef.current?.openFieldSheet(field), 140);
       };
-      const condMap: Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair', used: 'Used', refurbished: 'Refurbished', for_parts: 'For Parts' };
-      const condVal = canon.condition ? (condMap[canon.condition] || canon.condition) : null;
       const tagsArr = Array.isArray(canon.tags) ? canon.tags : (Array.isArray(detailedItem!.Tags) ? (detailedItem!.Tags as any) : []);
-      const tagsVal = tagsArr.length ? `${tagsArr.length} tag${tagsArr.length > 1 ? 's' : ''}` : null;
-      const brandVal = canon.brand || canon.vendor || (detailedItem as any)?.Vendor || null;
-      const skuVal = canon.sku || detailedItem!.Sku || null;
-      const barcodeVal = canon.barcode || detailedItem!.Barcode || null;
+      const photosCount = imgs.length;
+      // Gray meta after the big price (price is shown on its own, not in this line).
+      const metaGray: string[] = [];
+      if (totalStock > 0) metaGray.push(`${totalStock} in stock`);
+      if (sizeCount > 1) metaGray.push(`${sizeCount} sizes`);
+      const priceStockSummary = `${priceText}${totalStock > 0 ? ` · ${totalStock}` : ''}`;
+
+      // One read row: dark label (left) · gray value (right) · chevron. Tap → edit.
+      const ovRow = (label: string, value: string | null, placeholder: string, field: string, isLast?: boolean) => (
+        <TouchableOpacity style={[styles.ovDetailRow, !isLast && styles.ovDetailDivider]} activeOpacity={0.6} onPress={() => openInEdit(field)}>
+          <Text style={styles.ovDetailLabel} numberOfLines={1}>{label}</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={[styles.ovDetailValue, !value && styles.ovDetailValueEmpty]} numberOfLines={1}>{value || placeholder}</Text>
+          <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      );
 
       return (
         <View>
-          {cover ? (
-            <Image source={{ uri: cover }} style={styles.ovHero} />
-          ) : (
-            <View style={[styles.ovHero, styles.ovHeroEmpty]}>
-              <Icon name="image-outline" size={32} color="#C4C8CE" />
-            </View>
-          )}
-          {thumbs.length > 0 && (
-            <View style={styles.ovThumbRow}>
-              {thumbs.map((u: string, i: number) => (
-                <Image key={`${u}-${i}`} source={{ uri: u }} style={styles.ovThumb} />
-              ))}
-            </View>
-          )}
-
-          <Text style={styles.ovTitle}>{detailedItem!.Title || 'Untitled product'}</Text>
-          <Text style={styles.ovMetaLine}>{metaParts.join('   ·   ')}</Text>
-          {!!detailedItem!.Description && (
-            <Text style={styles.ovDesc} numberOfLines={3}>{detailedItem!.Description}</Text>
-          )}
-
-          {/* Inventory first (above details), tappable to edit price & stock */}
-          {sizeCount > 0 && (
-            <TouchableOpacity activeOpacity={0.7} onPress={() => setMode('edit')}>
-              <View style={styles.ovCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 6, paddingTop: 4, paddingBottom: 2 }}>
-                  <Text style={styles.ovCardLabel}>INVENTORY</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: '#5D7E16' }}>Price & stock</Text>
-                    <ChevronRight size={15} color="#9CA3AF" />
-                  </View>
-                </View>
-                {realVariants.map((v: any, i: number) => {
-                  const vPrice = Number(v?.Price);
-                  const vPriceText = Number.isFinite(vPrice) && vPrice > 0 ? `$${vPrice.toFixed(2)}` : '—';
-                  const vStock = stockByVariant[v?.Id] ?? 0;
-                  const vName = v?.Title || v?.Sku || `Variant ${i + 1}`;
-                  return (
-                    <View key={v?.Id || i} style={[styles.ovInvRow, i < realVariants.length - 1 && styles.ovInvDivider]}>
-                      <Text style={styles.ovInvName} numberOfLines={1}>{vName}</Text>
-                      <Text style={styles.ovInvPrice}>{vPriceText}</Text>
-                      <Text style={styles.ovInvStock}>{vStock} in stock</Text>
-                    </View>
-                  );
-                })}
+          {/* Product card — hero, thumbs, title, price, description */}
+          <View style={styles.ovProductCard}>
+            {cover ? (
+              <Image source={{ uri: cover }} style={styles.ovHero} />
+            ) : (
+              <View style={[styles.ovHero, styles.ovHeroEmpty]}>
+                <Icon name="image-outline" size={32} color="#C4C8CE" />
               </View>
-            </TouchableOpacity>
-          )}
-
-          {/* All details as a read table — tap any row to edit it */}
-          <Text style={styles.ovSectionLabel}>DETAILS</Text>
-          <View style={styles.ovCard}>
-            <FieldRow label="Price" value={priceText} onPress={() => openInEdit('price')} />
-            <FieldRow label="SKU" value={skuVal} placeholder="Add a SKU" onPress={() => openInEdit('sku')} />
-            <FieldRow label="Category" value={categoryText} placeholder="Add a category" onPress={() => openInEdit('category')} />
-            <FieldRow label="Condition" value={condVal} placeholder="Select condition" onPress={() => openInEdit('condition')} />
-            <FieldRow label="Brand" value={brandVal} placeholder="Add brand" onPress={() => openInEdit('brand')} />
-            <FieldRow label="Barcode" value={barcodeVal} placeholder="Add or scan" onPress={() => openInEdit('barcode')} />
-            <FieldRow label="Tags" value={tagsVal} placeholder="Add tags" onPress={() => openInEdit('tags')} last />
+            )}
+            {thumbs.length > 0 && (
+              <View style={styles.ovThumbRow}>
+                {thumbs.map((u: string, i: number) => (
+                  <Image key={`${u}-${i}`} source={{ uri: u }} style={styles.ovThumb} />
+                ))}
+              </View>
+            )}
+            <Text style={styles.ovTitle}>{detailedItem!.Title || 'Untitled product'}</Text>
+            <View style={styles.ovPriceRow}>
+              <Text style={styles.ovPrice}>{priceText}</Text>
+              {metaGray.length > 0 && <Text style={styles.ovPriceMeta}>{`· ${metaGray.join(' · ')}`}</Text>}
+            </View>
+            {!!detailedItem!.Description && (
+              <Text style={styles.ovDesc} numberOfLines={3}>{detailedItem!.Description}</Text>
+            )}
           </View>
 
+          {/* Details — key fields, tap a row to edit */}
+          <View style={styles.ovCard}>
+            <Text style={[styles.ovCardLabel, styles.ovCardLabelSolo]}>DETAILS</Text>
+            {ovRow('Price & stock', priceStockSummary, 'Set a price', 'price')}
+            {ovRow('Category', categoryText, 'Add a category', 'category')}
+            <TouchableOpacity style={[styles.ovDetailRow, styles.ovDetailDivider]} activeOpacity={0.6} onPress={() => setMode('edit')}>
+              <Text style={styles.ovDetailLabel}>Photos</Text>
+              <View style={{ flex: 1 }} />
+              <Text style={[styles.ovDetailValue, !photosCount && styles.ovDetailValueEmpty]}>{photosCount || 'Add photos'}</Text>
+              <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
+            {/* Tags — chips wrap below the label */}
+            <TouchableOpacity style={styles.ovTagsRow} activeOpacity={0.6} onPress={() => openInEdit('tags')}>
+              <Text style={styles.ovDetailLabel}>Tags</Text>
+              {tagsArr.length > 0 ? (
+                <View style={styles.ovTagsWrap}>
+                  {tagsArr.slice(0, 6).map((t: string, i: number) => (
+                    <View key={`${t}-${i}`} style={styles.ovTagChip}><Text style={styles.ovTagChipText}>{t}</Text></View>
+                  ))}
+                  {tagsArr.length > 6 && (
+                    <View style={styles.ovTagChip}><Text style={styles.ovTagChipText}>{tagsArr.length - 6}+ more</Text></View>
+                  )}
+                  <ChevronRight size={17} color="#C4C8CE" style={{ alignSelf: 'center' }} />
+                </View>
+              ) : (
+                <View style={styles.ovTagsWrap}>
+                  <Text style={[styles.ovDetailValue, styles.ovDetailValueEmpty]}>Add tags</Text>
+                  <ChevronRight size={17} color="#C4C8CE" style={{ alignSelf: 'center' }} />
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+
+          {/* Inventory — per-variant price + stock, tap to edit */}
+          {sizeCount > 0 && (
+            <TouchableOpacity activeOpacity={0.8} onPress={() => setMode('edit')} style={styles.ovCard}>
+              <View style={styles.ovInvHeader}>
+                <Text style={styles.ovCardLabel}>INVENTORY</Text>
+                <View style={styles.ovInvColHead}>
+                  <Text style={styles.ovInvColLabel}>Price</Text>
+                  <Text style={[styles.ovInvColLabel, styles.ovInvQtyCol]}>Inv</Text>
+                </View>
+              </View>
+              {realVariants.map((v: any, i: number) => {
+                const vPrice = Number(v?.Price);
+                const vPriceText = Number.isFinite(vPrice) && vPrice > 0 ? `$${vPrice.toFixed(2)}` : '—';
+                const vStock = stockByVariant[v?.Id] ?? 0;
+                const vName = v?.Title || v?.Sku || `Variant ${i + 1}`;
+                const vSku = v?.Sku || null;
+                const vImg = v?.ImageUrl || v?.Image || cover || null;
+                return (
+                  <View key={v?.Id || i} style={[styles.ovInvRow, i < realVariants.length - 1 && styles.ovInvDivider]}>
+                    {vImg ? (
+                      <Image source={{ uri: vImg }} style={styles.ovInvThumb} />
+                    ) : (
+                      <View style={[styles.ovInvThumb, styles.ovHeroEmpty]}><Icon name="image-outline" size={16} color="#C4C8CE" /></View>
+                    )}
+                    <View style={styles.ovInvNameCol}>
+                      <Text style={styles.ovInvName} numberOfLines={1}>{vName}</Text>
+                      {!!vSku && <Text style={styles.ovInvSku} numberOfLines={1}>{vSku}</Text>}
+                    </View>
+                    <Text style={styles.ovInvPrice}>{vPriceText}</Text>
+                    <Text style={[styles.ovInvStock, styles.ovInvQtyCol]}>{vStock}</Text>
+                  </View>
+                );
+              })}
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    };
+
+    // MORE DETAILS card (overview only) — long-tail fields, rendered last to match the design.
+    const renderMoreDetailsCard = () => {
+      const canon: any = (displayedPlatforms as any)?.shopify || Object.values(displayedPlatforms || {})[0] || {};
+      const condMap: Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair', used: 'Used', refurbished: 'Refurbished', for_parts: 'For Parts' };
+      const condVal = canon.condition ? (condMap[canon.condition] || canon.condition) : null;
+      const brandVal = canon.brand || canon.vendor || (detailedItem as any)?.Vendor || null;
+      const skuVal = canon.sku || detailedItem!.Sku || null;
+      const barcodeVal = canon.barcode || detailedItem!.Barcode || null;
+      const seoTitleVal = canon.seoTitle || canon.metaTitle || (detailedItem as any)?.SeoTitle || null;
+      const openInEdit = (field: string) => {
+        setMode('edit');
+        setTimeout(() => listingEditorRef.current?.openFieldSheet(field), 140);
+      };
+      const ovRow = (label: string, value: string | null, placeholder: string, field: string, isLast?: boolean) => (
+        <TouchableOpacity style={[styles.ovDetailRow, !isLast && styles.ovDetailDivider]} activeOpacity={0.6} onPress={() => openInEdit(field)}>
+          <Text style={styles.ovDetailLabel} numberOfLines={1}>{label}</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={[styles.ovDetailValue, !value && styles.ovDetailValueEmpty]} numberOfLines={1}>{value || placeholder}</Text>
+          <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      );
+      return (
+        <View style={styles.ovCard}>
+          <Text style={[styles.ovCardLabel, styles.ovCardLabelSolo]}>MORE DETAILS</Text>
+          {ovRow('Brand', brandVal, 'Add a brand', 'brand')}
+          {ovRow('Condition', condVal, 'Select condition', 'condition')}
+          {ovRow('SKU', skuVal, 'Add a SKU', 'sku')}
+          {ovRow('Barcode', barcodeVal, 'Add or scan', 'barcode')}
+          {ovRow('SEO title', seoTitleVal, 'Add an SEO title', 'seoTitle', true)}
         </View>
       );
     };
@@ -4017,11 +4138,11 @@ const ProductDetailScreen = observer(
                 // any prior save error so autosave re-arms.
                 editVersionRef.current += 1;
                 setSaveError(null);
-                setDisplayedPlatforms(next);
                 setHasUnsavedChanges(true)
-                log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
-                // DEEP merge: preserve all existing fields while updating changed ones
-                // This preserves user edits AND keeps all loaded backend data
+                // DEEP merge ONLY (no eager setDisplayedPlatforms(next) — that made the
+                // functional updater below receive the PARTIAL `next` as prev, so a
+                // category-only partial write collapsed state to just those fields and
+                // wiped every other platform/field. The merge here reads the true full prev.
                 updatePlatforms(prev => {
                   const merged = { ...prev };
                   for (const [platformKey, platformData] of Object.entries(next)) {
@@ -4127,12 +4248,17 @@ const ProductDetailScreen = observer(
             />
             )}
 
-            {/* Active Listings */}
-            <Card shadow="none" style={styles.platformsSection}>
-              <Text style={styles.alTitle}>Active Listings</Text>
+            {/* Active Channels — gray card with a white inner list (UJK-0) */}
+            <View style={styles.channelsCard}>
+              <View style={styles.channelsHeader}>
+                <Text style={styles.channelsTitle}>Active Channels</Text>
+                <TouchableOpacity style={styles.channelsManagePill} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                  <Text style={styles.channelsManageText}>Manage</Text>
+                </TouchableOpacity>
+              </View>
 
-              {(mappings.length > 0 || unpublishedPlatforms.length > 0 || partnerships.length > 0) ? (
-                <>
+              {(mappings.length > 0 || unpublishedPlatforms.length > 0 || partnerships.length > 0 || productCampaigns.length > 0) ? (
+                <View style={styles.channelsInner}>
                   {mappings.map((mapping) => {
                     const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
                     const rawType = connection?.PlatformType || 'unknown';
@@ -4181,60 +4307,73 @@ const ProductDetailScreen = observer(
                     );
                   })}
 
-                  {partnerships.length > 0 && (
-                    <>
-                      <Text style={styles.alSubLabel}>SHARED WITH</Text>
-                      {partnerships.map((partnership) => {
-                        const isLoading = partnershipActionLoading === partnership.inviteId || partnershipActionLoading === partnership.linkId;
-                        return (
-                          <View key={partnership.inviteId} style={styles.alRow}>
-                            <View style={styles.alLogo}><Icon name="account-group-outline" size={20} color={partnership.isShared ? BRAND_PRIMARY : '#9CA3AF'} /></View>
-                            <View style={styles.alInfo}>
-                              <Text style={styles.alName} numberOfLines={1}>{partnership.partnerOrgName}</Text>
-                              <View style={styles.alStatusLine}>
-                                <View style={[styles.alDot, { backgroundColor: partnership.isShared ? '#16A34A' : '#9CA3AF' }]} />
-                                <Text style={[styles.alStatusText, { color: partnership.isShared ? '#16A34A' : '#71717A' }]} numberOfLines={1}>{partnership.isShared ? 'Shared' : 'Not shared'} · {partnership.poolName}</Text>
-                              </View>
-                            </View>
-                            {isLoading ? (
-                              <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 8 }} />
-                            ) : partnership.isShared ? (
-                              partnership.canRevoke && partnership.linkId ? (
-                                <TouchableOpacity style={styles.alActionOutline} onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}>
-                                  <Text style={styles.alActionOutlineText}>Remove</Text>
-                                </TouchableOpacity>
-                              ) : (
-                                <View style={styles.alActionGhost}><Text style={styles.alActionGhostText}>Shared</Text></View>
-                              )
-                            ) : (
-                              <TouchableOpacity style={styles.alActionGreen} onPress={() => shareWithPartner(partnership.inviteId)}>
-                                <Text style={styles.alActionGreenText}>Share</Text>
-                              </TouchableOpacity>
-                            )}
+                  {partnerships.map((partnership) => {
+                    const isLoading = partnershipActionLoading === partnership.inviteId || partnershipActionLoading === partnership.linkId;
+                    return (
+                      <View key={partnership.inviteId} style={styles.alRow}>
+                        <View style={styles.alLogo}><Icon name="account-group-outline" size={20} color={partnership.isShared ? BRAND_PRIMARY : '#9CA3AF'} /></View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.alName} numberOfLines={1}>{partnership.partnerOrgName}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: partnership.isShared ? '#16A34A' : '#9CA3AF' }]} />
+                            <Text style={[styles.alStatusText, { color: partnership.isShared ? '#16A34A' : '#71717A' }]} numberOfLines={1}>{partnership.isShared ? 'Shared' : 'Not shared'} · {partnership.poolName}</Text>
                           </View>
-                        );
-                      })}
-                    </>
-                  )}
+                        </View>
+                        {isLoading ? (
+                          <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 8 }} />
+                        ) : partnership.isShared ? (
+                          partnership.canRevoke && partnership.linkId ? (
+                            <TouchableOpacity style={styles.alActionOutline} onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}>
+                              <Text style={styles.alActionOutlineText}>Remove</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <View style={styles.alActionGhost}><Text style={styles.alActionGhostText}>Shared</Text></View>
+                          )
+                        ) : (
+                          <TouchableOpacity style={styles.alActionGreen} onPress={() => shareWithPartner(partnership.inviteId)}>
+                            <Text style={styles.alActionGreenText}>Share</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
 
-                  <TouchableOpacity style={styles.alAddRow} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
-                    <Icon name="plus" size={16} color="#71717A" style={{ marginRight: 8 }} />
-                    <Text style={styles.alAddText}>Add a channel</Text>
-                  </TouchableOpacity>
-                </>
+                  {productCampaigns.map((c) => {
+                    const soldText = (typeof c.soldCount === 'number' && typeof c.totalCount === 'number')
+                      ? `${c.soldCount} of ${c.totalCount} sold`
+                      : 'Active';
+                    return (
+                      <TouchableOpacity key={c.id} style={styles.alRow} activeOpacity={0.7} onPress={() => (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: c.id, entryPoint: 'detail' })}>
+                        <View style={[styles.alLogo, styles.channelCampaignLogo]}><Icon name="sprout-outline" size={20} color="#5D7E16" /></View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.channelCampaignLabel}>IN A CAMPAIGN</Text>
+                          <Text style={styles.alName} numberOfLines={1}>{c.title}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: '#5D7E16' }]} />
+                            <Text style={[styles.alStatusText, { color: '#71717A' }]} numberOfLines={1}>{soldText}</Text>
+                          </View>
+                        </View>
+                        <ChevronRight size={18} color="#9CA3AF" />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               ) : (
-                <View style={styles.noPlatformsContainer}>
-                  <Text style={styles.noPlatformsText}>Not listed anywhere yet</Text>
-                  <TouchableOpacity style={styles.alAddRow} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
-                    <Icon name="plus" size={16} color="#71717A" style={{ marginRight: 8 }} />
-                    <Text style={styles.alAddText}>Add a channel</Text>
-                  </TouchableOpacity>
+                <View style={styles.channelsInner}>
+                  <View style={[styles.alRow, { borderBottomWidth: 0 }]}>
+                    <Text style={styles.noPlatformsText}>Not listed anywhere yet</Text>
+                  </View>
                 </View>
               )}
-            </Card>
 
+              <TouchableOpacity style={styles.channelsAddRow} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                <Icon name="plus" size={16} color="#9CA3AF" style={{ marginRight: 4 }} />
+                <Text style={styles.alAddText}>Add a channel</Text>
+              </TouchableOpacity>
+            </View>
 
-
+            {/* More details — long-tail fields, last card (overview only) */}
+            {mode === 'overview' && renderMoreDetailsCard()}
 
           </Card>
         </ScrollView>
@@ -4250,31 +4389,36 @@ const ProductDetailScreen = observer(
             />
           </View>
           <View style={styles.glassHeaderRow}>
-            <TouchableOpacity style={styles.navCircle} onPress={navigation.goBack} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.navCircle}
+              onPress={() => { if (mode === 'edit') { setMode('overview'); } else { navigation.goBack(); } }}
+              activeOpacity={0.85}
+            >
               <ChevronLeft size={22} color="#18181B" />
             </TouchableOpacity>
-            {/* Centered: Done (exit) with the live save state stacked under it. */}
-            <View style={{ alignItems: 'center', gap: 3 }}>
-              <TouchableOpacity
-                style={styles.modeToggle}
-                onPress={() => setMode((m) => (m === 'overview' ? 'edit' : 'overview'))}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.modeToggleText}>{mode === 'overview' ? 'Edit details' : 'Done'}</Text>
-              </TouchableOpacity>
-              <View style={{ height: 14, justifyContent: 'center' }}>
-                {isSaving ? (
-                  <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '600' }}>Saving…</Text>
-                ) : saveError ? (
-                  <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
-                    <Text style={{ color: '#DC2626', fontSize: 11, fontWeight: '700' }}>Save failed · Retry</Text>
-                  </TouchableOpacity>
-                ) : hasUnsavedChanges ? (
-                  <Text style={{ color: '#D97706', fontSize: 11, fontWeight: '600' }}>Unsaved</Text>
-                ) : lastSaveTime > 0 ? (
-                  <Text style={{ color: theme.colors.success, fontSize: 11, fontWeight: '600' }}>Saved</Text>
-                ) : null}
-              </View>
+            {/* Centered: in overview, an "Edit details" entry. In edit, saving is implicit —
+                no "Done"; just a quiet "Saving…/Saved" that fades after 5s. Back returns here. */}
+            <View style={{ alignItems: 'center', justifyContent: 'center', minHeight: 34 }}>
+              {mode === 'overview' ? (
+                <TouchableOpacity style={styles.modeToggle} onPress={() => setMode('edit')} activeOpacity={0.85}>
+                  <Text style={styles.modeToggleText}>Edit details</Text>
+                </TouchableOpacity>
+              ) : isSaving ? (
+                <View style={styles.savePill}>
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                  <Text style={[styles.savePillText, { color: theme.colors.primary }]}>Saving…</Text>
+                </View>
+              ) : saveError ? (
+                <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7} style={styles.savePill}>
+                  <Icon name="alert-circle-outline" size={14} color="#DC2626" />
+                  <Text style={[styles.savePillText, { color: '#DC2626' }]}>Save failed · Retry</Text>
+                </TouchableOpacity>
+              ) : (
+                <Animated.View style={[styles.savePill, { opacity: savedOpacity }]} pointerEvents="none">
+                  <Icon name="check" size={14} color={theme.colors.success} />
+                  <Text style={[styles.savePillText, { color: theme.colors.success }]}>Saved</Text>
+                </Animated.View>
+              )}
             </View>
             <TouchableOpacity onPress={() => setActionMenuVisible(true)} activeOpacity={0.85} style={styles.navCircle}>
               <Icon name="dots-horizontal" size={22} color="#18181B" />
@@ -4582,21 +4726,51 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   modeToggleText: { fontSize: 14, fontWeight: '700', color: '#18181B' },
-  ovHero: { width: '100%', height: 230, borderRadius: 18, backgroundColor: '#F3F4F6' },
+  // Quiet, calm save status shown in edit mode (no button chrome).
+  savePill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7 },
+  savePillText: { fontSize: 13, fontWeight: '600' },
+  // Product card (hero + title + price + desc)
+  ovProductCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  ovHero: { width: '100%', height: 190, borderRadius: 14, backgroundColor: '#ECECEF' },
   ovHeroEmpty: { alignItems: 'center', justifyContent: 'center' },
   ovThumbRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  ovThumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#F3F4F6' },
-  ovTitle: { fontSize: 22, fontWeight: '700', color: '#18181B', marginTop: 16, lineHeight: 28 },
-  ovMetaLine: { fontSize: 15, fontWeight: '600', color: '#3F3F46', marginTop: 8 },
-  ovDesc: { fontSize: 14, fontWeight: '400', color: '#71717A', marginTop: 10, lineHeight: 20 },
-  ovCard: { backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 6, marginTop: 16, overflow: 'hidden' },
-  ovCardLabel: { fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
-  ovInvRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12 },
+  ovThumb: { width: 58, height: 58, borderRadius: 11, backgroundColor: '#ECECEF' },
+  ovTitle: { fontSize: 18, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827', marginTop: 13, lineHeight: 23, letterSpacing: -0.2 },
+  ovPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 7, flexWrap: 'wrap' },
+  ovPrice: { fontSize: 22, fontFamily: CHAT_FONT.bold, fontWeight: '800', color: '#111827', letterSpacing: -0.2 },
+  ovPriceMeta: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#9CA3AF' },
+  ovDesc: { fontSize: 13.5, fontFamily: CHAT_FONT.regular, fontWeight: '400', color: '#3F3F46', marginTop: 6, lineHeight: 20 },
+
+  // Section cards (inventory / details / more details)
+  ovCard: { backgroundColor: '#FFFFFF', borderRadius: 18, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  ovCardLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7 },
+  ovCardLabelSolo: { paddingTop: 14, paddingBottom: 2 },
+
+  // Inventory rows
+  ovInvHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, paddingBottom: 4 },
+  ovInvColHead: { flexDirection: 'row', alignItems: 'center' },
+  ovInvColLabel: { width: 64, textAlign: 'right', fontSize: 11.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
+  ovInvQtyCol: { width: 44 },
+  ovInvRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, gap: 11 },
   ovInvDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
-  ovInvName: { flex: 1, fontSize: 15, fontWeight: '600', color: '#18181B' },
-  ovInvPrice: { fontSize: 15, fontWeight: '700', color: '#18181B', width: 90, textAlign: 'right' },
-  ovInvStock: { fontSize: 13, fontWeight: '500', color: '#71717A', width: 90, textAlign: 'right' },
-  ovSectionLabel: { fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginTop: 22, marginBottom: 8, marginLeft: 4 },
+  ovInvThumb: { width: 36, height: 36, borderRadius: 9, backgroundColor: '#ECECEF' },
+  ovInvNameCol: { flex: 1, minWidth: 0 },
+  ovInvName: { fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+  ovInvSku: { fontSize: 12, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#9CA3AF', marginTop: 1 },
+  ovInvPrice: { width: 64, textAlign: 'right', fontSize: 13, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
+  ovInvStock: { textAlign: 'right', fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+
+  // Detail rows (dark label · gray value · chevron)
+  ovDetailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, gap: 10 },
+  ovDetailDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F1F2F4' },
+  ovDetailLabel: { flexShrink: 0, fontSize: 15, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#111827' },
+  ovDetailValue: { fontSize: 13.5, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#6B7280', textAlign: 'right' },
+  ovDetailValueEmpty: { color: '#C4C8CE' },
+  ovTagsRow: { paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F1F2F4' },
+  ovTagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8, alignItems: 'center' },
+  ovTagChip: { backgroundColor: '#F3F4F6', borderRadius: 999, paddingHorizontal: 11, paddingVertical: 5 },
+  ovTagChipText: { fontSize: 12.5, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#3F3F46' },
+  ovSectionLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginTop: 22, marginBottom: 8, marginLeft: 4 },
   header: {
     paddingTop: 60,
     flexDirection: 'row',
@@ -4822,9 +4996,19 @@ const styles = StyleSheet.create({
     margin: 0,
     marginTop: 0,
   },
+  // Active Channels — UJK-0 gray card wrapping a white inner list (matches the Inventory card)
+  channelsCard: { marginTop: 12, backgroundColor: '#F3F4F6', borderColor: '#F1F2F4', borderWidth: 1, borderRadius: 14, padding: 12 },
+  channelsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9, paddingHorizontal: 2 },
+  channelsTitle: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#666666' },
+  channelsManagePill: { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB', borderWidth: 1, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 },
+  channelsManageText: { fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#6B7280' },
+  channelsInner: { backgroundColor: '#FFFFFF', borderRadius: 14, paddingHorizontal: 14, overflow: 'hidden' },
+  channelsAddRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 11, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', borderRadius: 13, paddingVertical: 10 },
+  channelCampaignLogo: { backgroundColor: '#93C82218' },
+  channelCampaignLabel: { fontSize: 10.5, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, marginBottom: 1 },
   // Active Listings — Paper status-row style (logo + name + dot·status + one verb)
-  alTitle: { fontSize: 18, fontWeight: '700', color: '#18181B', marginBottom: 4 },
-  alSubLabel: { fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginTop: 14, marginBottom: 4 },
+  alTitle: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7, marginTop: 10, marginBottom: 4 },
+  alSubLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7, marginTop: 14, marginBottom: 4 },
   alRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4842,10 +5026,10 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   alInfo: { flex: 1, minWidth: 0 },
-  alName: { fontSize: 15, fontWeight: '700', color: '#18181B' },
+  alName: { fontSize: 15, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
   alStatusLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   alDot: { width: 7, height: 7, borderRadius: 4 },
-  alStatusText: { fontSize: 13, fontWeight: '500', flexShrink: 1 },
+  alStatusText: { fontSize: 12.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', flexShrink: 1 },
   alActionOutline: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -4854,7 +5038,7 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     backgroundColor: '#FFFFFF',
   },
-  alActionOutlineText: { fontSize: 14, fontWeight: '600', color: '#3F3F46' },
+  alActionOutlineText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#6B7280' },
   alActionGreen: {
     paddingHorizontal: 18,
     paddingVertical: 8,
@@ -4863,14 +5047,14 @@ const styles = StyleSheet.create({
     minWidth: 80,
     alignItems: 'center',
   },
-  alActionGreenText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  alActionGreenText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#FFFFFF' },
   alActionGhost: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 999,
     backgroundColor: 'rgba(147,200,34,0.12)',
   },
-  alActionGhostText: { fontSize: 14, fontWeight: '600', color: '#4A7C00' },
+  alActionGhostText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#4A7C00' },
   alAddRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4882,7 +5066,7 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     borderColor: '#D1D5DB',
   },
-  alAddText: { fontSize: 14, fontWeight: '600', color: '#71717A' },
+  alAddText: { fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
   platformRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

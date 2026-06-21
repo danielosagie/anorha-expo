@@ -17,6 +17,7 @@ import Animated, {
   withSpring,
   withTiming,
   Extrapolation,
+  SharedValue,
 } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
@@ -30,9 +31,11 @@ interface SwipeCardProps {
   onNo: () => void;
   onIgnore?: () => void;
   enabled?: boolean;
+  /** 0→1 down-drag progress, so the shell can swap the action bar for the tray. */
+  downShared?: SharedValue<number>;
 }
 
-const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, enabled = true }) => {
+const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, enabled = true, downShared }) => {
   const x = useSharedValue(0);
   const y = useSharedValue(0);
   const gone = useSharedValue(false);
@@ -62,15 +65,20 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
     .activeOffsetY([-99999, 70])
     .failOffsetX([-40, 40])
     .onUpdate((e) => {
-      if (!gone.value && e.translationY > 0) y.value = e.translationY;
+      if (!gone.value && e.translationY > 0) {
+        y.value = e.translationY;
+        if (downShared) downShared.value = Math.min(1, e.translationY / Y_TH);
+      }
     })
     .onEnd((e) => {
       if (gone.value) return;
       if ((e.translationY > Y_TH || e.velocityY > 1100) && onIgnore) {
         gone.value = true;
+        if (downShared) downShared.value = 1;
         y.value = withTiming(H, { duration: 200 }, () => runOnJS(onIgnore)());
       } else {
         y.value = withSpring(0, { damping: 18, stiffness: 180 });
+        if (downShared) downShared.value = withSpring(0);
       }
     });
 
@@ -85,7 +93,6 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
   }));
   const yesStyle = useAnimatedStyle(() => ({ opacity: interpolate(x.value, [16, X_TH], [0, 1], Extrapolation.CLAMP) }));
   const noStyle = useAnimatedStyle(() => ({ opacity: interpolate(x.value, [-X_TH, -16], [1, 0], Extrapolation.CLAMP) }));
-  const ignoreStyle = useAnimatedStyle(() => ({ opacity: interpolate(y.value, [30, Y_TH], [0, 1], Extrapolation.CLAMP) }));
 
   return (
     <GestureDetector gesture={gesture}>
@@ -99,10 +106,6 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
         <Animated.View pointerEvents="none" style={[styles.stamp, styles.stampNo, noStyle]}>
           <MaterialCommunityIcons name="close-thick" size={18} color="#fff" />
           <Text style={styles.stampText}>NO</Text>
-        </Animated.View>
-        <Animated.View pointerEvents="none" style={[styles.stampIgnore, ignoreStyle]}>
-          <MaterialCommunityIcons name="trash-can-outline" size={18} color="#fff" />
-          <Text style={styles.stampText}>IGNORE</Text>
         </Animated.View>
       </Animated.View>
     </GestureDetector>
@@ -123,18 +126,6 @@ const styles = StyleSheet.create({
   },
   stampYes: { left: 22, backgroundColor: '#16A34A', transform: [{ rotate: '-12deg' }] },
   stampNo: { right: 22, backgroundColor: '#475569', transform: [{ rotate: '12deg' }] },
-  stampIgnore: {
-    position: 'absolute',
-    bottom: 24,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    borderRadius: 12,
-    backgroundColor: '#475569',
-  },
   stampText: { color: '#fff', fontSize: 18, fontFamily: 'Inter_800ExtraBold', letterSpacing: 1 },
 });
 

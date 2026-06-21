@@ -20,6 +20,7 @@ export interface VariantInventoryEditorProps {
     id: string;
     name: string;
     image?: string;
+    sku?: string;
     // Map of locationId -> Inventory Data. Using generic Record to be flexible
     inventory: Record<string, InventoryItemData>;
     defaultPrice?: number;
@@ -256,56 +257,54 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
   const platformLocations = locations.filter(l => l.platformKey.toLowerCase() === activeTabLower);
   const isShopify = activeTabLower === 'shopify';
 
+  // Flatten every (variant × location) pair into one list so the rows share a single
+  // white card with hairline dividers (last row has none) — matches the All-tab look.
+  const rows = variants.flatMap((variant) =>
+    platformLocations.map((loc) => ({ variant, loc }))
+  );
+
   return (
     <View style={styles.container}>
       {variants.length === 0 ? (
         <Text style={styles.emptyText}>No variants available</Text>
+      ) : platformLocations.length === 0 ? (
+        <Text style={styles.emptyText}>No locations for {activeTab}</Text>
       ) : (
-        variants.map((variant) => (
-          <View key={variant.id} style={styles.variantGroup}>
-            {platformLocations.length === 0 ? (
-              <Text style={styles.emptyText}>No locations for {activeTab}</Text>
-            ) : (
-              platformLocations.map((loc) => {
-                const invKey = loc.id;
-                const data = variant.inventory[invKey] || { quantity: 0, price: undefined };
+        <View style={styles.platformCard}>
+          {rows.map(({ variant, loc }, idx) => {
+            const invKey = loc.id;
+            const data = variant.inventory[invKey] || { quantity: 0, price: undefined };
+            // Use per-location price, fallback to default only if not set
+            const currentPrice = data.price ?? variant.defaultPrice ?? 0;
+            return (
+              <VariantInventoryRow
+                key={`${variant.id}-${loc.id}`}
+                variantName={variant.name}
+                sku={variant.sku}
+                variantId={variant.id}
+                invKey={invKey}
+                quantity={data.quantity}
+                price={currentPrice}
+                image={data.image || variant.image}
+                isLast={idx === rows.length - 1}
 
-                // Use per-location price, fallback to default only if not set
-                const currentPrice = data.price ?? variant.defaultPrice ?? 0;
+                // Flags - Blue styling for Shopify
+                isGlobalPrice={isShopify && !!loc.isGlobal}
+                isOverride={false} // Never show override in editor - only GenerateDetails sets this
+                isGenerationMode={isGenerationMode}
 
-                // Override Logic: ONLY in generation mode
-                const isOverride = false; // Never show override in editor - only GenerateDetails sets this
+                // External update highlight (green border)
+                externalUpdateQuantity={hasExternalUpdateQuantity?.(variant.id, invKey)}
+                externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, invKey)}
 
-                return (
-                  <View key={`${variant.id}-${loc.id}`} style={{ marginBottom: 10 }}>
-                    <VariantInventoryRow
-                      variantName={variant.name}
-                      variantId={variant.id}
-                      invKey={invKey}
-                      quantity={data.quantity}
-                      price={currentPrice}
-                      image={data.image || variant.image}
-
-                      // Flags - Blue styling for Shopify
-                      isGlobalPrice={isShopify && !!loc.isGlobal}
-                      isOverride={isOverride}
-                      isGenerationMode={isGenerationMode}
-
-                      // External update highlight (green border)
-                      externalUpdateQuantity={hasExternalUpdateQuantity?.(variant.id, invKey)}
-                      externalUpdatePrice={hasExternalUpdatePrice?.(variant.id, invKey)}
-
-                      // Handlers - Use internal wrapper for global Shopify pricing
-                      onChangeQuantity={(q) => handleInventoryUpdate(variant.id, invKey, 'quantity', q)}
-                      onChangePrice={(p) => handleInventoryUpdate(variant.id, invKey, 'price', p)}
-                      onSelectImage={() => onSelectImage?.(variant.id)}
-                    />
-                  </View>
-                );
-              })
-            )}
-          </View>
-        ))
+                // Handlers - Use internal wrapper for global Shopify pricing
+                onChangeQuantity={(q) => handleInventoryUpdate(variant.id, invKey, 'quantity', q)}
+                onChangePrice={(p) => handleInventoryUpdate(variant.id, invKey, 'price', p)}
+                onSelectImage={() => onSelectImage?.(variant.id)}
+              />
+            );
+          })}
+        </View>
       )}
     </View>
   );
@@ -315,9 +314,19 @@ const styles = StyleSheet.create({
   container: {
     gap: 16,
   },
+  // White card wrapping the per-platform variant rows (rows draw their own dividers).
+  platformCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
   variantSection: {
     marginBottom: 16,
     gap: 8,
+    backgroundColor: '#fff',
+    paddingTop: 8,
+    paddingHorizontal: 12,
+    borderRadius: 9,
   },
   sectionTitle: {
     fontSize: 15,
@@ -349,8 +358,8 @@ const styles = StyleSheet.create({
     color: '#18181B',
   },
   shareNote: {
-    fontSize: 12,
-    fontWeight: '400',
+    fontSize: 13,
+    fontWeight: '500',
     color: '#9CA3AF',
   },
   groupPriceRow: {
@@ -470,6 +479,7 @@ const styles = StyleSheet.create({
   priceInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: "center",
     borderWidth: 1,
     borderColor: '#E5E7EB',
     borderRadius: 10,
@@ -484,17 +494,18 @@ const styles = StyleSheet.create({
   currencySymbol: {
     color: '#9CA3AF',
     paddingLeft: 8,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '500',
   },
   priceInput: {
     color: '#111827',
     fontWeight: '600',
-    width: 70,
+    width: 110,
     textAlign: 'left',
-    fontSize: 14,
-    paddingVertical: 0,
+    fontSize: 15,
+    paddingVertical: 4,
     paddingHorizontal: 4,
+    justifyContent: "center",
     height: '100%',
   },
   priceInputTextShopify: {
