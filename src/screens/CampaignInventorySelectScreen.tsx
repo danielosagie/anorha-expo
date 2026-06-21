@@ -75,6 +75,7 @@ const CampaignInventorySelectScreen = () => {
   const [command, setCommand] = useState('');
   const [commandNote, setCommandNote] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [matching, setMatching] = useState(false);
   const [headerH, setHeaderH] = useState(64);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -133,31 +134,80 @@ const CampaignInventorySelectScreen = () => {
 
   const haystack = (r: any) => `${r.Title || ''} ${r.Tags || ''} ${r.Sku || ''}`.toLowerCase();
 
-  const runCommand = useCallback((text: string) => {
+  // Offline fallback: the old substring matcher, used only when the agent call fails.
+  const localKeywordSelect = useCallback((text: string): number => {
     const terms = text
       .toLowerCase()
       .replace(/[^a-z0-9 ]/g, ' ')
       .split(/\s+/)
       .filter(w => w.length > 1 && !STOPWORDS.has(w));
-    if (!terms.length) {
-      setCommandNote('Tell me what to select, like "tech items with Pro".');
-      return;
-    }
+    if (!terms.length) return 0;
     let matches = rows.filter(r => terms.every(t => haystack(r).includes(t)));
     if (!matches.length) matches = rows.filter(r => terms.some(t => haystack(r).includes(t)));
-    if (!matches.length) {
-      setCommandNote(`Nothing matched "${terms.join(' ')}".`);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
-      return;
-    }
+    if (!matches.length) return 0;
     setSelected(prev => {
       const n = new Set(prev);
       matches.forEach(m => n.add(m.Id));
       return n;
     });
-    setCommandNote(`Selected ${matches.length} item${matches.length === 1 ? '' : 's'} matching ${terms.map(t => `“${t}”`).join(' + ')}.`);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    return matches.length;
   }, [rows]);
+
+  // Ask Sprout to read the request and pick the matching items — understands categories,
+  // brands, models and price ("Nike shoes under $50"), not just substrings.
+  const runCommand = useCallback(async (text: string) => {
+    const criteria = (text || '').trim();
+    if (!criteria) {
+      setCommandNote('Tell me what to select, like "Nike shoes under $50".');
+      return;
+    }
+    if (matching || !rows.length) return;
+    setMatching(true);
+    setCommandNote('Finding matches…');
+    try {
+      const token = await ensureSupabaseJwt();
+      const items = rows.slice(0, 600).map(r => ({
+        id: r.Id,
+        title: r.Title,
+        price: Number(r.Price ?? 0),
+        sku: r.Sku,
+        tags: typeof r.Tags === 'string' ? r.Tags : Array.isArray(r.Tags) ? r.Tags.join(', ') : '',
+      }));
+      const resp = await fetch(`${API_BASE_URL}/api/inventory/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ criteria, items }),
+      });
+      if (!resp.ok) throw new Error(`select ${resp.status}`);
+      const json = await resp.json();
+      const ids: string[] = Array.isArray(json?.ids) ? json.ids : [];
+      if (!ids.length) {
+        setCommandNote(json?.summary || `Nothing matched “${criteria}”.`);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+        return;
+      }
+      const idSet = new Set(ids);
+      setSelected(prev => {
+        const n = new Set(prev);
+        rows.forEach(r => { if (idSet.has(r.Id)) n.add(r.Id); });
+        return n;
+      });
+      setCommandNote(json?.summary || `Selected ${ids.length} item${ids.length === 1 ? '' : 's'}.`);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    } catch {
+      // Network/agent hiccup — fall back to the local keyword matcher so it still works.
+      const matched = localKeywordSelect(criteria);
+      if (matched > 0) {
+        setCommandNote(`Selected ${matched} item${matched === 1 ? '' : 's'} (offline match).`);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      } else {
+        setCommandNote('Couldn’t reach Sprout to match that — try again.');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+      }
+    } finally {
+      setMatching(false);
+    }
+  }, [rows, matching, localKeywordSelect]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -244,7 +294,7 @@ const CampaignInventorySelectScreen = () => {
             placeholder="Tell Sprout what to select…"
             placeholderTextColor="#9CA3AF"
             returnKeyType="search"
-            editable={!transcribing}
+            editable={!transcribing && !matching}
           />
           {transcribing ? (
             <ActivityIndicator size="small" color="#71717A" />
@@ -253,17 +303,23 @@ const CampaignInventorySelectScreen = () => {
               onPress={recording ? finishRecording : startRecording}
               style={[s.micBtn, recording && s.micBtnRec]}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              disabled={matching}
             >
               <AudioLines size={18} color={recording ? '#FFFFFF' : '#71717A'} />
             </TouchableOpacity>
           )}
         </View>
-        <TouchableOpacity style={s.runBtn} onPress={() => runCommand(command)} activeOpacity={0.85}>
-          <Text style={s.runBtnText}>Select</Text>
+        <TouchableOpacity
+          style={[s.runBtn, (matching || transcribing) && { opacity: 0.6 }]}
+          onPress={() => runCommand(command)}
+          disabled={matching || transcribing}
+          activeOpacity={0.85}
+        >
+          {matching ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={s.runBtnText}>Select</Text>}
         </TouchableOpacity>
       </View>
       {commandNote ? <Text style={s.commandNote}>{commandNote}</Text> : (
-        <Text style={s.commandHint}>Try “select all tech items with Pro” or “Nike shoes”.</Text>
+        <Text style={s.commandHint}>Try “Nike shoes under $50” or “tech over $100”.</Text>
       )}
 
       {/* Search */}

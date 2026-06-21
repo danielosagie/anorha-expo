@@ -164,6 +164,27 @@ type ItemStage = 'submitted_for_match' | 'awaiting_user_input' | 'generating' | 
  * rides inside matchContext.clientState — the backend has no columns for it and used
  * to silently drop it when sent top-level, which broke stage restore on draft resume.
  */
+// Best human label we can infer for a scanned item from its match results, so saved scans
+// aren't all "Unidentified item" in history — this is what lets the seller (and the agent)
+// tell which scan is which. Only fills a missing/placeholder title; never overwrites a real one.
+const inferScanItemTitle = (item: any, matchContext: Record<string, any> | undefined): string | undefined => {
+  const existing = typeof item?.title === 'string' ? item.title.trim() : '';
+  if (existing && existing.toLowerCase() !== 'unidentified item') return existing;
+  const entry = matchContext?.[item?.id];
+  const md = entry?.matchData ?? entry?.match?.response ?? entry?.response ?? entry;
+  const confirmedTitle = entry?.confirmed?.title || entry?.match?.confirmed?.title || md?.confirmed?.title;
+  const candidates = md?.rankedCandidates ?? md?.candidates ?? md?.results;
+  const candidateTitle = Array.isArray(candidates) ? candidates[0]?.title : undefined;
+  const best = String(confirmedTitle || candidateTitle || '').trim();
+  return best || (existing || undefined);
+};
+
+const labelScannedItems = (scannedItems: any[], matchContext: Record<string, any> | undefined): any[] =>
+  (scannedItems || []).map((it) => {
+    const title = inferScanItemTitle(it, matchContext);
+    return title && title !== it?.title ? { ...it, title } : it;
+  });
+
 const toQuickScanSessionBody = (p: {
   scannedItems: any[];
   matchContext: Record<string, any>;
@@ -172,7 +193,7 @@ const toQuickScanSessionBody = (p: {
   itemStageById?: Record<string, ItemStage>;
   processedItemIds?: string[];
 }) => ({
-  scannedItems: p.scannedItems,
+  scannedItems: labelScannedItems(p.scannedItems, p.matchContext),
   matchContext: writeQuickScanClientState(p.matchContext, {
     itemStageById: p.itemStageById,
     processedItemIds: p.processedItemIds,

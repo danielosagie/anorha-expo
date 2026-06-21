@@ -33,11 +33,20 @@ const BRAND = '#93C822';
 const FONT = { medium: 'Inter_500Medium', semibold: 'Inter_600SemiBold' };
 const WAVE_BARS = 32;
 
-// Map a metering reading (dBFS, roughly -60 → 0) to a 0..1 amplitude for the waveform.
+// Map a metering reading (dBFS) to a 0..1 amplitude for the waveform. We normalize across
+// the band where a voice actually lives (~-55..-10 dBFS) instead of the full -60..0, then
+// apply a gentle expansion curve. That drops the noise floor near the baseline and lets
+// loud syllables punch toward the top — so the bars track the real sound with motion
+// rather than hovering at a uniform mid height.
+const FLOOR_DB = -55;
+const CEIL_DB = -10;
+// Resting waveform amplitude (silence / no reading) — bars sit just above the baseline.
+const BASE_LEVEL = 0.05;
 const meterToLevel = (db: number | undefined): number => {
-  if (db == null || Number.isNaN(db)) return 0.12;
-  const clamped = Math.max(-60, Math.min(0, db));
-  return Math.max(0.08, (clamped + 60) / 60);
+  if (db == null || Number.isNaN(db)) return BASE_LEVEL;
+  const clamped = Math.max(FLOOR_DB, Math.min(CEIL_DB, db));
+  const n = (clamped - FLOOR_DB) / (CEIL_DB - FLOOR_DB); // 0..1 across the voice band
+  return Math.max(BASE_LEVEL, Math.pow(n, 1.4));
 };
 
 export const MessageComposer = ({
@@ -65,9 +74,11 @@ export const MessageComposer = ({
   // failures (audio session, prepare) shouldn't blame the mic permission.
   const [voiceErrorSettings, setVoiceErrorSettings] = useState(false);
   // Rolling levels (0..1) that drive the live waveform bars.
-  const [levels, setLevels] = useState<number[]>(() => new Array(WAVE_BARS).fill(0.12));
+  const [levels, setLevels] = useState<number[]>(() => new Array(WAVE_BARS).fill(BASE_LEVEL));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const meterRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Last waveform level, used for the fast-attack/quick-decay envelope.
+  const peakRef = useRef(BASE_LEVEL);
   // Latest draft/setter so transcription appends correctly even on crash-resume.
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -209,21 +220,28 @@ export const MessageComposer = ({
       await recorder.prepareToRecordAsync();
       recorder.record();
       setDuration(0);
-      setLevels(new Array(WAVE_BARS).fill(0.12));
+      setLevels(new Array(WAVE_BARS).fill(BASE_LEVEL));
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-      // Poll the recorder's metering to drive a live, scrolling waveform.
+      // Poll the recorder's metering to drive a live, scrolling waveform. Sample fast
+      // (~22fps) so the bars feel snappy. Fast attack / quick decay: a louder reading
+      // snaps the bar up instantly, a quieter one eases down — so peaks pop with the
+      // voice instead of getting smoothed into a sluggish blob.
       if (meterRef.current) clearInterval(meterRef.current);
+      peakRef.current = BASE_LEVEL;
       meterRef.current = setInterval(() => {
-        let level = 0.12;
+        let level = BASE_LEVEL;
         try {
           const status: any = recorder.getStatus?.();
           level = meterToLevel(status?.metering);
         } catch {
-          level = 0.12;
+          level = BASE_LEVEL;
         }
-        setLevels(prev => [...prev.slice(1), level]);
-      }, 90);
+        const prevPeak = peakRef.current;
+        const next = level >= prevPeak ? level : prevPeak * 0.7 + level * 0.3;
+        peakRef.current = next;
+        setLevels(prev => [...prev.slice(1), next]);
+      }, 45);
       return 'ok';
     } catch (e) {
       // Surface the real reason in logs without blaming the mic permission.
@@ -383,7 +401,7 @@ export const MessageComposer = ({
               {levels.map((lv, i) => (
                 <View
                   key={i}
-                  style={[styles.waveBar, { height: 4 + Math.round(lv * 22) }]}
+                  style={[styles.waveBar, { height: 3 + lv * 25 }]}
                 />
               ))}
             </View>
@@ -581,7 +599,7 @@ const styles = StyleSheet.create({
   recCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
   recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#EF4444' },
   waveRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 28, gap: 2 },
-  waveBar: { width: 3, minHeight: 4, backgroundColor: BRAND, borderRadius: 1.5 },
+  waveBar: { width: 3, minHeight: 3, backgroundColor: BRAND, borderRadius: 1.5 },
   recTimer: { fontFamily: FONT.semibold, fontSize: 13, color: '#EF4444', fontVariant: ['tabular-nums'] },
   recDone: { width: 40, height: 40, borderRadius: 20, backgroundColor: BRAND, alignItems: 'center', justifyContent: 'center' },
 });

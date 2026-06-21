@@ -218,6 +218,22 @@ const CampaignThreadScreen = () => {
   }, []);
   const feedKeyboardInset = Math.max(keyboardHeight - insets.bottom, 0);
 
+  // When Sprout asks a structured question (or proposes a plan), drop the keyboard so the
+  // card takes its place at the bottom instead of stacking on top of the keyboard. Tapping
+  // the card's "type your own answer" field brings the keyboard back when the seller wants it.
+  // Fire only on the none→pending transition: pendingQuestion/pendingPlan are fresh object
+  // refs on every refresh, so keying off truthiness alone would dismiss the keyboard mid-typing
+  // whenever a new message lands.
+  const prevPendingRef = useRef({ question: false, plan: false });
+  useEffect(() => {
+    const nowQuestion = !!controller.pendingQuestion;
+    const nowPlan = !!controller.pendingPlan;
+    if ((nowQuestion && !prevPendingRef.current.question) || (nowPlan && !prevPendingRef.current.plan)) {
+      Keyboard.dismiss();
+    }
+    prevPendingRef.current = { question: nowQuestion, plan: nowPlan };
+  }, [controller.pendingQuestion, controller.pendingPlan]);
+
   // ── Threads drawer: swipe left→right (or tap) to open, like the chat template ──
   const screenW = Dimensions.get('window').width;
   const DRAWER_W = Math.min(330, screenW * 0.84);
@@ -380,6 +396,12 @@ const CampaignThreadScreen = () => {
         contentTopInset={headerH + 8}
         contentBottomInset={footerH + 8 + feedKeyboardInset}
       />
+
+      {/* ── Faded scrim behind the question/plan card so it reads as a focused tray sitting
+          where the keyboard was. Non-interactive (taps fall through to scroll the feed). ── */}
+      {(controller.pendingQuestion || controller.pendingPlan) ? (
+        <View pointerEvents="none" style={s.cardScrim} />
+      ) : null}
 
       {/* ── Composer + pending question ride the keyboard. Absolute bottom anchor whose
           translateY is driven by reanimated's live keyboard height (composerLiftStyle) —
@@ -580,6 +602,8 @@ const s = StyleSheet.create({
   // The composer's keyboard-avoider: absolute bottom anchor so behavior:'padding' lifts
   // the composer column with the keyboard (the feed is a full-bleed sibling behind it).
   composerAvoider: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  // Dim scrim shown behind a pending question/plan card.
+  cardScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,17,17,0.28)' },
 
   // Floating glass header — white at the top, fading to transparent, content scrolls under
   header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },

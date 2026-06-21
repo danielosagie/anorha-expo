@@ -258,25 +258,16 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     let actionCompletionTimer: ReturnType<typeof setTimeout> | null = null;
     let assistantStreamStarted = false;
     let fallbackTriggered = false;
+    // The server accepted the turn (ack / any assistant output). Once true, a dropped
+    // socket is recoverable: the turn is running/finished server-side, so we poll for
+    // the completed reply instead of re-posting (which would duplicate the turn) or
+    // marking the message failed.
+    let turnAccepted = false;
+    let openRetried = false;
 
     return new Promise<{ threadId: string }>((resolve, reject) => {
       const EventSource = require('react-native-sse').default as any;
-      const source = new EventSource(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          threadId: input.threadId || undefined,
-          clientMessageId: input.clientMessageId,
-          kind: input.kind,
-          content: input.content,
-          actionType: input.actionType,
-          actionPayload: input.actionPayload,
-          imageUrls: input.imageUrls,
-        }),
-      } as any);
+      let source: any = null;
 
       const finish = (resultThreadId?: string) => {
         if (completed) return;
@@ -285,7 +276,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
           clearTimeout(actionCompletionTimer);
           actionCompletionTimer = null;
         }
-        source.close();
+        source?.close();
         resolve({ threadId: resultThreadId || resolvedThreadId || input.threadId || '' });
       };
 
@@ -296,11 +287,12 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
           clearTimeout(actionCompletionTimer);
           actionCompletionTimer = null;
         }
-        source.close();
+        source?.close();
         observer.onError?.(error);
         reject(error);
       };
 
+      // A genuinely missing stream endpoint (404): the turn never ran, so re-post it.
       const triggerFallback = async (errorText?: string) => {
         if (completed || fallbackTriggered) return;
         fallbackTriggered = true;
@@ -308,7 +300,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
           clearTimeout(actionCompletionTimer);
           actionCompletionTimer = null;
         }
-        source.close();
+        source?.close();
         try {
           const result = await this.streamTurnFallback(input, observer, errorText);
           completed = true;
@@ -321,7 +313,27 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         }
       };
 
-      source.addEventListener('message', (event: StreamingEvent) => {
+      // A mid-stream socket drop AFTER the server accepted the turn. Do NOT re-post —
+      // poll the thread for the completed reply so the answer lands without a scary
+      // "Failed / network connection lost" banner.
+      const recoverAfterDrop = async (errorText?: string) => {
+        if (completed || fallbackTriggered) return;
+        fallbackTriggered = true;
+        if (actionCompletionTimer) {
+          clearTimeout(actionCompletionTimer);
+          actionCompletionTimer = null;
+        }
+        source?.close();
+        try {
+          const result = await this.recoverCompletedTurn(input, observer, resolvedThreadId);
+          completed = true;
+          resolve(result);
+        } catch (recoverError) {
+          fail(recoverError instanceof Error ? recoverError : new Error(errorText || 'Streaming connection failed'));
+        }
+      };
+
+      const handleMessage = (event: StreamingEvent) => {
         const raw = typeof event.data === 'string' ? event.data : '';
         // A keep-alive ping, an SSE comment, a sentinel, or a split/garbled chunk
         // is not a turn failure. Skip the single event instead of tearing down the
@@ -349,6 +361,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
               }
               break;
             case 'message.ack':
+              turnAccepted = true;
               observer.onMessageAck?.({
                 clientMessageId: readString(payload.clientMessageId) || input.clientMessageId,
                 serverMessageId: readString(payload.serverMessageId) || readString(payload.messageId),
@@ -357,6 +370,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
               break;
             case 'assistant.started':
               assistantStreamStarted = true;
+              turnAccepted = true;
               if (actionCompletionTimer) {
                 clearTimeout(actionCompletionTimer);
                 actionCompletionTimer = null;
@@ -367,6 +381,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
               });
               break;
             case 'assistant.delta':
+              turnAccepted = true;
               observer.onAssistantDelta?.({
                 delta: readString(payload.delta) || readString(payload.content) || '',
                 messageId: readString(payload.messageId) || readString(payload.assistantMessageId),
@@ -391,6 +406,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
               });
               break;
             case 'tool.completed':
+              turnAccepted = true;
               // A finished agent tool — arg-free by contract. Surfaces as a step item.
               observer.onToolCompleted?.({
                 tool: readString(payload.tool) || 'tool',
@@ -401,6 +417,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
               });
               break;
             case 'action.completed':
+              turnAccepted = true;
               observer.onActionCompleted?.({
                 clientMessageId: readString(payload.clientMessageId) || input.clientMessageId,
                 actionType: readString(payload.actionType) || input.actionType,
@@ -422,19 +439,57 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
           // do not fail the turn — the stream finishes on assistant.completed / error.
           return;
         }
-      });
+      };
 
-      source.addEventListener('error', (event: StreamingEvent) => {
+      const handleError = (event: StreamingEvent) => {
         const errorMessage =
           readString((event as any)?.message) ||
           readString((event as any)?.data) ||
           'Streaming connection failed';
+        // The route itself is missing (404) — re-post the turn through the non-stream path.
         if (this.isMissingStreamEndpointError(errorMessage)) {
           void triggerFallback(errorMessage);
           return;
         }
+        // The server already took the turn — recover the finished reply by polling,
+        // not by re-posting (which would run the turn twice).
+        if (turnAccepted) {
+          void recoverAfterDrop(errorMessage);
+          return;
+        }
+        // Dropped before the server even accepted the turn — classic iOS -1005 on a
+        // stale pooled socket. Retry the connection once before giving up.
+        if (!openRetried && this.isTransientConnectionError(errorMessage)) {
+          openRetried = true;
+          try { source?.close(); } catch { /* socket already gone */ }
+          connect();
+          return;
+        }
         fail(new Error(errorMessage));
-      });
+      };
+
+      const connect = () => {
+        source = new EventSource(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            threadId: input.threadId || undefined,
+            clientMessageId: input.clientMessageId,
+            kind: input.kind,
+            content: input.content,
+            actionType: input.actionType,
+            actionPayload: input.actionPayload,
+            imageUrls: input.imageUrls,
+          }),
+        } as any);
+        source.addEventListener('message', handleMessage);
+        source.addEventListener('error', handleError);
+      };
+
+      connect();
     });
   }
 
@@ -881,6 +936,51 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
 
   private isMissingStreamEndpointError(errorMessage: string) {
     return errorMessage.includes('Cannot POST') || errorMessage.includes('"statusCode":404') || errorMessage.includes('404');
+  }
+
+  /** iOS reuses pooled HTTP connections; the first request on a stale socket fails with
+   *  -1005 "The network connection was lost." These are transient and worth one retry. */
+  private isTransientConnectionError(errorMessage: string) {
+    const m = (errorMessage || '').toLowerCase();
+    return (
+      m.includes('network connection was lost') ||
+      m.includes('-1005') ||
+      m.includes('connection failed') ||
+      m.includes('network request failed') ||
+      m.includes('timed out') ||
+      m.includes('timeout')
+    );
+  }
+
+  /** Recover a turn whose socket dropped after the server accepted it: poll the thread
+   *  for the freshly-completed assistant reply (it may still be finishing as we poll) and
+   *  emit it, without re-posting the turn. Throws only if nothing lands in time. */
+  private async recoverCompletedTurn(
+    input: StreamTurnInput,
+    observer: StreamTurnObserver,
+    resolvedThreadId: string,
+  ): Promise<{ threadId: string }> {
+    const threadId = resolvedThreadId || input.threadId || '';
+    if (!threadId) throw new Error('Streaming connection was lost.');
+    const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await delay(attempt === 0 ? 700 : 1300);
+      const messages = await this.getMessages(input.campaignId, threadId).catch(() => [] as any[]);
+      const latestAssistant = messages
+        .slice()
+        .reverse()
+        .find(message => message.role === 'assistant' && (message.content || '').trim().length > 0);
+      if (latestAssistant) {
+        const rid = latestAssistant.threadId || threadId;
+        // Re-emit under the server's message id so it lands on the same bubble the
+        // partial stream created (no duplicate), then completes it.
+        observer.onAssistantStarted?.({ messageId: latestAssistant.id, threadId: rid });
+        observer.onAssistantCompleted?.({ messageId: latestAssistant.id, content: latestAssistant.content, threadId: rid });
+        return { threadId: rid };
+      }
+    }
+    throw new Error('Streaming connection was lost.');
   }
 
   private async streamTurnFallback(
