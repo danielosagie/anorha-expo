@@ -667,7 +667,7 @@ const App: React.FC = () => {
                   handles the signed-out / not-ready states internally (and supplies its own
                   ThemeProvider, StatusBar and FlashMessage). */}
               <WithSessionProvider>
-                {React.createElement(OrgProvider as any, null, (
+                <OrgProvider>
                   <AppDataProvider>
                     <LiveActivityProvider>
                       <JobsProvider>
@@ -675,7 +675,7 @@ const App: React.FC = () => {
                       </JobsProvider>
                     </LiveActivityProvider>
                   </AppDataProvider>
-                ))}
+                </OrgProvider>
               </WithSessionProvider>
             </>
           </NavigationContainer>
