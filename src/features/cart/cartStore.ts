@@ -440,14 +440,14 @@ export function selectLegacyBulkItems(): LegacyBulkItem[] {
     }));
 }
 
-export function selectLegacyQuickScanStore(): Record<string, { matchData: any; serpApiData: any[] }> {
+export function selectLegacyQuickScanStore(): Record<string, { matchData: any; matchRows: any[] }> {
   // Processed items are INCLUDED here on purpose: their match data lives in cart$
   // and must stay readable so navigating back to an already-matched item still
   // shows its match (it's filtered only from the active bulk-items list, above).
-  const out: Record<string, { matchData: any; serpApiData: any[] }> = {};
+  const out: Record<string, { matchData: any; matchRows: any[] }> = {};
   for (const it of selectAllItems()) {
-    if (it.match?.response || it.match?.serpApiData) {
-      out[it.id] = { matchData: it.match.response, serpApiData: it.match.serpApiData ?? [] };
+    if (it.match?.response || it.match?.matchRows) {
+      out[it.id] = { matchData: it.match.response, matchRows: it.match.matchRows ?? [] };
     }
   }
   return out;
@@ -492,13 +492,13 @@ export function reconcileBulkItems(prev: LegacyBulkItem[], next: LegacyBulkItem[
 }
 
 export function reconcileQuickScanStore(
-  prev: Record<string, { matchData: any; serpApiData: any[] }>,
-  next: Record<string, { matchData: any; serpApiData: any[] }>,
+  prev: Record<string, { matchData: any; matchRows: any[] }>,
+  next: Record<string, { matchData: any; matchRows: any[] }>,
 ) {
   for (const id of Object.keys(next)) {
     if (!getEntry(id)) continue;
     const v = next[id];
-    setItemMatch(id, { response: v?.matchData, serpApiData: v?.serpApiData ?? [] });
+    setItemMatch(id, { response: v?.matchData, matchRows: v?.matchRows ?? [] });
   }
   // Clear match data ONLY for a live, non-processed item the screen explicitly
   // dropped from the map (e.g. a re-scan reset). Processed items keep their match
@@ -508,7 +508,7 @@ export function reconcileQuickScanStore(
   const processed = selectProcessedSet();
   for (const id of Object.keys(prev)) {
     if (!(id in next) && getEntry(id) && !processed.has(id)) {
-      setItemMatch(id, { response: undefined, serpApiData: undefined });
+      setItemMatch(id, { response: undefined, matchRows: undefined });
     }
   }
 }
@@ -630,8 +630,8 @@ export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }):
 
   const matchContext: Record<string, any> = {};
   for (const it of items) {
-    if (it.match?.response || it.match?.serpApiData) {
-      matchContext[it.id] = { matchData: it.match.response, serpApiData: it.match.serpApiData ?? [] };
+    if (it.match?.response || it.match?.matchRows) {
+      matchContext[it.id] = { matchData: it.match.response, matchRows: it.match.matchRows ?? [] };
     }
   }
 
@@ -675,7 +675,7 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
       title: s.title,
       quantity: typeof s.quantity === 'number' ? s.quantity : 1,
       status: photos.length ? 'searching' : 'capturing',
-      match: ctx ? { response: ctx.matchData, serpApiData: ctx.serpApiData } : undefined,
+      match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows } : undefined,
       preSelectedSource: s.preSelectedSource,
       createdAt: ts,
       updatedAt: ts,

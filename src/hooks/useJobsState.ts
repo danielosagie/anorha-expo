@@ -41,7 +41,7 @@ export interface ItemJobState {
         progress?: number; // 0-100
         currentStage?: string;
         selectedIndices?: number[];
-        serpApiData?: any[];
+        matchRows?: any[];
         vlmAnalysis?: {
             confidence: number;
             ocrText: string;

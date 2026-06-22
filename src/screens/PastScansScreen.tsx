@@ -365,8 +365,8 @@ const PastScansScreen = () => {
     const results = (item as any)?.results || [];
     const images = results
       .map((r: any) => (
-        r?.serpApiData?.[0]?.image ||
-        r?.serpApiData?.[0]?.thumbnail ||
+        r?.matchRows?.[0]?.image ||
+        r?.matchRows?.[0]?.thumbnail ||
         r?.images?.[0]?.url ||
         r?.sourceImageUrl ||
         r?.coverImage ||
