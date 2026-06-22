@@ -40,6 +40,11 @@ interface InventoryListCardProps {
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onLayout?: (event: LayoutChangeEvent) => void;
+  /** Optional status pill (import review: "Linked", "Needs review" …). */
+  statusLabel?: string;
+  statusColor?: string;
+  /** Hide the "Last synced" line (irrelevant for items being imported). */
+  hideSync?: boolean;
 }
 
 const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
@@ -62,6 +67,9 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   isSelectionMode,
   isSelected,
   onLayout,
+  statusLabel,
+  statusColor,
+  hideSync,
 }) => {
   const theme = useTheme();
 
@@ -194,7 +202,13 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
               </Text>
             )}
 
-            {lastSyncedAt ? (
+            {!!statusLabel && (
+              <View style={[styles.statusChip, { borderColor: `${statusColor || '#6B7280'}55`, backgroundColor: `${statusColor || '#6B7280'}14` }]}>
+                <Text style={[styles.statusChipText, { color: statusColor || '#6B7280' }]} numberOfLines={1}>{statusLabel}</Text>
+              </View>
+            )}
+
+            {hideSync ? null : lastSyncedAt ? (
               <Text style={[styles.syncText, { color: isStale ? '#B45309' : '#6B7280' }]}>
                 Last synced: {new Date(lastSyncedAt).toLocaleString()}
                 {isStale ? ' • Stale' : ''}
@@ -330,6 +344,16 @@ const styles = StyleSheet.create({
     marginTop: -4,
     marginBottom: 8,
   },
+  statusChip: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    marginTop: 2,
+    marginBottom: 6,
+  },
+  statusChipText: { fontSize: 11.5, fontWeight: '800', letterSpacing: 0.2 },
   bottomRow: {
     flexDirection: 'row',
     alignItems: 'center',

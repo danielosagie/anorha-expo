@@ -56,6 +56,8 @@ export interface PricingGuidanceCardProps {
   onOpenComp?: (comp: PricingComp, index: number) => void;
   /** When set, renders Fast sale / Recommended / Max profit chips that apply a price. */
   onApplyPrice?: (price: number, kind: 'fast' | 'recommended' | 'max') => void;
+  /** The price currently on the listing — highlights whichever chip is closest to it. */
+  currentPrice?: number;
   /** 'screen' renders the big section headers (preview page); 'none' for modals with their own title. */
   headers?: 'screen' | 'none';
   /** Pricing research is still in flight — show a "Finding comps…" state instead of blank dashes. */
@@ -65,18 +67,6 @@ export interface PricingGuidanceCardProps {
 const money = (n?: number | null) => (typeof n === 'number' && isFinite(n) ? `$${Math.round(n)}` : '—');
 const rangeText = (low?: number, high?: number) =>
   typeof low === 'number' && typeof high === 'number' ? `${money(low)} - ${money(high)}` : '—';
-
-// Average days-to-sell of the samples priced nearest the target (mirrors backend logic).
-const averageDaysNearTarget = (targetPrice: number, samples: PricingComp[]): number | undefined => {
-  const withDays = samples.filter((s) => typeof s.estimatedDaysToSell === 'number' && Number.isFinite(s.estimatedDaysToSell));
-  if (!withDays.length) return undefined;
-  const nearest = withDays
-    .map((s) => ({ ...s, dist: Math.abs(Number(s.price) - targetPrice) }))
-    .sort((a, b) => a.dist - b.dist)
-    .slice(0, Math.min(5, withDays.length));
-  const avg = nearest.reduce((sum, s) => sum + Number(s.estimatedDaysToSell || 0), 0) / nearest.length;
-  return Math.round(avg);
-};
 
 const cachedLabel = (cachedAt?: string): string | null => {
   if (!cachedAt) return null;
@@ -90,6 +80,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   pricing,
   onOpenComp,
   onApplyPrice,
+  currentPrice,
   headers = 'screen',
   loading = false,
 }) => {
@@ -134,6 +125,56 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
         { kind: 'max' as const, label: 'Max profit', price: high! },
       ])
     : null;
+
+  // Highlight the tier closest to the price the seller actually has — not a hard-coded
+  // "recommended", which made the middle chip always look selected. Falls back to
+  // "recommended" only when there's no price set yet.
+  const selectedKind: 'fast' | 'recommended' | 'max' | null = !applyOptions
+    ? null
+    : typeof currentPrice === 'number' && currentPrice > 0
+    ? applyOptions.reduce((best, o) =>
+        Math.abs(o.price - currentPrice) < Math.abs(best.price - currentPrice) ? o : best,
+      ).kind
+    : 'recommended';
+
+  // Per-tier time-to-sell — must differ per tier (cheaper sells faster), and the
+  // previous code showed the same number three times because the cached research
+  // only keeps ~5 comps, so "average of the 5 nearest" collapses to one value.
+  // Priority: (1) backend estimate when it genuinely varies; (2) anchor on the comps'
+  // OWN median sell-time — the real number behind each "~Nd to sell" row — and spread
+  // Fast/Max around it; (3) last resort, derive from the tier's position in the band.
+  const tierDays: Record<'fast' | 'recommended' | 'max', number | undefined> = (() => {
+    const t = p.timeToSell;
+    const raw = [t?.fastSaleAvgDays, t?.recommendedAvgDays, t?.maxProfitAvgDays].map((d) =>
+      typeof d === 'number' && Number.isFinite(d) ? Math.round(d) : undefined,
+    );
+    if (raw.every((d) => typeof d === 'number') && new Set(raw).size > 1) {
+      return { fast: raw[0], recommended: raw[1], max: raw[2] };
+    }
+    const dayVals = samples
+      .map((s) => s.estimatedDaysToSell)
+      .filter((d): d is number => typeof d === 'number' && Number.isFinite(d))
+      .sort((a, b) => a - b);
+    if (dayVals.length) {
+      const anchor = dayVals[Math.floor(dayVals.length / 2)]; // median of the comps' sell-times
+      return {
+        fast: Math.max(2, Math.round(anchor * 0.65)),
+        recommended: Math.max(2, Math.round(anchor)),
+        max: Math.round(anchor * 1.6),
+      };
+    }
+    if (applyOptions && typeof low === 'number' && typeof high === 'number') {
+      const span = Math.max(1, high - low);
+      const daysFor = (price: number) =>
+        Math.max(2, Math.round(4 + Math.min(1, Math.max(0, (price - low) / span)) * 18));
+      return {
+        fast: daysFor(applyOptions[0].price),
+        recommended: daysFor(applyOptions[1].price),
+        max: daysFor(applyOptions[2].price),
+      };
+    }
+    return { fast: undefined, recommended: undefined, max: undefined };
+  })();
 
   // Nothing usable to show yet: either still fetching ("Finding comps…") or the
   // research genuinely came back empty ("No recent comps found"). Either way, show
@@ -214,15 +255,8 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
         {applyOptions ? (
           <View style={styles.applyRow}>
             {applyOptions.map((opt) => {
-              // Prefer the backend time-to-sell estimate; fall back to the per-comp heuristic.
-              const backendDays =
-                opt.kind === 'fast'
-                  ? p.timeToSell?.fastSaleAvgDays
-                  : opt.kind === 'recommended'
-                  ? p.timeToSell?.recommendedAvgDays
-                  : p.timeToSell?.maxProfitAvgDays;
-              const days = typeof backendDays === 'number' ? Math.round(backendDays) : averageDaysNearTarget(opt.price, samples);
-              const highlight = opt.kind === 'recommended';
+              const days = tierDays[opt.kind];
+              const highlight = opt.kind === selectedKind;
               return (
                 <TouchableOpacity
                   key={opt.kind}

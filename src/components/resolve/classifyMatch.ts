@@ -58,8 +58,10 @@ export function classifyMatch(suggestions: DraftItem[], platformName?: string): 
       candidates: group.map((g, i) => ({
         id: g.platformProduct.id,
         title: g.platformProduct.title || g.platformProduct.sku,
-        sub: g.platformProduct.sku,
+        sub: [g.platformProduct.sku || null, money(g.platformProduct.price) !== '—' ? money(g.platformProduct.price) : null].filter(Boolean).join(' · ') || undefined,
         plat: g.matchType && g.matchType !== 'NONE' ? g.matchType : 'row',
+        sku: g.platformProduct.sku || null,
+        price: typeof g.platformProduct.price === 'number' ? g.platformProduct.price : null,
         on: true,
         master: i === 0,
       })),
@@ -307,6 +309,26 @@ export function classifyMatch(suggestions: DraftItem[], platformName?: string): 
   return { cases, autoResolved };
 }
 
+/**
+ * The cases that genuinely need a human swipe decision — the swipe deck's EXACT set.
+ * Shared so the lobby/intro "to review" count can never disagree with what the deck
+ * actually shows. (The bug: the lobby + intro counted classifyMatch().cases — all of
+ * them, including the orphans/catalog card and catalog-direction items — while the deck
+ * filtered down to real review work, so it could say "49 to review" then "All caught up".)
+ * Mirrors MatchDeck.statusOf('review') = unresolved AND not catalog-direction, and drops
+ * the bulk orphan/orphans card (that lives in the All-items view, never the deck).
+ */
+export function reviewDeckCases(suggestions: DraftItem[], platformName?: string): MatchCase[] {
+  const reviewIds = new Set(
+    (suggestions || [])
+      .filter((s) => !s.resolved && s.direction !== 'anorha_to_platform')
+      .map((s) => s.platformProduct.id),
+  );
+  return classifyMatch(suggestions, platformName).cases.filter(
+    (c) => c.kind !== 'orphan' && c.kind !== 'orphans' && (c.itemIds || []).some((id) => reviewIds.has(id)),
+  );
+}
+
 // ── case builders ──────────────────────────────────────────────────────────
 // Default pick prefers the side that actually HAS data — never default to an
 // empty value over a real one (e.g. "—" beating "$50.00").
@@ -423,19 +445,16 @@ function variantsCase(pid: string, group: DraftItem[]): MatchCase {
     itemIds: group.map((g) => g.platformProduct.id),
     candidates: group.map((g) => {
       const p = g.platformProduct;
-      // One human line per row: the variant's own title when it has one,
-      // otherwise its SKU — and the sub never repeats what the title shows.
       const title = (p.title && p.title !== parentTitle ? p.title : '') || p.sku || 'Variant';
-      const price = money(p.price);
-      const sub =
-        title === p.sku
-          ? price !== '—' ? price : undefined
-          : [p.sku, price !== '—' ? price : null].filter(Boolean).join(' · ') || undefined;
+      // Always carry SKU · price so the variant row can show both.
+      const sub = [p.sku || null, money(p.price) !== '—' ? money(p.price) : null].filter(Boolean).join(' · ') || undefined;
       return {
         id: p.id,
         title,
         sub,
         uri: p.imageUrl,
+        sku: p.sku || null,
+        price: typeof p.price === 'number' ? p.price : null,
         hint: g.suggestedCanonicalProduct?.id ? `→ ${trim(g.suggestedCanonicalProduct.title, 12)}` : undefined,
       };
     }),
@@ -588,24 +607,51 @@ export function applyMatchDecision(
     isSelected: action !== 'IGNORE',
   });
 
+  // Every kind must commit a concrete action in BOTH branches — a card that
+  // resolves without setting one leaves the item ambiguous at commit time.
   if (decision === 'alt') {
-    if (kind === 'orphan') return set('IGNORE'); // delist / ignore
-    if (kind === 'collision') return set('LINK_EXISTING'); // "they're the same → merge"
-    if (kind === 'compare' || kind === 'consolidate') return set('CREATE_NEW'); // keep both / apart
-    if (kind === 'find') return set('CREATE_NEW'); // add as new
-    if (kind === 'variants') return set('CREATE_NEW'); // keep separate = its own product
-    return { ...s, resolved: true };
+    switch (kind) {
+      case 'orphan':
+      case 'orphans':
+        return set('LINK_EXISTING'); // "decide later" → keep it listed, revisit next sync
+      case 'collision':
+        return set('LINK_EXISTING'); // "actually the same → merge"
+      case 'stale':
+        return set('IGNORE'); // unlink the broken link (also via meta.unlink upstream)
+      case 'compare':
+      case 'consolidate':
+      case 'find':
+      case 'variants':
+      case 'split':
+      case 'kit':
+      case 'onesided':
+      case 'align':
+      case 'fuzzy':
+      default:
+        return set('CREATE_NEW'); // keep apart / keep as one / keep separate / add as new
+    }
   }
 
   // primary
   switch (kind) {
     case 'collision':
-      return set('CREATE_NEW'); // keep as 2 items
+      return set('CREATE_NEW'); // keep as 2 distinct items
     case 'find':
       return set(s.suggestedCanonicalProduct?.id ? 'LINK_EXISTING' : 'CREATE_NEW');
+    case 'split':
+      return set('CREATE_NEW'); // create the pieces as new products
     case 'orphan':
+    case 'orphans':
       return set('LINK_EXISTING'); // keep listed
+    case 'compare':
+    case 'consolidate':
+    case 'variants':
+    case 'onesided':
+    case 'align':
+    case 'stale':
+    case 'kit':
+    case 'fuzzy':
     default:
-      return set('LINK_EXISTING'); // compare/consolidate/variants/stale/kit/split/onesided/align
+      return set('LINK_EXISTING'); // link / merge / sync
   }
 }

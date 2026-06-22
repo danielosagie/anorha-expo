@@ -113,7 +113,7 @@ class MarkdownBoundary extends React.Component<
 
 type MessageWithTime = ConversationMessage & { time: string };
 
-type ToolStep = { tool: string; label: string; status?: string; durationMs?: number };
+type ToolStep = { tool: string; label: string; status?: string; durationMs?: number; resultSummary?: string };
 
 // Icon per tool family for the step items (reference: Slack/Gmail-style step rows).
 const toolStepIcon = (tool: string): string => {
@@ -199,9 +199,14 @@ const ToolActivityCard = ({
                   color={step.status === 'failed' ? '#D04848' : '#5D7E16'}
                 />
               </View>
-              <Text style={styles.activityRowLabel} numberOfLines={1}>{step.label}</Text>
+              {/* Label + the data the tool returned (a short, safe outcome line). */}
+              <View style={styles.activityRowTextCol}>
+                <Text style={styles.activityRowLabel} numberOfLines={1}>{step.label}</Text>
+                {step.resultSummary ? (
+                  <Text style={styles.activityRowResult} numberOfLines={2}>{step.resultSummary}</Text>
+                ) : null}
+              </View>
               {step.status === 'failed' ? <Text style={styles.activityRowFail}>failed</Text> : null}
-              <View style={styles.activitySpacer} />
               {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
                 <Text style={styles.activityRowMeta}>{(step.durationMs / 1000).toFixed(1)}s</Text>
               ) : null}
@@ -768,11 +773,21 @@ const styles = StyleSheet.create({
   activityIconChipFail: {
     backgroundColor: 'rgba(208,72,72,0.12)',
   },
+  activityRowTextCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
   activityRowLabel: {
     fontSize: 12.5,
     color: '#3F3F46',
     fontFamily: 'Inter_500Medium',
     flexShrink: 1,
+  },
+  activityRowResult: {
+    fontSize: 11.5,
+    color: '#9CA3AF',
+    fontFamily: 'Inter_400Regular',
   },
   activityRowMeta: {
     fontSize: 11,

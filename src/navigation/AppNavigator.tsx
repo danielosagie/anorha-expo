@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { CardStyleInterpolators, createStackNavigator, StackScreenProps } from '@react-navigation/stack';
 import { withSwipeBack } from '../components/withSwipeBack';
 import { SwipeBackProvider } from '../components/SwipeBackContext';
@@ -11,7 +11,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, View, Text, StyleSheet } from 'react-native';
 import { Asset } from 'expo-asset';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
@@ -404,9 +404,9 @@ const TabNavigator = () => {
         setTimeout(() => {
           navigation.navigate('CampaignThreadScreen', { campaignId: String(data.campaignId) });
         }, 500);
-      } else if (data?.type === 'job_complete') {
-        // Import / sync finished — deep-link the user to their inventory so
-        // they can pick up where they left off.
+      } else if (data?.type === 'job_complete' || data?.type === 'listing_ready') {
+        // Import / sync / listing-generation finished — deep-link the user to their
+        // inventory so they can pick up where they left off (review + publish).
         setTimeout(() => {
           navigation.navigate('Inventory');
         }, 500);
@@ -644,12 +644,28 @@ SplashScreen.preventAutoHideAsync();
 const AppNavigator = () => {
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
   const session = React.useContext(SessionContext);
+  const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
   const [isFirstLaunch, setIsFirstLaunch] = useState<boolean | null>(null);
   const [appIsReady, setAppIsReady] = useState(false);
   const [initialStackName, setInitialStackName] = useState<'AuthStack' | 'AppStack' | null>(null);
   const [initialAppScreen, setInitialAppScreen] = useState<'CreateAccountScreen' | 'AccountSyncIssueScreen' | 'TabNavigator' | null>(null);
+  // The landing screen is resolved ONCE per signed-in user. Without this, every Clerk
+  // token-refresh that toggled session.bridgeReady (10-min interval, app-foreground) re-ran
+  // the onboarding check, churned `initialAppScreen`, and — because that value is in the root
+  // Stack.Navigator key below — REMOUNTED the whole navigator, snapping the user back to Home.
+  const onboardingResolvedForUserRef = useRef<string | null>(null);
+  // Once the signed-in navigator is live, later session/token churn must NOT swap it for
+  // the startup shell or change the navigator key (either one snapped you back to Home).
+  // hasLiveTreeRef is robust to session.user.id briefly going null during a bridge
+  // re-init — it keys off "the tree is already up", not the (churning) user id. Reset on
+  // sign-out so the next sign-in re-resolves the landing normally.
+  const hasLiveTreeRef = useRef(false);
+  const [navBooted, setNavBooted] = useState(false);
+  // An explicit retry (AccountSyncIssue retry button / onboarding completion) bumps
+  // retryOnboardingTrigger and MUST always re-resolve, bypassing the one-shot guard.
+  const lastRetryTriggerRef = useRef(0);
   const [retryOnboardingTrigger, setRetryOnboardingTrigger] = useState(0);
   const [lastOnboardingDebugInfo, setLastOnboardingDebugInfo] = useState('');
 
@@ -785,6 +801,24 @@ const AppNavigator = () => {
     const next = isSignedIn ? 'AppStack' : 'AuthStack';
     setInitialStackName(next);
     if (isSignedIn) {
+      const uid = session?.user?.id ?? null;
+      const retryChanged = lastRetryTriggerRef.current !== retryOnboardingTrigger;
+      lastRetryTriggerRef.current = retryOnboardingTrigger;
+      // Tree already live for this signed-in session → ignore bridgeReady/token/uid churn
+      // outright. This catches the case the check below misses: when `uid` momentarily
+      // goes null during a session bridge re-init (which otherwise fell through, flipped
+      // isLoading, and remounted the navigator to Home). An explicit retry still re-runs.
+      if (hasLiveTreeRef.current && !retryChanged) {
+        setIsLoading(false);
+        return;
+      }
+      // Already resolved a stable landing for THIS user → do not re-run on later
+      // bridgeReady/token-refresh toggles (that churned the key and bounced to Home).
+      // An explicit retry (retryOnboardingTrigger bump) always re-resolves.
+      if (uid && onboardingResolvedForUserRef.current === uid && !retryChanged) {
+        setIsLoading(false);
+        return;
+      }
       // Default to TabNavigator to avoid blank UI, then refine after check
       setInitialAppScreen('TabNavigator');
       if (!session?.bridgeReady) {
@@ -794,10 +828,23 @@ const AppNavigator = () => {
       setIsLoading(true);
       checkOnboardingAndNavigate();
     } else {
+      onboardingResolvedForUserRef.current = null;
+      hasLiveTreeRef.current = false;
+      setNavBooted(false);
       setInitialAppScreen(null);
       setIsLoading(false);
     }
   }, [clerkLoaded, isSignedIn, session?.bridgeReady, session?.user?.id, retryOnboardingTrigger]);
+
+  // Mark the signed-in navigator "live" once a landing screen is resolved. After this the
+  // gate below stops swapping in the full-screen startup shell on re-checks (which
+  // unmounted the tree and lost your place) and shows a small inline pill instead.
+  useEffect(() => {
+    if (isSignedIn && initialAppScreen && !navBooted) {
+      hasLiveTreeRef.current = true;
+      setNavBooted(true);
+    }
+  }, [isSignedIn, initialAppScreen, navBooted]);
 
   // Add AppState listener for session expiry
   useEffect(() => {
@@ -862,9 +909,11 @@ const AppNavigator = () => {
       } else if (dbUser?.isOnboardingComplete) {
         log.debug(`[Onboarding Check] User ID: ${userId} - Onboarding complete. Going to TabNavigator`);
         setInitialAppScreen('TabNavigator');
+        onboardingResolvedForUserRef.current = userId; // stable landing → don't re-resolve on token-refresh churn
       } else {
         log.debug(`[Onboarding Check] User ID: ${userId} - Onboarding INCOMPLETE in DB. Going to CreateAccountScreen`);
         setInitialAppScreen('CreateAccountScreen');
+        onboardingResolvedForUserRef.current = userId; // stable landing → don't re-resolve on token-refresh churn
       }
 
     } catch (error) {
@@ -887,7 +936,10 @@ const AppNavigator = () => {
     );
   }
 
-  if (isLoading || !clerkLoaded || (isSignedIn && !initialAppScreen)) {
+  // Only take over the screen with the full startup shell on the FIRST boot. Once the
+  // signed-in tree is live (navBooted), a re-check keeps you exactly where you are and
+  // surfaces a small inline "Reconnecting…" pill instead (rendered below).
+  if (!navBooted && (isLoading || !clerkLoaded || (isSignedIn && !initialAppScreen))) {
     return (
       <AppStartupShell
         title="Restoring navigation"
@@ -930,8 +982,32 @@ const AppNavigator = () => {
         </OnboardingCheckContext.Provider>
       </AuthContext.Provider>
       </SwipeBackProvider>
+      {/* Non-disruptive re-check indicator: the tree stays mounted underneath so you keep
+          your place, instead of the old full-screen "Restoring navigation" takeover. */}
+      {navBooted && isSignedIn && isLoading ? (
+        <View pointerEvents="none" style={[reconnectStyles.pillWrap, { top: insets.top + 8 }]}>
+          <View style={reconnectStyles.pill}>
+            <ActivityIndicator size="small" color="#FFFFFF" />
+            <Text style={reconnectStyles.pillText}>Reconnecting…</Text>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 };
 
-export default AppNavigator; 
+const reconnectStyles = StyleSheet.create({
+  pillWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 50 },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,17,19,0.92)',
+  },
+  pillText: { color: '#FFFFFF', fontSize: 13, fontFamily: 'Inter_500Medium' },
+});
+
+export default AppNavigator;

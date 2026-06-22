@@ -413,6 +413,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 label: readString(payload.label) || readString(payload.tool) || 'Step',
                 status: readString(payload.status) || 'success',
                 durationMs: typeof payload.durationMs === 'number' ? payload.durationMs : undefined,
+                resultSummary: readString(payload.resultSummary) || undefined,
                 threadId,
               });
               break;

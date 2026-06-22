@@ -1,6 +1,6 @@
 // sssync_mobile_test/src/context/OrgContext.tsx
 
-import React, { createContext, useState, useEffect, useCallback, useContext } from 'react';
+import React, { createContext, useState, useEffect, useCallback, useContext, useRef } from 'react';
 import { useUser, useOrganizationList } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../lib/supabase';
@@ -271,6 +271,13 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /**
    * Refresh orgs (re-fetch from API)
    */
+  // The load effect below depends on refreshOrgs' identity, and refreshOrgs ->
+  // loadAvailableOrgs -> setState re-renders recreate that identity, which re-fires
+  // the effect. Without a guard this hammered /api/organizations/me/active dozens of
+  // times a second. Coalesce re-entrant calls and throttle to one refresh / 4s.
+  const refreshInFlightRef = useRef(false);
+  const lastRefreshAtRef = useRef(0);
+
   const refreshOrgs = useCallback(async () => {
     if (!session?.bridgeReady) {
       const jwtState = getSupabaseJwtState().state;
@@ -285,6 +292,11 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    if (refreshInFlightRef.current) return;
+    if (Date.now() - lastRefreshAtRef.current < 4000) return;
+    refreshInFlightRef.current = true;
+    lastRefreshAtRef.current = Date.now();
+
     setIsLoading(true);
     try {
       await loadAvailableOrgs();
@@ -292,6 +304,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       log.error('[OrgContext] Refresh error:', err);
     } finally {
       setIsLoading(false);
+      refreshInFlightRef.current = false;
     }
   }, [hydrateFromCache, loadAvailableOrgs, session?.bridgeReady]);
 

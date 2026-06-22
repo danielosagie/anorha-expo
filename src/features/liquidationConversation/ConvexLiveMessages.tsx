@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { useQuery } from 'convex/react';
+import { useConvexAuth, useQuery } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 
 type RawMessage = {
@@ -32,8 +32,16 @@ let liveDisabled = process.env.EXPO_PUBLIC_DISABLE_CONVEX_LIVE === '1';
  * and the chat keeps working via the existing fetch path.
  */
 function ConvexLiveMessagesInner({ threadId, onMessages }: Props) {
+  // Only subscribe once Convex has an authenticated identity. listByThread calls
+  // ensureIdentity(), so firing it during the Clerk→Convex auth handshake (or if auth
+  // never lands) throws "Unauthorized". Skipping until authenticated avoids that throw
+  // and lets the chat fall back to its existing fetch path.
+  const { isAuthenticated } = useConvexAuth();
   // `(api as any)` until `npx convex codegen` types the new function.
-  const data = useQuery((api as any).messages.listByThread, threadId ? { threadId } : 'skip');
+  const data = useQuery(
+    (api as any).messages.listByThread,
+    isAuthenticated && threadId ? { threadId } : 'skip',
+  );
   useEffect(() => {
     if (Array.isArray(data) && data.length) {
       onMessages(data as RawMessage[]);
