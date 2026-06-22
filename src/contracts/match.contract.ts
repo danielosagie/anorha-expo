@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:e334fe44e151)
+// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:745845a17fbd)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * MATCH PIPELINE CONTRACT — single source of truth for the mobile↔backend match seam.
@@ -61,7 +61,7 @@ export const zRerankedResult = z
   .object({
     rank: z.number(),
     score: z.number(),
-    /** Index into the original SerpAPI results array. */
+    /** Index into the original match results array. */
     matchRowIndex: z.number(),
     title: z.string(),
     link: z.string(),
@@ -78,7 +78,7 @@ export const zRerankedResult = z
     inInventory: z.boolean().optional(),
     ProductVariantId: z.string().nullable().optional(),
   })
-  // The wire merges SerpAPI display fields (thumbnail, image, price, source, …)
+  // The wire merges provider display fields (thumbnail, image, price, source, …)
   // into each candidate; keep them legal without enumerating a provider shape.
   .catchall(z.any());
 export type RerankedResult = z.infer<typeof zRerankedResult>;
@@ -148,16 +148,16 @@ export const zVlmAnalysis = z.object({
   model: z.string(),
   type: z.string(),
   paraphrases: z.array(z.string()),
-  provider: z.enum(['scout', 'gemini']).optional(),
+  provider: z.enum(['fast', 'vision']).optional(),
   vlmModel: z.string().optional(),
   fallbackUsed: z.boolean().optional(),
   fallbackReason: z.string().optional(),
-  timings: z.object({ scoutMs: z.number().optional(), visionMs: z.number().optional() }).optional(),
+  timings: z.object({ fastMs: z.number().optional(), visionMs: z.number().optional() }).optional(),
 });
 export type VlmAnalysis = z.infer<typeof zVlmAnalysis>;
 
 export const zSearchAttempt = z.object({
-  source: z.enum(['ebay_text', 'ebay_image', 'google_text', 'google_lens', 'retry_text', 'classification_research']),
+  source: z.enum(['ebay_text', 'ebay_image', 'web_text', 'visual_search', 'retry_text', 'classification_research']),
   query: z.string().optional(),
   resultCount: z.number(),
   durationMs: z.number(),
@@ -178,7 +178,7 @@ export const zMatchJobResult = z.object({
   productIndex: z.number(),
   productId: z.string(),
   variantId: z.string(),
-  /** Full SerpAPI response (intentionally untyped — provider-shaped). */
+  /** Full provider response (intentionally untyped — provider-shaped). */
   matchRows: z.array(z.any()),
   rerankedResults: z.array(zRerankedResult),
   confidence: z.enum(['high', 'medium', 'low']),

@@ -1580,8 +1580,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           const arr = p.images || p.imageUris || [];
           if (Array.isArray(arr)) {
             arr.forEach((u: string) => {
-              // Filter out empty strings, null, undefined, and scraped URLs
-              if (typeof u === 'string' && u.trim().length > 0 && !u.includes('firecrawl') && !u.includes('serpapi')) {
+              // Filter out empty strings, null, undefined (scraper-hosted URLs arrive
+              // pre-emptied from the server, so this length guard drops them too).
+              if (typeof u === 'string' && u.trim().length > 0) {
                 imgs.add(u);
               }
             });
