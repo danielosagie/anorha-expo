@@ -29,7 +29,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { MappingSuggestion } from '../types/importSession';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
 import MatchDeck from '../components/import/MatchDeck';
-import { classifyMatch } from '../components/resolve/classifyMatch';
+import { classifyMatch, reviewDeckCases } from '../components/resolve/classifyMatch';
 
 // ---------------------------------------------------------------------------
 // Main screen
@@ -95,7 +95,13 @@ const MappingReviewScreen: React.FC = () => {
     () => classifyMatch((suggestions || []) as any, platformName),
     [suggestions, platformName],
   );
-  const remaining = classify.cases.length;
+  // "to review" must be the DECK's set, not every classified case — otherwise the intro
+  // says "49 to review" and the deck immediately shows "All caught up" (orphans/catalog
+  // items are classified but never dealt as cards). reviewDeckCases is that shared set.
+  const remaining = useMemo(
+    () => reviewDeckCases((suggestions || []) as any, platformName).length,
+    [suggestions, platformName],
+  );
   const autoMatched = classify.autoResolved.length || (importDraft?.summary.autoResolved ?? 0);
   const reviewed = (suggestions || []).filter((s) => s.resolved).length;
   const planTotal = reviewed + remaining;

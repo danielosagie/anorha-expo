@@ -13,7 +13,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { MappingSuggestion } from '../../types/importSession';
-import { classifyMatch, applyMatchDecision } from '../resolve/classifyMatch';
+import { applyMatchDecision, reviewDeckCases } from '../resolve/classifyMatch';
 import {
   MatchResolver,
   MatchCase,
@@ -117,22 +117,11 @@ const FILTERS: { key: string; label: string }[] = [
 
 // The deck is the real match decisions — never the bulk "313 catalog items not in
 // this import" card (orphans). Those live only in the All-items view ("In catalog").
-const buildDeck = (sugs: MappingSuggestion[], platform?: string): MatchCase[] => {
-  // The swipe deck is ONLY for items that genuinely need a human decision. Already-
-  // linked items and "incoming catalog" (the seller's existing inventory, pulled in
-  // just so the matcher has something to match against) are not review work — they
-  // live in the All-items view. So keep a case only if it still contains an item that
-  // needs review; otherwise the deck balloons with hundreds of auto-handled items.
-  const reviewIds = new Set(
-    sugs.filter((s) => statusOf(s).key === 'review').map((s) => s.platformProduct.id),
-  );
-  return classifyMatch(sugs as any, platform).cases.filter(
-    (c) =>
-      c.kind !== 'orphan' &&
-      c.kind !== 'orphans' &&
-      (c.itemIds || []).some((id) => reviewIds.has(id)),
-  );
-};
+// reviewDeckCases (in classifyMatch) is the single source of truth so the lobby/intro
+// "to review" count is EXACTLY this set — they can't disagree ("49 to review" then
+// "All caught up"). It mirrors statusOf('review') = unresolved AND not catalog-direction.
+const buildDeck = (sugs: MappingSuggestion[], platform?: string): MatchCase[] =>
+  reviewDeckCases(sugs as any, platform);
 
 const MatchDeck: React.FC<MatchDeckProps> = ({
   theme,

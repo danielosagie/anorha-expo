@@ -309,6 +309,26 @@ export function classifyMatch(suggestions: DraftItem[], platformName?: string): 
   return { cases, autoResolved };
 }
 
+/**
+ * The cases that genuinely need a human swipe decision — the swipe deck's EXACT set.
+ * Shared so the lobby/intro "to review" count can never disagree with what the deck
+ * actually shows. (The bug: the lobby + intro counted classifyMatch().cases — all of
+ * them, including the orphans/catalog card and catalog-direction items — while the deck
+ * filtered down to real review work, so it could say "49 to review" then "All caught up".)
+ * Mirrors MatchDeck.statusOf('review') = unresolved AND not catalog-direction, and drops
+ * the bulk orphan/orphans card (that lives in the All-items view, never the deck).
+ */
+export function reviewDeckCases(suggestions: DraftItem[], platformName?: string): MatchCase[] {
+  const reviewIds = new Set(
+    (suggestions || [])
+      .filter((s) => !s.resolved && s.direction !== 'anorha_to_platform')
+      .map((s) => s.platformProduct.id),
+  );
+  return classifyMatch(suggestions, platformName).cases.filter(
+    (c) => c.kind !== 'orphan' && c.kind !== 'orphans' && (c.itemIds || []).some((id) => reviewIds.has(id)),
+  );
+}
+
 // ── case builders ──────────────────────────────────────────────────────────
 // Default pick prefers the side that actually HAS data — never default to an
 // empty value over a real one (e.g. "—" beating "$50.00").

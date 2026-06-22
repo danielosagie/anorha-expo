@@ -24,7 +24,7 @@ import { supabase } from '../../lib/supabase';
 import { useImportSession } from '../hooks/useImportSession';
 import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
 import { RC } from '../components/resolve/ResolveKit';
-import { classifyMatch } from '../components/resolve/classifyMatch';
+import { reviewDeckCases } from '../components/resolve/classifyMatch';
 import {
   LobbyHeader,
   HeaderPill,
@@ -116,7 +116,7 @@ const ImportOverviewScreen = () => {
   // label AND its done-state off THIS one number so the lobby, the deck, and the
   // checkmark never disagree (the old `reviewCount` counted raw rows = "438").
   const matchCases = useMemo(
-    () => classifyMatch((suggestions || []) as any, platformName).cases,
+    () => reviewDeckCases((suggestions || []) as any, platformName),
     [suggestions, platformName],
   );
   const matchDone = matchCases.length === 0;
