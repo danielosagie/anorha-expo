@@ -2802,8 +2802,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           )}
         </View>
 
-      </View>
-
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
           Suppressed while the Price sheet is open — that sheet inlines the same card. */}
       <Modal visible={pricingResearchModalVisible && openField !== 'price'} transparent animationType="slide">
