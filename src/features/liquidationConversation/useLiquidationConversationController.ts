@@ -455,12 +455,12 @@ export const useLiquidationConversationController = ({
           },
           // Completed tool steps attach to THIS run's assistant bubble as compact
           // items (label + status only; arguments never reach the client).
-          onToolCompleted: ({ tool, label, status, durationMs }) => {
+          onToolCompleted: ({ tool, label, status, durationMs, resultSummary }) => {
             setThreadStateFor(threadId, current => appendAssistantToolStep(
               current,
               item.campaignId,
               threadId,
-              { tool, label, status, durationMs },
+              { tool, label, status, durationMs, resultSummary },
               assistantId,
             ));
           },

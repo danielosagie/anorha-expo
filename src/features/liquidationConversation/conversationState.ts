@@ -222,7 +222,7 @@ export const appendAssistantToolStep = (
   state: ConversationThreadState,
   campaignId: string,
   threadId: string,
-  step: { tool: string; label: string; status?: string; durationMs?: number },
+  step: { tool: string; label: string; status?: string; durationMs?: number; resultSummary?: string },
   assistantMessageId?: string,
 ): ConversationThreadState => {
   const ensured = ensureAssistantPlaceholder(state, campaignId, threadId, assistantMessageId);

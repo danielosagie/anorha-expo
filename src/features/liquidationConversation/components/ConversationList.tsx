@@ -175,9 +175,13 @@ export const ConversationList = ({
       </TimestampRevealContext.Provider>
 
       {showJumpToLatest && canJump ? (
-        <TouchableOpacity style={styles.jumpButton} onPress={() => listRef.current?.scrollToEnd({ animated: true })}>
-          <Icon name="arrow-down" size={14} color="#FFFFFF" />
-          <Text style={styles.jumpButtonText}>Latest</Text>
+        <TouchableOpacity
+          style={styles.jumpButton}
+          onPress={() => { setShowJumpToLatest(false); scrollToBottom(true); }}
+          activeOpacity={0.85}
+          accessibilityLabel="Jump to latest"
+        >
+          <Icon name="chevron-down" size={22} color="#18181B" />
         </TouchableOpacity>
       ) : null}
     </View>
@@ -223,21 +227,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
+  // Small circular down-arrow bubble (iMessage/Claude-style), floats bottom-right above
+  // the composer. White with a hairline + soft shadow to match the app's calm surfaces.
   jumpButton: {
     position: 'absolute',
-    right: 18,
-    bottom: 12,
-    borderRadius: 16,
-    backgroundColor: '#111827',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
+    right: 16,
+    bottom: 14,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     alignItems: 'center',
-    gap: 6,
-  },
-  jumpButtonText: {
-    color: '#FFFFFF',
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 12,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
   },
 });

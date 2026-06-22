@@ -221,6 +221,8 @@ export interface ConversationToolStep {
   label: string;
   status?: string;
   durationMs?: number;
+  /** Short, user-safe outcome shown under the step label ("12 found", "$650 median"). */
+  resultSummary?: string;
 }
 
 export interface StreamTurnObserver {
