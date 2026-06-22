@@ -489,19 +489,71 @@ export const useLiquidationConversationController = ({
         const remoteMessages = await adapter.getMessages(item.campaignId, threadId).catch(() => null);
         if (remoteMessages) {
           setThreadStateFor(threadId, current => {
-            // The seller's attached photos must survive the blind replace: if the server
-            // copy of this turn's user message doesn't echo the urls in its metadata, carry
-            // them over from the local optimistic message so the thumbnails don't vanish.
+            // ADDITIVE reconcile, never a blind replace. A blind replace swapped the
+            // just-streamed assistant bubble (key `assistant-<cid>`) for a server-id copy
+            // under a different key, so FlashList unmounted it and mounted a new one — the
+            // "a message vanished and a new one appeared" flash. Instead we keep local
+            // messages and only fold in what the server adds (the job card, an approval
+            // prompt), reconciling this turn's user + assistant copies onto their live
+            // bubbles in place so their keys (and the seller's photos) survive.
             const turnImages = item.imageUrls;
-            const merged = turnImages && turnImages.length
-              ? remoteMessages.map(rm => {
-                  if (rm.role !== 'user' || (rm.imageUrls && rm.imageUrls.length)) return rm;
-                  const matchesContent = (rm.content || '').trim() === (item.content || '').trim();
-                  const matchesId = !!rm.clientMessageId && rm.clientMessageId === item.clientMessageId;
-                  return matchesId || matchesContent ? { ...rm, imageUrls: turnImages } : rm;
-                })
-              : remoteMessages;
-            return { ...current, messages: merged };
+            const assistantLocalId = `assistant-${item.clientMessageId}`;
+            const next = current.messages.slice();
+            const cidOf = (rm: ConversationMessage): string | undefined =>
+              typeof (rm.metadata as any)?.clientMessageId === 'string' ? ((rm.metadata as any).clientMessageId as string) : undefined;
+            const isCardOrPrompt = (rm: ConversationMessage): boolean =>
+              !!(rm.decisionPrompt || (rm.metadata as any)?.jobCard || (rm.metadata as any)?.type === 'approval_request');
+            let reconciledAssistant = false;
+            for (const rm of remoteMessages) {
+              if (next.some(m => m.id === rm.id || m.serverMessageId === rm.id)) continue; // already shown
+              const rmCid = cidOf(rm);
+              // Server copy of THIS turn's streamed reply → fold onto the live bubble (keep its key).
+              if (
+                rm.role === 'assistant' && !reconciledAssistant && !isCardOrPrompt(rm) &&
+                (rmCid === item.clientMessageId || (!rmCid && !!(rm.content || '').trim()))
+              ) {
+                const idx = next.findIndex(m => m.id === assistantLocalId && !m.serverMessageId);
+                if (idx >= 0) {
+                  next[idx] = {
+                    ...next[idx],
+                    serverMessageId: rm.id,
+                    content: rm.content || next[idx].content,
+                    metadata: { ...(next[idx].metadata || {}), ...(rm.metadata || {}) },
+                    decisionPrompt: rm.decisionPrompt ?? next[idx].decisionPrompt,
+                  };
+                  reconciledAssistant = true;
+                  continue;
+                }
+              }
+              // Server copy of THIS turn's optimistic user message → attach the server id in place.
+              if (rm.role === 'user') {
+                let userIdx = -1;
+                for (let i = next.length - 1; i >= 0; i--) {
+                  const m = next[i];
+                  if (m.role === 'user' && !m.serverMessageId &&
+                    ((rmCid && m.clientMessageId && m.clientMessageId === rmCid) || (m.content || '').trim() === (rm.content || '').trim())) {
+                    userIdx = i; break;
+                  }
+                }
+                if (userIdx >= 0) {
+                  next[userIdx] = {
+                    ...next[userIdx],
+                    serverMessageId: rm.id,
+                    deliveryState: 'sent',
+                    imageUrls: next[userIdx].imageUrls?.length ? next[userIdx].imageUrls : (turnImages || next[userIdx].imageUrls),
+                  };
+                  continue;
+                }
+              }
+              // Genuinely new server message (job card, approval prompt) → append it, carrying the
+              // seller's attached photos onto a bare user echo so thumbnails survive.
+              next.push(
+                turnImages && turnImages.length && rm.role === 'user' && !(rm.imageUrls && rm.imageUrls.length)
+                  ? { ...rm, imageUrls: turnImages }
+                  : rm,
+              );
+            }
+            return { ...current, messages: next };
           }, { immediate: true });
         }
       }

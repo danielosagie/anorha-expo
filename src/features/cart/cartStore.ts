@@ -142,6 +142,23 @@ export function updateItem(itemId: string, patch: Partial<Omit<CartItem, 'kind' 
   cart$.entries[itemId].assign({ ...patch, updatedAt: now() });
 }
 
+/**
+ * Swap a captured photo's uri (e.g. local `file://` → uploaded public URL) once the scan
+ * upload finishes. The persisted scan session and the clearout agent read the cart item's
+ * photos, so leaving a device-local path here means the agent gets a `file://` it can't open
+ * ("send me a pic"). Writing the public URL back fixes that at the source.
+ */
+export function setItemPhotoUri(itemId: string, photoId: string, uri: string) {
+  const entry = getEntry(itemId);
+  if (!isItem(entry)) return;
+  const photos = Array.isArray((entry as CartItem).photos) ? (entry as CartItem).photos : [];
+  if (!photos.some(p => p?.id === photoId)) return;
+  cart$.entries[itemId].assign({
+    photos: photos.map(p => (p?.id === photoId ? { ...p, uri } : p)),
+    updatedAt: now(),
+  });
+}
+
 export function setItemTitle(itemId: string, title: string) {
   if (!isItem(getEntry(itemId))) return;
   cart$.entries[itemId].assign({ title, updatedAt: now() });

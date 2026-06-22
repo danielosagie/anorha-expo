@@ -28,7 +28,7 @@ import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot } from '../features/cart/cartStore';
+import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri } from '../features/cart/cartStore';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import {
   View,
@@ -2856,6 +2856,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.debug('[QUICK SCAN] Uploading image to Supabase...');
       const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
       log.debug('[QUICK SCAN] Image uploaded to:', publicImageUrl);
+
+      // Persist the uploaded URL onto the scanned item's photo so the saved scan session (and
+      // the clearout agent that reads it) get a server-readable URL instead of the device's
+      // local file:// path — otherwise add_scan_to_campaign can't open the image and the agent
+      // falls back to "send me a pic" and can't price by the item's real condition.
+      if (publicImageUrl) setItemPhotoUri(itemId, photo.id, publicImageUrl);
 
       const token = tokenMaybe;
 
