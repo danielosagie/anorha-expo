@@ -4017,5 +4017,10 @@ const styles = StyleSheet.create({
   },
   suggestionBox: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 10, padding: 12, marginTop: 10, backgroundColor: '#FAFAFA' },
   suggestionChip: { borderWidth: 1, borderColor: '#E5E5E5', borderStyle: 'dashed', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+  suggestRow: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 4 },
+  suggestChip: { flex: 1, alignItems: 'center', paddingVertical: 8, paddingHorizontal: 6, borderRadius: 10, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#FAFAFA' },
+  suggestChipHi: { borderColor: BRAND_PRIMARY, backgroundColor: 'rgba(147,200,34,0.08)' },
+  suggestChipLabel: { fontSize: 11, color: '#6B7280', marginBottom: 2 },
+  suggestChipPrice: { fontSize: 14, fontWeight: '600', color: '#111' },
   modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
 });
