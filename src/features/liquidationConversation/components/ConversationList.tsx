@@ -94,20 +94,36 @@ export const ConversationList = ({
   // composer — unless the seller has scrolled up to read history (showJumpToLatest).
   const prevLenRef = useRef(0);
   const prevBottomRef = useRef(contentBottomInset ?? 0);
+  const prevTailRef = useRef(0);
+  // A signal that grows as the LAST bubble streams in (text tokens, reasoning, tool steps)
+  // even though messages.length stays the same — without this we never re-pin during a
+  // response and its bottom scrolls out of view as it grows past the viewport.
+  const tailGrowth = (() => {
+    const last = messages[messages.length - 1];
+    if (!last) return 0;
+    const meta = (last.metadata ?? {}) as any;
+    const steps = Array.isArray(meta.toolSteps) ? meta.toolSteps.length : 0;
+    const reasoningLen = typeof meta.reasoning === 'string' ? meta.reasoning.length : 0;
+    return (last.content?.length ?? 0) + reasoningLen + steps * 40;
+  })();
   useEffect(() => {
     if (showJumpToLatest) {
       prevLenRef.current = messages.length;
       prevBottomRef.current = contentBottomInset ?? 0;
+      prevTailRef.current = tailGrowth;
       return;
     }
     const grew = messages.length > prevLenRef.current;
     const insetGrew = (contentBottomInset ?? 0) > prevBottomRef.current;
+    const tailGrew = tailGrowth > prevTailRef.current; // streaming tokens grew the last bubble
     prevLenRef.current = messages.length;
     prevBottomRef.current = contentBottomInset ?? 0;
-    if (grew || insetGrew) {
+    prevTailRef.current = tailGrowth;
+    if (grew || insetGrew || tailGrew) {
+      // New message → gentle animated scroll; streaming growth → instant pin (no jank).
       requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
     }
-  }, [messages, showJumpToLatest, contentBottomInset]);
+  }, [messages, showJumpToLatest, contentBottomInset, tailGrowth]);
 
   if (loading) {
     return (
