@@ -46,27 +46,20 @@ function formatCurrency(value: number): string {
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-// Vendor / internal names we never surface to a seller (Groq, Serpapi, Firecrawl, …).
-const VENDOR_WORDS = /\b(groq|serpapi|firecrawl|openai|gpt|gemini|claude|anthropic|whisper|llm|kimi|moonshot|deepseek|scrape|credits?)\b/gi;
-
-// Raw usage keys (and their vendor-named variants) → plain-English, transparent labels.
-// Synonyms intentionally share a label so the history groups into clean lines.
+// Raw usage keys → plain-English, transparent labels. Deliberately contains NO internal
+// tool/vendor names (model providers, search/scrape services, …) so none can be recovered
+// from the shipped bundle. Unknown keys are bucketed by generic intent words below, and the
+// raw key is never humanized into the UI (it could carry an internal name).
 const FEATURE_LABELS: Record<string, string> = {
   ai_quick_scan: 'Photo scans',
   product_photo_scan: 'Photo scans',
   ai_recognize_match: 'Product matching',
   auto_match: 'Product matching',
   auto_match_products: 'Product matching',
-  match_serpapi_search: 'Product matching',
   product_search: 'Product matching',
   ebay_pricing_research: 'Price research',
   ebay_pricing: 'Price research',
-  ai_generate_groq: 'Listing details',
-  generation_groq: 'Listing details',
   ai_text_generation: 'Listing details',
-  ai_generate_scrape_credits: 'Web research',
-  generation_firecrawl: 'Web research',
-  generation_firecrawl_scrape: 'Web research',
   web_research: 'Web research',
   ai_shipping_vision: 'Shipping estimates',
   shipping_vision: 'Shipping estimates',
@@ -82,21 +75,20 @@ const FEATURE_LABELS: Record<string, string> = {
 function getFeatureDisplayName(key: string): string {
   const norm = String(key || '').toLowerCase().trim();
   if (FEATURE_LABELS[norm]) return FEATURE_LABELS[norm];
-  // Unknown key — bucket by intent so an unmapped vendor name can never leak.
-  if (/(scrape|firecrawl|serpapi|web|research|search)/.test(norm)) return 'Web research';
-  if (/(generat|groq|gpt|llm|text|writ|kimi|deepseek)/.test(norm)) return 'Listing details';
-  if (/ship/.test(norm)) return 'Shipping estimates'; // before vision: "shipping_vision_*" is shipping, not a photo scan
+  // Unknown key — bucket by generic intent (no tool/vendor names) so nothing internal leaks.
+  if (/ship/.test(norm)) return 'Shipping estimates'; // before vision: "shipping_vision_*" is shipping
+  if (/(scrape|crawl|web|research|search)/.test(norm)) return 'Web research';
+  if (/(generat|text|writ|caption)/.test(norm)) return 'Listing details';
   if (/(vision|photo|scan|image)/.test(norm)) return 'Photo scans';
   if (/(match|recogni)/.test(norm)) return 'Product matching';
-  if (/(pric|comp|ebay)/.test(norm)) return 'Price research';
+  if (/(pric|comp)/.test(norm)) return 'Price research';
   if (/(sync|import|export|inventory)/.test(norm)) return 'Inventory sync';
   if (/insight/.test(norm)) return 'Business insights';
   if (/receipt/.test(norm)) return 'Receipt scans';
   if (/manifest/.test(norm)) return 'Manifest scans';
   if (/(liquidat|clearout)/.test(norm)) return 'Clearout research';
-  // Last resort: humanize but scrub any vendor word.
-  const cleaned = norm.replace(/^ai_/, '').replace(/_/g, ' ').replace(VENDOR_WORDS, '').replace(/\s+/g, ' ').trim();
-  return cleaned ? cleaned.replace(/\b\w/g, c => c.toUpperCase()) : 'AI usage';
+  // Never humanize the raw key (it may carry an internal name) — generic label instead.
+  return 'AI usage';
 }
 
 const HealthBar = ({ used, limit, fillColor }: { used: number, limit: number, fillColor: string }) => {
