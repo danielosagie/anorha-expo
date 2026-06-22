@@ -1714,7 +1714,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
                   <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
                     <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
-                      {['llm', 'groq', 'tree', 'rerank'].includes(activeData.taxonomySource || '') ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
+                      {activeData.taxonomySource && activeData.taxonomySource !== 'suggested' && activeData.taxonomySource !== 'manual' ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
                     </Text>
                   </View>
                 )}
