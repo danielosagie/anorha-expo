@@ -85,10 +85,10 @@ function getFeatureDisplayName(key: string): string {
   // Unknown key — bucket by intent so an unmapped vendor name can never leak.
   if (/(scrape|firecrawl|serpapi|web|research|search)/.test(norm)) return 'Web research';
   if (/(generat|groq|gpt|llm|text|writ|kimi|deepseek)/.test(norm)) return 'Listing details';
+  if (/ship/.test(norm)) return 'Shipping estimates'; // before vision: "shipping_vision_*" is shipping, not a photo scan
   if (/(vision|photo|scan|image)/.test(norm)) return 'Photo scans';
   if (/(match|recogni)/.test(norm)) return 'Product matching';
   if (/(pric|comp|ebay)/.test(norm)) return 'Price research';
-  if (/ship/.test(norm)) return 'Shipping estimates';
   if (/(sync|import|export|inventory)/.test(norm)) return 'Inventory sync';
   if (/insight/.test(norm)) return 'Business insights';
   if (/receipt/.test(norm)) return 'Receipt scans';
