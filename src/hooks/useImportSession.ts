@@ -22,6 +22,37 @@ const log = createLogger('useImportSession');
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
+// Module-level cache + in-flight coalescing for the active org id. Several import
+// effects need it, and a render loop was firing one of them dozens of times a
+// second — each hitting /api/organizations/me/active and flooding the server logs.
+// The active org barely changes within a session, so cache it briefly and never
+// run more than one request at a time.
+let __activeOrgCache: { id: string | null; ts: number } | null = null;
+let __activeOrgInFlight: Promise<string | null> | null = null;
+const ACTIVE_ORG_TTL_MS = 60_000;
+async function getActiveOrgIdCached(token: string | null): Promise<string | null> {
+  if (__activeOrgCache && Date.now() - __activeOrgCache.ts < ACTIVE_ORG_TTL_MS) {
+    return __activeOrgCache.id;
+  }
+  if (__activeOrgInFlight) return __activeOrgInFlight;
+  __activeOrgInFlight = (async () => {
+    try {
+      const res = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      const d = res.ok ? await res.json() : null;
+      const id = d ? (d.id || d.orgId || null) : null;
+      __activeOrgCache = { id, ts: Date.now() };
+      return id;
+    } catch {
+      return __activeOrgCache?.id ?? null;
+    } finally {
+      __activeOrgInFlight = null;
+    }
+  })();
+  return __activeOrgInFlight;
+}
+
 /** Pull the v2 matching signals off a raw backend suggestion item so the
  *  resolver classifier can route precisely (these were being dropped before).
  *  Input is contract-typed: if the backend renames a signal, this stops compiling
@@ -260,14 +291,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
     }
     try {
       const token = await ensureSupabaseJwt();
-      const orgRes = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      });
-      let orgId: string | undefined;
-      if (orgRes.ok) {
-        const orgData = await orgRes.json();
-        orgId = orgData.id || orgData.orgId;
-      }
+      const orgId = (await getActiveOrgIdCached(token)) || undefined;
       const connRes = await supabase.from('PlatformConnections').select('Id, UserId, OrgId, PlatformType, DisplayName, Status').eq('IsEnabled', true);
       if (connRes.data && connRes.data.length > 0) {
         const filtered = orgId ? connRes.data.filter((c: any) => c.OrgId === orgId) : connRes.data;
@@ -756,15 +780,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       try {
         const token = await ensureSupabaseJwt();
         let orgId = connection?.OrgId || externalConnection?.OrgId;
-        if (!orgId) {
-          const res = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          });
-          if (res.ok) {
-            const d = await res.json();
-            orgId = d.id || d.orgId;
-          }
-        }
+        if (!orgId) orgId = (await getActiveOrgIdCached(token)) || undefined;
         if (!orgId) {
           setPools([]);
           return;
@@ -897,15 +913,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       setIsCreatingPool(true);
       const token = await ensureSupabaseJwt();
       let orgId = connection?.OrgId;
-      if (!orgId) {
-        const res = await fetch(`${SSSYNC_API_BASE_URL}/api/organizations/me/active`, {
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-        if (res.ok) {
-          const d = await res.json();
-          orgId = d.id || d.orgId;
-        }
-      }
+      if (!orgId) orgId = (await getActiveOrgIdCached(token)) || undefined;
       if (!orgId) throw new Error('Could not determine organization');
 
       const locationIdsForNewPool = displayConnectionLocations
@@ -1018,10 +1026,52 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         productCreationMode,
       };
 
+      // The review deck resolves matches directly on `suggestions` (sets action +
+      // isSelected). That resolved set is the real plan — send it as explicit
+      // commit items. (We still send draftLog so the server can fall back to its
+      // replay path for older builds.) Without this, the server rebuilt the plan
+      // from its own — sometimes empty — base and committed nothing.
+      const commitItems = (suggestions || [])
+        .filter((s) => s.isSelected && s.action !== 'IGNORE' && s.action !== 'UNMATCHED')
+        .map((s) => {
+          const parentId = s.platformProduct?.parentId ?? null;
+          const action =
+            s.direction === 'anorha_to_platform'
+              ? 'PUSH_TO_PLATFORM'
+              : s.action === 'LINK_EXISTING'
+                ? 'LINK_EXISTING'
+                : 'CREATE_NEW';
+          return {
+            platformProduct: {
+              id: s.platformProduct.id,
+              sku: s.platformProduct.sku ?? null,
+              title: s.platformProduct.title ?? null,
+              price: s.platformProduct.price ?? null,
+              imageUrl: s.platformProduct.imageUrl ?? null,
+              parentId,
+            },
+            action,
+            direction: s.direction || 'platform_to_anorha',
+            productShape: s.productShape || (parentId ? 'variant_family' : 'simple'),
+            parentId,
+            sourceHash: s.sourceHash,
+            suggestedCanonicalProduct:
+              s.action === 'LINK_EXISTING' && s.suggestedCanonicalProduct?.id
+                ? {
+                    id: s.suggestedCanonicalProduct.id,
+                    sku: s.suggestedCanonicalProduct.sku ?? null,
+                    title: s.suggestedCanonicalProduct.title ?? null,
+                    price: s.suggestedCanonicalProduct.price ?? null,
+                    imageUrl: s.suggestedCanonicalProduct.imageUrl ?? null,
+                  }
+                : null,
+          };
+        });
+
       const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/commit`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decisions: draftLog, syncRules: syncRulesPayload }),
+        body: JSON.stringify({ items: commitItems, decisions: draftLog, syncRules: syncRulesPayload }),
       });
 
       if (!confirmRes.ok) {
@@ -1032,6 +1082,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       const result = await confirmRes.json().catch(() => ({}));
       const jobId = result?.jobId;
       const operationId = result?.operationId;
+      // The server reports how many items it actually committed. Fall back to the
+      // count we sent so the completion screen never reads "Imported 0 items" when
+      // it really linked things.
+      const committedCount = typeof result?.committedCount === 'number' ? result.committedCount : commitItems.length;
 
       // Persist the in-flight import so the user can leave and come back to
       // accurate, resumable progress (polled via useImportProgress).
@@ -1045,7 +1099,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               connectionId,
               // Best-effort total for the progress banner: everything the user
               // decided plus what the server auto-matched.
-              itemsTotal: (importDraft?.completed.length || 0) + (importDraft?.summary.autoResolved || 0),
+              itemsTotal: committedCount || (importDraft?.completed.length || 0) + (importDraft?.summary.autoResolved || 0),
               startedAt: new Date().toISOString(),
             }),
           );
@@ -1062,6 +1116,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
           syncMode,
           delistMode,
           jobId,
+          importCount: committedCount,
           origin: 'import',
         });
       }
@@ -1073,6 +1128,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   }, [
     connectionId,
     draftLog,
+    suggestions,
     importDraft,
     selectedPool,
     poolNameInput,

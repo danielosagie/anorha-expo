@@ -111,7 +111,16 @@ const ImportOverviewScreen = () => {
   }, [navigation, refreshSuggestions, fetchOptimizerCounts]);
 
   const optimizerDone = optimizeCount === 0;
-  const canComplete = mappingDone && settingsDone && optimizerDone;
+  // The real "to review" count is the deck's decision cards — classifyMatch groups
+  // the hundreds of raw rows into a handful of actual decisions. Drive the Match
+  // label AND its done-state off THIS one number so the lobby, the deck, and the
+  // checkmark never disagree (the old `reviewCount` counted raw rows = "438").
+  const matchCases = useMemo(
+    () => classifyMatch((suggestions || []) as any, platformName).cases,
+    [suggestions, platformName],
+  );
+  const matchDone = matchCases.length === 0;
+  const canComplete = matchDone && settingsDone && optimizerDone;
 
   const handleCompleteImport = () => {
     if (!canComplete) return;
@@ -127,7 +136,7 @@ const ImportOverviewScreen = () => {
   type StageId = 'match' | 'optimize' | 'preferences' | 'finish';
   const stageOrder: StageId[] = ['match', 'optimize', 'preferences', 'finish'];
   const stageDone: Record<StageId, boolean> = {
-    match: mappingDone,
+    match: matchDone,
     optimize: optimizerDone,
     preferences: settingsDone,
     finish: false,
@@ -179,10 +188,7 @@ const ImportOverviewScreen = () => {
     [connectionId],
   );
 
-  const receiptCases = useMemo(
-    () => classifyMatch((suggestions || []) as any, platformName).cases,
-    [suggestions, platformName],
-  );
+  const receiptCases = matchCases;
   const flaggedIds = useMemo(
     () => new Set(receiptCases.flatMap((c) => c.itemIds || [])),
     [receiptCases],
@@ -313,7 +319,7 @@ const ImportOverviewScreen = () => {
           icon: 'puzzle',
           glyph: 'puzzle-outline',
           title: 'Match',
-          upSub: `${reviewCount} quick question${reviewCount === 1 ? '' : 's'}`,
+          upSub: matchCases.length === 0 ? 'All matched · nothing to review' : `${matchCases.length} to review`,
           count: null,
           heroSub: '',
           ctaSub: '',
