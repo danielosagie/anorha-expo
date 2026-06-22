@@ -26,7 +26,7 @@ const matchResults = {
       {
         productIndex: 0,
         originalTargetImage: 'https://picsum.photos/seed/target0/300/300',
-        serpApiData: [
+        matchRows: [
           { title: 'Organic Coconut Oil 32oz', thumbnail: 'https://picsum.photos/seed/c1/200', link: 'https://amazon.com', source: 'amazon.com' },
           { title: 'Cold Pressed Coconut Oil', thumbnail: 'https://picsum.photos/seed/c2/200', link: 'https://ebay.com', source: 'ebay.com' },
           { title: 'Virgin Coconut Oil Jar', thumbnail: 'https://picsum.photos/seed/c3/200', link: 'https://walmart.com', source: 'walmart.com' },

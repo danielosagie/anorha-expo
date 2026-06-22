@@ -29,7 +29,7 @@ import type { CartItem, ItemStage, LegacyBulkItem } from '../../../features/cart
 import type { QuickMatchSelection } from '../types';
 
 type SetState<T> = T | ((prev: T) => T);
-type QuickScanStore = Record<string, { matchData: any; serpApiData: any[] }>;
+type QuickScanStore = Record<string, { matchData: any; matchRows: any[] }>;
 type ConfirmedMap = Record<string, QuickMatchSelection>;
 type StageMap = Record<string, ItemStage>;
 

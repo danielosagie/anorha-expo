@@ -131,7 +131,7 @@ export type AppStackParamList = {
       itemIds?: string[];
       bulkItems?: any[];
       confirmedQuickMatchByItemId?: Record<string, {
-        serpApiData: any[];
+        matchRows: any[];
         preSelectedIndices: number[];
         source?: 'quick_scan_auto' | 'quick_scan_confirmed';
         confidence?: number;
@@ -221,7 +221,7 @@ export type AppStackParamList = {
           productIndex: number;
           productId: string;
           variantId: string;
-          serpApiData: Array<{
+          matchRows: Array<{
             position?: number;
             title?: string;
             link?: string;
@@ -286,7 +286,7 @@ export type AppStackParamList = {
           originalTargetImage: string;
           timing: {
             quickScanMs: number;
-            serpApiMs: number;
+            matchMs: number;
             embeddingMs: number;
             vectorSearchMs: number;
             rerankingMs: number;

@@ -20,8 +20,8 @@ export interface ShelfFolderSheetProps {
   label?: string;
   sourcePhotoUri?: string;
   items: LegacyBulkItem[];
-  quickScanStore?: Record<string, { matchData?: any; serpApiData?: any[] }>;
-  confirmedQuickMatchByItemId?: Record<string, { serpApiData?: any[]; preSelectedIndices?: number[] }>;
+  quickScanStore?: Record<string, { matchData?: any; matchRows?: any[] }>;
+  confirmedQuickMatchByItemId?: Record<string, { matchRows?: any[]; preSelectedIndices?: number[] }>;
   itemLoadingStates?: Record<string, { isLoading?: boolean; stage?: string; error?: string }>;
   onBack: () => void;
   onUngroup: () => void;
@@ -53,9 +53,13 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
     const loading = itemLoadingStates[id];
     if (loading?.isLoading) return { kind: 'scanning', text: loading.stage || 'Scanning…' };
     const confirmed = confirmedQuickMatchByItemId[id];
-    if (confirmed?.serpApiData && confirmed.preSelectedIndices?.length) {
-      const c: any = confirmed.serpApiData[confirmed.preSelectedIndices[0]];
-      return { kind: 'matched', text: 'Match found', price: money(c?.price), title: c?.title, image: c?.imageUrl || c?.image };
+    const selectedIdx = confirmed?.preSelectedIndices?.[0];
+    const selectedRow: any =
+      typeof selectedIdx === 'number' && Array.isArray(confirmed?.matchRows)
+        ? confirmed.matchRows[selectedIdx]
+        : undefined;
+    if (selectedRow) {
+      return { kind: 'matched', text: 'Match found', price: money(selectedRow?.price), title: selectedRow?.title, image: selectedRow?.imageUrl || selectedRow?.image };
     }
     const qs = quickScanStore[id];
     const cands = qs?.matchData?.rankedCandidates;

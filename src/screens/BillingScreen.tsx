@@ -46,25 +46,49 @@ function formatCurrency(value: number): string {
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
+// Raw usage keys → plain-English, transparent labels. Deliberately contains NO internal
+// tool/vendor names (model providers, search/scrape services, …) so none can be recovered
+// from the shipped bundle. Unknown keys are bucketed by generic intent words below, and the
+// raw key is never humanized into the UI (it could carry an internal name).
+const FEATURE_LABELS: Record<string, string> = {
+  ai_quick_scan: 'Photo scans',
+  product_photo_scan: 'Photo scans',
+  ai_recognize_match: 'Product matching',
+  auto_match: 'Product matching',
+  auto_match_products: 'Product matching',
+  product_search: 'Product matching',
+  ebay_pricing_research: 'Price research',
+  ebay_pricing: 'Price research',
+  ai_text_generation: 'Listing details',
+  web_research: 'Web research',
+  ai_shipping_vision: 'Shipping estimates',
+  shipping_vision: 'Shipping estimates',
+  ai_insight_generation: 'Business insights',
+  ai_receipt_parsing: 'Receipt scans',
+  ai_manifest_analysis: 'Manifest scans',
+  ai_liquidation_research: 'Clearout research',
+  sync: 'Inventory sync',
+  import: 'Product imports',
+  export: 'Product exports',
+};
+
 function getFeatureDisplayName(key: string): string {
-  const displayNames: Record<string, string> = {
-    ai_quick_scan: 'Photo Scan',
-    ai_recognize_match: 'Auto-Match',
-    ai_generate_groq: 'AI Generation',
-    ai_generate_scrape_credits: 'Web Research',
-    ai_insight_generation: 'Insights',
-    ai_receipt_parsing: 'Receipt Processing',
-    ai_manifest_analysis: 'Manifest Analysis',
-    ai_liquidation_research: 'Liquidation Research',
-    ebay_pricing_research: 'eBay Pricing Research',
-    ai_shipping_vision: 'Shipping Vision',
-    match_serpapi_search: 'Product Search',
-    generation_firecrawl: 'Web Scraping',
-    sync: 'Inventory Sync',
-    import: 'Product Import',
-    export: 'Product Export',
-  };
-  return displayNames[key] || key.replace(/^ai_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const norm = String(key || '').toLowerCase().trim();
+  if (FEATURE_LABELS[norm]) return FEATURE_LABELS[norm];
+  // Unknown key — bucket by generic intent (no tool/vendor names) so nothing internal leaks.
+  if (/ship/.test(norm)) return 'Shipping estimates'; // before vision: "shipping_vision_*" is shipping
+  if (/(scrape|crawl|web|research|search)/.test(norm)) return 'Web research';
+  if (/(generat|text|writ|caption)/.test(norm)) return 'Listing details';
+  if (/(vision|photo|scan|image)/.test(norm)) return 'Photo scans';
+  if (/(match|recogni)/.test(norm)) return 'Product matching';
+  if (/(pric|comp)/.test(norm)) return 'Price research';
+  if (/(sync|import|export|inventory)/.test(norm)) return 'Inventory sync';
+  if (/insight/.test(norm)) return 'Business insights';
+  if (/receipt/.test(norm)) return 'Receipt scans';
+  if (/manifest/.test(norm)) return 'Manifest scans';
+  if (/(liquidat|clearout)/.test(norm)) return 'Clearout research';
+  // Never humanize the raw key (it may carry an internal name) — generic label instead.
+  return 'AI usage';
 }
 
 const HealthBar = ({ used, limit, fillColor }: { used: number, limit: number, fillColor: string }) => {
@@ -212,17 +236,26 @@ export default function BillingScreen() {
 
   const featureUsage = summary?.usage || {};
   const featureEntries = Object.entries(featureUsage || {});
-  const usageHistoryEntries = featureEntries
-    .map(([key, value]: [string, any]) => {
+  // Group by the friendly label (always derived from the key, never the backend's raw
+  // displayName) so vendor names can't leak and synonyms collapse into one clean line.
+  const usageHistoryEntries = Object.values(
+    featureEntries.reduce((acc, [key, value]: [string, any]) => {
       const totalCostCents = safeNumber(value?.totalCost ?? value?.total_cost ?? value?.total_cost_cents);
       const totalQuantity = safeNumber(
         value?.totalQuantity ?? value?.total_quantity ?? value?.quantity ?? value?.count
       );
-      const displayName = value?.displayName || getFeatureDisplayName(key);
-      return { key, displayName, totalCostCents, totalQuantity };
-    })
-    .filter((entry) => entry.totalCostCents > 0 || entry.totalQuantity > 0)
-    .sort((a, b) => b.totalCostCents - a.totalCostCents);
+      if (totalCostCents <= 0 && totalQuantity <= 0) return acc;
+      const displayName = getFeatureDisplayName(key);
+      const existing = acc[displayName];
+      if (existing) {
+        existing.totalCostCents += totalCostCents;
+        existing.totalQuantity += totalQuantity;
+      } else {
+        acc[displayName] = { key: displayName, displayName, totalCostCents, totalQuantity };
+      }
+      return acc;
+    }, {} as Record<string, { key: string; displayName: string; totalCostCents: number; totalQuantity: number }>)
+  ).sort((a, b) => b.totalCostCents - a.totalCostCents);
 
   const totalUsageHistoryCents = usageHistoryEntries.reduce((sum, entry) => sum + entry.totalCostCents, 0);
   const aiUsedCents = summary?.ai_used_cents == null

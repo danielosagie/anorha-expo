@@ -42,8 +42,8 @@ export type ItemStage =
 export interface CartItemMatch {
   /** Full ranked candidates from the search (legacy: quickScanStore[id].matchData). */
   response?: MatchResponse;
-  /** Raw marketplace/serp rows backing the candidates (legacy: quickScanStore[id].serpApiData). */
-  serpApiData?: any[];
+  /** Raw marketplace/serp rows backing the candidates (legacy: quickScanStore[id].matchRows). */
+  matchRows?: any[];
   /** The auto/user-confirmed selection (legacy: confirmedQuickMatchByItemId[id]). */
   confirmed?: QuickMatchSelection;
   /** Contract-typed per-product result from the orchestrate-match pipeline (src/contracts). */

@@ -45,9 +45,9 @@ type Candidate = {
 
 type MatchResult = {
   productIndex: number;
-  serpApiData?: Candidate[];
+  matchRows?: Candidate[];
   rerankedResults?: Array<{
-    serpApiIndex?: number;
+    matchRowIndex?: number;
     score?: number;
     title?: string;
     link?: string;
@@ -73,7 +73,7 @@ const getToken = async () => ensureSupabaseJwt();
 
 function reorderCandidates(result?: MatchResult | null): Candidate[] {
   if (!result) return [];
-  const base = Array.isArray(result.serpApiData) ? result.serpApiData : [];
+  const base = Array.isArray(result.matchRows) ? result.matchRows : [];
   const reranked = Array.isArray(result.rerankedResults) ? result.rerankedResults : [];
   if (!base.length || !reranked.length) return base;
 
@@ -81,9 +81,9 @@ function reorderCandidates(result?: MatchResult | null): Candidate[] {
   const used = new Set<number>();
 
   reranked.forEach((item) => {
-    if (typeof item?.serpApiIndex === 'number' && base[item.serpApiIndex]) {
-      ordered.push(base[item.serpApiIndex]);
-      used.add(item.serpApiIndex);
+    if (typeof item?.matchRowIndex === 'number' && base[item.matchRowIndex]) {
+      ordered.push(base[item.matchRowIndex]);
+      used.add(item.matchRowIndex);
     }
   });
 
@@ -491,13 +491,13 @@ export default function MatchSelectionScreen({ route }: { route: ScreenRoute }) 
   } : null;
   const jobsModalItems = useMemo(() => {
     return results.map((result, index) => {
-      const top = result?.rerankedResults?.[0] || result?.serpApiData?.[0];
+      const top = result?.rerankedResults?.[0] || result?.matchRows?.[0];
       const topImage = (top as any)?.thumbnail || (top as any)?.image;
       return {
         index,
         title: top?.title || `Item ${index + 1}`,
         thumb: result?.originalTargetImage || topImage || '',
-        matchesCount: Array.isArray(result?.serpApiData) ? result.serpApiData.length : 0,
+        matchesCount: Array.isArray(result?.matchRows) ? result.matchRows.length : 0,
       };
     });
   }, [results]);

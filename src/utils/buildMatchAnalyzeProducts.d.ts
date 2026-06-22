@@ -2,7 +2,7 @@ export function buildMatchAnalyzeProducts(
   publicImageUrls: string[],
   itemsForAnalyze?: Array<{ id: string }>,
   quickMatchHintsByItemId?: Record<string, {
-    serpApiData: any[];
+    matchRows: any[];
     preSelectedIndices: number[];
     source?: 'quick_scan_auto' | 'quick_scan_confirmed';
     confidence?: number;
