@@ -4937,7 +4937,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       <ListingsReadyCard
         visible={!!listingsReady}
         count={listingsReady?.count ?? 1}
-        onReview={() => { setListingsReady(null); }}
+        onReview={() => {
+          setListingsReady(null);
+          // ListingsReadyCard and the bulk items sheet are sibling Modals; presenting
+          // in the same tick batches them (see openBulkItemsSheet note). Defer so the
+          // ready card dismisses first, then open the review surface.
+          setTimeout(() => openBulkItemsSheet(), 280);
+        }}
         onDismiss={() => setListingsReady(null)}
       />
     </GestureHandlerRootView>
