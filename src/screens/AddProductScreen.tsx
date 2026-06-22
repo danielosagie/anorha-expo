@@ -406,12 +406,12 @@ const shouldAutoSelectQuickMatch = ({
 
 const getSelectedQuickMatchCandidate = (
   matchInfo?: QuickMatchSelection | null,
-  store?: { matchData: MatchResponse; serpApiData: any[] } | null,
+  store?: { matchData: MatchResponse; matchRows: any[] } | null,
 ) => {
-  if (matchInfo && Array.isArray(matchInfo.serpApiData) && matchInfo.preSelectedIndices?.length) {
+  if (matchInfo && Array.isArray(matchInfo.matchRows) && matchInfo.preSelectedIndices?.length) {
     const selectedIndex = matchInfo.preSelectedIndices[0];
     return {
-      candidate: matchInfo.serpApiData[selectedIndex] ?? null,
+      candidate: matchInfo.matchRows[selectedIndex] ?? null,
       isConfirmed: true,
     };
   }
@@ -448,7 +448,7 @@ const rankedCandidatesToQuickMatchHintCandidates = (candidates: MatchCandidate[]
 const getLocalInventoryCandidateForItem = (
   itemId: string,
   confirmedQuickMatchByItemId: Record<string, QuickMatchSelection>,
-  quickScanStore: Record<string, { matchData: MatchResponse; serpApiData: any[] }>,
+  quickScanStore: Record<string, { matchData: MatchResponse; matchRows: any[] }>,
 ) => {
   const confirmedCandidate = getSelectedQuickMatchCandidate(
     confirmedQuickMatchByItemId[itemId],
@@ -464,7 +464,7 @@ const getLocalInventoryCandidateForItem = (
     return rankedLocalMatch as any;
   }
 
-  return quickScanStore[itemId]?.serpApiData?.find((candidate: any) => candidate?.isLocalMatch) ?? null;
+  return quickScanStore[itemId]?.matchRows?.find((candidate: any) => candidate?.isLocalMatch) ?? null;
 };
 
 const getConnectedPlatformKeys = (platformLocations: Array<{ platformType?: string }>) => (
@@ -777,9 +777,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     const chosenIdx = confirmed?.preSelectedIndices?.[0] ?? 0;
     const matchedCandidate: any = candidates[chosenIdx] || candidates[0];
     const chosen: any =
-      (confirmed?.serpApiData && confirmed.serpApiData[chosenIdx]) || matchedCandidate;
+      (confirmed?.matchRows && confirmed.matchRows[chosenIdx]) || matchedCandidate;
     // pricingResearch (the instant livePricing seed AND the enriched sold comps) is stored on the
-    // matchData ranked candidate — NOT on confirmed.serpApiData. For an AUTO-CONFIRMED match `chosen`
+    // matchData ranked candidate — NOT on confirmed.matchRows. For an AUTO-CONFIRMED match `chosen`
     // is the confirmed entry, which has no pricingResearch → without this fallback pricingLoading
     // stays true forever ("Finding comps…" that never resolves, even though the price is right here).
     const pr: any = chosen?.pricingResearch ?? matchedCandidate?.pricingResearch ?? candidates[0]?.pricingResearch;
@@ -844,8 +844,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
     setQuickScanStore((prev) => ({
       ...prev,
-      'dev-single-1': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'h1', title: 'Sony WH-1000XM5 Wireless Headphones', price: 248, imageUrl: 'https://picsum.photos/seed/sonym/120' } as any] }, serpApiData: [] },
-      'dev-single-2': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'sw1', title: 'Nintendo Switch OLED', price: 299, imageUrl: 'https://picsum.photos/seed/switchm/120' } as any] }, serpApiData: [] },
+      'dev-single-1': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'h1', title: 'Sony WH-1000XM5 Wireless Headphones', price: 248, imageUrl: 'https://picsum.photos/seed/sonym/120' } as any] }, matchRows: [] },
+      'dev-single-2': { matchData: { systemAction: 'show_single_match', confidence: 'high', totalMatches: 1, rankedCandidates: [{ id: 'sw1', title: 'Nintendo Switch OLED', price: 299, imageUrl: 'https://picsum.photos/seed/switchm/120' } as any] }, matchRows: [] },
     }));
     setIsBulkMode(true);
     if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
@@ -1018,7 +1018,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           const candidates = rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates);
           setConfirmedQuickMatchByItemId((prev) => ({
             ...prev,
-            [id]: { serpApiData: candidates, preSelectedIndices: [0], source: 'quick_scan_confirmed' },
+            [id]: { matchRows: candidates, preSelectedIndices: [0], source: 'quick_scan_confirmed' },
           }));
         }
         showNotificationMessage('Added to cart');
@@ -1088,7 +1088,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               const qs = quickScanStore[child.id];
               if (qs?.matchData?.rankedCandidates?.length) {
                 next[child.id] = {
-                  serpApiData: rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates),
+                  matchRows: rankedCandidatesToQuickMatchHintCandidates(qs.matchData.rankedCandidates),
                   preSelectedIndices: [0],
                   source: 'quick_scan_confirmed',
                 };
@@ -1484,8 +1484,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     spinRotation.value = 0;
   }, [progressWidth, spinRotation]);
 
-  // Transform quick-scan ranked candidates to serpApiData for MatchSelection overrides
-  const candidatesToSerpApiData = useCallback((candidates: Array<{
+  // Transform quick-scan ranked candidates to matchRows for MatchSelection overrides
+  const candidatesToMatchRows = useCallback((candidates: Array<{
     id: string;
     title?: string;
     description?: string;
@@ -2009,7 +2009,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                       rankedCandidates: res.matches,
                       totalMatches: res.matches.length,
                     },
-                    serpApiData: res.matches,
+                    matchRows: res.matches,
                   },
                 }));
 
@@ -2025,7 +2025,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setConfirmedQuickMatchByItemId((prev) => ({
                     ...prev,
                     [itemId]: {
-                      serpApiData: quickMatchHintCandidates,
+                      matchRows: quickMatchHintCandidates,
                       preSelectedIndices: [0],
                       source: 'quick_scan_auto',
                       confidence: res.confidence === 'high' ? 0.9 : 0.6,
@@ -2159,7 +2159,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     rankedCandidates: res.matches,
                     totalMatches: res.matches.length,
                   },
-                  serpApiData: res.matches.map((match: any) => ({ ...match, queryKey: newQuery })),
+                  matchRows: res.matches.map((match: any) => ({ ...match, queryKey: newQuery })),
                 },
               }));
               // Drop the previously confirmed/auto-selected match so the fresh results actually
@@ -2983,12 +2983,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
 
         // Update store
-        const serpApiDataForItem = candidatesToSerpApiData(nextMatchData.rankedCandidates as any);
+        const matchRowsForItem = candidatesToMatchRows(nextMatchData.rankedCandidates as any);
         const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(nextMatchData.rankedCandidates);
         setQuickScanStore(prev => {
           const updated = {
             ...prev,
-            [itemId]: { matchData: nextMatchData, serpApiData: serpApiDataForItem }
+            [itemId]: { matchData: nextMatchData, matchRows: matchRowsForItem }
           };
           return updated;
         });
@@ -3029,7 +3029,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return {
             ...prev,
             [itemId]: {
-              serpApiData: quickMatchHintCandidates,
+              matchRows: quickMatchHintCandidates,
               preSelectedIndices: [0],
               source: 'quick_scan_auto',
               confidence: rerankerMeta?.confidence,
@@ -3180,7 +3180,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   }, [
     uploadImageToSupabase,
-    candidatesToSerpApiData,
+    candidatesToMatchRows,
     quickScanStore,
     showNotificationMessage,
     isAutoScanning,
@@ -3321,13 +3321,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
     const store = quickScanStore[id];
-    if (!store || !Array.isArray(store.serpApiData) || store.serpApiData.length === 0) {
+    if (!store || !Array.isArray(store.matchRows) || store.matchRows.length === 0) {
       showNotificationMessage('No quick matches available for this item.', 2000);
       return;
     }
     (navigation as any).navigate('MatchSelectionScreen', {
       overrideResults: [
-        { productIndex: 0, serpApiData: store.serpApiData }
+        { productIndex: 0, matchRows: store.matchRows }
       ],
       overrideFocusIndex: 0,
       isNewScan: true
@@ -3441,7 +3441,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (!cur?.matchData?.rankedCandidates?.length) return prev;
           const keep = (c: any) => !c?.isLocalMatch && !c?.inInventory;
           const filtered = cur.matchData.rankedCandidates.filter(keep);
-          return { ...prev, [itemId]: { ...cur, matchData: { ...cur.matchData, rankedCandidates: filtered, totalMatches: filtered.length }, serpApiData: (cur.serpApiData || []).filter(keep) } };
+          return { ...prev, [itemId]: { ...cur, matchData: { ...cur.matchData, rankedCandidates: filtered, totalMatches: filtered.length }, matchRows: (cur.matchRows || []).filter(keep) } };
         });
         showNotificationMessage('Will add as a new product.', 1800);
       },

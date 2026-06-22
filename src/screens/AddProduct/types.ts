@@ -49,7 +49,7 @@ export interface MatchResponse {
 export type { SubmitMatchJobResponse as JobResponse } from '../../contracts';
 
 export type QuickMatchSelection = {
-  serpApiData: any[];
+  matchRows: any[];
   preSelectedIndices: number[];
   source?: 'quick_scan_auto' | 'quick_scan_confirmed';
   confidence?: number;

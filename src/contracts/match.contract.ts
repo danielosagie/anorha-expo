@@ -62,7 +62,7 @@ export const zRerankedResult = z
     rank: z.number(),
     score: z.number(),
     /** Index into the original SerpAPI results array. */
-    serpApiIndex: z.number(),
+    matchRowIndex: z.number(),
     title: z.string(),
     link: z.string(),
     imageUrl: z.string().optional(),
@@ -86,7 +86,7 @@ export type RerankedResult = z.infer<typeof zRerankedResult>;
 /** Per-tier timing the processor emits — the eval harness derives tier/cost from this. */
 export const zMatchTiming = z.object({
   quickScanMs: z.number(),
-  serpApiMs: z.number(),
+  matchMs: z.number(),
   embeddingMs: z.number(),
   vectorSearchMs: z.number(),
   rerankingMs: z.number(),
@@ -130,7 +130,7 @@ export const zUserAssist = z.object({
         imageUrl: z.string().optional(),
         price: z.union([z.string(), z.number()]).optional(),
         link: z.string().optional(),
-        serpApiIndex: z.number().optional(),
+        matchRowIndex: z.number().optional(),
       }),
     )
     .optional(),
@@ -152,7 +152,7 @@ export const zVlmAnalysis = z.object({
   vlmModel: z.string().optional(),
   fallbackUsed: z.boolean().optional(),
   fallbackReason: z.string().optional(),
-  timings: z.object({ scoutMs: z.number().optional(), geminiMs: z.number().optional() }).optional(),
+  timings: z.object({ scoutMs: z.number().optional(), visionMs: z.number().optional() }).optional(),
 });
 export type VlmAnalysis = z.infer<typeof zVlmAnalysis>;
 
@@ -179,14 +179,14 @@ export const zMatchJobResult = z.object({
   productId: z.string(),
   variantId: z.string(),
   /** Full SerpAPI response (intentionally untyped — provider-shaped). */
-  serpApiData: z.any(),
+  matchRows: z.any(),
   rerankedResults: z.array(zRerankedResult),
   confidence: z.enum(['high', 'medium', 'low']),
   vectorSearchFoundResults: z.boolean(),
   originalTargetImage: z.string(),
   processingTimeMs: z.number(),
   timing: zMatchTiming,
-  matchSource: z.enum(['ebay', 'serpapi']).optional(),
+  matchSource: z.enum(['ebay', 'web']).optional(),
   matchDecision: zMatchDecision.optional(),
   matchDecisionReason: z.string().optional(),
   processingState: zMatchProcessingState.optional(),

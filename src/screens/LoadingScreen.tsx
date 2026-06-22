@@ -48,7 +48,7 @@ type MatchResult = {
     prompt?: string;
     requestId?: string;
   };
-  serpApiData?: any[];
+  matchRows?: any[];
   rerankedResults?: any[];
   skipToGenerate?: boolean;
   autoGenerateJobId?: string;
@@ -135,7 +135,7 @@ const isAssistRequired = (result: MatchResult | null | undefined, allowEmptyFall
   if (String(result.matchDecision || '').toLowerCase() === 'needs_user_input') return true;
   if (String(result.processingState || '').toLowerCase() === 'awaiting_user_input') return true;
   if (!allowEmptyFallback) return false;
-  const candidates = Array.isArray(result.serpApiData) ? result.serpApiData : [];
+  const candidates = Array.isArray(result.matchRows) ? result.matchRows : [];
   const reranked = Array.isArray(result.rerankedResults) ? result.rerankedResults : [];
   return candidates.length === 0 && reranked.length === 0;
 };
@@ -362,13 +362,13 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     if (sourceBulk.length > 0) {
       return sourceBulk.map((item: any, index: number) => {
         const result = results[index];
-        const top = result?.rerankedResults?.[0] || result?.serpApiData?.[0];
+        const top = result?.rerankedResults?.[0] || result?.matchRows?.[0];
         const firstPhoto = Array.isArray(item?.photos) ? item.photos[0] : null;
         return {
           index,
           title: top?.title || item?.title || `Item ${index + 1}`,
           thumb: toPhotoUri(firstPhoto),
-          matchesCount: Array.isArray(result?.serpApiData) ? result.serpApiData.length : 0,
+          matchesCount: Array.isArray(result?.matchRows) ? result.matchRows.length : 0,
         };
       });
     }
@@ -376,12 +376,12 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     const sourcePhotos = Array.isArray(payloadRef.current?.firstPhotos) ? payloadRef.current?.firstPhotos : [];
     return sourcePhotos.map((photo: any, index: number) => {
       const result = results[index];
-      const top = result?.rerankedResults?.[0] || result?.serpApiData?.[0];
+      const top = result?.rerankedResults?.[0] || result?.matchRows?.[0];
       return {
         index,
         title: top?.title || `Item ${index + 1}`,
         thumb: toPhotoUri(photo),
-        matchesCount: Array.isArray(result?.serpApiData) ? result.serpApiData.length : 0,
+        matchesCount: Array.isArray(result?.matchRows) ? result.matchRows.length : 0,
       };
     });
   }, []);
@@ -409,8 +409,8 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
 
     const fallback = [
       result?.originalTargetImage,
-      result?.serpApiData?.[0]?.image,
-      result?.serpApiData?.[0]?.thumbnail,
+      result?.matchRows?.[0]?.image,
+      result?.matchRows?.[0]?.thumbnail,
       result?.rerankedResults?.[0]?.image,
       result?.rerankedResults?.[0]?.thumbnail,
     ].filter((uri) => typeof uri === 'string' && uri.length > 0);
@@ -743,24 +743,24 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ route, navigation }) => {
     if (bulkItems.length > 0) {
       return bulkItems.map((item: any, index: number) => {
         const firstPhoto = Array.isArray(item?.photos) ? item.photos[0] : null;
-        const top = results[index]?.rerankedResults?.[0] || results[index]?.serpApiData?.[0];
+        const top = results[index]?.rerankedResults?.[0] || results[index]?.matchRows?.[0];
         return {
           index,
           title: top?.title || item?.title || `Item ${index + 1}`,
           thumb: toPhotoUri(firstPhoto),
-          matchesCount: Array.isArray(results[index]?.serpApiData) ? results[index].serpApiData.length : 0,
+          matchesCount: Array.isArray(results[index]?.matchRows) ? results[index].matchRows.length : 0,
         };
       });
     }
 
     if (firstPhotos.length > 0) {
       return firstPhotos.map((photo: any, index: number) => {
-        const top = results[index]?.rerankedResults?.[0] || results[index]?.serpApiData?.[0];
+        const top = results[index]?.rerankedResults?.[0] || results[index]?.matchRows?.[0];
         return {
           index,
           title: top?.title || `Item ${index + 1}`,
           thumb: toPhotoUri(photo),
-          matchesCount: Array.isArray(results[index]?.serpApiData) ? results[index].serpApiData.length : 0,
+          matchesCount: Array.isArray(results[index]?.matchRows) ? results[index].matchRows.length : 0,
         };
       });
     }

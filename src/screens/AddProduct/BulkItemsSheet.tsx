@@ -47,7 +47,7 @@ export const BulkItemsSheet: React.FC<{
   sheetTranslateY: any;
   jobResponse: JobResponse | null;
   navigation: any;
-  quickScanStore?: Record<string, { matchData: MatchResponse; serpApiData: any[] }>;
+  quickScanStore?: Record<string, { matchData: MatchResponse; matchRows: any[] }>;
   onOpenQuickMatches?: (itemId: string) => void;
   onOpenItemPreview?: (itemId: string) => void;
   cartTree?: CartTreeNode[];
@@ -144,8 +144,8 @@ export const BulkItemsSheet: React.FC<{
   const cartSubtotal = displayItems.reduce((sum, it) => {
     const conf = confirmedQuickMatchByItemId?.[it.id];
     const qs = quickScanStore?.[it.id];
-    const cand: any = (conf?.serpApiData && conf.preSelectedIndices?.length)
-      ? conf.serpApiData[conf.preSelectedIndices[0]]
+    const cand: any = (conf?.matchRows && conf.preSelectedIndices?.length)
+      ? conf.matchRows[conf.preSelectedIndices[0]]
       : qs?.matchData?.rankedCandidates?.[0];
     return sum + (extractPrice(cand?.price) ?? 0) * ((it as any).quantity ?? 1);
   }, 0);
@@ -228,8 +228,8 @@ export const BulkItemsSheet: React.FC<{
     const firstByKey = new Map<string, string>();
     for (const it of displayItems) {
       const mi = confirmedQuickMatchByItemId?.[it.id];
-      const confirmed = (mi && mi.serpApiData && mi.preSelectedIndices && mi.preSelectedIndices.length > 0)
-        ? mi.serpApiData[mi.preSelectedIndices[0]]
+      const confirmed = (mi && mi.matchRows && mi.preSelectedIndices && mi.preSelectedIndices.length > 0)
+        ? mi.matchRows[mi.preSelectedIndices[0]]
         : null;
       const m: any = confirmed || quickScanStore?.[it.id]?.matchData?.rankedCandidates?.[0];
       if (!m) continue;
@@ -336,7 +336,7 @@ export const BulkItemsSheet: React.FC<{
       targetItems.forEach(item => {
         if (item.preSelectedSource) {
           mergedConfirmedQuickMatch[item.id] = {
-            serpApiData: [item.preSelectedSource],
+            matchRows: [item.preSelectedSource],
             preSelectedIndices: [0],
             source: 'quick_scan_confirmed',
           };
@@ -360,10 +360,10 @@ export const BulkItemsSheet: React.FC<{
         const selectedCandidate = (
           isUsableSource &&
           selectedIndex != null &&
-          Array.isArray(confirmedMatch.serpApiData) &&
-          confirmedMatch.serpApiData[selectedIndex]
+          Array.isArray(confirmedMatch.matchRows) &&
+          confirmedMatch.matchRows[selectedIndex]
         )
-          ? confirmedMatch.serpApiData[selectedIndex]
+          ? confirmedMatch.matchRows[selectedIndex]
           : null;
         const imageUrls = item.photos.map((photo) => photo.uri).filter(Boolean);
         const fallbackId = item.id || `quick-generate-${index}`;
@@ -733,8 +733,8 @@ export const BulkItemsSheet: React.FC<{
                     const hasQuickScanData = quickScanStore?.[item.id];
                     const matchCount = hasQuickScanData?.matchData?.totalMatches || 0;
                     const topMatch = hasQuickScanData?.matchData?.rankedCandidates?.[0];
-                    const confirmedMatch = (matchInfo && matchInfo.serpApiData && matchInfo.preSelectedIndices && matchInfo.preSelectedIndices.length > 0)
-                      ? matchInfo.serpApiData[matchInfo.preSelectedIndices[0]]
+                    const confirmedMatch = (matchInfo && matchInfo.matchRows && matchInfo.preSelectedIndices && matchInfo.preSelectedIndices.length > 0)
+                      ? matchInfo.matchRows[matchInfo.preSelectedIndices[0]]
                       : null;
                     const selectedMatch = confirmedMatch || topMatch;
                     const selectedMatchImage = selectedMatch?.imageUrl || selectedMatch?.image || null;
@@ -940,8 +940,8 @@ export const BulkItemsSheet: React.FC<{
               {savedItems.map((sItem) => {
                 const sConf = confirmedQuickMatchByItemId?.[sItem.id];
                 const sQs = quickScanStore?.[sItem.id];
-                const sCand: any = (sConf?.serpApiData && sConf.preSelectedIndices?.length)
-                  ? sConf.serpApiData[sConf.preSelectedIndices[0]]
+                const sCand: any = (sConf?.matchRows && sConf.preSelectedIndices?.length)
+                  ? sConf.matchRows[sConf.preSelectedIndices[0]]
                   : sQs?.matchData?.rankedCandidates?.[0];
                 const sThumb = sCand?.imageUrl || sCand?.image || sItem.photos.find((p: CapturedPhoto) => p.isCover)?.uri || sItem.photos[0]?.uri;
                 const sTitle = sCand?.title || sItem.title || 'Saved item';
