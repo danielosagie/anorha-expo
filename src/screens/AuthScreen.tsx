@@ -7,7 +7,7 @@ import Button from '../components/Button';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSignIn, useSignUp, useSSO } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp, useSSO, useAuth, useClerk } from '@clerk/clerk-expo';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';
@@ -444,7 +444,25 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
   const { signIn, isLoaded: isSignInLoaded, setActive: signInSetActive } = useSignIn();
   const { signUp, isLoaded: isSignUpLoaded, setActive: signUpSetActive } = useSignUp();
   const { startSSOFlow } = useSSO();
+  const { isSignedIn } = useAuth();
+  const clerk = useClerk();
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  // "You're already signed in" (Clerk `session_exists`) means THIS device already holds
+  // an active session — not a remote/other device. Recovery is to activate the existing
+  // session so the root navigator (which gates on isSignedIn) routes into the app.
+  const activateExistingSession = useCallback(async () => {
+    try {
+      const existing = clerk?.session?.id ?? clerk?.client?.sessions?.[0]?.id ?? null;
+      if (existing) {
+        await clerk.setActive({ session: existing });
+        return true;
+      }
+    } catch (e) {
+      log.error('[AuthScreen] activateExistingSession failed:', e);
+    }
+    return false;
+  }, [clerk]);
 
   const handleGoogleSignIn = useCallback(async () => {
     setGoogleLoading(true);
@@ -476,6 +494,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
 
     log.debug('[AuthScreen] handleAuth called. isLogin:', isLogin);
 
+    // If this device already holds an active Clerk session, there is nothing to sign into:
+    // a fresh signIn.create() would be rejected with `session_exists`. Surface the existing
+    // session so the root navigator (gated on isSignedIn) routes into the app. Do this before
+    // field validation so a stranded-but-signed-in user can recover even with empty inputs.
+    if (isLogin && isSignedIn) {
+      log.debug('[AuthScreen] Already signed in; activating existing session instead of signIn.create');
+      await activateExistingSession();
+      return;
+    }
 
     // Validate all fields first
     if (!validateAllFields()) {
@@ -556,7 +583,17 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
         }
       }
     } catch (error: any) {
-      if (error.errors && error.errors[0]?.message) {
+      // A Clerk session already exists on THIS device (code `session_exists` /
+      // "You're already signed in") — NOT a remote/other-device session. Clerk nests this
+      // under error.errors[0], so handle it BEFORE the generic field/modal handling below
+      // (which previously surfaced it as a scary "Sign In Failed"). Recover by activating
+      // the existing session so the root navigator routes into the app.
+      const clerkCode = error?.errors?.[0]?.code ?? error?.code;
+      const clerkMsg = error?.errors?.[0]?.message ?? error?.message ?? '';
+      if (clerkCode === 'session_exists' || /already signed in/i.test(clerkMsg)) {
+        log.debug('[AuthScreen] session_exists — activating existing Clerk session');
+        await activateExistingSession();
+      } else if (error.errors && error.errors[0]?.message) {
         const msg = error.errors[0].message;
         const longMsg = error.errors[0].longMessage || msg;
 
@@ -572,8 +609,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
             'error'
           );
         }
-      } else if (error.message?.includes('already signed in')) {
-        log.debug('Already signed in');
       } else {
         showErrorModal(
           'Something Went Wrong',
@@ -584,7 +619,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
-  }, [isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, signInSetActive, signUpSetActive, navigation, validateAllFields, showErrorModal]);
+  }, [isLogin, email, password, firstName, lastName, isSignInLoaded, isSignUpLoaded, signIn, signUp, signInSetActive, signUpSetActive, navigation, validateAllFields, showErrorModal, isSignedIn, activateExistingSession]);
 
   const handleForgotPassword = useCallback(async () => {
     if (!email) {

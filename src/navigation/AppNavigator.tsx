@@ -9,7 +9,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 // import { Camera } from 'lucide-react-native';
 import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth, useClerk } from '@clerk/clerk-expo';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
 import { ActivityIndicator, View, Text, StyleSheet } from 'react-native';
 import { Asset } from 'expo-asset';
@@ -643,6 +643,7 @@ SplashScreen.preventAutoHideAsync();
 
 const AppNavigator = () => {
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
+  const clerk = useClerk();
   const session = React.useContext(SessionContext);
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(true);
@@ -749,6 +750,21 @@ const AppNavigator = () => {
               log.error('[AuthContext] Sign out error:', e);
             }
           }
+          // The benign "origin" error above is swallowed as success, but it can leave a
+          // dangling Clerk session in SecureStore — which strands the user on the login
+          // screen and triggers "You're already signed in" on the next sign-in attempt.
+          // Verify the session actually cleared and force it once more if it survived.
+          try {
+            if (clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0) {
+              log.debug('[AuthContext] Clerk session survived signOut; forcing clear');
+              await clerk.signOut();
+            }
+          } catch (verifyErr: any) {
+            const vMsg = verifyErr?.message || String(verifyErr);
+            if (!vMsg.includes('signed out') && !vMsg.includes('origin')) {
+              log.error('[AuthContext] Forced session clear failed:', verifyErr);
+            }
+          }
         }
       } finally {
         // Tear down the Supabase bridge AFTER attempting Clerk sign-out so we don't
@@ -767,7 +783,7 @@ const AppNavigator = () => {
         log.debug(e);
       }
     }
-  }), [clerkSignOut]); // Remove navigation dependency
+  }), [clerkSignOut, clerk]); // Remove navigation dependency
 
   const onboardingCheckContextValue = React.useMemo(() => ({
     retryOnboardingCheck: () => {
