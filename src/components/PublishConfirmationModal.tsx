@@ -138,11 +138,12 @@ export default function PublishConfirmationModal({
         <Modal
             visible={visible}
             transparent={true}
-            animationType="fade"
+            animationType="slide"
             onRequestClose={onClose}
         >
             <View style={styles.backdrop}>
                 <View style={styles.container}>
+                    <View style={styles.grabber} />
                     <View style={styles.header}>
                         <View>
                             <Text style={styles.title}>Review & Publish</Text>
@@ -302,24 +303,37 @@ export default function PublishConfirmationModal({
 const styles = StyleSheet.create({
     backdrop: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20
+        backgroundColor: 'rgba(0,0,0,0.45)',
+        justifyContent: 'flex-end',
+        alignItems: 'stretch',
+        padding: 0
+    },
+    grabber: {
+        alignSelf: 'center',
+        width: 40,
+        height: 5,
+        borderRadius: 999,
+        backgroundColor: '#E5E7EB',
+        marginTop: 8,
+        marginBottom: 2,
     },
     container: {
         backgroundColor: '#fff',
-        borderRadius: 24,
+        borderTopLeftRadius: 26,
+        borderTopRightRadius: 26,
+        borderBottomLeftRadius: 0,
+        borderBottomRightRadius: 0,
         width: '100%',
-        maxHeight: '85%',
+        maxHeight: '90%',
+        paddingBottom: 28,
         shadowColor: "#000",
         shadowOffset: {
             width: 0,
-            height: 10,
+            height: -4,
         },
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-        elevation: 10,
+        shadowOpacity: 0.12,
+        shadowRadius: 16,
+        elevation: 12,
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column'

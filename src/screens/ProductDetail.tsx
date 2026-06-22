@@ -12,6 +12,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from '../components/PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
+import FieldRow from '../components/ListingEditor/FieldRow';
+import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import BottomActionBar from '../components/BottomActionBar';
 import { CameraView } from 'expo-camera';
 import Card from '../components/Card';
@@ -43,6 +45,20 @@ const log = createLogger('ProductDetail');
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
+
+// Compact relative time for the Active Listings status rows ("2h ago", "3d ago").
+const relTime = (ms: number): string => {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'just now';
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+};
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
@@ -218,7 +234,13 @@ const ProductDetailScreen = observer(
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
     const insets = useSafeAreaInsets();
-    const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+    // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
+    // Saved/Saving…/Unsaved/Retry chip is the only save model now, so the scroll
+    // content no longer needs to clear an 80px action bar.
+    const bottomSafePadding = insets.bottom + 28;
+    // Overview (read-only summary, the mockup's landing) vs Edit (the field form).
+    // Edit mode is the existing screen verbatim, so no functionality is lost.
+    const [mode, setMode] = useState<'overview' | 'edit'>('overview');
 
     // 🚨 DEBUG: Intercept all fetch calls from this component
     React.useEffect(() => {
@@ -258,7 +280,7 @@ const ProductDetailScreen = observer(
         const productImages = obs?.productImages$?.get?.() ?? {};
         const forVariant = Object.values(productImages).filter((img: any) => img.ProductVariantId === detailedItem.Id);
         if (forVariant.length > 0) {
-          return forVariant.sort((a: any, b: any) => (a.Position ?? 0) - (b.Position ?? 0)).map((img: any) => img.ImageUrl);
+          return forVariant.sort((a: any, b: any) => (a.Position ?? 0) - (b.Position ?? 0)).map((img: any) => img.ImageUrl).filter((u: any): u is string => typeof u === 'string' && u.trim().length > 0);
         }
       } catch { /* Legend may not be ready */ }
       return detailedItem?.PrimaryImageUrl ? [detailedItem.PrimaryImageUrl] : [];
@@ -381,6 +403,8 @@ const ProductDetailScreen = observer(
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Quiet "Saved" confirmation that fades out ~5s after the last save (no persistent badge).
+    const savedOpacity = useRef(new Animated.Value(0)).current;
     const editVersionRef = useRef(0);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
@@ -509,6 +533,25 @@ const ProductDetailScreen = observer(
     const [updateCounter, setUpdateCounter] = useState(0);
     const [displayedPlatforms, setDisplayedPlatforms] = useState<Record<string, any>>({});
     const [, forceUpdate] = useState({});
+
+    // Seed a canonical platform from detailedItem the moment we have the product, so the
+    // Edit form is NEVER blank when Overview already shows Title/Price/Description. The full
+    // hydration effect (variants/inventory/per-platform) still runs and overlays its data on
+    // top — the spread order below lets that real data win once it arrives.
+    useEffect(() => {
+        if (!detailedItem) return;
+        const hasCanonical = Object.values(displayedPlatforms).some(
+            (p: any) => p && (p.title || p.price != null || p.description),
+        );
+        if (hasCanonical) return;
+        try {
+            const canonical = createCanonicalBase(detailedItem as any);
+            setDisplayedPlatforms(prev => ({ ...prev, shopify: { ...canonical, ...(prev.shopify || {}) } }));
+        } catch (e) {
+            log.warn('[ProductDetail] canonical seed failed', e);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailedItem?.Id]);
     const lastHydratedItemRef = useRef<string | null>(null);
     const lastSavedRef = useRef<string>('');
 
@@ -547,6 +590,36 @@ const ProductDetailScreen = observer(
     const [clearoutLoading, setClearoutLoading] = useState(false);
     const [clearoutBusy, setClearoutBusy] = useState<string | null>(null);
     const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
+    // Campaigns this product is currently IN (the "In a campaign" overview card).
+    const [productCampaigns, setProductCampaigns] = useState<Array<{ id: string; title: string; soldCount?: number; totalCount?: number }>>([]);
+    const loadedProductCampaignsRef = useRef<string | null>(null);
+
+    // Determine which active campaigns this product belongs to (once per product, deferred,
+    // capped). Checks each active campaign's items for this variant/product id.
+    useEffect(() => {
+      const variantId = detailedItem?.Id;
+      const productId = (detailedItem as any)?.ProductId;
+      if (!variantId || loadedProductCampaignsRef.current === variantId) return;
+      loadedProductCampaignsRef.current = variantId;
+      let cancelled = false;
+      (async () => {
+        try {
+          const all = await campaignAdapter.listCampaigns().catch(() => []);
+          const active = (all || []).filter((c: any) => ['active', 'waiting_user', 'paused'].includes(c.status)).slice(0, 15);
+          const matches: Array<{ id: string; title: string; soldCount?: number; totalCount?: number }> = [];
+          await Promise.all(active.map(async (c: any) => {
+            try {
+              const items = await campaignAdapter.getCampaignItems(c.id);
+              const inIt = (items || []).some((it: any) => it.productId === variantId || (productId && it.productId === productId));
+              if (inIt) matches.push({ id: c.id, title: c.title, soldCount: c.stats?.soldCount, totalCount: c.stats?.totalCount });
+            } catch { /* skip this campaign */ }
+          }));
+          if (!cancelled) setProductCampaigns(matches);
+        } catch { /* ignore — card just won't show */ }
+      })();
+      return () => { cancelled = true; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailedItem?.Id]);
 
     const openClearout = useCallback(async () => {
       setActionMenuVisible(false);
@@ -1459,11 +1532,37 @@ const ProductDetailScreen = observer(
         }
       });
 
+      // Also surface every platform the PRODUCT is enabled on (On{Platform}), even without a
+      // connected account, so the seller can set price/stock for each enabled channel — not
+      // just Shopify.
+      const enabledFlags: Record<string, boolean> = {
+        shopify: !!(detailedItem as any)?.OnShopify,
+        square: !!(detailedItem as any)?.OnSquare,
+        clover: !!(detailedItem as any)?.OnClover,
+        amazon: !!(detailedItem as any)?.OnAmazon,
+        ebay: !!(detailedItem as any)?.OnEbay,
+        facebook: !!(detailedItem as any)?.OnFacebook,
+      };
+      Object.entries(enabledFlags).forEach(([platform, on]) => {
+        if (!on) return;
+        if (locsByPlatform[platform] && locsByPlatform[platform].length > 0) return;
+        const conn = connections.find(c => c.PlatformType?.toLowerCase() === platform);
+        const label = platform.charAt(0).toUpperCase() + platform.slice(1);
+        const connectionName = conn?.DisplayName || `${label}`;
+        locsByPlatform[platform] = [{
+          id: conn ? `default-${conn.Id}` : `default-${platform}`,
+          name: `${connectionName} Inventory`,
+          connectionId: conn?.Id ?? '',
+          connectionName,
+          platformType: platform,
+        }];
+      });
+
       log.debug('[ProductDetail] buildPlatformLocations result:',
         Object.entries(locsByPlatform).map(([p, locs]) => `${p}: ${locs.length} locations`).join(', '));
 
       return locsByPlatform;
-    }, [allPlatformLocations, connections, groupedInventory, platformLocationNames]);
+    }, [allPlatformLocations, connections, groupedInventory, platformLocationNames, detailedItem]);
 
     // Auto-save function with proper API call
     // Note: Pricing validation is flexible - either flat price OR all variants have prices
@@ -1617,6 +1716,20 @@ const ProductDetailScreen = observer(
         }
       };
     }, [hasUnsavedChanges, isSaving, saveError, performAutoSave]);
+
+    // Show a quiet "Saved" then fade it out after 5s of no changes. While saving or with
+    // unsaved edits it stays hidden (the header shows "Saving…" instead).
+    useEffect(() => {
+      if (isSaving || hasUnsavedChanges || saveError || lastSaveTime <= 0) {
+        savedOpacity.setValue(0);
+        return;
+      }
+      savedOpacity.setValue(1);
+      const hideTimer = setTimeout(() => {
+        Animated.timing(savedOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start();
+      }, 5000);
+      return () => clearTimeout(hideTimer);
+    }, [lastSaveTime, isSaving, hasUnsavedChanges, saveError, savedOpacity]);
 
     // Restore a previous saved version as the working draft (R3 versions UI).
     const restoreDraftVersion = useCallback(async (versionId: string) => {
@@ -3798,13 +3911,190 @@ const ProductDetailScreen = observer(
     }
 
 
+    // Read-only Overview summary (the mockup's landing). Tapping any detail row, or
+    // the header "Edit details" toggle, switches to the full field form (edit mode).
+    const renderOverviewSummary = () => {
+      const imgs = (editorImages || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+      const cover = imgs[0];
+      const thumbs = imgs.slice(1, 4);
+      const priceNum = Number(detailedItem!.Price);
+      const priceText = Number.isFinite(priceNum) && priceNum > 0 ? `$${priceNum.toFixed(2)}` : '—';
+      const realVariants = (allProductVariants || []).filter((v: any) => String(v?.VariantType || '').toLowerCase() !== 'base');
+      const sizeCount = realVariants.length;
+      const stockByVariant: Record<string, number> = {};
+      (rawInventoryLevels || []).forEach((l: any) => {
+        const id = l?.ProductVariantId;
+        if (!id) return;
+        stockByVariant[id] = (stockByVariant[id] || 0) + (Number(l?.Quantity) || 0);
+      });
+      const totalStock = (rawInventoryLevels || []).reduce((s: number, l: any) => s + (Number(l?.Quantity) || 0), 0);
+      const canon: any = (displayedPlatforms as any)?.shopify || Object.values(displayedPlatforms || {})[0] || {};
+      const categoryText = canon.categoryPath || canon.category || canon.productCategory || null;
+
+      // Tapping any read row jumps into Edit mode and opens that field's sheet.
+      const openInEdit = (field: string) => {
+        setMode('edit');
+        setTimeout(() => listingEditorRef.current?.openFieldSheet(field), 140);
+      };
+      const tagsArr = Array.isArray(canon.tags) ? canon.tags : (Array.isArray(detailedItem!.Tags) ? (detailedItem!.Tags as any) : []);
+      const photosCount = imgs.length;
+      // Gray meta after the big price (price is shown on its own, not in this line).
+      const metaGray: string[] = [];
+      if (totalStock > 0) metaGray.push(`${totalStock} in stock`);
+      if (sizeCount > 1) metaGray.push(`${sizeCount} sizes`);
+      const priceStockSummary = `${priceText}${totalStock > 0 ? ` · ${totalStock}` : ''}`;
+
+      // One read row: dark label (left) · gray value (right) · chevron. Tap → edit.
+      const ovRow = (label: string, value: string | null, placeholder: string, field: string, isLast?: boolean) => (
+        <TouchableOpacity style={[styles.ovDetailRow, !isLast && styles.ovDetailDivider]} activeOpacity={0.6} onPress={() => openInEdit(field)}>
+          <Text style={styles.ovDetailLabel} numberOfLines={1}>{label}</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={[styles.ovDetailValue, !value && styles.ovDetailValueEmpty]} numberOfLines={1}>{value || placeholder}</Text>
+          <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      );
+
+      return (
+        <View>
+          {/* Product card — hero, thumbs, title, price, description */}
+          <View style={styles.ovProductCard}>
+            {cover ? (
+              <Image source={{ uri: cover }} style={styles.ovHero} />
+            ) : (
+              <View style={[styles.ovHero, styles.ovHeroEmpty]}>
+                <Icon name="image-outline" size={32} color="#C4C8CE" />
+              </View>
+            )}
+            {thumbs.length > 0 && (
+              <View style={styles.ovThumbRow}>
+                {thumbs.map((u: string, i: number) => (
+                  <Image key={`${u}-${i}`} source={{ uri: u }} style={styles.ovThumb} />
+                ))}
+              </View>
+            )}
+            <Text style={styles.ovTitle}>{detailedItem!.Title || 'Untitled product'}</Text>
+            <View style={styles.ovPriceRow}>
+              <Text style={styles.ovPrice}>{priceText}</Text>
+              {metaGray.length > 0 && <Text style={styles.ovPriceMeta}>{`· ${metaGray.join(' · ')}`}</Text>}
+            </View>
+            {!!detailedItem!.Description && (
+              <Text style={styles.ovDesc} numberOfLines={3}>{detailedItem!.Description}</Text>
+            )}
+          </View>
+
+          {/* Details — key fields, tap a row to edit */}
+          <View style={styles.ovCard}>
+            <Text style={[styles.ovCardLabel, styles.ovCardLabelSolo]}>DETAILS</Text>
+            {ovRow('Price & stock', priceStockSummary, 'Set a price', 'price')}
+            {ovRow('Category', categoryText, 'Add a category', 'category')}
+            <TouchableOpacity style={[styles.ovDetailRow, styles.ovDetailDivider]} activeOpacity={0.6} onPress={() => setMode('edit')}>
+              <Text style={styles.ovDetailLabel}>Photos</Text>
+              <View style={{ flex: 1 }} />
+              <Text style={[styles.ovDetailValue, !photosCount && styles.ovDetailValueEmpty]}>{photosCount || 'Add photos'}</Text>
+              <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
+            {/* Tags — chips wrap below the label */}
+            <TouchableOpacity style={styles.ovTagsRow} activeOpacity={0.6} onPress={() => openInEdit('tags')}>
+              <Text style={styles.ovDetailLabel}>Tags</Text>
+              {tagsArr.length > 0 ? (
+                <View style={styles.ovTagsWrap}>
+                  {tagsArr.slice(0, 6).map((t: string, i: number) => (
+                    <View key={`${t}-${i}`} style={styles.ovTagChip}><Text style={styles.ovTagChipText}>{t}</Text></View>
+                  ))}
+                  {tagsArr.length > 6 && (
+                    <View style={styles.ovTagChip}><Text style={styles.ovTagChipText}>{tagsArr.length - 6}+ more</Text></View>
+                  )}
+                  <ChevronRight size={17} color="#C4C8CE" style={{ alignSelf: 'center' }} />
+                </View>
+              ) : (
+                <View style={styles.ovTagsWrap}>
+                  <Text style={[styles.ovDetailValue, styles.ovDetailValueEmpty]}>Add tags</Text>
+                  <ChevronRight size={17} color="#C4C8CE" style={{ alignSelf: 'center' }} />
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+
+          {/* Inventory — per-variant price + stock, tap to edit */}
+          {sizeCount > 0 && (
+            <TouchableOpacity activeOpacity={0.8} onPress={() => setMode('edit')} style={styles.ovCard}>
+              <View style={styles.ovInvHeader}>
+                <Text style={styles.ovCardLabel}>INVENTORY</Text>
+                <View style={styles.ovInvColHead}>
+                  <Text style={styles.ovInvColLabel}>Price</Text>
+                  <Text style={[styles.ovInvColLabel, styles.ovInvQtyCol]}>Inv</Text>
+                </View>
+              </View>
+              {realVariants.map((v: any, i: number) => {
+                const vPrice = Number(v?.Price);
+                const vPriceText = Number.isFinite(vPrice) && vPrice > 0 ? `$${vPrice.toFixed(2)}` : '—';
+                const vStock = stockByVariant[v?.Id] ?? 0;
+                const vName = v?.Title || v?.Sku || `Variant ${i + 1}`;
+                const vSku = v?.Sku || null;
+                const vImg = v?.ImageUrl || v?.Image || cover || null;
+                return (
+                  <View key={v?.Id || i} style={[styles.ovInvRow, i < realVariants.length - 1 && styles.ovInvDivider]}>
+                    {vImg ? (
+                      <Image source={{ uri: vImg }} style={styles.ovInvThumb} />
+                    ) : (
+                      <View style={[styles.ovInvThumb, styles.ovHeroEmpty]}><Icon name="image-outline" size={16} color="#C4C8CE" /></View>
+                    )}
+                    <View style={styles.ovInvNameCol}>
+                      <Text style={styles.ovInvName} numberOfLines={1}>{vName}</Text>
+                      {!!vSku && <Text style={styles.ovInvSku} numberOfLines={1}>{vSku}</Text>}
+                    </View>
+                    <Text style={styles.ovInvPrice}>{vPriceText}</Text>
+                    <Text style={[styles.ovInvStock, styles.ovInvQtyCol]}>{vStock}</Text>
+                  </View>
+                );
+              })}
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    };
+
+    // MORE DETAILS card (overview only) — long-tail fields, rendered last to match the design.
+    const renderMoreDetailsCard = () => {
+      const canon: any = (displayedPlatforms as any)?.shopify || Object.values(displayedPlatforms || {})[0] || {};
+      const condMap: Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair', used: 'Used', refurbished: 'Refurbished', for_parts: 'For Parts' };
+      const condVal = canon.condition ? (condMap[canon.condition] || canon.condition) : null;
+      const brandVal = canon.brand || canon.vendor || (detailedItem as any)?.Vendor || null;
+      const skuVal = canon.sku || detailedItem!.Sku || null;
+      const barcodeVal = canon.barcode || detailedItem!.Barcode || null;
+      const seoTitleVal = canon.seoTitle || canon.metaTitle || (detailedItem as any)?.SeoTitle || null;
+      const openInEdit = (field: string) => {
+        setMode('edit');
+        setTimeout(() => listingEditorRef.current?.openFieldSheet(field), 140);
+      };
+      const ovRow = (label: string, value: string | null, placeholder: string, field: string, isLast?: boolean) => (
+        <TouchableOpacity style={[styles.ovDetailRow, !isLast && styles.ovDetailDivider]} activeOpacity={0.6} onPress={() => openInEdit(field)}>
+          <Text style={styles.ovDetailLabel} numberOfLines={1}>{label}</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={[styles.ovDetailValue, !value && styles.ovDetailValueEmpty]} numberOfLines={1}>{value || placeholder}</Text>
+          <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      );
+      return (
+        <View style={styles.ovCard}>
+          <Text style={[styles.ovCardLabel, styles.ovCardLabelSolo]}>MORE DETAILS</Text>
+          {ovRow('Brand', brandVal, 'Add a brand', 'brand')}
+          {ovRow('Condition', condVal, 'Select condition', 'condition')}
+          {ovRow('SKU', skuVal, 'Add a SKU', 'sku')}
+          {ovRow('Barcode', barcodeVal, 'Add or scan', 'barcode')}
+          {ovRow('SEO title', seoTitleVal, 'Add an SEO title', 'seoTitle', true)}
+        </View>
+      );
+    };
+
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
         {/* Non-blocking notification banner */}
         {bannerMessage && (
           <TouchableOpacity
             activeOpacity={bannerClickable ? 0.7 : 1}
-            onPress={bannerClickable ? scrollToFirstChangedField : undefined}
+            onPress={bannerClickable ? () => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => scrollToFirstChangedField(), 80); } else { scrollToFirstChangedField(); } } : undefined}
             disabled={!bannerClickable}
           >
             <Animated.View
@@ -3812,14 +4102,15 @@ const ProductDetailScreen = observer(
                 styles.notificationBanner,
                 {
                   opacity: bannerOpacity,
-                  backgroundColor: bannerClickable ? BRAND_PRIMARY + 'E6' : theme.colors.primary + 'E6', // Green for clickable
+                  borderColor: bannerClickable ? '#93C822' : '#E5E7EB',
                 }
               ]}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                <Text style={styles.notificationBannerText}>{bannerMessage}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: bannerClickable ? '#93C822' : '#71717A' }} />
+                <Text style={styles.notificationBannerText} numberOfLines={2}>{bannerMessage}</Text>
                 {bannerClickable && (
-                  <Icon name="arrow-down" size={16} color="#fff" />
+                  <Text style={styles.notificationBannerReview}>Review</Text>
                 )}
               </View>
             </Animated.View>
@@ -3832,8 +4123,10 @@ const ProductDetailScreen = observer(
         >
 
 
-          {/* Listing editor (edit mode) */}
+          {/* Overview = read table of all details (tap a row to edit); Edit = full form. */}
           <Card shadow="none" style={styles.basicSection}>
+            {mode === 'overview' && renderOverviewSummary()}
+            {mode === 'edit' && (
             <ListingEditorForm
               ref={listingEditorRef}
               platforms={displayedPlatforms}
@@ -3845,11 +4138,11 @@ const ProductDetailScreen = observer(
                 // any prior save error so autosave re-arms.
                 editVersionRef.current += 1;
                 setSaveError(null);
-                setDisplayedPlatforms(next);
                 setHasUnsavedChanges(true)
-                log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
-                // DEEP merge: preserve all existing fields while updating changed ones
-                // This preserves user edits AND keeps all loaded backend data
+                // DEEP merge ONLY (no eager setDisplayedPlatforms(next) — that made the
+                // functional updater below receive the PARTIAL `next` as prev, so a
+                // category-only partial write collapsed state to just those fields and
+                // wiped every other platform/field. The merge here reads the true full prev.
                 updatePlatforms(prev => {
                   const merged = { ...prev };
                   for (const [platformKey, platformData] of Object.entries(next)) {
@@ -3953,182 +4246,134 @@ const ProductDetailScreen = observer(
               onGeneratePlatform={handleGeneratePlatform}
               generatingPlatformKeys={generatingPlatformKeys}
             />
+            )}
 
-            {/* Active Listings */}
-            <Card shadow="none" style={styles.platformsSection}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Active Listings</Text>
+            {/* Active Channels — gray card with a white inner list (UJK-0) */}
+            <View style={styles.channelsCard}>
+              <View style={styles.channelsHeader}>
+                <Text style={styles.channelsTitle}>Active Channels</Text>
+                <TouchableOpacity style={styles.channelsManagePill} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                  <Text style={styles.channelsManageText}>Manage</Text>
+                </TouchableOpacity>
+              </View>
 
-              {mappings.length > 0 ? (
-                <>
+              {(mappings.length > 0 || unpublishedPlatforms.length > 0 || partnerships.length > 0 || productCampaigns.length > 0) ? (
+                <View style={styles.channelsInner}>
                   {mappings.map((mapping) => {
                     const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
                     const rawType = connection?.PlatformType || 'unknown';
-                    // capitalize first letter
                     const typeLabel = rawType.charAt(0).toUpperCase() + rawType.slice(1);
-
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
-                    const platformType = rawType;
-                    const lastSyncedAt = mapping.LastSyncedAt || null;
-                    const parsedSyncMs = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
+                    const parsedSyncMs = mapping.LastSyncedAt ? new Date(mapping.LastSyncedAt).getTime() : 0;
                     const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
+                    const statusColor = isStale ? '#BA7517' : '#16A34A';
+                    const statusText = isStale
+                      ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
+                      : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
                     return (
-                      <View key={mapping.Id} style={styles.platformRow}>
-                        <View style={styles.platformInfo}>
-                          <View style={styles.platformLogoContainer}>
-                            <PlatformLogo type={platformType} size={18} fallbackIcon="store" />
-                          </View>
-                          <View style={styles.platformDetails}>
-                            <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformName}</Text>
-                            <Text style={[styles.platformStatus, { color: theme.colors.text }]}>Status: {mapping.SyncStatus || 'Connected'}</Text>
-                            <Text style={[styles.platformStatus, { color: isStale ? '#B45309' : theme.colors.textSecondary }]}>
-                              Last synced: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Unavailable'}
-                              {isStale ? ' • Stale' : ''}
-                            </Text>
+                      <View key={mapping.Id} style={styles.alRow}>
+                        <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.alName} numberOfLines={1}>{platformName}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: statusColor }]} />
+                            <Text style={[styles.alStatusText, { color: statusColor }]} numberOfLines={1}>{statusText}</Text>
                           </View>
                         </View>
-                        <TouchableOpacity
-                          style={styles.delistButton}
-                          onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}
-                        >
-                          <Icon name="archive-outline" size={16} color={theme.colors.text} style={{ marginRight: 6 }} />
-                          <Text style={[styles.delistButtonText, { color: theme.colors.text }]}>Delist</Text>
+                        <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
+                          <Text style={styles.alActionOutlineText}>Delist</Text>
                         </TouchableOpacity>
                       </View>
                     );
                   })}
 
-                  {/* Unpublished platforms - ready to publish */}
-                  {unpublishedPlatforms.length > 0 && (
-                    <>
-                      <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 12, marginBottom: 8 }}>
-                        Ready to publish:
-                      </Text>
-                      {unpublishedPlatforms.map((platform) => {
-                        const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
-                        const isCurrentlyPublishing = isPublishing === platform;
+                  {unpublishedPlatforms.map((platform) => {
+                    const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
+                    const isCurrentlyPublishing = isPublishing === platform;
+                    return (
+                      <View key={platform} style={styles.alRow}>
+                        <View style={styles.alLogo}>{getPlatform(platform) ? <PlatformLogo type={platform} size={20} /> : <Icon name="store" size={20} color={BRAND_PRIMARY} />}</View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.alName} numberOfLines={1}>{platformLabel}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: '#9CA3AF' }]} />
+                            <Text style={[styles.alStatusText, { color: '#71717A' }]}>Connected · not listed</Text>
+                          </View>
+                        </View>
+                        <TouchableOpacity style={styles.alActionGreen} onPress={() => handlePublishToPlatform(platform)} disabled={isCurrentlyPublishing}>
+                          {isCurrentlyPublishing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.alActionGreenText}>Publish</Text>}
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
 
-                        return (
-                          <View key={platform} style={[styles.platformRow, { backgroundColor: '#FFFDF4', borderRadius: 8, marginBottom: 4 }]}>
-                            <View style={styles.platformInfo}>
-                              <View style={[styles.platformLogoContainer, { backgroundColor: '#ffffffff' }]}>
-                                {getPlatform(platform) ? (
-                                  <PlatformLogo type={platform} size={18} />
-                                ) : (
-                                  <Icon name="store" size={18} color={BRAND_PRIMARY} />
-                                )}
-                              </View>
-                              <View style={styles.platformDetails}>
-                                <Text style={[styles.platformName, { color: theme.colors.text }]}>{platformLabel}</Text>
-                                <Text style={{ fontSize: 12, color: BRAND_PRIMARY }}>Ready to publish</Text>
-                              </View>
-                            </View>
-                            <TouchableOpacity
-                              style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 8 }]}
-                              onPress={() => handlePublishToPlatform(platform)}
-                              disabled={isCurrentlyPublishing}
-                            >
-                              {isCurrentlyPublishing ? (
-                                <ActivityIndicator size="small" color="#fff" />
-                              ) : (
-                                <>
-                                  <Icon name="rocket-launch-outline" size={14} color="#fff" style={{ marginRight: 6 }} />
-                                  <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>Publish</Text>
-                                </>
-                              )}
+                  {partnerships.map((partnership) => {
+                    const isLoading = partnershipActionLoading === partnership.inviteId || partnershipActionLoading === partnership.linkId;
+                    return (
+                      <View key={partnership.inviteId} style={styles.alRow}>
+                        <View style={styles.alLogo}><Icon name="account-group-outline" size={20} color={partnership.isShared ? BRAND_PRIMARY : '#9CA3AF'} /></View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.alName} numberOfLines={1}>{partnership.partnerOrgName}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: partnership.isShared ? '#16A34A' : '#9CA3AF' }]} />
+                            <Text style={[styles.alStatusText, { color: partnership.isShared ? '#16A34A' : '#71717A' }]} numberOfLines={1}>{partnership.isShared ? 'Shared' : 'Not shared'} · {partnership.poolName}</Text>
+                          </View>
+                        </View>
+                        {isLoading ? (
+                          <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 8 }} />
+                        ) : partnership.isShared ? (
+                          partnership.canRevoke && partnership.linkId ? (
+                            <TouchableOpacity style={styles.alActionOutline} onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}>
+                              <Text style={styles.alActionOutlineText}>Remove</Text>
                             </TouchableOpacity>
+                          ) : (
+                            <View style={styles.alActionGhost}><Text style={styles.alActionGhostText}>Shared</Text></View>
+                          )
+                        ) : (
+                          <TouchableOpacity style={styles.alActionGreen} onPress={() => shareWithPartner(partnership.inviteId)}>
+                            <Text style={styles.alActionGreenText}>Share</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
+
+                  {productCampaigns.map((c) => {
+                    const soldText = (typeof c.soldCount === 'number' && typeof c.totalCount === 'number')
+                      ? `${c.soldCount} of ${c.totalCount} sold`
+                      : 'Active';
+                    return (
+                      <TouchableOpacity key={c.id} style={styles.alRow} activeOpacity={0.7} onPress={() => (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: c.id, entryPoint: 'detail' })}>
+                        <View style={[styles.alLogo, styles.channelCampaignLogo]}><Icon name="sprout-outline" size={20} color="#5D7E16" /></View>
+                        <View style={styles.alInfo}>
+                          <Text style={styles.channelCampaignLabel}>IN A CAMPAIGN</Text>
+                          <Text style={styles.alName} numberOfLines={1}>{c.title}</Text>
+                          <View style={styles.alStatusLine}>
+                            <View style={[styles.alDot, { backgroundColor: '#5D7E16' }]} />
+                            <Text style={[styles.alStatusText, { color: '#71717A' }]} numberOfLines={1}>{soldText}</Text>
                           </View>
-                        );
-                      })}
-                    </>
-                  )}
-
-                  {/* Partner Sharing Section */}
-                  {partnerships.length > 0 && (
-                    <>
-                      <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 16, marginBottom: 8 }}>
-                        Partner Sharing:
-                      </Text>
-                      {partnerships.map((partnership) => {
-                        const isLoading = partnershipActionLoading === partnership.inviteId || partnershipActionLoading === partnership.linkId;
-
-                        return (
-                          <View
-                            key={partnership.inviteId}
-                            style={[
-                              styles.platformRow,
-                              {
-                                backgroundColor: partnership.isShared ? '#ffffffff' : '#F9FAFB',
-                                borderRadius: 8,
-                                marginBottom: 4,
-                              },
-                            ]}
-                          >
-                            <View style={styles.platformInfo}>
-                              <View style={styles.platformLogoContainer}>
-                                <Icon name="account-group-outline" size={18} color={partnership.isShared ? BRAND_PRIMARY : '#FFF'} />
-                              </View>
-                              <View style={styles.platformDetails}>
-                                <Text style={[styles.platformName, { color: theme.colors.text }]} numberOfLines={1}>
-                                  {partnership.partnerOrgName}
-                                </Text>
-                                <Text style={{ fontSize: 12, color: partnership.isShared ? BRAND_PRIMARY : theme.colors.textSecondary }}>
-                                  {partnership.isShared ? 'Shared' : 'Not shared'} • {partnership.poolName}
-                                </Text>
-                              </View>
-                            </View>
-
-                            {isLoading ? (
-                              <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 12 }} />
-                            ) : partnership.isShared ? (
-                              partnership.canRevoke && partnership.linkId ? (
-                                <TouchableOpacity
-                                  style={[styles.delistButton, { backgroundColor: '#DC2626', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 6 }]}
-                                  onPress={() => revokeFromPartner(partnership.linkId!, partnership.partnerOrgName)}
-                                >
-                                  <Icon name="link-off" size={14} color="#ffffffff" style={{ marginRight: 4 }} />
-                                  <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Remove</Text>
-                                </TouchableOpacity>
-                              ) : (
-                                <View style={[styles.delistButton, { backgroundColor: '#E0E7FF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}>
-                                  <Icon name="check" size={14} color={BRAND_PRIMARY} style={{ marginRight: 4 }} />
-                                  <Text style={{ color: '#ffffffff', fontWeight: '500', fontSize: 13 }}>Shared</Text>
-                                </View>
-                              )
-                            ) : (
-                              <TouchableOpacity
-                                style={[styles.syncButton, { backgroundColor: BRAND_PRIMARY, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6 }]}
-                                onPress={() => shareWithPartner(partnership.inviteId)}
-                              >
-                                <Icon name="share-variant-outline" size={14} color="#fff" style={{ marginRight: 4 }} />
-                                <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Share</Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        );
-                      })}
-                    </>
-                  )}
-
-                  <TouchableOpacity
-                    style={styles.addPlatformRow}
-                    onPress={() => listingEditorRef.current?.openPlatformPicker?.()}
-                  >
-                    <Icon name="plus" size={16} color={theme.colors.textSecondary} style={{ marginRight: 8 }} />
-                    <Text style={[styles.addPlatformText, { color: theme.colors.textSecondary }]}>Add Platform</Text>
-                  </TouchableOpacity>
-                </>
+                        </View>
+                        <ChevronRight size={18} color="#9CA3AF" />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               ) : (
-                <View style={styles.noPlatformsContainer}>
-                  <Text style={[styles.noPlatformsText, { color: theme.colors.textSecondary }]}>No active listings</Text>
-                  <TouchableOpacity onPress={() => listingEditorRef.current?.openPlatformPicker?.()} style={[styles.syncButton, { backgroundColor: theme.colors.primary, marginTop: 8 }]}>
-                    <Text style={{ color: '#fff', fontWeight: '600' }}>+ Add Platform</Text>
-                  </TouchableOpacity>
+                <View style={styles.channelsInner}>
+                  <View style={[styles.alRow, { borderBottomWidth: 0 }]}>
+                    <Text style={styles.noPlatformsText}>Not listed anywhere yet</Text>
+                  </View>
                 </View>
               )}
-            </Card>
 
+              <TouchableOpacity style={styles.channelsAddRow} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                <Icon name="plus" size={16} color="#9CA3AF" style={{ marginRight: 4 }} />
+                <Text style={styles.alAddText}>Add a channel</Text>
+              </TouchableOpacity>
+            </View>
 
-
+            {/* More details — long-tail fields, last card (overview only) */}
+            {mode === 'overview' && renderMoreDetailsCard()}
 
           </Card>
         </ScrollView>
@@ -4144,25 +4389,40 @@ const ProductDetailScreen = observer(
             />
           </View>
           <View style={styles.glassHeaderRow}>
-            <TouchableOpacity style={styles.navCircle} onPress={navigation.goBack} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.navCircle}
+              onPress={() => { if (mode === 'edit') { setMode('overview'); } else { navigation.goBack(); } }}
+              activeOpacity={0.85}
+            >
               <ChevronLeft size={22} color="#18181B" />
             </TouchableOpacity>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {isSaving ? (
-                <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '600' }}>Saving…</Text>
-              ) : saveError ? (
-                <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7}>
-                  <Text style={{ color: '#DC2626', fontSize: 12, fontWeight: '700' }}>Save failed · Retry</Text>
+            {/* Centered: in overview, an "Edit details" entry. In edit, saving is implicit —
+                no "Done"; just a quiet "Saving…/Saved" that fades after 5s. Back returns here. */}
+            <View style={{ alignItems: 'center', justifyContent: 'center', minHeight: 34 }}>
+              {mode === 'overview' ? (
+                <TouchableOpacity style={styles.modeToggle} onPress={() => setMode('edit')} activeOpacity={0.85}>
+                  <Text style={styles.modeToggleText}>Edit details</Text>
                 </TouchableOpacity>
-              ) : hasUnsavedChanges ? (
-                <Text style={{ color: '#D97706', fontSize: 12, fontWeight: '600' }}>Unsaved</Text>
-              ) : lastSaveTime > 0 ? (
-                <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '600' }}>Saved</Text>
-              ) : null}
-              <TouchableOpacity onPress={() => setActionMenuVisible(true)} activeOpacity={0.85} style={styles.navCircle}>
-                <Icon name="dots-horizontal" size={22} color="#18181B" />
-              </TouchableOpacity>
+              ) : isSaving ? (
+                <View style={styles.savePill}>
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                  <Text style={[styles.savePillText, { color: theme.colors.primary }]}>Saving…</Text>
+                </View>
+              ) : saveError ? (
+                <TouchableOpacity onPress={() => performAutoSave()} activeOpacity={0.7} style={styles.savePill}>
+                  <Icon name="alert-circle-outline" size={14} color="#DC2626" />
+                  <Text style={[styles.savePillText, { color: '#DC2626' }]}>Save failed · Retry</Text>
+                </TouchableOpacity>
+              ) : (
+                <Animated.View style={[styles.savePill, { opacity: savedOpacity }]} pointerEvents="none">
+                  <Icon name="check" size={14} color={theme.colors.success} />
+                  <Text style={[styles.savePillText, { color: theme.colors.success }]}>Saved</Text>
+                </Animated.View>
+              )}
             </View>
+            <TouchableOpacity onPress={() => setActionMenuVisible(true)} activeOpacity={0.85} style={styles.navCircle}>
+              <Icon name="dots-horizontal" size={22} color="#18181B" />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -4367,16 +4627,9 @@ const ProductDetailScreen = observer(
           </View>
         </BaseModal>
 
-        {/* Sync Status Indicator */}
-        {
-          hasUnsavedChanges && (
-            <BottomActionBar
-              primaryLabel={isSaving ? 'Saving…' : 'Save changes'}
-              primaryDisabled={isSaving}
-              onPrimary={() => performAutoSave()}
-            />
-          )
-        }
+        {/* Manual "Save changes" bar intentionally removed — autosave + the header
+            chip (Saved / Saving… / Unsaved / Save failed · Retry) is the single,
+            calm save model. Retry on failure lives in that header chip. */}
         {/* Barcode Scanner Modal */}
         {
           scannerMounted && (
@@ -4420,21 +4673,30 @@ const styles = StyleSheet.create({
     top: 50,
     left: 16,
     right: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
     borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     zIndex: 9999,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
   },
   notificationBannerText: {
-    color: '#fff',
+    color: '#3F3F46',
     fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  notificationBannerReview: {
+    color: '#4A7C00',
+    fontSize: 13,
+    fontWeight: '700',
+    marginLeft: 'auto',
   },
   scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
   scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
@@ -4450,6 +4712,65 @@ const styles = StyleSheet.create({
   glassHeader: { ...GLASS_HEADER_STYLES.header },
   glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
   navCircle: { ...GLASS_HEADER_STYLES.navCircle },
+  modeToggle: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  modeToggleText: { fontSize: 14, fontWeight: '700', color: '#18181B' },
+  // Quiet, calm save status shown in edit mode (no button chrome).
+  savePill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7 },
+  savePillText: { fontSize: 13, fontWeight: '600' },
+  // Product card (hero + title + price + desc)
+  ovProductCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  ovHero: { width: '100%', height: 190, borderRadius: 14, backgroundColor: '#ECECEF' },
+  ovHeroEmpty: { alignItems: 'center', justifyContent: 'center' },
+  ovThumbRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  ovThumb: { width: 58, height: 58, borderRadius: 11, backgroundColor: '#ECECEF' },
+  ovTitle: { fontSize: 18, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827', marginTop: 13, lineHeight: 23, letterSpacing: -0.2 },
+  ovPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 7, flexWrap: 'wrap' },
+  ovPrice: { fontSize: 22, fontFamily: CHAT_FONT.bold, fontWeight: '800', color: '#111827', letterSpacing: -0.2 },
+  ovPriceMeta: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#9CA3AF' },
+  ovDesc: { fontSize: 13.5, fontFamily: CHAT_FONT.regular, fontWeight: '400', color: '#3F3F46', marginTop: 6, lineHeight: 20 },
+
+  // Section cards (inventory / details / more details)
+  ovCard: { backgroundColor: '#FFFFFF', borderRadius: 18, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  ovCardLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7 },
+  ovCardLabelSolo: { paddingTop: 14, paddingBottom: 2 },
+
+  // Inventory rows
+  ovInvHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, paddingBottom: 4 },
+  ovInvColHead: { flexDirection: 'row', alignItems: 'center' },
+  ovInvColLabel: { width: 64, textAlign: 'right', fontSize: 11.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
+  ovInvQtyCol: { width: 44 },
+  ovInvRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, gap: 11 },
+  ovInvDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  ovInvThumb: { width: 36, height: 36, borderRadius: 9, backgroundColor: '#ECECEF' },
+  ovInvNameCol: { flex: 1, minWidth: 0 },
+  ovInvName: { fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+  ovInvSku: { fontSize: 12, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#9CA3AF', marginTop: 1 },
+  ovInvPrice: { width: 64, textAlign: 'right', fontSize: 13, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
+  ovInvStock: { textAlign: 'right', fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+
+  // Detail rows (dark label · gray value · chevron)
+  ovDetailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, gap: 10 },
+  ovDetailDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F1F2F4' },
+  ovDetailLabel: { flexShrink: 0, fontSize: 15, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#111827' },
+  ovDetailValue: { fontSize: 13.5, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#6B7280', textAlign: 'right' },
+  ovDetailValueEmpty: { color: '#C4C8CE' },
+  ovTagsRow: { paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F1F2F4' },
+  ovTagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8, alignItems: 'center' },
+  ovTagChip: { backgroundColor: '#F3F4F6', borderRadius: 999, paddingHorizontal: 11, paddingVertical: 5 },
+  ovTagChipText: { fontSize: 12.5, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#3F3F46' },
+  ovSectionLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginTop: 22, marginBottom: 8, marginLeft: 4 },
   header: {
     paddingTop: 60,
     flexDirection: 'row',
@@ -4675,6 +4996,77 @@ const styles = StyleSheet.create({
     margin: 0,
     marginTop: 0,
   },
+  // Active Channels — UJK-0 gray card wrapping a white inner list (matches the Inventory card)
+  channelsCard: { marginTop: 12, backgroundColor: '#F3F4F6', borderColor: '#F1F2F4', borderWidth: 1, borderRadius: 14, padding: 12 },
+  channelsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9, paddingHorizontal: 2 },
+  channelsTitle: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#666666' },
+  channelsManagePill: { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB', borderWidth: 1, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 },
+  channelsManageText: { fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#6B7280' },
+  channelsInner: { backgroundColor: '#FFFFFF', borderRadius: 14, paddingHorizontal: 14, overflow: 'hidden' },
+  channelsAddRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 11, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', borderRadius: 13, paddingVertical: 10 },
+  channelCampaignLogo: { backgroundColor: '#93C82218' },
+  channelCampaignLabel: { fontSize: 10.5, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, marginBottom: 1 },
+  // Active Listings — Paper status-row style (logo + name + dot·status + one verb)
+  alTitle: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7, marginTop: 10, marginBottom: 4 },
+  alSubLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7, marginTop: 14, marginBottom: 4 },
+  alRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F2F4',
+  },
+  alLogo: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  alInfo: { flex: 1, minWidth: 0 },
+  alName: { fontSize: 15, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+  alStatusLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  alDot: { width: 7, height: 7, borderRadius: 4 },
+  alStatusText: { fontSize: 12.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', flexShrink: 1 },
+  alActionOutline: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+  },
+  alActionOutlineText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#6B7280' },
+  alActionGreen: {
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: BRAND_PRIMARY,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  alActionGreenText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#FFFFFF' },
+  alActionGhost: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(147,200,34,0.12)',
+  },
+  alActionGhostText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#4A7C00' },
+  alAddRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#D1D5DB',
+  },
+  alAddText: { fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
   platformRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

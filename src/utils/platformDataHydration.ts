@@ -128,6 +128,15 @@ export function normalizeForListingEditor(platformData: any): any {
     normalized.title = normalized.name;
   }
 
+  // Category bridge: generation returns a FREE-TEXT `categorySuggestion` only (no id/path).
+  // Seed the fields the form actually reads so the Category row shows the suggested text
+  // instead of a blank placeholder while the per-platform taxonomy resolver fills the real id.
+  if (normalized.categorySuggestion && !normalized.categoryPath && !normalized.category && !normalized.productCategory) {
+    normalized.categoryPath = normalized.categorySuggestion;
+    normalized.category = normalized.categorySuggestion;        // eBay/general read path
+    normalized.productCategory = normalized.categorySuggestion;  // shopify read path
+  }
+
   return normalized;
 }
 

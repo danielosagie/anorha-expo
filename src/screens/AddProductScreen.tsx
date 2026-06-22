@@ -19,6 +19,8 @@ import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
 import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
+import ListingProcessingCard from './AddProduct/ListingProcessingCard';
+import ListingsReadyCard from './AddProduct/ListingsReadyCard';
 import { useBulkItems } from './AddProduct/hooks/useBulkItems';
 import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
 import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
@@ -26,7 +28,7 @@ import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem } from '../features/cart/cartStore';
+import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri } from '../features/cart/cartStore';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import {
   View,
@@ -122,6 +124,7 @@ import {
 } from '../lib/mobileFlowLogger';
 import { buildMatchAnalyzeProducts } from '../utils/buildMatchAnalyzeProducts';
 import { safeJson } from '../utils/safeJson';
+import { notifyListingReady } from '../utils/localNotify';
 import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../lib/quickScanStream';
 import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../components/camera/ShelfScanProgressCard';
 import BottomActionBar from '../components/BottomActionBar';
@@ -924,6 +927,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               setItemStageById((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = 'generated'; }); return n; });
               // State machine: draft generated → awaiting per-item finalize.
               job.itemIds.forEach((id) => transitionItem(id, 'ready_to_list'));
+              // Listing(s) ready — if the seller has left this screen (other tab) or the app
+              // isn't active, fire a local "ready" notification. (Fully backgrounded/killed
+              // delivery needs a backend push; the poll is paused while suspended.)
+              if (!isFocusedRef.current || AppState.currentState !== 'active') {
+                void notifyListingReady(job.itemIds.length);
+              }
               genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
             }
           } else if (status === 'failed') {
@@ -1323,7 +1332,90 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // cold start isn't the dark/unfocused capture that made first scans misfire.
   const cameraReadyAtRef = useRef(0);
   const isFocused = useIsFocused();
+
+  // "Creating your listings" → "Ready to review" card flow (post-checkout).
+  const [creatingListings, setCreatingListings] = useState<{ photoUri?: string | null; count: number } | null>(null);
+  const [listingsReady, setListingsReady] = useState<{ count: number } | null>(null);
+  // "Done" hides the processing CARD but creation keeps running (so the ready card +
+  // notification still fire) — so we track dismissal separately from the creation state.
+  const [processingCardDismissed, setProcessingCardDismissed] = useState(false);
+  const listingsReadyShownRef = useRef(false);
+  const sawCreationLoadingRef = useRef(false);
+
+  // Once creation has actually started loading and then settled, swap the "Creating…" card
+  // for the "Ready to review" card (only if the seller is still here — the notification
+  // covers the away case). The sawLoading guard avoids firing before loading is observed.
+  useEffect(() => {
+    if (!creatingListings) { listingsReadyShownRef.current = false; sawCreationLoadingRef.current = false; return; }
+    const anyLoading = Object.values(itemLoadingStates || {}).some((s) => s?.isLoading);
+    if (anyLoading) { sawCreationLoadingRef.current = true; return; }
+    if (sawCreationLoadingRef.current && !listingsReadyShownRef.current) {
+      listingsReadyShownRef.current = true;
+      const anyGenerated = Object.values(itemStageById || {}).some((s) => s === 'generated');
+      const count = creatingListings.count;
+      setCreatingListings(null);
+      if (anyGenerated && isFocusedRef.current && AppState.currentState === 'active') {
+        setListingsReady({ count });
+      }
+    }
+  }, [itemLoadingStates, itemStageById, creatingListings]);
   isFocusedRef.current = isFocused;
+
+  // ── Resume where you left off (ASK, don't silently restore) ─────────────────
+  // The cart is persisted locally (autosave, armed only AFTER the resume decision so it
+  // can't clobber the saved snapshot before we read it). On first entry, if there's an
+  // unfinished session — in-memory items or a saved snapshot — we PROMPT Resume / Start
+  // fresh instead of silently restoring (or silently losing) it.
+  const resumeHandledRef = useRef(false);
+  const [resumePrompt, setResumePrompt] = useState<{ count: number; source: 'memory' | 'snapshot' } | null>(null);
+  const [snapshotArmed, setSnapshotArmed] = useState(false);
+
+  useEffect(() => {
+    if (!snapshotArmed) return;
+    const dispose = startCartSnapshotAutosave();
+    return dispose;
+  }, [snapshotArmed]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (resumeHandledRef.current) return;
+      // Explicit resume from Past Scans — the tap WAS the choice, no prompt.
+      if (sessionIdParam) { resumeHandledRef.current = true; setSnapshotArmed(true); return; }
+      let cancelled = false;
+      (async () => {
+        const inMem = selectAllItems().length;
+        if (inMem > 0) {
+          if (cancelled) return;
+          resumeHandledRef.current = true;
+          setResumePrompt({ count: inMem, source: 'memory' });
+          return;
+        }
+        const snap = await peekCartSnapshot();
+        if (cancelled) return;
+        resumeHandledRef.current = true;
+        if (snap && snap.count > 0) {
+          setResumePrompt({ count: snap.count, source: 'snapshot' });
+        } else {
+          setSnapshotArmed(true); // nothing to resume → start persisting from here
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [sessionIdParam])
+  );
+
+  useEffect(() => {
+    if (!resumePrompt) return;
+    const n = resumePrompt.count;
+    Alert.alert(
+      'Resume where you left off?',
+      `You have ${n} item${n === 1 ? '' : 's'} in progress.`,
+      [
+        { text: 'Start fresh', style: 'destructive', onPress: () => { resetCart(); void clearCartSnapshot(); setResumePrompt(null); setSnapshotArmed(true); } },
+        { text: 'Resume', onPress: () => { if (resumePrompt.source === 'snapshot') { void hydrateCartSnapshot(); } setResumePrompt(null); setSnapshotArmed(true); } },
+      ],
+      { cancelable: false },
+    );
+  }, [resumePrompt]);
 
   // Stable item ID generator to prevent key collisions
   const itemIdCounterRef = useRef(0);
@@ -2785,6 +2877,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.debug('[QUICK SCAN] Uploading image to Supabase...');
       const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
       log.debug('[QUICK SCAN] Image uploaded to:', publicImageUrl);
+
+      // Persist the uploaded URL onto the scanned item's photo so the saved scan session (and
+      // the clearout agent that reads it) get a server-readable URL instead of the device's
+      // local file:// path — otherwise add_scan_to_campaign can't open the image and the agent
+      // falls back to "send me a pic" and can't price by the item's real condition.
+      if (publicImageUrl) setItemPhotoUri(itemId, photo.id, publicImageUrl);
 
       const token = tokenMaybe;
 
@@ -4475,6 +4573,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   itemLoadingStates={itemLoadingStates}
                   setItemLoadingStates={setItemLoadingStates}
                   itemStageById={itemStageById}
+                  onListingCreationStarted={(info) => { listingsReadyShownRef.current = false; sawCreationLoadingRef.current = false; setListingsReady(null); setProcessingCardDismissed(false); setCreatingListings(info); }}
                   confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
                   connectedPlatformKeys={connectedPlatformKeys}
                   currentInstruction={currentInstruction}
@@ -4828,6 +4927,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Post-checkout: "Creating your listings" → "Ready to review" cards. */}
+      <ListingProcessingCard
+        visible={!!creatingListings && !processingCardDismissed}
+        imageUri={creatingListings?.photoUri}
+        count={creatingListings?.count ?? 1}
+        onDone={() => setProcessingCardDismissed(true)}
+      />
+      <ListingsReadyCard
+        visible={!!listingsReady}
+        count={listingsReady?.count ?? 1}
+        onReview={() => { setListingsReady(null); }}
+        onDismiss={() => setListingsReady(null)}
+      />
     </GestureHandlerRootView>
   );
 };

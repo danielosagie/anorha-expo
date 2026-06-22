@@ -28,7 +28,9 @@ import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { MappingSuggestion } from '../types/importSession';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
-import DecisionQueue from '../components/import/DecisionQueue';
+import MatchDeck from '../components/import/MatchDeck';
+import { classifyMatch, reviewDeckCases } from '../components/resolve/classifyMatch';
+import anorhaLogo from '../assets/rounded_anorha.png';
 
 // ---------------------------------------------------------------------------
 // Main screen
@@ -57,16 +59,25 @@ const MappingReviewScreen: React.FC = () => {
     isCSVImport,
     importedProducts,
     skipInitialFetch: !!isScanningEarly,
-    onNavigate: (screen, params) => navigation.navigate(screen as any, params),
+    // Completing the import must DROP the whole import flow from the stack — otherwise
+    // "back" from "Import Complete" re-enters the now-stale Match / overview screens (the
+    // messed-up stack the seller hit). Reset to Inventory with the completion screen on top.
+    onNavigate: (screen, params) =>
+      screen === 'PublishConfirmation'
+        ? navigation.reset({
+            index: 1,
+            routes: [
+              { name: 'TabNavigator' as any, params: { screen: 'Inventory' } },
+              { name: 'PublishConfirmation' as any, params },
+            ],
+          })
+        : navigation.navigate(screen as any, params),
   });
 
   const {
     suggestions,
     setSuggestions,
     importDraft,
-    draftLog,
-    recordDecision,
-    reopenDecision,
     loading,
     error,
     counts: hookCounts,
@@ -89,14 +100,43 @@ const MappingReviewScreen: React.FC = () => {
   const [queueOpen, setQueueOpen] = useState(false);
   const [autoExpanded, setAutoExpanded] = useState(false);
 
-  // Everything the lobby shows is derived from the server-built draft + the
-  // local decision log. No reason taxonomy, no client annotation.
-  const planTotal = importDraft?.units.length ?? 0;
-  const autoMatched = importDraft?.summary.autoResolved ?? 0;
-  const answered = draftLog.filter((d) => d.kind === 'answer').length;
-  const remaining = Math.max(0, planTotal - answered);
-  const answeredSkips = draftLog.filter((d) => d.kind === 'answer' && d.answer === 'skip').length;
-  const broughtInCount = autoMatched + Math.max(0, answered - answeredSkips);
+  // The lobby reads the live mapping suggestions through the same classifier the
+  // deck uses, so its "to review" count is exactly the deck's length — with no
+  // dependency on the server import-draft (which 404s on sssync-bknd and used to
+  // leave this screen stuck on "Preparing your import…").
+  const classify = useMemo(
+    () => classifyMatch((suggestions || []) as any, platformName),
+    [suggestions, platformName],
+  );
+  // "to review" must be the DECK's set, not every classified case — otherwise the intro
+  // says "49 to review" and the deck immediately shows "All caught up" (orphans/catalog
+  // items are classified but never dealt as cards). reviewDeckCases is that shared set.
+  const remaining = useMemo(
+    () => reviewDeckCases((suggestions || []) as any, platformName).length,
+    [suggestions, platformName],
+  );
+  const autoMatched = classify.autoResolved.length || (importDraft?.summary.autoResolved ?? 0);
+  const reviewed = (suggestions || []).filter((s) => s.resolved).length;
+  const planTotal = reviewed + remaining;
+  const answered = reviewed;
+  // Done-overlay tallies, read straight off the decided suggestions.
+  const broughtInCount =
+    autoMatched + (suggestions || []).filter((s) => s.resolved && s.isSelected && s.action !== 'IGNORE').length;
+  const answeredSkips = (suggestions || []).filter((s) => s.resolved && s.action === 'IGNORE').length;
+
+  // Nothing to review → land directly on the single "All reviewed" confirm summary. The
+  // separate "All set / Complete import" lobby card was a redundant extra screen on the way
+  // to the same confirm. Fire once (ref-guarded) so the overlay's "Back to review" can still
+  // dismiss it; re-arm if real review work reappears (e.g. an undo).
+  const autoDoneShownRef = useRef(false);
+  useEffect(() => {
+    if (loading || !suggestions) return;
+    if (remaining > 0) { autoDoneShownRef.current = false; return; }
+    if (!queueOpen && !doneVisible && !autoDoneShownRef.current) {
+      autoDoneShownRef.current = true;
+      setDoneVisible(true);
+    }
+  }, [loading, suggestions, remaining, queueOpen, doneVisible]);
 
   // Scan completion: react to the sync status instead of polling every 2.5s forever.
   // syncProgress comes from usePlatformConnections() — a React state value in the dep
@@ -163,11 +203,6 @@ const MappingReviewScreen: React.FC = () => {
   const updateOne = useCallback((id: string, patch: (s: MappingSuggestion) => MappingSuggestion) => {
     setSuggestions((prev) => (prev || []).map((s) => (s.platformProduct.id === id ? patch(s) : s)));
   }, [setSuggestions]);
-
-  const openSearchFor = useCallback((item: { platformProduct: { id: string } }) => {
-    setSearchSheet({ visible: true, targetId: item.platformProduct.id });
-    setSearchQuery('');
-  }, []);
 
   // ── Server-driven decision queue (GROUP → SAME → KEEP) ───────────────────────
   // Every interaction posts to the backend; the queue renders the draft it
@@ -251,32 +286,20 @@ const MappingReviewScreen: React.FC = () => {
   }
 
   // ---------------------------------------------------------------------------
-  // Render: full-screen decision queue (GROUP → SAME → KEEP) — server-driven
+  // Render: full-screen Match deck — the five-card resolver queue, one card at a
+  // time, driven by the live suggestions (classifyMatch → MatchResolver). Each
+  // decision writes back onto the suggestions and persists via /draft-mappings.
   // ---------------------------------------------------------------------------
-  if (queueOpen && importDraft) {
+  if (queueOpen) {
     return (
-      <DecisionQueue
+      <MatchDeck
         theme={theme}
         insets={insets}
-        draft={importDraft}
-        log={draftLog}
-        onRecord={recordDecision}
-        onReopen={reopenDecision}
-        onSearch={openSearchFor}
-        onClose={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); }}
-        onCommit={() => { setSearchSheet({ visible: false, targetId: null }); setQueueOpen(false); setDoneVisible(true); }}
-        searchSheet={
-          <SearchSheet
-            theme={theme}
-            visible={searchSheet.visible}
-            onClose={() => setSearchSheet({ visible: false, targetId: null })}
-            query={searchQuery}
-            onQueryChange={setSearchQuery}
-            results={searchResults}
-            loading={searchLoading}
-            onSelect={handleSearchSelect}
-          />
-        }
+        suggestions={suggestions || []}
+        platformName={platformName}
+        setSuggestions={setSuggestions}
+        onClose={() => setQueueOpen(false)}
+        onCommit={() => { setQueueOpen(false); setDoneVisible(true); }}
       />
     );
   }
@@ -295,16 +318,20 @@ const MappingReviewScreen: React.FC = () => {
       />
 
       <ScrollView contentContainerStyle={styles.contentPadding} showsVerticalScrollIndicator={false}>
-        {/* Overview — everything comes from the server-built draft */}
+        {/* Overview — what we found, derived from the live suggestions */}
         <View style={styles.overviewCard}>
-          <Icon name={remaining === 0 ? 'check-decagram' : 'view-grid-outline'} size={30} color={theme.colors.primary} />
+          <Icon name={remaining === 0 ? 'check-decagram' : 'cards-outline'} size={30} color={theme.colors.primary} />
           <Text style={[styles.overviewBig, { color: theme.colors.text }]}>
             {remaining === 0 ? 'All set' : `${remaining} to review`}
           </Text>
           <Text style={[styles.overviewSub, { color: theme.colors.textSecondary }]}>
-            {autoMatched > 0
-              ? `${autoMatched} matched automatically${remaining === 0 ? '' : ` · ${answered} of ${planTotal} decided`}`
-              : remaining === 0 ? 'Ready to import' : `${answered} of ${planTotal} decided`}
+            {remaining === 0
+              ? autoMatched > 0
+                ? `${autoMatched} matched automatically · ready to import`
+                : 'Ready to import'
+              : autoMatched > 0
+                ? `We matched ${autoMatched} on their own — the rest need a quick look`
+                : `${remaining} product${remaining === 1 ? '' : 's'} need a quick look`}
           </Text>
           {planTotal > 0 && (
             <View style={{ width: '100%', marginTop: 14 }}>
@@ -321,39 +348,17 @@ const MappingReviewScreen: React.FC = () => {
           )}
         </View>
 
-        {/* What the backend handled for you — collapsed; this is done work, not a to-do. */}
-        {importDraft && importDraft.autoResolved.length > 0 && (
-          <View style={styles.autoSection}>
-            <TouchableOpacity
-              style={styles.autoToggle}
-              onPress={() => setAutoExpanded((v) => !v)}
-              activeOpacity={0.7}
-            >
-              <Icon name="check-circle" size={18} color={theme.colors.primary} />
-              <Text style={[styles.autoToggleText, { color: theme.colors.textSecondary }]}>
-                {importDraft.autoResolved.length} matched automatically — nothing to do
-              </Text>
-              <Icon
-                name={autoExpanded ? 'chevron-up' : 'chevron-down'}
-                size={20}
-                color={theme.colors.textSecondary}
-              />
-            </TouchableOpacity>
-            {autoExpanded &&
-              importDraft.autoResolved.slice(0, 60).map((a) => (
-                <SimpleRow
-                  key={a.id}
-                  theme={theme}
-                  imageUrl={a.imageUrl}
-                  title={a.title}
-                  subtitle={`→ ${a.matchedTo?.title || a.reason}`}
-                  right={<Icon name="check-circle" size={18} color={theme.colors.primary} />}
-                />
-              ))}
+        {/* What the stage is — a few words, not a wall of text */}
+        {remaining > 0 && (
+          <View style={styles.howWrap}>
+            <Text style={[styles.howLabel, { color: theme.colors.textSecondary }]}>HOW IT WORKS</Text>
+            <HowRow theme={theme} icon="card-text-outline" text="One card per product that needs a decision" />
+            <HowRow theme={theme} icon="gesture-swipe-horizontal" text="Swipe right to accept, left to decline" />
+            <HowRow theme={theme} icon="undo-variant" text="Skip or undo anytime — nothing’s final until you finish" />
           </View>
         )}
 
-        {!importDraft && (
+        {!suggestions && (
           <View style={styles.emptyState}>
             <Icon name="cloud-search-outline" size={32} color="#D1D5DB" />
             <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>Preparing your import…</Text>
@@ -368,22 +373,13 @@ const MappingReviewScreen: React.FC = () => {
         pointerEvents="box-none"
       >
         <View style={styles.stickyRow}>
-          <TouchableOpacity
-            onPress={() => setWizardVisible(true)}
-            style={styles.stickySecondaryBtn}
-            activeOpacity={0.85}
-          >
-            <Icon name="cog-outline" size={18} color={theme.colors.textSecondary} />
-            <Text style={[styles.stickySecondaryText, { color: theme.colors.textSecondary }]}>Settings</Text>
-          </TouchableOpacity>
           {remaining > 0 ? (
             <TouchableOpacity
               onPress={openQueue}
               style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
               activeOpacity={0.85}
             >
-              <Icon name="play-circle-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.stickyPrimaryText}>Review {remaining} item{remaining === 1 ? '' : 's'}</Text>
+              <Text style={styles.stickyPrimaryText}>Start reviewing</Text>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -391,7 +387,6 @@ const MappingReviewScreen: React.FC = () => {
               style={[styles.stickyPrimaryBtn, { backgroundColor: theme.colors.primary }]}
               activeOpacity={0.85}
             >
-              <Icon name="check" size={17} color="#FFFFFF" />
               <Text style={styles.stickyPrimaryText}>Complete import</Text>
             </TouchableOpacity>
           )}
@@ -421,15 +416,6 @@ const MappingReviewScreen: React.FC = () => {
         />
       )}
 
-      <ImportWizardSheet
-        visible={wizardVisible}
-        onClose={() => setWizardVisible(false)}
-        platformName={platformName}
-        connection={connection}
-        counts={hookCounts}
-        session={session}
-        showReselectMatches={false}
-      />
     </View>
   );
 };
@@ -446,6 +432,18 @@ function Header({ title, count, onClose, theme }: { title: string; count: number
       </TouchableOpacity>
       <Text style={[styles.headerTitle, { color: theme.colors.text }]}>{title}</Text>
       <Text style={[styles.headerCount, { color: theme.colors.textSecondary }]}>{count}</Text>
+    </View>
+  );
+}
+
+// One line of "how this stage works" — icon + short text.
+function HowRow({ theme, icon, text }: { theme: any; icon: string; text: string }) {
+  return (
+    <View style={styles.howRow}>
+      <View style={styles.howIcon}>
+        <Icon name={icon} size={18} color={theme.colors.primary} />
+      </View>
+      <Text style={[styles.howRowText, { color: theme.colors.text }]}>{text}</Text>
     </View>
   );
 }
@@ -649,7 +647,7 @@ function DoneOverlay({
   return (
     <View style={[styles.doneOverlay, { backgroundColor: theme.colors.background, paddingTop: insets.top + 80 }]}>
       <View style={styles.donePlant}>
-        <Icon name="sprout-outline" size={32} color="#15803D" />
+        <Image source={anorhaLogo} style={styles.doneLogo} resizeMode="contain" />
       </View>
       <Text style={[styles.doneTitle, { color: theme.colors.text }]}>All reviewed</Text>
       <Text style={[styles.doneSub, { color: theme.colors.textSecondary }]}>
@@ -779,6 +777,37 @@ const styles = StyleSheet.create({
   },
   autoSection: {
     marginTop: 4,
+  },
+
+  // "How it works" explainer
+  howWrap: {
+    marginTop: 8,
+  },
+  howLabel: {
+    fontSize: 11,
+    letterSpacing: 0.6,
+    marginBottom: 6,
+    marginLeft: 2,
+    fontFamily: 'Inter_700Bold',
+  },
+  howRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+  },
+  howIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  howRowText: {
+    flex: 1,
+    fontSize: 14.5,
+    fontFamily: 'Inter_500Medium',
   },
   autoToggle: {
     flexDirection: 'row',
@@ -1473,6 +1502,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 22,
+  },
+  doneLogo: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
   },
   doneTitle: {
     fontSize: 26,

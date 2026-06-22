@@ -94,20 +94,36 @@ export const ConversationList = ({
   // composer — unless the seller has scrolled up to read history (showJumpToLatest).
   const prevLenRef = useRef(0);
   const prevBottomRef = useRef(contentBottomInset ?? 0);
+  const prevTailRef = useRef(0);
+  // A signal that grows as the LAST bubble streams in (text tokens, reasoning, tool steps)
+  // even though messages.length stays the same — without this we never re-pin during a
+  // response and its bottom scrolls out of view as it grows past the viewport.
+  const tailGrowth = (() => {
+    const last = messages[messages.length - 1];
+    if (!last) return 0;
+    const meta = (last.metadata ?? {}) as any;
+    const steps = Array.isArray(meta.toolSteps) ? meta.toolSteps.length : 0;
+    const reasoningLen = typeof meta.reasoning === 'string' ? meta.reasoning.length : 0;
+    return (last.content?.length ?? 0) + reasoningLen + steps * 40;
+  })();
   useEffect(() => {
     if (showJumpToLatest) {
       prevLenRef.current = messages.length;
       prevBottomRef.current = contentBottomInset ?? 0;
+      prevTailRef.current = tailGrowth;
       return;
     }
     const grew = messages.length > prevLenRef.current;
     const insetGrew = (contentBottomInset ?? 0) > prevBottomRef.current;
+    const tailGrew = tailGrowth > prevTailRef.current; // streaming tokens grew the last bubble
     prevLenRef.current = messages.length;
     prevBottomRef.current = contentBottomInset ?? 0;
-    if (grew || insetGrew) {
+    prevTailRef.current = tailGrowth;
+    if (grew || insetGrew || tailGrew) {
+      // New message → gentle animated scroll; streaming growth → instant pin (no jank).
       requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
     }
-  }, [messages, showJumpToLatest, contentBottomInset]);
+  }, [messages, showJumpToLatest, contentBottomInset, tailGrowth]);
 
   if (loading) {
     return (
@@ -159,9 +175,13 @@ export const ConversationList = ({
       </TimestampRevealContext.Provider>
 
       {showJumpToLatest && canJump ? (
-        <TouchableOpacity style={styles.jumpButton} onPress={() => listRef.current?.scrollToEnd({ animated: true })}>
-          <Icon name="arrow-down" size={14} color="#FFFFFF" />
-          <Text style={styles.jumpButtonText}>Latest</Text>
+        <TouchableOpacity
+          style={styles.jumpButton}
+          onPress={() => { setShowJumpToLatest(false); scrollToBottom(true); }}
+          activeOpacity={0.85}
+          accessibilityLabel="Jump to latest"
+        >
+          <Icon name="chevron-down" size={22} color="#18181B" />
         </TouchableOpacity>
       ) : null}
     </View>
@@ -207,21 +227,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
+  // Small circular down-arrow bubble (iMessage/Claude-style), floats bottom-right above
+  // the composer. White with a hairline + soft shadow to match the app's calm surfaces.
   jumpButton: {
     position: 'absolute',
-    right: 18,
-    bottom: 12,
-    borderRadius: 16,
-    backgroundColor: '#111827',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
+    right: 16,
+    bottom: 14,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     alignItems: 'center',
-    gap: 6,
-  },
-  jumpButtonText: {
-    color: '#FFFFFF',
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 12,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
   },
 });

@@ -15,7 +15,8 @@ import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import { CHAT_COLORS, CHAT_FONT, CHAT_SHADOWS, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActionBar';
 import { MessageComposer } from '../components/chat/MessageComposer';
-import ListingEditorForm from '../components/ListingEditorForm';
+import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
+import FieldSheet from '../components/ListingEditor/FieldSheet';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
@@ -103,6 +104,7 @@ const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; cre
 function GenerateDetailsScreen({ route, navigation }: Props) {
   const isFocused = useIsFocused();
   const mainScrollRef = useRef<ScrollView>(null);
+  const listingEditorRef = useRef<ListingEditorFormRef>(null);
   const [listingEditorY, setListingEditorY] = useState(0);
   const insets = useSafeAreaInsets();
   const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
@@ -501,9 +503,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       normalized.shopify = {
         title: firstPlatformData.title || firstPlatformData.name || '',
         description: firstPlatformData.description || '',
-        price: typeof firstPlatformData.price === 'string'
-          ? parseFloat(firstPlatformData.price.replace(/[^0-9.]/g, '')) || 0
-          : (firstPlatformData.price || 0),
+        // price intentionally omitted — we don't autofill a price from generation.
         sku: firstPlatformData.sku || '',
         barcode: firstPlatformData.barcode || '',
         weight: firstPlatformData.weight || 0,
@@ -511,6 +511,33 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         tags: firstPlatformData.tags || [],
         images: imageUrls,
       };
+    }
+
+    // Do NOT autofill price from generation. Strip the backend price (and per-variant /
+    // per-location price) from the incoming data BEFORE the merge, so any price the seller
+    // already set is preserved while no generated price is introduced. The AI/research
+    // suggestion metadata (aiPriceRecommendation / aiRecommendedPrice) is kept so the Price
+    // sheet can still OFFER a suggestion on demand — the seller pulls it when ready.
+    for (const key of Object.keys(normalized)) {
+      const pd = normalized[key];
+      if (!pd || typeof pd !== 'object') continue;
+      delete pd.price;
+      if (Array.isArray(pd.variants)) {
+        pd.variants = pd.variants.map((v: any) => {
+          if (!v || typeof v !== 'object') return v;
+          const { price: _vp, ...restV } = v;
+          if (restV.inventoryByLocation && typeof restV.inventoryByLocation === 'object') {
+            restV.inventoryByLocation = Object.fromEntries(
+              Object.entries(restV.inventoryByLocation).map(([locId, loc]: [string, any]) => {
+                if (!loc || typeof loc !== 'object') return [locId, loc];
+                const { price: _lp, ...restLoc } = loc;
+                return [locId, restLoc];
+              }),
+            );
+          }
+          return restV;
+        });
+      }
     }
 
     // Hydrate into platformsRef (preserves user edits)
@@ -648,6 +675,40 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [regenSubmitting, setRegenSubmitting] = useState(false);
   const [regenAutoRun, setRegenAutoRun] = useState(false);
   const [quickFixLoading, setQuickFixLoading] = useState(false);
+  // Quick-fix shows the change as a diff to accept (Keep original / Use this) — never a silent overwrite.
+  const [quickFixDiff, setQuickFixDiff] = useState<{
+    fixes: Record<string, any>;
+    userQuery: string;
+    changes: Array<{ platform: string; field: string; before: any; after: any }>;
+  } | null>(null);
+
+  const applyQuickFix = () => {
+    const diff = quickFixDiff;
+    if (!diff) return;
+    updatePlatforms(prev => {
+      const updated = { ...prev };
+      for (const [platform, fieldChanges] of Object.entries(diff.fixes as Record<string, any>)) {
+        updated[platform] = {
+          ...(updated[platform] || {}),
+          ...fieldChanges,
+          __refilled: Array.from(new Set([
+            ...((updated[platform] as any)?.__refilled || []),
+            ...Object.keys(fieldChanges as Record<string, any>),
+          ])),
+        };
+      }
+      return updated;
+    });
+    setQuickFixDiff(null);
+    setQuickFixText('');
+  };
+
+  const formatDiffValue = (v: any): string => {
+    if (v == null || v === '') return '—';
+    if (Array.isArray(v)) return v.join(', ');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [allConnections, setAllConnections] = useState<any[]>([]);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
@@ -1220,8 +1281,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
 
-  // Readiness step-through: compute all missing required fields across all non-ignored platforms
-  const [missingFieldNavIndex, setMissingFieldNavIndex] = useState(0);
+  // Missing required fields across all non-ignored platforms (drives the "All" pill badge
+  // + highlights the first gap). The old < > field-stepper was removed with the XTX-0 bar.
   const allMissingRequiredFields = useMemo(() => {
     const missing: Array<{ platform: string; field: string; label: string }> = [];
     const seenLabels = new Set<string>();
@@ -2561,8 +2622,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               {/* Editor form that matches the product page design */}
               <View onLayout={(e) => setListingEditorY(e.nativeEvent.layout.y)}>
                 <ListingEditorForm
-                  highlightedField={allMissingRequiredFields[missingFieldNavIndex]?.field}
-                  highlightedPlatform={allMissingRequiredFields[missingFieldNavIndex]?.platform}
+                  ref={listingEditorRef}
+                  highlightedField={allMissingRequiredFields[0]?.field}
+                  highlightedPlatform={allMissingRequiredFields[0]?.platform}
                   onScrollToOffset={(y) => {
                     mainScrollRef.current?.scrollTo({ y: Math.max(0, listingEditorY + y - 80), animated: true });
                   }}
@@ -2821,27 +2883,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       if (!res.ok) throw new Error('Quick fix failed');
                       const data = await res.json();
 
-                      // Apply fixes to displayed platforms
+                      // Show the change as a diff to accept — never a silent overwrite.
                       if (data?.results?.[0]?.fixes) {
-                        const fixes = data.results[0].fixes;
-                        const changedFields = data.results[0].changedFields || [];
-
-                        updatePlatforms(prev => {
-                          const updated = { ...prev };
-                          for (const [platform, fieldChanges] of Object.entries(fixes as Record<string, any>)) {
-                            updated[platform] = {
-                              ...(updated[platform] || {}),
-                              ...fieldChanges,
-                              __refilled: Array.from(new Set([
-                                ...((updated[platform] as any)?.__refilled || []),
-                                ...Object.keys(fieldChanges as Record<string, any>),
-                              ])),
-                            };
+                        const fixes = data.results[0].fixes as Record<string, any>;
+                        const changes: Array<{ platform: string; field: string; before: any; after: any }> = [];
+                        for (const [platform, fieldChanges] of Object.entries(fixes)) {
+                          for (const [field, after] of Object.entries(fieldChanges as Record<string, any>)) {
+                            const before = (displayedPlatforms as any)?.[platform]?.[field];
+                            changes.push({ platform, field, before, after });
                           }
-                          return updated;
-                        });
-
-                        log.debug('[QuickFix] Applied fixes to fields:', changedFields);
+                        }
+                        if (changes.length > 0) {
+                          setQuickFixDiff({ fixes, userQuery: text, changes });
+                          setIsInputExpanded(false);
+                        } else {
+                          Alert.alert('No change', 'The AI didn’t suggest any changes for that.');
+                        }
                       }
                     } catch (e) {
                       log.error('[QuickFix] Error:', e);
@@ -2881,44 +2938,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               }
               primaryDisabled={!canPublish}
               onPrimary={doPublish}
-              stepNav={!canPublish && allMissingRequiredFields.length > 0 ? {
-                currentLabel: allMissingRequiredFields[missingFieldNavIndex % allMissingRequiredFields.length]?.label || 'Field',
-                currentIndex: (missingFieldNavIndex % allMissingRequiredFields.length) + 1,
-                totalCount: allMissingRequiredFields.length,
-                onPrev: () => {
-                  setMissingFieldNavIndex(i => {
-                    const next = i <= 0 ? allMissingRequiredFields.length - 1 : i - 1;
-                    // Auto-scroll after index changes by scheduling after re-render
-                    setTimeout(() => {
-                      mainScrollRef.current?.scrollTo({
-                        y: Math.max(0, listingEditorY - 40),
-                        animated: true,
-                      });
-                    }, 350);
-                    return next;
-                  });
-                },
-                onNext: () => {
-                  setMissingFieldNavIndex(i => {
-                    const next = (i + 1) % allMissingRequiredFields.length;
-                    setTimeout(() => {
-                      mainScrollRef.current?.scrollTo({
-                        y: Math.max(0, listingEditorY - 40),
-                        animated: true,
-                      });
-                    }, 350);
-                    return next;
-                  });
-                },
-                onTapField: () => {
-                  // Scroll to the listing editor area — the highlightedField prop handles field-level scroll
-                  mainScrollRef.current?.scrollTo({
-                    y: Math.max(0, listingEditorY - 40),
-                    animated: true,
-                  });
-                },
-              } : undefined}
-              secondaryLabel={'Save to Inventory'}
+              secondaryLabel={'Save Draft'}
               onSecondary={doSaveToInventory}
               tertiaryContent={hasMultipleResults ? (
                 <Text style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Tap the item pill up top to switch items, then Publish each</Text>
@@ -3372,6 +3392,45 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         isPublishing={isPublishing}
         onSaveToInventory={() => { setPublishModalOpen(false); doSaveToInventory(); }}
       />
+
+      {/* Quick-fix diff — accept the change or keep the original (never a silent overwrite) */}
+      <FieldSheet
+        visible={!!quickFixDiff}
+        title="Quick fix"
+        onClose={() => setQuickFixDiff(null)}
+        onSave={applyQuickFix}
+        saveLabel="Use this"
+        footerExtra={
+          <TouchableOpacity
+            onPress={() => setQuickFixDiff(null)}
+            style={{ height: 50, borderRadius: 999, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#3F3F46' }}>Keep original</Text>
+          </TouchableOpacity>
+        }
+      >
+        {!!quickFixDiff?.userQuery && (
+          <View style={{ alignSelf: 'flex-end', maxWidth: '85%', backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 16 }}>
+            <Text style={{ fontSize: 14, color: '#3B6300' }}>{quickFixDiff.userQuery}</Text>
+          </View>
+        )}
+        <Text style={{ fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginBottom: 10 }}>HERE'S THE CHANGE</Text>
+        {(quickFixDiff?.changes || []).map((c, i) => {
+          const platformSuffix = platformKeys.length > 1 ? ` · ${c.platform.charAt(0).toUpperCase()}${c.platform.slice(1)}` : '';
+          return (
+            <View key={`${c.platform}-${c.field}-${i}`} style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 14, marginBottom: 10 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: '#18181B', marginBottom: 8, textTransform: 'capitalize' }}>
+                {c.field.replace(/ \(either flat or all variants\)/, '')}{platformSuffix}
+              </Text>
+              <Text style={{ fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, marginBottom: 2 }}>BEFORE</Text>
+              <Text style={{ fontSize: 14, color: '#9CA3AF', textDecorationLine: 'line-through', marginBottom: 10 }}>{formatDiffValue(c.before)}</Text>
+              <Text style={{ fontSize: 10, fontWeight: '700', color: '#4A7C00', letterSpacing: 0.5, marginBottom: 2 }}>AFTER</Text>
+              <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }}>{formatDiffValue(c.after)}</Text>
+            </View>
+          );
+        })}
+      </FieldSheet>
       {/* Media Gallery Modal */}
       {mediaModalVisible && (
         <>
