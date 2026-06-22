@@ -157,9 +157,10 @@ export const BulkItemsSheet: React.FC<{
   const cartSubtotal = displayItems.reduce((sum, it) => {
     const conf = confirmedQuickMatchByItemId?.[it.id];
     const qs = quickScanStore?.[it.id];
-    const cand: any = (conf?.matchRows && conf.preSelectedIndices?.length)
-      ? conf.matchRows[conf.preSelectedIndices[0]]
-      : qs?.matchData?.rankedCandidates?.[0];
+    const confIdx = conf?.preSelectedIndices?.[0];
+    const confCand: any =
+      typeof confIdx === 'number' && Array.isArray(conf?.matchRows) ? conf.matchRows[confIdx] : undefined;
+    const cand: any = confCand ?? qs?.matchData?.rankedCandidates?.[0];
     return sum + (extractPrice(cand?.price) ?? 0) * ((it as any).quantity ?? 1);
   }, 0);
   const [editingItemId, setEditingItemId] = React.useState<string | null>(null);
@@ -953,9 +954,10 @@ export const BulkItemsSheet: React.FC<{
               {savedItems.map((sItem) => {
                 const sConf = confirmedQuickMatchByItemId?.[sItem.id];
                 const sQs = quickScanStore?.[sItem.id];
-                const sCand: any = (sConf?.matchRows && sConf.preSelectedIndices?.length)
-                  ? sConf.matchRows[sConf.preSelectedIndices[0]]
-                  : sQs?.matchData?.rankedCandidates?.[0];
+                const sConfIdx = sConf?.preSelectedIndices?.[0];
+                const sConfCand: any =
+                  typeof sConfIdx === 'number' && Array.isArray(sConf?.matchRows) ? sConf.matchRows[sConfIdx] : undefined;
+                const sCand: any = sConfCand ?? sQs?.matchData?.rankedCandidates?.[0];
                 const sThumb = sCand?.imageUrl || sCand?.image || sItem.photos.find((p: CapturedPhoto) => p.isCover)?.uri || sItem.photos[0]?.uri;
                 const sTitle = sCand?.title || sItem.title || 'Saved item';
                 const sPrice = extractPrice(sCand?.price);

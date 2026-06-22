@@ -2932,7 +2932,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             images: [{ url: publicImageUrl, metadata: { id: photo.id, timestamp: photo.timestamp, width: photo.width, height: photo.height } }],
             ...(options?.textHint ? { textQuery: options.textHint } : {}),
             targetSites: ['general', 'ebay.com'],
-            reranker: 'llama4-groq',
             mode: 'ocr-vlm-search',
           },
           onEvent: (evt) => {

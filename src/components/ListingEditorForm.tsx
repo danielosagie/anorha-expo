@@ -1982,7 +1982,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             {typeof (activeData as any).taxonomyConfidence === 'number' && (activeData as any).taxonomyConfidence >= 0.5 && (
               <View style={{ alignSelf: 'flex-start', backgroundColor: (activeData as any).taxonomyConfidence > 0.8 ? CHAT_COLORS.brandSoft : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 12 }}>
                 <Text style={{ color: (activeData as any).taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 11, fontWeight: '600' }}>
-                  {['llm', 'groq', 'tree', 'rerank'].includes((activeData as any).taxonomySource || '') ? 'AI Match' : 'Suggested'} {Math.round((activeData as any).taxonomyConfidence * 100)}%
+                  {(activeData as any).taxonomySource && (activeData as any).taxonomySource !== 'suggested' && (activeData as any).taxonomySource !== 'manual' ? 'AI Match' : 'Suggested'} {Math.round((activeData as any).taxonomyConfidence * 100)}%
                 </Text>
               </View>
             )}

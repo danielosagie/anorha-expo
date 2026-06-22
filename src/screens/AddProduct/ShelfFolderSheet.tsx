@@ -53,9 +53,13 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
     const loading = itemLoadingStates[id];
     if (loading?.isLoading) return { kind: 'scanning', text: loading.stage || 'Scanning…' };
     const confirmed = confirmedQuickMatchByItemId[id];
-    if (confirmed?.matchRows && confirmed.preSelectedIndices?.length) {
-      const c: any = confirmed.matchRows[confirmed.preSelectedIndices[0]];
-      return { kind: 'matched', text: 'Match found', price: money(c?.price), title: c?.title, image: c?.imageUrl || c?.image };
+    const selectedIdx = confirmed?.preSelectedIndices?.[0];
+    const selectedRow: any =
+      typeof selectedIdx === 'number' && Array.isArray(confirmed?.matchRows)
+        ? confirmed.matchRows[selectedIdx]
+        : undefined;
+    if (selectedRow) {
+      return { kind: 'matched', text: 'Match found', price: money(selectedRow?.price), title: selectedRow?.title, image: selectedRow?.imageUrl || selectedRow?.image };
     }
     const qs = quickScanStore[id];
     const cands = qs?.matchData?.rankedCandidates;

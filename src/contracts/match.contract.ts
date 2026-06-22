@@ -179,7 +179,7 @@ export const zMatchJobResult = z.object({
   productId: z.string(),
   variantId: z.string(),
   /** Full SerpAPI response (intentionally untyped — provider-shaped). */
-  matchRows: z.any(),
+  matchRows: z.array(z.any()),
   rerankedResults: z.array(zRerankedResult),
   confidence: z.enum(['high', 'medium', 'low']),
   vectorSearchFoundResults: z.boolean(),
