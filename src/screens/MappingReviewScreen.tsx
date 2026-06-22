@@ -30,6 +30,7 @@ import { MappingSuggestion } from '../types/importSession';
 import { tokens, BRAND_PRIMARY} from '../design/tokens';
 import MatchDeck from '../components/import/MatchDeck';
 import { classifyMatch, reviewDeckCases } from '../components/resolve/classifyMatch';
+import anorhaLogo from '../assets/rounded_anorha.png';
 
 // ---------------------------------------------------------------------------
 // Main screen
@@ -620,7 +621,7 @@ function DoneOverlay({
   return (
     <View style={[styles.doneOverlay, { backgroundColor: theme.colors.background, paddingTop: insets.top + 80 }]}>
       <View style={styles.donePlant}>
-        <Icon name="sprout-outline" size={32} color="#15803D" />
+        <Image source={anorhaLogo} style={styles.doneLogo} resizeMode="contain" />
       </View>
       <Text style={[styles.doneTitle, { color: theme.colors.text }]}>All reviewed</Text>
       <Text style={[styles.doneSub, { color: theme.colors.textSecondary }]}>
@@ -1475,6 +1476,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 22,
+  },
+  doneLogo: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
   },
   doneTitle: {
     fontSize: 26,
