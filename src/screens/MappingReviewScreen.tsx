@@ -59,7 +59,19 @@ const MappingReviewScreen: React.FC = () => {
     isCSVImport,
     importedProducts,
     skipInitialFetch: !!isScanningEarly,
-    onNavigate: (screen, params) => navigation.navigate(screen as any, params),
+    // Completing the import must DROP the whole import flow from the stack — otherwise
+    // "back" from "Import Complete" re-enters the now-stale Match / overview screens (the
+    // messed-up stack the seller hit). Reset to Inventory with the completion screen on top.
+    onNavigate: (screen, params) =>
+      screen === 'PublishConfirmation'
+        ? navigation.reset({
+            index: 1,
+            routes: [
+              { name: 'TabNavigator' as any, params: { screen: 'Inventory' } },
+              { name: 'PublishConfirmation' as any, params },
+            ],
+          })
+        : navigation.navigate(screen as any, params),
   });
 
   const {
@@ -111,6 +123,20 @@ const MappingReviewScreen: React.FC = () => {
   const broughtInCount =
     autoMatched + (suggestions || []).filter((s) => s.resolved && s.isSelected && s.action !== 'IGNORE').length;
   const answeredSkips = (suggestions || []).filter((s) => s.resolved && s.action === 'IGNORE').length;
+
+  // Nothing to review → land directly on the single "All reviewed" confirm summary. The
+  // separate "All set / Complete import" lobby card was a redundant extra screen on the way
+  // to the same confirm. Fire once (ref-guarded) so the overlay's "Back to review" can still
+  // dismiss it; re-arm if real review work reappears (e.g. an undo).
+  const autoDoneShownRef = useRef(false);
+  useEffect(() => {
+    if (loading || !suggestions) return;
+    if (remaining > 0) { autoDoneShownRef.current = false; return; }
+    if (!queueOpen && !doneVisible && !autoDoneShownRef.current) {
+      autoDoneShownRef.current = true;
+      setDoneVisible(true);
+    }
+  }, [loading, suggestions, remaining, queueOpen, doneVisible]);
 
   // Scan completion: react to the sync status instead of polling every 2.5s forever.
   // syncProgress comes from usePlatformConnections() — a React state value in the dep

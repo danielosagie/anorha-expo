@@ -51,7 +51,18 @@ const ImportOverviewScreen = () => {
   const session = useImportSession({
     connectionId,
     platformName,
-    onNavigate: (screen, params) => navigation.navigate(screen as any, params),
+    // On completion, drop the import flow from the stack so "back" from "Import Complete"
+    // lands on Inventory, not the stale Match/overview screens.
+    onNavigate: (screen, params) =>
+      screen === 'PublishConfirmation'
+        ? navigation.reset({
+            index: 1,
+            routes: [
+              { name: 'TabNavigator' as any, params: { screen: 'Inventory' } },
+              { name: 'PublishConfirmation' as any, params },
+            ],
+          })
+        : navigation.navigate(screen as any, params),
   });
 
   const {
