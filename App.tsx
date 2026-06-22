@@ -659,25 +659,24 @@ const App: React.FC = () => {
             }}
           >
             <>
-              {isSignedIn ? (
-                <WithSessionProvider>
-                  {React.createElement(OrgProvider as any, null, (
-                    <AppDataProvider>
-                      <LiveActivityProvider>
-                        <JobsProvider>
-                          <AuthedAppContent navigationRef={navigationRef} />
-                        </JobsProvider>
-                      </LiveActivityProvider>
-                    </AppDataProvider>
-                  ))}
-                </WithSessionProvider>
-              ) : (
-                <ThemeProvider>
-                  <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-                  <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
-                  <FlashMessage position="top" />
-                </ThemeProvider>
-              )}
+              {/* Providers wrap the navigator in ALL auth states. AppNavigator does its own
+                  auth gating (AuthStack vs AppStack) and can render app screens while Clerk is
+                  momentarily signed-out (a stored session still resolves to the AppStack), so
+                  Session/Org/AppData must always be mounted or those screens crash
+                  ("useAppData must be used within an AppDataProvider"). AuthedAppContent already
+                  handles the signed-out / not-ready states internally (and supplies its own
+                  ThemeProvider, StatusBar and FlashMessage). */}
+              <WithSessionProvider>
+                {React.createElement(OrgProvider as any, null, (
+                  <AppDataProvider>
+                    <LiveActivityProvider>
+                      <JobsProvider>
+                        <AuthedAppContent navigationRef={navigationRef} />
+                      </JobsProvider>
+                    </LiveActivityProvider>
+                  </AppDataProvider>
+                ))}
+              </WithSessionProvider>
             </>
           </NavigationContainer>
         </PlatformPickerOverlayProvider>
