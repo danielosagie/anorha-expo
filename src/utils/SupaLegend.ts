@@ -68,6 +68,26 @@ function buildFallbackLegendState(userId: string): LegendStateObservables {
     };
 }
 
+// A single, stable, inert observable set handed to any component that reads the
+// Legend State context while the provider value is momentarily null/incomplete.
+//
+// This happens on SIGN-OUT: App.tsx nulls the context value one commit BEFORE React
+// Navigation unmounts the signed-in screens that consume it, so those screens get one
+// final render against a null provider. Throwing there crashed the whole app — e.g.
+// NewClearoutSheet, which SproutHomeScreen keeps mounted even while the sheet is closed.
+//
+// Built lazily and cached so its observable identities never change across renders.
+// Stable identity is required so consumers' effects/subscriptions don't churn. The
+// observables are plain (NOT Supabase-synced), so this fallback touches no network and
+// holds no user data.
+let signedOutLegendStateSingleton: LegendStateObservables | null = null;
+export function getSignedOutLegendState(): LegendStateObservables {
+    if (!signedOutLegendStateSingleton) {
+        signedOutLegendStateSingleton = buildFallbackLegendState('__signed_out__');
+    }
+    return signedOutLegendStateSingleton;
+}
+
 // Initialization function
 export async function initializeLegendState(
     supabaseClient: SupabaseClient,
