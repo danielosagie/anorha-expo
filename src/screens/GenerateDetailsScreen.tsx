@@ -983,14 +983,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     if (idx === currentProductIndex) return;
     const targetJobId = itemGenerateJobs[idx]?.jobId;
     if (targetJobId && jobId && targetJobId !== jobId && !hasResultForIndex(idx)) {
-      // Item lives on a different generate job — reload the screen against it.
-      navigation.navigate('LoadingScreen' as any, {
-        processType: 'generate',
-        payload: { jobId: targetJobId, firstPhotos: [] },
-        onCompleteRoute: {
-          screen: 'GenerateDetailsScreen',
-          params: { jobId: targetJobId, items, jobMap: itemGenerateJobs, focusIndex: idx },
-        },
+      // Item lives on a different generate job — reload this screen against it.
+      // Interstitial deprecated: re-open GenerateDetails in its processing state
+      // (it polls the job and shows "Generating…" inline) instead of routing
+      // through the full-screen LoadingScreen.
+      navigation.replace('GenerateDetailsScreen' as any, {
+        jobId: targetJobId,
+        status: 'processing',
+        items,
+        jobMap: itemGenerateJobs,
+        focusIndex: idx,
       });
       return;
     }

@@ -11,7 +11,6 @@ import Button from '../components/Button';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { JobResponse } from './MatchSelectionScreen';
 import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PastScansScreen');
@@ -32,20 +31,6 @@ interface PastScan {
   images: string[];
   platform_details: any;
   status: 'draft' | 'active' | 'archived';
-}
-
-// For the "Match Jobs" tab
-interface MatchJob {
-  id: string; // This is the job_id from the table
-  created_at: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
-  summary: {
-    highConfidenceCount?: number;
-    mediumConfidenceCount?: number;
-    lowConfidenceCount?: number;
-    totalProducts?: number;
-  };
-  results?: any[];
 }
 
 interface GenerationJob {
@@ -94,41 +79,11 @@ const PastScansScreen = () => {
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(140);
 
-  const [activeTab, setActiveTab] = useState<'drafts' | 'matches' | 'listings'>('drafts');
-  const [matchJobs, setMatchJobs] = useState<MatchJob[]>([]);
+  const [activeTab, setActiveTab] = useState<'drafts' | 'listings'>('drafts');
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [draftScans, setDraftScans] = useState<DraftScan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const fetchMatchJobs = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('No authenticated user');
-
-      const { data, error } = await supabase
-        .from('match_jobs')
-        .select('job_id, created_at, status, summary, results')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        log.error('Error fetching match jobs:', error);
-        throw new Error('Failed to fetch match jobs.');
-      }
-
-      // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
-      const formattedJobs = data.map(job => ({ ...job, id: job.job_id })) as MatchJob[];
-      setMatchJobs(formattedJobs);
-
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   const fetchPastGenerations = useCallback(async () => {
     try {
@@ -300,21 +255,12 @@ const PastScansScreen = () => {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'matches') {
-      fetchMatchJobs();
-    } else if (activeTab === 'listings') {
+    if (activeTab === 'listings') {
       fetchPastGenerations();
     } else if (activeTab === 'drafts') {
       fetchDraftScans();
     }
-  }, [activeTab, fetchMatchJobs, fetchPastGenerations, fetchDraftScans]);
-
-  const handleLoadMatchJob = (job: MatchJob) => {
-    // Legacy surface: only unfinished/historical match jobs still open the selection screen.
-    navigation.navigate('MatchSelectionScreen', {
-      response: { jobId: job.id }
-    });
-  };
+  }, [activeTab, fetchPastGenerations, fetchDraftScans]);
 
   const handleLoadGeneration = (job: GenerationJob) => {
     if (job.status === 'completed') {
@@ -360,37 +306,6 @@ const PastScansScreen = () => {
       ) : null}
     </View>
   );
-
-  const renderMatchJobItem = ({ item }: { item: MatchJob }) => {
-    const results = (item as any)?.results || [];
-    const images = results
-      .map((r: any) => (
-        r?.matchRows?.[0]?.image ||
-        r?.matchRows?.[0]?.thumbnail ||
-        r?.images?.[0]?.url ||
-        r?.sourceImageUrl ||
-        r?.coverImage ||
-        ''
-      ))
-      .filter((uri: string) => !!uri);
-    const meta = statusMeta(item.status);
-    return (
-      <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => handleLoadMatchJob(item)}>
-        {renderThumb(images[0], results.length, 'image-off')}
-        <View style={styles.rowInfo}>
-          <Text style={styles.rowTitle} numberOfLines={1}>Match job</Text>
-          <Text style={styles.rowMeta} numberOfLines={1}>{new Date(item.created_at).toLocaleString()}</Text>
-          <View style={styles.statusRow}>
-            <View style={[styles.statusDot, { backgroundColor: meta.color }]} />
-            <Text style={[styles.statusText, { color: meta.color === CHAT_COLORS.success ? CHAT_COLORS.brandDeep : meta.color }]}>
-              {meta.label}
-            </Text>
-          </View>
-        </View>
-        <Icon name="chevron-right" size={22} color={CHAT_COLORS.faint} />
-      </TouchableOpacity>
-    );
-  };
 
   const renderScanItem = ({ item }: { item: GenerationJob }) => {
     const results = item.results || [];
@@ -455,29 +370,12 @@ const PastScansScreen = () => {
     }
 
     if (error) {
-      const retryFn = activeTab === 'matches' ? fetchMatchJobs : activeTab === 'listings' ? fetchPastGenerations : fetchDraftScans;
+      const retryFn = activeTab === 'listings' ? fetchPastGenerations : fetchDraftScans;
       return (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
           <Button title="Try Again" onPress={retryFn} style={styles.retryButton} />
         </View>
-      );
-    }
-
-    if (activeTab === 'matches') {
-      return (
-        <FlatList
-          data={matchJobs}
-          renderItem={renderMatchJobItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={[styles.listContent, listTopPadding]}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Icon name="history" size={44} color={CHAT_COLORS.faint} />
-              <Text style={styles.emptyText}>No match jobs found</Text>
-            </View>
-          }
-        />
       );
     }
 
@@ -514,9 +412,8 @@ const PastScansScreen = () => {
     );
   };
 
-  const TABS: Array<{ key: 'drafts' | 'matches' | 'listings'; label: string }> = [
+  const TABS: Array<{ key: 'drafts' | 'listings'; label: string }> = [
     { key: 'drafts', label: 'Scan carts' },
-    //{ key: 'matches', label: 'Matches' },
     { key: 'listings', label: 'Listings' },
   ];
 

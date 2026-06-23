@@ -3410,28 +3410,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }, [performQuickScan, preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage])
   );
 
-  // Open Match Selection screen using quick scan results for a given item
-  const openMatchSelectionForItem = useCallback((itemId?: string | null) => {
-    const id = itemId || currentMatchItemId;
-    if (!id) {
-      showNotificationMessage('No item selected for quick matches.', 2000);
-      return;
-    }
-    const store = quickScanStore[id];
-    if (!store || !Array.isArray(store.matchRows) || store.matchRows.length === 0) {
-      showNotificationMessage('No quick matches available for this item.', 2000);
-      return;
-    }
-    (navigation as any).navigate('MatchSelectionScreen', {
-      overrideResults: [
-        { productIndex: 0, matchRows: store.matchRows }
-      ],
-      overrideFocusIndex: 0,
-      isNewScan: true
-    });
-    setShowMatchSheet(false);
-    setCurrentInstruction('ready');
-  }, [quickScanStore, currentMatchItemId, navigation, showNotificationMessage]);
+  // (Removed dead openMatchSelectionForItem — MatchSelectionScreen was deprecated and deleted.)
 
   // Reopen quick matches sheet for an item from the bulk items list
   const openQuickMatchesForItem = useCallback((itemId: string) => {

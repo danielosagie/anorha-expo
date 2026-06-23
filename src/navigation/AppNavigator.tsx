@@ -56,8 +56,19 @@ import TeamScreen from '../screens/TeamScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
-import LoadingScreen from '../screens/LoadingScreen';
-import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
+// LoadingScreen + MatchSelectionScreen were deprecated and deleted. Their param
+// SHAPES are retained in AppStackParamList below (the LoadingScreen entry is the
+// canonical "active flow" payload used by activeFlowPersistence; no route is
+// registered, so nothing can navigate to either).
+// Relocated from the deleted MatchSelectionScreen — the match-job submit response
+// shape, still referenced by the param types below.
+export interface JobResponse {
+  jobId: string;
+  status?: string;
+  estimatedTimeMinutes?: number;
+  totalProducts?: number;
+  message?: string;
+}
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
@@ -605,14 +616,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
         cardStyle: { backgroundColor: '#000000' },
       }}
     />
-    <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
-    <AppStackNav.Screen
-      name="MatchSelectionScreen"
-      component={sb(MatchSelectionScreen)}
-      options={{
-        cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
-      }}
-    />
+    {/* LoadingScreen + MatchSelectionScreen deprecated and removed — no routes registered. */}
     <AppStackNav.Screen
       name="GenerateDetailsScreen"
       component={sb(GenerateDetailsScreen)}

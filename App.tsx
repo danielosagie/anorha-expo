@@ -382,14 +382,17 @@ const App: React.FC = () => {
           };
           const onCompleteRoute = checkpoint.onCompleteRoute || buildFallbackCompleteRoute(processType, checkpoint.jobId);
 
-          (navigationRef.current as any)?.navigate('AppStack', {
-            screen: 'LoadingScreen',
-            params: {
-              processType,
-              payload,
-              onCompleteRoute,
-            },
-          });
+          // Interstitial deprecated: don't auto-open the full-screen LoadingScreen on
+          // resume. For a generate job, land directly on the results screen in its
+          // processing state (it polls inline via useJobsState); for a match job, skip
+          // auto-nav rather than show the interstitial — the seller re-engages from
+          // wherever they already are. (Checkpoint state is still loaded above.)
+          if (processType === 'generate' && onCompleteRoute?.screen === 'GenerateDetailsScreen') {
+            (navigationRef.current as any)?.navigate('AppStack', {
+              screen: 'GenerateDetailsScreen',
+              params: { ...(onCompleteRoute.params || {}), jobId: checkpoint.jobId, status: 'processing' },
+            });
+          }
         } catch (error) {
           console.error('[App] Auto-resume failed:', error);
         }
@@ -440,14 +443,17 @@ const App: React.FC = () => {
           };
           const onCompleteRoute = checkpoint.onCompleteRoute || buildFallbackCompleteRoute(processType, checkpoint.jobId);
 
-          (navigationRef.current as any)?.navigate('AppStack', {
-            screen: 'LoadingScreen',
-            params: {
-              processType,
-              payload,
-              onCompleteRoute,
-            },
-          });
+          // Interstitial deprecated: don't auto-open the full-screen LoadingScreen on
+          // resume. For a generate job, land directly on the results screen in its
+          // processing state (it polls inline via useJobsState); for a match job, skip
+          // auto-nav rather than show the interstitial — the seller re-engages from
+          // wherever they already are. (Checkpoint state is still loaded above.)
+          if (processType === 'generate' && onCompleteRoute?.screen === 'GenerateDetailsScreen') {
+            (navigationRef.current as any)?.navigate('AppStack', {
+              screen: 'GenerateDetailsScreen',
+              params: { ...(onCompleteRoute.params || {}), jobId: checkpoint.jobId, status: 'processing' },
+            });
+          }
         })();
       });
 
