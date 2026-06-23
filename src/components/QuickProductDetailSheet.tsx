@@ -45,7 +45,7 @@ interface VariantInventory {
 interface QuickProductDetailSheetProps {
   product: any; // barcodeSearchResult from AddProductScreen
   onClose: () => void;
-  onSave: (updates: { variantId: string; location: string; quantity: number; price?: number }[]) => Promise<void>;
+  onSave: (updates: { variantId: string; location: string; quantity?: number; price?: number }[]) => Promise<void>;
   onOpenDetail?: () => void;
   platformLocations?: { id: string; name: string; platformType?: string }[];
 }
@@ -325,19 +325,30 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
     try {
       setIsSaving(true);
 
-      // Prepare updates array - parse composite keys
-      const updates = Object.entries(inventoryUpdates).map(([key, data]) => {
-        const [variantId, locationId] = key.split(':');
-        return {
-          variantId,
-          location: locationId,
-          quantity: data.quantity || 0,
-          price: data.price,
-        };
-      });
+      // Prepare updates array - parse composite keys.
+      // IMPORTANT: only send the fields the user actually edited. Never coerce an
+      // untouched quantity to 0 — that would absolute-set the location's real
+      // stock to zero and sync that loss to connected channels.
+      const updates = Object.entries(inventoryUpdates)
+        .map(([key, data]) => {
+          const [variantId, locationId] = key.split(':');
+          const update: { variantId: string; location: string; quantity?: number; price?: number } = {
+            variantId,
+            location: locationId,
+          };
+          if (data.quantity !== undefined && Number.isFinite(data.quantity)) {
+            update.quantity = data.quantity;
+          }
+          if (data.price !== undefined && Number.isFinite(data.price)) {
+            update.price = data.price;
+          }
+          return update;
+        })
+        // Drop entries where nothing valid was actually changed
+        .filter(u => u.quantity !== undefined || u.price !== undefined);
 
       if (updates.length === 0) {
-        Alert.alert('No Changes', 'Update at least one variant quantity');
+        Alert.alert('No Changes', 'Update at least one variant quantity or price');
         setIsSaving(false);
         return;
       }

@@ -4684,7 +4684,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
                   const API_BASE = API_BASE_URL;
 
-                  // Process per variant
+                  // Process per variant, tracking which variants persisted so a
+                  // partial failure can be reconciled instead of reported as a
+                  // single blanket error (a naive retry would otherwise re-apply
+                  // already-saved updates).
+                  const savedVariantIds: string[] = [];
+                  const failedVariantIds: string[] = [];
+
                   for (const [variantId, variantUpdates] of Object.entries(updatesByVariant)) {
                     // Map to API payload structure
                     const payloadUpdates = variantUpdates.map(u => {
@@ -4694,31 +4700,58 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                         log.warn(`[BARCODE SAVE] No connectionId found for location ${u.location}`);
                         return null;
                       }
-                      return {
+                      // Only include fields the user actually changed; never send an
+                      // absent quantity (would zero the location) or a non-finite price.
+                      const payload: { platformConnectionId: string; locationId: string; quantity?: number; price?: number } = {
                         platformConnectionId: locInfo.connectionId,
                         locationId: u.location,
-                        quantity: u.quantity,
-                        price: u.price // API now supports price
                       };
+                      if (u.quantity !== undefined && Number.isFinite(u.quantity)) {
+                        payload.quantity = u.quantity;
+                      }
+                      if (u.price !== undefined && Number.isFinite(u.price)) {
+                        payload.price = u.price;
+                      }
+                      // Skip rows with nothing valid to apply
+                      if (payload.quantity === undefined && payload.price === undefined) {
+                        return null;
+                      }
+                      return payload;
                     }).filter(Boolean); // Remove nulls
 
                     if (payloadUpdates.length === 0) continue;
 
-                    const response = await fetch(`${API_BASE}/api/products/${variantId}/inventory`, {
-                      method: 'PUT',
-                      headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                      },
-                      body: JSON.stringify({ updates: payloadUpdates }),
-                    });
+                    try {
+                      const response = await fetch(`${API_BASE}/api/products/${variantId}/inventory`, {
+                        method: 'PUT',
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ updates: payloadUpdates }),
+                      });
 
-                    if (!response.ok) {
-                      throw new Error(`API failed: ${response.status}`);
+                      if (!response.ok) {
+                        throw new Error(`API failed: ${response.status}`);
+                      }
+                      savedVariantIds.push(variantId);
+                    } catch (variantErr) {
+                      log.error(`[BARCODE SAVE] Variant ${variantId} failed:`, variantErr);
+                      failedVariantIds.push(variantId);
                     }
                   }
 
-                  Alert.alert('Success', 'Inventory updated successfully');
+                  if (failedVariantIds.length === 0) {
+                    Alert.alert('Success', 'Inventory updated successfully');
+                  } else if (savedVariantIds.length === 0) {
+                    Alert.alert('Error', 'Failed to save updates. Please try again.');
+                  } else {
+                    // Partial failure: be explicit so the user knows what still needs saving.
+                    Alert.alert(
+                      'Partially Saved',
+                      `${savedVariantIds.length} item(s) saved, ${failedVariantIds.length} failed. Please retry the items that did not save.`
+                    );
+                  }
 
                   // Close sheet after save? Or keep open?
                   // User might want to scan next.

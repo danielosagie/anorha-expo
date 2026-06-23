@@ -110,7 +110,12 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
         if (status === 'error') {
           return { success: false, errorMessage: message || 'Connection failed. Please try again.' };
         }
-        // status 'success' or absent → treat as connected.
+        // Require an affirmative signal — an explicit success status OR a
+        // connectionId. A callback with neither (malformed/stale/replayed deep
+        // link) is NOT a real connection, so don't report success.
+        if (status !== 'success' && !connectionId) {
+          return { success: false, errorMessage: 'The connection did not complete. Please try again.' };
+        }
         if (connectionId) {
           void startScan(connectionId);
         }

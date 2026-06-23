@@ -77,11 +77,19 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
     };
 
     const handlePriceChange = (text: string) => {
-        const num = text.replace(/[^0-9.]/g, '');
+        // Strip non-numeric chars and collapse to a single decimal point so a
+        // fat-fingered value like "19.9.9" can never become NaN.
+        const cleaned = text.replace(/[^0-9.]/g, '');
+        const firstDot = cleaned.indexOf('.');
+        const num = firstDot === -1
+            ? cleaned
+            : cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
         setLocalPrice(num);
         if (priceTimeoutRef.current) clearTimeout(priceTimeoutRef.current);
         priceTimeoutRef.current = setTimeout(() => {
-            onChangePrice(Number(num || '0'));
+            const parsed = Number(num || '0');
+            // Never emit a non-finite price to the save path.
+            onChangePrice(Number.isFinite(parsed) ? parsed : 0);
         }, 400);
     };
 

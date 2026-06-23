@@ -13,8 +13,10 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('SyncRulesScreen');
 
 
-type SyncDirection = 'two-way' | 'push-only' | 'pull-only';
-type SourceOfTruth = 'sssync' | 'platform';
+// Canonical backend enums (sync-rules.service.ts SyncRules) — keep these in
+// lockstep with the engine so saved directives are actually readable/enforced.
+type SyncDirection = 'bidirectional' | 'push_only' | 'pull_only';
+type SourceOfTruth = 'ANORHA' | 'PLATFORM';
 
 type SyncRulesScreenRouteProp = RouteProp<AppStackParamList, 'SyncRules'>;
 type SyncRulesScreenNavigationProp = StackNavigationProp<AppStackParamList, 'SyncRules'>;
@@ -29,8 +31,8 @@ const SyncRulesScreen = () => {
   const SSSYNC_API_BASE_URL = API_BASE_URL;
 
   // Sync Rules State
-  const [syncDirection, setSyncDirection] = useState<SyncDirection>('two-way');
-  const [sourceOfTruth, setSourceOfTruth] = useState<SourceOfTruth>('sssync');
+  const [syncDirection, setSyncDirection] = useState<SyncDirection>('bidirectional');
+  const [sourceOfTruth, setSourceOfTruth] = useState<SourceOfTruth>('ANORHA');
   const [autoCreate, setAutoCreate] = useState(true);
   const [autoUpdate, setAutoUpdate] = useState(true);
   const [syncInventory, setSyncInventory] = useState(true);
@@ -98,10 +100,24 @@ const SyncRulesScreen = () => {
 
       if (data?.SyncRules) {
         const rules = data.SyncRules;
-        setSyncDirection(rules.syncDirection || 'two-way');
-        setSourceOfTruth(rules.sourceOfTruth || 'sssync');
-        setAutoCreate(rules.autoCreate !== undefined ? rules.autoCreate : true);
-        setAutoUpdate(rules.autoUpdate !== undefined ? rules.autoUpdate : true);
+        // Direction: canonical enum, with back-compat for any legacy hyphenated values.
+        const legacyDir: Record<string, SyncDirection> = {
+          'two-way': 'bidirectional',
+          'push-only': 'push_only',
+          'pull-only': 'pull_only',
+        };
+        const dir = rules.syncDirection;
+        setSyncDirection((dir && legacyDir[dir]) || (dir as SyncDirection) || 'bidirectional');
+        // Source of truth: backend stores productDetailsSoT/inventorySoT ('PLATFORM'|'ANORHA').
+        // Fall back to the legacy 'sssync'/'platform' shape if present.
+        const sot: SourceOfTruth | undefined =
+          rules.productDetailsSoT ||
+          rules.inventorySoT ||
+          (rules.sourceOfTruth === 'platform' ? 'PLATFORM' : rules.sourceOfTruth === 'sssync' ? 'ANORHA' : undefined);
+        setSourceOfTruth(sot || 'ANORHA');
+        // createNew is the canonical auto-create flag; keep legacy autoCreate as fallback.
+        setAutoCreate(rules.createNew !== undefined ? rules.createNew : rules.autoCreate !== undefined ? rules.autoCreate : true);
+        setAutoUpdate(rules.propagateUpdates !== undefined ? rules.propagateUpdates : rules.autoUpdate !== undefined ? rules.autoUpdate : true);
         setSyncInventory(rules.syncInventory !== undefined ? rules.syncInventory : true);
         setSyncPricing(rules.syncPricing !== undefined ? rules.syncPricing : true);
       }
@@ -115,27 +131,34 @@ const SyncRulesScreen = () => {
   const saveSyncRules = async () => {
     setSaving(true);
     try {
-      const syncRules = {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) throw new Error('Auth required');
+
+      // Route through the canonical sync-rules endpoint so the engine applies the
+      // direction preset (push/pull/propagate flags) and persists field names it
+      // actually reads. The server derives allowPush/allowPull/propagate* from
+      // syncDirection, so we send the canonical intent fields only.
+      const updates: Record<string, any> = {
         syncDirection,
-        sourceOfTruth,
-        autoCreate,
-        autoUpdate,
+        productDetailsSoT: sourceOfTruth,
+        inventorySoT: sourceOfTruth,
+        createNew: autoCreate,
+        propagateUpdates: autoUpdate,
         syncInventory,
         syncPricing,
+        // Additive UI-only scheduling/destination metadata (merged + persisted).
         mode: syncMode,
         schedule: syncMode === 'batch' ? { dailyTimeUtc: batchTime } : null,
         destinations: { connectionIds: selectedDestinations },
-        updatedAt: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from('PlatformConnections')
-        .update({ SyncRules: syncRules })
-        .eq('Id', connectionId);
-
-      if (error) {
-        throw error;
-      }
+      const res = await fetch(`${SSSYNC_API_BASE_URL}/api/sync-rules/connections/${connectionId}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
 
       Alert.alert(
         'Success',
@@ -154,21 +177,38 @@ const SyncRulesScreen = () => {
     navigation.navigate('ImportOverview', { connectionId, platformName });
   };
 
-  const disconnectPlatform = async () => {
-    try {
-      const { data: session } = await supabase.auth.getSession();
-      const token = session?.session?.access_token;
-      if (!token) throw new Error('Auth required');
-      const res = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`Failed (${res.status})`);
-      Alert.alert('Disconnected', `${platformName} connection disabled.`);
-      navigation.goBack();
-    } catch (e: any) {
-      Alert.alert('Disconnect failed', e?.message || 'Please try again');
-    }
+  const disconnectPlatform = () => {
+    Alert.alert(
+      'Remove connection',
+      `Disconnect ${platformName}? Your products stay in Anorha.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { data: session } = await supabase.auth.getSession();
+              const token = session?.session?.access_token;
+              if (!token) throw new Error('Auth required');
+              // Non-destructive disconnect: keep all products/inventory (mirrors
+              // ConnectionsScreen). A hard DELETE would cull inventory, which the
+              // copy never warned about.
+              const res = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}/disconnect`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cleanupStrategy: 'keep' }),
+              });
+              if (!res.ok) throw new Error(`Failed (${res.status})`);
+              Alert.alert('Disconnected', `${platformName} connection removed. Your products stay in Anorha.`);
+              navigation.goBack();
+            } catch (e: any) {
+              Alert.alert('Disconnect failed', e?.message || 'Please try again');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const renderSyncDirectionOption = (option: SyncDirection, title: string, subtitle: string, icon: string) => (
@@ -359,24 +399,24 @@ const SyncRulesScreen = () => {
   const applyPreset = (preset: 'conservative' | 'balanced' | 'aggressive') => {
     switch (preset) {
       case 'conservative':
-        setSyncDirection('pull-only');
-        setSourceOfTruth('platform');
+        setSyncDirection('pull_only');
+        setSourceOfTruth('PLATFORM');
         setAutoCreate(false);
         setAutoUpdate(false);
         setSyncInventory(true);
         setSyncPricing(false);
         break;
       case 'balanced':
-        setSyncDirection('two-way');
-        setSourceOfTruth('sssync');
+        setSyncDirection('bidirectional');
+        setSourceOfTruth('ANORHA');
         setAutoCreate(true);
         setAutoUpdate(true);
         setSyncInventory(true);
         setSyncPricing(true);
         break;
       case 'aggressive':
-        setSyncDirection('push-only');
-        setSourceOfTruth('sssync');
+        setSyncDirection('push_only');
+        setSourceOfTruth('ANORHA');
         setAutoCreate(true);
         setAutoUpdate(true);
         setSyncInventory(true);
@@ -483,9 +523,9 @@ const SyncRulesScreen = () => {
 
             {/* Direction */}
             <View style={{ height: 8 }} />
-            {renderSyncDirectionOption('two-way', 'Two-way sync', 'Changes flow in both directions', 'sync')}
-            {renderSyncDirectionOption('push-only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
-            {renderSyncDirectionOption('pull-only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
+            {renderSyncDirectionOption('bidirectional', 'Two-way sync', 'Changes flow in both directions', 'sync')}
+            {renderSyncDirectionOption('push_only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
+            {renderSyncDirectionOption('pull_only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
 
             <View style={{ marginTop: 10 }}>
               <Button title="Next" onPress={() => setStep(4)} icon="arrow-right" />

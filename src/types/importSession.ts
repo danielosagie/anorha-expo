@@ -72,7 +72,11 @@ export interface MappingSuggestion {
   } | null;
   direction?: 'platform_to_anorha' | 'anorha_to_platform' | 'bidirectional';
   isSelected: boolean;
-  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE' | 'AI_SEMANTIC';
+  // Backend contract (import.contract.ts MATCH_TYPES) sends MANUAL; align so a
+  // server-sent manual match is typed rather than falling through. AI_SEMANTIC
+  // is retained only because a non-owned consumer (classifyMatch.ts) still
+  // references it; it is unused by the backend.
+  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE' | 'MANUAL' | 'AI_SEMANTIC';
   confidence?: number;
   resolved?: boolean;
   prevTab?: 'all' | 'needs_review' | 'matched' | 'ignored';
