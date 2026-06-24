@@ -30,6 +30,7 @@ import { SystemNotificationProvider } from './src/context/SystemNotificationCont
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import { ConvexProvider } from './src/providers/ConvexProvider';
+import { BrowserJobsConvexProvider } from './src/providers/BrowserJobsConvexProvider';
 import * as Sentry from '@sentry/react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
@@ -737,13 +738,20 @@ const App: React.FC = () => {
                   ThemeProvider, StatusBar and FlashMessage). */}
               <WithSessionProvider>
                 <OrgProvider>
-                  <AppDataProvider>
-                    <LiveActivityProvider>
-                      <JobsProvider>
-                        <AuthedAppContent navigationRef={navigationRef} />
-                      </JobsProvider>
-                    </LiveActivityProvider>
-                  </AppDataProvider>
+                  {/* 2nd Convex client (browserJobs deployment). Pure context
+                      carrier — does NOT wrap a ConvexProvider, so it never
+                      hijacks chat's useQuery (the top-level agent-chat
+                      ConvexProvider stays authoritative). Mounted here so it has
+                      SessionContext for the userId. */}
+                  <BrowserJobsConvexProvider>
+                    <AppDataProvider>
+                      <LiveActivityProvider>
+                        <JobsProvider>
+                          <AuthedAppContent navigationRef={navigationRef} />
+                        </JobsProvider>
+                      </LiveActivityProvider>
+                    </AppDataProvider>
+                  </BrowserJobsConvexProvider>
                 </OrgProvider>
               </WithSessionProvider>
             </>

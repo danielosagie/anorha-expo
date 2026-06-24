@@ -35,6 +35,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { captureOrPickImageAssets } from '../utils/imageCapture';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useCollaboration } from '../hooks/useCollaboration';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
@@ -233,6 +234,7 @@ const ProductDetailScreen = observer(
     const passedItem = route.params?.item;
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
+    const fbDispatch = useFacebookJobStatus();
     const insets = useSafeAreaInsets();
     // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
     // Saved/Saving…/Unsaved/Retry chip is the only save model now, so the scroll
@@ -4270,14 +4272,23 @@ const ProductDetailScreen = observer(
                     const statusText = isStale
                       ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
                       : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
+                    // Facebook posts through the user's computer (async). When a
+                    // dispatch job is in flight / waiting / paused / failed, show its
+                    // realtime status instead of the sync status \u2014 same dot+label idiom.
+                    const fbStatus = rawType.toLowerCase() === 'facebook'
+                      ? fbDispatch.statusForVariant(detailedItem?.Id)
+                      : null;
+                    const dotColor = fbStatus ? fbStatus.dotColor : statusColor;
+                    const textColor = fbStatus ? fbStatus.color : statusColor;
+                    const rowStatusText = fbStatus ? fbStatus.label : statusText;
                     return (
                       <View key={mapping.Id} style={styles.alRow}>
                         <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
                         <View style={styles.alInfo}>
                           <Text style={styles.alName} numberOfLines={1}>{platformName}</Text>
                           <View style={styles.alStatusLine}>
-                            <View style={[styles.alDot, { backgroundColor: statusColor }]} />
-                            <Text style={[styles.alStatusText, { color: statusColor }]} numberOfLines={1}>{statusText}</Text>
+                            <View style={[styles.alDot, { backgroundColor: dotColor }]} />
+                            <Text style={[styles.alStatusText, { color: textColor }]} numberOfLines={1}>{rowStatusText}</Text>
                           </View>
                         </View>
                         <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
