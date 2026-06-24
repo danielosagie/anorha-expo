@@ -201,16 +201,11 @@ type Props = {
   platformLocations?: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>>;
   onChangePlatforms: (next: PlatformsData) => void;
   onChangeImages?: (next: string[]) => void;
-  onOpenFieldPanel?: (fieldKey: string) => void;
   onOpenBarcodeScanner?: (onResult: (code: string) => void) => void;
   onOpenImageCapture?: (onResult: (uris: string[]) => void) => void;
-  onRegenerateField?: (platformKey: string, fieldKey: string) => void;
   onAddMissingField?: (platformKey: string) => void;
   getMissingFieldsCount?: (platformKey: string) => number;
   onGeneratePlatform?: (platformKey: string) => Promise<void>;
-  enableAIRefill?: boolean;
-  onSuggestVariants?: (platformKey: string) => void;
-  onBoostListing?: (platformKey: string, kind: 'boost' | 'advanced') => void;
   // Optional publish-ignore controls
   onToggleIgnorePlatform?: (platformKey: string, ignored: boolean) => void;
   isPlatformIgnored?: (platformKey: string) => boolean;
@@ -357,7 +352,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const isFocused = useIsFocused();
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
@@ -1905,22 +1900,22 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return (
       <>
         {/* Title */}
-        <FieldSheet visible={openField === 'title'} title="Title" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('title') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" helper="A clear, specific name sells best" maxLength={80} showCount onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('title')} />
+        <FieldSheet visible={openField === 'title'} title="Title" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" helper="A clear, specific name sells best" maxLength={80} showCount scope={scopeText} externalUpdate={hasExternalUpdate('title')} />
         </FieldSheet>
 
         {/* Description */}
-        <FieldSheet visible={openField === 'description'} title="Description" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('description') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe the item, its condition, and what's included…" onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('description')} />
+        <FieldSheet visible={openField === 'description'} title="Description" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe the item, its condition, and what's included…" scope={scopeText} externalUpdate={hasExternalUpdate('description')} />
         </FieldSheet>
 
         {/* SKU */}
-        <FieldSheet visible={openField === 'sku'} title="SKU" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('sku') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" helper="Your internal code to track this item" onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('sku')} />
+        <FieldSheet visible={openField === 'sku'} title="SKU" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" helper="Your internal code to track this item" scope={scopeText} externalUpdate={hasExternalUpdate('sku')} />
         </FieldSheet>
 
         {/* Barcode */}
-        <FieldSheet visible={openField === 'barcode'} title="Barcode" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('barcode') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+        <FieldSheet visible={openField === 'barcode'} title="Barcode" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
           <SheetTextField value={(activeData as any).barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN / code128" scope={scopeText} externalUpdate={hasExternalUpdate('barcode')} />
           <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
             <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
@@ -1929,23 +1924,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </FieldSheet>
 
         {/* Tags */}
-        <FieldSheet visible={openField === 'tags'} title="Tags" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('tags') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
-          <ChipsField label="Tags" valueArray={(activeData as any).tags} onChangeArray={(arr) => patchField('tags', arr)} onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined} refilled={refilledIncludes('tags')} />
+        <FieldSheet visible={openField === 'tags'} title="Tags" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
+          <ChipsField label="Tags" valueArray={(activeData as any).tags} onChangeArray={(arr) => patchField('tags', arr)} refilled={refilledIncludes('tags')} />
         </FieldSheet>
 
         {/* Price — number + sold-comps research (never a bare number to defend) */}
-        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('price') : undefined} onClose={() => { setOpenField(null); setPricingResearchModalVisible(false); }} onSave={() => { setOpenField(null); setPricingResearchModalVisible(false); }}>
+        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onClose={() => { setOpenField(null); setPricingResearchModalVisible(false); }} onSave={() => { setOpenField(null); setPricingResearchModalVisible(false); }}>
           <View style={rowStyles.priceInputWrap}>
             <Text style={rowStyles.priceCurrency}>$</Text>
             <TextInput style={rowStyles.priceInput} value={String((activeData as any).price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
           </View>
 
-          {enableAIRefill && activeTab !== 'all' && (
-            <TouchableOpacity style={[rowStyles.researchBtn, { marginTop: 12 }]} onPress={() => onRegenerateField?.(activePlatformKey, 'price')}>
-              <Sparkles size={15} color={BRAND_PRIMARY} />
-              <Text style={rowStyles.researchBtnText}>Re-suggest with AI</Text>
-            </TouchableOpacity>
-          )}
 
           {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
             <View style={{ marginTop: 16 }}>
@@ -2104,7 +2093,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </FieldSheet>
 
         {/* Weight */}
-        <FieldSheet visible={openField === 'weight'} title="Weight" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('weight') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+        <FieldSheet visible={openField === 'weight'} title="Weight" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
           <SheetTextField value={String((activeData as any).weight ?? '')} onChangeText={(t) => patchField('weight', t)} keyboardType="decimal-pad" autoFocus placeholder="0" helper="Used for shipping estimates" />
           <View style={{ marginTop: 16 }}>
             <Text style={rowStyles.sectionLabel}>Unit</Text>
@@ -2464,8 +2453,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           value={activeData.description}
           multiline
           onChangeText={(t) => patchField('description', t)}
-          onInfo={() => onOpenFieldPanel?.('description')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('description')}
           externalUpdate={hasExternalUpdate('description')}
         />
@@ -2474,8 +2461,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           label="Tags"
           valueArray={activeData.tags}
           onChangeArray={(arr) => patchField('tags', arr)}
-          onInfo={() => onOpenFieldPanel?.('tags')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined}
           refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
         />
 
@@ -2651,11 +2636,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                       <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
                     </View>
                   ) : null}
-                  {enableAIRefill && activeTab !== 'all' && (
-                    <TouchableOpacity onPress={() => onRegenerateField?.(activePlatformKey, 'price')} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-                      <Sparkles size={14} color={'#000'} />
-                    </TouchableOpacity>
-                  )}
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   {showResearchPricing && (
@@ -2663,9 +2643,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                       {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={14} color={BRAND_PRIMARY} />}
                       <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
                     </TouchableOpacity>
-                  )}
-                  {onOpenFieldPanel && (
-                    <TouchableOpacity onPress={() => onOpenFieldPanel('price')}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
                   )}
                 </View>
               </View>
@@ -2731,7 +2708,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
         <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-end', }}>
           <View style={{ flex: 1 }}>
-            <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
+            <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} />
           </View>
           <View style={{ width: 140, marginBottom: 12 }}>
             <AppMenuSelect
@@ -2750,8 +2727,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             required
             value={activeData.sku}
             onChangeText={(t) => patchField('sku', t)}
-            onInfo={() => onOpenFieldPanel?.('sku')}
-            onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
             refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
             error={requiredFields?.includes?.('sku') && !activeData.sku}
             externalUpdate={hasExternalUpdate('sku')}
@@ -2759,7 +2734,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ flex: 1 }}>
-            <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} externalUpdate={hasExternalUpdate('barcode')} />
+            <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} externalUpdate={hasExternalUpdate('barcode')} />
           </View>
           <TouchableOpacity style={[styles.scanBtn, {}]} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
             <Icon name="qrcode-scan" size={20} color="#fff" />

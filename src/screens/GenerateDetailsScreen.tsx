@@ -9,7 +9,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
-import { Boxes, X, Sparkles, Pencil, ArrowLeft, ChevronLeft, History, Edit, PencilIcon } from 'lucide-react-native';
+import { Boxes, X, Pencil, ChevronLeft, PencilIcon } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import { CHAT_COLORS, CHAT_FONT, CHAT_SHADOWS, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
@@ -43,7 +43,6 @@ const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
 // Feature flag to hide AI refill functionality
-const ENABLE_AI_REFILL_FEATURES = false;
 
 
 
@@ -69,35 +68,6 @@ const log = createLogger('GenerateDetailsScreen');
 // NOTE: Schema currently not used in this file - UI uses ListingEditorForm which has its own logic
 
 // Helper function to group versions by match job ID, showing latest as primary
-const groupVersionsByMatchId = (versions: Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string }>): Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string; versionCount?: number; allVersions?: Array<any> }> => {
-  if (!Array.isArray(versions)) return [];
-
-  // Group by match job ID
-  const grouped = versions.reduce((acc, version) => {
-    const key = version.matchJobId || 'no-match-id';
-    if (!acc[key]) {
-      acc[key] = [];
-    }
-    acc[key].push(version);
-    return acc;
-  }, {} as Record<string, typeof versions>);
-
-  // For each group, return the latest version as primary with version count
-  const result = Object.entries(grouped).map(([matchJobId, versionGroup]) => {
-    // Sort by creation date (newest first)
-    const sortedVersions = versionGroup.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    const latestVersion = sortedVersions[0];
-
-    return {
-      ...latestVersion,
-      versionCount: sortedVersions.length,
-      allVersions: sortedVersions // Store all versions for access
-    };
-  });
-
-  // Sort results by creation date (newest first)
-  return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-};
 
 // REMOVED - Now using unified hydration utilities from platformDataHydration.ts
 
@@ -639,21 +609,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [itemMenuOpen, setItemMenuOpen] = useState(false);
   const [userGenerateJobs, setUserGenerateJobs] = useState<Array<{ jobId: string; status: string; createdAt: string; completedAt?: string }>>([]);
   const [checklist, setChecklist] = useState<Record<string, { missing: string[]; ready: boolean }>>({});
-  const [versionsSheetOpen, setVersionsSheetOpen] = useState(false);
-  const [versions, setVersions] = useState<Array<{ id: string; jobId: string; createdAt: string; platforms: any; sources?: Array<{ url: string; usedForFields?: string[] }>; matchJobId?: string; source?: string; versionCount?: number; allVersions?: Array<any> }>>([]);
-  const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null);
-  const [versionsTab, setVersionsTab] = useState<'versions' | 'sources'>('versions');
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerMounted, setScannerMounted] = useState(false);
   const scannerHeight = useRef(new Animated.Value(0)).current;
-  const [isFilling, setIsFilling] = useState(false);
-  const [recentlyFilledByPlatform, setRecentlyFilledByPlatform] = useState<Record<string, string[]>>({});
-  const [fillSelectedFields, setFillSelectedFields] = useState<string[]>([
-    'title', 'description', 'price', 'barcode'
-  ]);
-  const [lastFillCount, setLastFillCount] = useState<number>(0);
-  const [refilledFieldsByPlatform, setRefilledFieldsByPlatform] = useState<Record<string, string[]>>({});
-  const [fillOverlayOpen, setFillOverlayOpen] = useState<boolean>(false);
   const [missingFieldsModalOpen, setMissingFieldsModalOpen] = useState<boolean>(false);
   const [selectedMissingPlatform, setSelectedMissingPlatform] = useState<string>('');
   const [fieldSearchQuery, setFieldSearchQuery] = useState<string>('');
@@ -665,15 +623,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     'Shipping Details': false,
     'Return Policy': false
   });
-  // Regenerate modal state
-  const [regenModalOpen, setRegenModalOpen] = useState(false);
-  const [regenPlatformKey, setRegenPlatformKey] = useState<string | null>(null);
-  const [regenFieldKey, setRegenFieldKey] = useState<string | null>(null);
-  const [regenText, setRegenText] = useState<string>('');
-  const [regenVersions, setRegenVersions] = useState<Array<{ label: string; text: string }>>([]);
-  const [regenActiveVersion, setRegenActiveVersion] = useState(0);
-  const [regenSubmitting, setRegenSubmitting] = useState(false);
-  const [regenAutoRun, setRegenAutoRun] = useState(false);
   const [quickFixLoading, setQuickFixLoading] = useState(false);
   // Quick-fix shows the change as a diff to accept (Keep original / Use this) — never a silent overwrite.
   const [quickFixDiff, setQuickFixDiff] = useState<{
@@ -861,16 +810,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     })();
   }, []);
 
-  useEffect(() => {
-    if (regenModalOpen && regenAutoRun && !regenSubmitting) {
-      // small delay to allow modal layout before firing
-      const t = setTimeout(() => {
-        submitRegenerateField();
-        setRegenAutoRun(false);
-      }, 150);
-      return () => clearTimeout(t);
-    }
-  }, [regenModalOpen, regenAutoRun, regenSubmitting]);
 
   // Get shared JobsContext for cross-screen state sync (defined early to avoid a TDZ crash on web)
   const jobsContext = useJobsOptional();
@@ -1154,71 +1093,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     setChecklist(next);
   }, [displayedPlatforms]);
 
-  // Fetch versions when sheet opens
-  useEffect(() => {
-    if (!versionsSheetOpen) return;
-
-    // Try to get versions from generate jobs related to this match
-    const productId = (route.params as any)?.productId || effectiveResult?.productId || null;
-    const variantId = (route.params as any)?.variantId || effectiveResult?.variantId || null;
-    const currentMatchJobId = matchJobId;
-
-    (async () => {
-      try {
-        // First try to get versions from the backend API
-        const baseUrl = API_BASE_URL;
-        if (baseUrl && productId) {
-          const token = await ensureSupabaseJwt();
-          const res = await fetch(`${baseUrl}/api/products/generate/versions?productId=${encodeURIComponent(productId)}${variantId ? `&variantId=${encodeURIComponent(variantId)}` : ''}&limit=20&offset=0`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data)) {
-              // Group versions by match job ID and show latest version as primary
-              const groupedVersions = groupVersionsByMatchId(data);
-              setVersions(groupedVersions);
-              return;
-            }
-          }
-        }
-
-        // Fallback: get all generate jobs and filter by current match context
-        const token = await ensureSupabaseJwt();
-        const { data: generateJobs, error } = await supabase
-          .from('generate_jobs')
-          .select('job_id, status, created_at, results, match_job_id')
-          .eq('status', 'completed')
-          .order('created_at', { ascending: false })
-          .limit(50); // Increased limit to get more versions for grouping
-
-        if (!error && generateJobs) {
-          const relatedVersions = generateJobs
-            .filter(job => {
-              // Include jobs that either have the same match_job_id or contain results for the same product
-              return job.match_job_id === currentMatchJobId ||
-                (Array.isArray(job.results) && job.results.some((r: any) =>
-                  r.productId === productId || r.productIndex === effectiveResult?.productIndex
-                ));
-            })
-            .map(job => ({
-              id: job.job_id,
-              jobId: job.job_id,
-              createdAt: job.created_at,
-              platforms: job.results?.[0]?.platforms || {},
-              matchJobId: job.match_job_id,
-              source: job.results?.[0]?.source || 'generated'
-            }));
-
-          // Group versions by match job ID  
-          const groupedVersions = groupVersionsByMatchId(relatedVersions);
-          setVersions(groupedVersions);
-        }
-      } catch (e) {
-        log.error('Error fetching versions:', e);
-      }
-    })();
-  }, [versionsSheetOpen, first, route.params, matchJobId]);
 
   // Fetch user's generate jobs for modal display (counts and last generated timestamps)
   useEffect(() => {
@@ -1447,12 +1321,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     setMissingFieldsModalOpen(false);
   };
 
-  // Field panel open handler
-  const handleOpenFieldPanel = (fieldKey: string) => {
-    setSelectedFieldKey(fieldKey);
-    setVersionsTab('versions');
-    setVersionsSheetOpen(true);
-  };
 
   // Build publish/save payloads from displayed data
   const buildPlatformPayload = () => {
@@ -1605,163 +1473,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return payload;
   };
 
-  const fillTheRest = async () => {
-    if (isFilling || !ENABLE_AI_REFILL_FEATURES) return;
-    try {
-      setIsFilling(true);
-      const baseUrl = API_BASE_URL;
-      const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || effectiveResult?.productId;
-      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
-      if (!baseUrl || !productId || !variantId || !token) return;
 
-      const payload = buildPlatformPayload();
-      const selectedPlatforms = Object.keys(displayedPlatforms || {});
-
-      const res = await fetch(`${baseUrl}/api/products/generate-details`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          productId,
-          variantId,
-          imageUris: payload.media.imageUris,
-          coverImageIndex: payload.media.coverImageIndex,
-          selectedPlatforms,
-          selectedMatch: null,
-          enhancedWebData: null,
-        })
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      const gen = (data?.generatedDetails || data || {}) as any;
-      const genPlatforms = (gen || {}) as Record<string, any>;
-      log.debug('[GEN-DETAILS] fillTheRest generated platform keys:', Object.keys(genPlatforms));
-
-      const mergeFields = ['title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode', 'images', 'options', 'seoTitle', 'seoDescription'];
-      const next = { ...displayedPlatforms } as any;
-      const changedMap: Record<string, string[]> = {};
-      for (const k of Object.keys(genPlatforms)) {
-        const incoming = genPlatforms[k] || {};
-        const curr = next[k] || {};
-        const merged: any = { ...curr };
-        for (const f of mergeFields) {
-          if (!fillSelectedFields.includes(f)) continue;
-          const currVal = curr?.[f];
-          const incomingVal = incoming?.[f];
-          const isEmpty = (v: any) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
-          if (isEmpty(currVal) && incomingVal !== undefined) {
-            merged[f] = Array.isArray(incomingVal) ? [...incomingVal] : incomingVal;
-            if (!changedMap[k]) changedMap[k] = [];
-            changedMap[k].push(f);
-          }
-        }
-        next[k] = merged;
-      }
-      updatePlatforms(next);
-      setRecentlyFilledByPlatform(changedMap);
-      // Track refilled fields per platform for pill badges
-      setRefilledFieldsByPlatform(prev => {
-        const merged: Record<string, string[]> = { ...prev };
-        for (const k of Object.keys(changedMap)) {
-          const prevArr = merged[k] || [];
-          merged[k] = Array.from(new Set([...prevArr, ...changedMap[k]]));
-        }
-        return merged;
-      });
-      // write into platform state so ListingEditorForm can render badge without screen prop threading
-      updatePlatforms(prev => {
-        const out: any = { ...prev };
-        for (const k of Object.keys(changedMap)) {
-          out[k] = { ...(out[k] || {}), __refilled: Array.from(new Set([...((out[k]?.__refilled) || []), ...changedMap[k]])) };
-        }
-        return out;
-      });
-    } catch { }
-    finally {
-      setIsFilling(false);
-    }
-  };
-
-  const regenerateField = async (platformKey: string, fieldKey: string) => {
-    if (!ENABLE_AI_REFILL_FEATURES) return;
-    setRegenPlatformKey(platformKey);
-    setRegenFieldKey(fieldKey);
-    // Seed versions with current text as Version 1
-    const currentVal = ((displayedPlatforms as any)?.[platformKey] || {})[fieldKey];
-    const baseText = Array.isArray(currentVal) ? currentVal.join(', ') : (currentVal ?? '');
-    setRegenVersions([{ label: 'Version 1', text: String(baseText) }]);
-    setRegenActiveVersion(0);
-    setRegenText('');
-    setRegenModalOpen(true);
-    // If field is empty, auto-run regenerate when modal opens
-    const isEmpty = baseText === '' || baseText == null;
-    setRegenAutoRun(isEmpty);
-  };
-
-  const submitRegenerateField = async () => {
-    try {
-      setRegenSubmitting(true);
-      const baseUrl = API_BASE_URL;
-      const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || effectiveResult?.productId;
-      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
-      if (!baseUrl || !productId || !variantId || !regenPlatformKey || !regenFieldKey || !token) return;
-      const payload = buildPlatformPayload();
-
-      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          generateJobId: jobId,
-          products: [{
-            productIndex: currentProductIndex,
-            productId,
-            variantId,
-            regenerateType: 'specific_fields',
-            targetPlatform: regenPlatformKey,
-            targetFields: [regenFieldKey],
-            userQuery: regenText,
-            customPrompt: regenText,
-            imageUrls: payload.media.imageUris,
-          }],
-          options: { useExistingScrapedData: true }
-        })
-      });
-      if (!submit.ok) throw new Error('regenerate submit failed');
-      const submitJson = await submit.json();
-      const regenJobId = submitJson?.jobId;
-
-      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
-      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
-      const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
-      const incomingPlatform = (matched?.platforms || {})[regenPlatformKey] || {};
-      if (incomingPlatform && Object.prototype.hasOwnProperty.call(incomingPlatform, regenFieldKey)) {
-        const newText = Array.isArray(incomingPlatform[regenFieldKey!]) ? (incomingPlatform[regenFieldKey!] as any[]).join(', ') : String(incomingPlatform[regenFieldKey!]);
-        setRegenVersions(prev => [...prev, { label: `Version ${prev.length + 1}`, text: newText }]);
-        setRegenActiveVersion(prev => prev + 1);
-        updatePlatforms(prev => ({
-          ...prev,
-          [regenPlatformKey]: (() => {
-            const curr = prev?.[regenPlatformKey] || {} as any;
-            const __refilled = Array.from(new Set([...(curr.__refilled || []), regenFieldKey!]));
-            return {
-              ...curr,
-              [regenFieldKey!]: Array.isArray(incomingPlatform[regenFieldKey!]) ? [...incomingPlatform[regenFieldKey!]] : incomingPlatform[regenFieldKey!],
-              __refilled,
-            };
-          })()
-        }));
-        setRefilledFieldsByPlatform(prev => ({
-          ...prev,
-          [regenPlatformKey]: Array.from(new Set([...(prev[regenPlatformKey] || []), regenFieldKey!]))
-        }));
-      }
-    } catch (e) {
-      log.error('Regenerate field failed:', e);
-    } finally {
-      setRegenSubmitting(false);
-    }
-  };
 
   const doSaveToInventory = async () => {
     log.debug('[doSaveToInventory] Starting inventory save...');
@@ -1900,7 +1612,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       if (Object.keys(missingByPlatform).length) {
         const lines = Object.entries(missingByPlatform).map(([plat, fields]) =>
-          `${PLATFORM_META[plat]?.label || plat}: Missing ${fields.join(', ')}`
+          `${(PLATFORM_META as any)[plat]?.label || plat}: Missing ${fields.join(', ')}`
         );
         alert(`Cannot publish yet!\n\n${lines.join('\n')}\n\nPlease fill in all required fields.`);
         return;
@@ -2158,27 +1870,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
-  const pollRegenerateUntilDone = async (regenJobId: string, token?: string) => {
-    const baseUrl = API_BASE_URL;
-    if (!baseUrl) return null;
-    for (let i = 0; i < 40; i++) {
-      try {
-        const auth = token || await ensureSupabaseJwt();
-        const r = await fetch(`${baseUrl}/api/products/regenerate/status/${regenJobId}`, { headers: auth ? { Authorization: `Bearer ${auth}` } : undefined });
-        const s = await r.json();
-        if (s?.status === 'completed') {
-          const rr = await fetch(`${baseUrl}/api/products/regenerate/results/${regenJobId}`, { headers: auth ? { Authorization: `Bearer ${auth}` } : undefined });
-          if (rr.ok) return await rr.json();
-          return null;
-        }
-        if (s?.status === 'failed' || s?.status === 'cancelled') return null;
-      } catch (e) { log.debug('Poll check failed, retrying...', e); }
-      // Backoff: start at 3s, increase slightly
-      const delay = 3000 + (i * 500);
-      await new Promise(res => setTimeout(res, delay));
-    }
-    return null;
-  };
 
   const generatePlatform = async (platformKey: string) => {
     try {
@@ -2244,104 +1935,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
-  const suggestVariants = async (platformKey: string) => {
-    try {
-      const baseUrl = API_BASE_URL;
-      const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || effectiveResult?.productId;
-      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
-      if (!baseUrl || !productId || !variantId || !token) return;
-      const payload = buildPlatformPayload();
-      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          generateJobId: jobId,
-          products: [{
-            productIndex: currentProductIndex,
-            productId,
-            variantId,
-            regenerateType: 'specific_fields',
-            targetPlatform: platformKey,
-            targetFields: ['variants'],
-            userQuery: 'Suggest variants from images and description. Return optionsSuggestions as {name, values} and variantExamples.',
-            customPrompt: 'Suggest variants from images and description. Return optionsSuggestions as {name, values} and variantExamples.',
-            imageUrls: payload.media.imageUris,
-          }],
-          options: { useExistingScrapedData: true }
-        })
-      });
-      if (!submit.ok) throw new Error('variant suggest submit failed');
-      const submitJson = await submit.json();
-      const regenJobId = submitJson?.jobId;
-      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
-      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
-      const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
-      const canonical = (matched?.platforms || {}).canonical;
-      if (canonical?.optionsSuggestions) {
-        updatePlatforms(prev => ({
-          ...prev,
-          [platformKey]: {
-            ...(prev as any)[platformKey],
-            __variantSuggestions: canonical.optionsSuggestions
-          }
-        }));
-      }
-    } catch (e) {
-      log.error('Suggest variants failed:', e);
-    }
-  };
 
-  const boostListing = async (platformKey: string, kind: 'boost' | 'advanced') => {
-    try {
-      const baseUrl = API_BASE_URL;
-      const token = await ensureSupabaseJwt();
-      const productId = (route.params as any)?.productId || effectiveResult?.productId;
-      const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
-      if (!baseUrl || !productId || !variantId || !token) return;
-      const payload = buildPlatformPayload();
-      const fieldGroups: Record<string, string[]> = {
-        boost: ['tags', 'categorySuggestion', 'brand', 'seoTitle', 'seoDescription'],
-        advanced: ['googleShopping', 'itemSpecifics', 'returnPolicy', 'shippingDetails']
-      };
-      const targetFields = fieldGroups[kind] || [];
-      const userQuery = kind === 'boost'
-        ? 'Boost listing for conversion and SEO. Add persuasive tags, category suggestions, brand if known, and SEO title/description.'
-        : 'Fill advanced/other listing fields accurately from context. Keep optional fields helpful and consistent.';
-      const submit = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          generateJobId: jobId,
-          products: [{
-            productIndex: currentProductIndex,
-            productId,
-            variantId,
-            regenerateType: 'specific_fields',
-            targetPlatform: platformKey,
-            targetFields,
-            userQuery,
-            customPrompt: userQuery,
-            imageUrls: payload.media.imageUris,
-          }],
-          options: { useExistingScrapedData: true }
-        })
-      });
-      if (!submit.ok) throw new Error('boost submit failed');
-      const submitJson = await submit.json();
-      const regenJobId = submitJson?.jobId;
-      const resultPayload = await pollRegenerateUntilDone(regenJobId, token || undefined);
-      const resultArray = Array.isArray(resultPayload?.results) ? resultPayload.results : [];
-      const matched = resultArray.find((r: any) => r.productIndex === currentProductIndex) || resultArray[0];
-      const incomingPlatform = (matched?.platforms || {})[platformKey] || {};
-      const normalized = normalizeForListingEditor(incomingPlatform);
-      updatePlatforms(prev =>
-        hydratePlatformsFromBackend({ [platformKey]: normalized }, prev)
-      );
-    } catch (e) {
-      log.error('Boost listing failed:', e);
-    }
-  };
 
   // ========== PHASE 2.6: Media Gallery Handlers ==========
   const handlePickImage = async () => {
@@ -2624,8 +2218,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       return merged;
                     });
                   }}
-                  onOpenFieldPanel={handleOpenFieldPanel}
-                  onRegenerateField={ENABLE_AI_REFILL_FEATURES ? regenerateField : undefined}
                   onOpenBarcodeScanner={(onResult) => {
                     openScanner(onResult);
                   }}
@@ -2650,9 +2242,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   allMissingCount={allMissingRequiredFields.filter(m => m.field !== 'category').length}
                   onGeneratePlatform={generatePlatform}
                   generatingPlatformKeys={generatingPlatformKeys}
-                  enableAIRefill={ENABLE_AI_REFILL_FEATURES}
-                  onSuggestVariants={suggestVariants}
-                  onBoostListing={boostListing}
                   isGenerationMode={true}
                 />
               </View>
@@ -2705,9 +2294,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 <Text style={styles.itemsPillText}>{currentItemPosition}/{items.length}</Text>
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity style={styles.navCircle} onPress={() => setVersionsSheetOpen(true)} activeOpacity={0.85}>
-              <History size={18} color={CHAT_COLORS.ink} />
-            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -2904,38 +2490,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       </KeyboardAvoidingView>
 
 
-      {!!lastFillCount && ENABLE_AI_REFILL_FEATURES && (
-        <View style={{ position: 'absolute', bottom: 96, left: 16, right: 16, backgroundColor: 'rgba(17,17,17,0.92)', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' }}>
-          <Text style={{ color: '#fff', fontWeight: '600' }}>Filled {lastFillCount} field{lastFillCount === 1 ? '' : 's'}</Text>
-        </View>
-      )}
-      {fillOverlayOpen && ENABLE_AI_REFILL_FEATURES && (
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 6000 }} pointerEvents="box-none">
-          <TouchableOpacity activeOpacity={1} onPress={() => setFillOverlayOpen(false)} style={{ height: 8 }} />
-          <View style={{ backgroundColor: '#fff', borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderColor: '#E5E5E5' }}>
-            <Text style={{ color: '#000', fontWeight: '700', marginBottom: 8 }}>Choose fields to fill</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {['title', 'description', 'tags', 'price', 'sku', 'barcode', 'seoTitle', 'seoDescription', 'options'].map((f) => {
-                const selected = fillSelectedFields.includes(f);
-                return (
-                  <TouchableOpacity key={f} onPress={() => setFillSelectedFields(prev => selected ? prev.filter(x => x !== f) : [...prev, f])} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: selected ? BRAND_PRIMARY : '#E5E5E5', backgroundColor: selected ? 'rgba(147,200,34,0.08)' : '#fff', marginRight: 8, marginBottom: 8 }}>
-                    <Text style={{ color: '#000' }}>{f}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, marginBottom: 4, alignItems: "center" }}>
-              <TouchableOpacity onPress={() => setFillOverlayOpen(false)} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}>
-                <Text style={{ color: '#000' }}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => { setFillOverlayOpen(false); fillTheRest(); }} style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Sparkles size={16} color={'#111'} />
-                <Text style={{ color: '#000', fontWeight: '700' }}>Fill selected</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
       {scannerMounted && (
         <View style={styles.scannerDockFull} pointerEvents="box-none">
           <Animated.View pointerEvents={scannerOpen ? 'auto' : 'none'} style={[styles.scannerFullBleed, { height: scannerHeight }]}>
@@ -2956,181 +2510,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           </Animated.View>
         </View>
-      )}
-      {versionsSheetOpen && (
-        <>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={() => setVersionsSheetOpen(false)}
-            style={styles.versionsBackdrop}
-          />
-          <View style={styles.versionsSheet}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity onPress={() => setVersionsTab('versions')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'versions' ? BRAND_PRIMARY : '#E5E5E5', backgroundColor: versionsTab === 'versions' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
-                  <Text style={{ color: '#000', fontWeight: '600' }}>Versions</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setVersionsTab('sources')} style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: versionsTab === 'sources' ? BRAND_PRIMARY : '#E5E5E5', backgroundColor: versionsTab === 'sources' ? 'rgba(147,200,34,0.08)' : '#fff' }}>
-                  <Text style={{ color: '#000', fontWeight: '600' }}>Sources</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <TouchableOpacity onPress={() => setVersionsSheetOpen(false)} accessibilityLabel="Close versions panel" style={{ padding: 6 }}>
-                  <X size={20} color={'#000'} />
-                </TouchableOpacity>
-              </View>
-            </View>
-            <ScrollView style={{ marginTop: 12 }}>
-              {versionsTab === 'versions' ? (
-                versions.length === 0 ? (
-                  <Text style={{ color: '#666' }}>No versions recorded yet.</Text>
-                ) : versions.map((v, index) => {
-                  const isCurrentVersion = v.jobId === jobId;
-                  const platformCount = Object.keys(v.platforms || {}).length;
-                  const hasMultipleVersions = (v.versionCount || 1) > 1;
-
-                  return (
-                    <View key={v.id} style={{ marginBottom: 8 }}>
-                      {/* Main version card */}
-                      <TouchableOpacity
-                        onPress={() => {
-                          // Normalize and hydrate the version data
-                          const normalized: Record<string, any> = {};
-                          for (const [key, value] of Object.entries(v.platforms || {})) {
-                            normalized[key] = normalizeForListingEditor(value);
-                          }
-                          updatePlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
-                          setVersionsSheetOpen(false);
-                        }}
-                        style={[
-                          {
-                            borderWidth: 1,
-                            borderColor: isCurrentVersion ? BRAND_PRIMARY : '#E5E5E5',
-                            backgroundColor: isCurrentVersion ? 'rgba(147,200,34,0.05)' : '#fff',
-                            borderRadius: 10,
-                            padding: 12,
-                          }
-                        ]}
-                      >
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                          <Text style={{ color: '#000', fontWeight: '600', flex: 1 }}>
-                            Match from {new Date(v.createdAt).toLocaleDateString()}
-                            {isCurrentVersion && <Text style={{ color: BRAND_PRIMARY }}> (Current)</Text>}
-                            {hasMultipleVersions && (
-                              <Text style={{ color: '#666', fontWeight: '400' }}> • {v.versionCount} versions</Text>
-                            )}
-                          </Text>
-                          <Text style={{ color: '#666', fontSize: 12 }}>
-                            {new Date(v.createdAt).toLocaleDateString()}
-                          </Text>
-                        </View>
-
-                        <Text style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>
-                          Latest: {new Date(v.createdAt).toLocaleTimeString()}
-                        </Text>
-
-                        {platformCount > 0 ? (
-                          <Text style={{ color: '#000', fontSize: 13 }}>
-                            {platformCount} platform{platformCount !== 1 ? 's' : ''}: {Object.keys(v.platforms || {}).map(k => PLATFORM_META[k]?.label || k).join(', ')}
-                          </Text>
-                        ) : (
-                          <Text style={{ color: '#999', fontSize: 13, fontStyle: 'italic' }}>No platform data</Text>
-                        )}
-
-                        {v.matchJobId && (
-                          <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
-                            Match ID: {v.matchJobId.slice(0, 8)}...
-                          </Text>
-                        )}
-                      </TouchableOpacity>
-
-                      {/* Show all versions if multiple exist */}
-                      {hasMultipleVersions && Array.isArray(v.allVersions) && (
-                        <View style={{ marginTop: 8, marginLeft: 16 }}>
-                          <Text style={{ color: '#666', fontSize: 12, marginBottom: 6 }}>All versions for this match:</Text>
-                          {v.allVersions.map((version: any, versionIndex: number) => {
-                            const isCurrentSubVersion = version.jobId === jobId;
-                            const versionPlatformCount = Object.keys(version.platforms || {}).length;
-
-                            return (
-                              <TouchableOpacity
-                                key={version.id}
-                                onPress={() => {
-                                  // Normalize and hydrate the version data
-                                  const normalized: Record<string, any> = {};
-                                  for (const [key, value] of Object.entries(version.platforms || {})) {
-                                    normalized[key] = normalizeForListingEditor(value);
-                                  }
-                                  updatePlatforms(prev => hydratePlatformsFromBackend(normalized, prev));
-                                  setVersionsSheetOpen(false);
-                                }}
-                                style={{
-                                  borderWidth: 1,
-                                  borderColor: isCurrentSubVersion ? BRAND_PRIMARY : '#E5E5E5',
-                                  backgroundColor: isCurrentSubVersion ? 'rgba(147,200,34,0.05)' : '#F8F9FA',
-                                  borderRadius: 8,
-                                  padding: 8,
-                                  marginBottom: 4
-                                }}
-                              >
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <Text style={{ color: '#000', fontSize: 13, fontWeight: '600' }}>
-                                    Version {(v.allVersions?.length || 0) - versionIndex}
-                                    {isCurrentSubVersion && <Text style={{ color: BRAND_PRIMARY }}> (Current)</Text>}
-                                  </Text>
-                                  <Text style={{ color: '#666', fontSize: 11 }}>
-                                    {new Date(version.createdAt).toLocaleTimeString()}
-                                  </Text>
-                                </View>
-
-                                {versionPlatformCount > 0 && (
-                                  <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
-                                    {versionPlatformCount} platforms: {Object.keys(version.platforms || {}).map(k => PLATFORM_META[k]?.label || k).join(', ')}
-                                  </Text>
-                                )}
-
-                                {version.source && (
-                                  <Text style={{ color: '#666', fontSize: 10, marginTop: 2 }}>
-                                    Source: {version.source}
-                                  </Text>
-                                )}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      )}
-                    </View>
-                  );
-                })
-              ) : (
-                <View>
-                  {!selectedFieldKey ? (
-                    <Text style={{ color: '#666' }}>Tap the info icon next to a field to view sources for that field.</Text>
-                  ) : (
-                    <>
-                      <Text style={{ color: '#000', fontWeight: '700', marginBottom: 6 }}>Sources for "{selectedFieldKey}"</Text>
-                      {(() => {
-                        const rows: Array<{ url: string }> = [];
-                        for (const v of versions) {
-                          const src = (v.sources || []).filter(s => !s.usedForFields || s.usedForFields.includes(selectedFieldKey));
-                          src.forEach(s => rows.push({ url: s.url }));
-                        }
-                        const unique = Array.from(new Set(rows.map(r => r.url)));
-                        return unique.length === 0 ? (
-                          <Text style={{ color: '#666' }}>No recorded field-level sources.</Text>
-                        ) : unique.map(u => (
-                          <View key={u} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 8 }}>
-                            <Text style={{ color: '#000' }}>{u}</Text>
-                          </View>
-                        ));
-                      })()}
-                    </>
-                  )}
-                </View>
-              )}
-            </ScrollView>
-          </View>
-        </>
       )}
       {missingFieldsModalOpen && (
         <>
@@ -3159,7 +2538,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
             {/* Platform info */}
             <Text style={{ fontSize: 14, color: '#666', marginBottom: 12 }}>
-              Platform: {PLATFORM_META[selectedMissingPlatform]?.label || selectedMissingPlatform}
+              Platform: {(PLATFORM_META as any)[selectedMissingPlatform]?.label || selectedMissingPlatform}
             </Text>
 
             <ScrollView style={{ maxHeight: 400 }}>
@@ -3227,105 +2606,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             >
               <Text style={{ color: '#000', fontWeight: '600' }}>Cancel</Text>
             </TouchableOpacity>
-          </View>
-        </>
-      )}
-      {/* Regenerate modal */}
-      {regenModalOpen && (
-        <>
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={() => setRegenModalOpen(false)}
-            style={styles.modalBackdrop}
-          />
-          <View style={[styles.missingFieldsModal, { left: 0, right: 0, borderRadius: 16, backgroundColor: "#FFF" }]}>
-
-            {/* Modal Header */}
-            <View style={{ flex: 1, flexDirection: 'row', alignContent: "center", alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                <Pencil size={16} color={'#000'} />
-                <Text style={{ fontSize: 18, fontWeight: '700', color: '#000', alignItems: 'center', gap: 3 }}>
-                  Editing This Field
-                </Text>
-
-              </View>
-
-
-              <TouchableOpacity style={[styles.btnSecondary, { flexDirection: "row", backgroundColor: "#FFF", }]} onPress={() => setRegenModalOpen(false)}>
-                <Icon name="arrow-left" size={18} color={'#000'} />
-                <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
-              </TouchableOpacity>
-
-
-
-            </View>
-
-
-            {/* Current Field Card */}
-            <View style={{ flexDirection: "column", borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF", borderRadius: 10, marginBottom: 20, gap: 8, boxShadow: "offsetX: 3, color: black, " }}>
-
-              <View style={{ flex: 1, flexDirection: "row", justifyContent: "space-around", alignItems: "center", paddingHorizontal: 10, paddingVertical: 5 }}>
-
-                <Text style={{ flex: 1, justifyContent: "flex-start", color: '#71717A' }}>
-                  <Text style={{ color: '#000', fontWeight: '600', textTransform: "capitalize" }}>{regenFieldKey} • {regenPlatformKey}</Text>
-                </Text>
-
-
-                {/* Version switcher with arrows */}
-                <View style={{ flex: 1, justifyContent: "flex-end", flexDirection: 'row', alignItems: 'center', gap: 8, }}>
-                  <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.max(0, v - 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, padding: 6 }}>
-                    <Icon name="chevron-left" size={18} color="#000" />
-                  </TouchableOpacity>
-                  <Text style={{ color: '#000', fontWeight: '600' }}>{regenVersions[regenActiveVersion]?.label || 'Version'}</Text>
-                  <TouchableOpacity onPress={() => setRegenActiveVersion(v => Math.min(regenVersions.length - 1, v + 1))} style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 8, backgroundColor: "#71717A", padding: 6 }}>
-                    <Icon name="chevron-right" size={18} color="#FFF" />
-                  </TouchableOpacity>
-                </View>
-
-              </View>
-
-
-              {/* Original/current text area (read-only) */}
-              <View style={{ flex: 1, marginHorizontal: 8, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, padding: 10, marginBottom: 10, backgroundColor: '#FAFAFA' }}>
-                <Text style={{ color: '#000' }}>
-                  {regenVersions[regenActiveVersion]?.text || ''}
-                </Text>
-              </View>
-
-
-            </View>
-
-            {/* Prompt presets - horizontal scroll at same width as input below */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }} contentContainerStyle={{ paddingRight: 6 }}>
-              {['Fill missing', 'More casual', 'More corporate', 'More direct', 'Translate'].map(p => (
-                <TouchableOpacity key={p} onPress={() => setRegenText(t => (t ? `${t} ${p}` : p))} style={{ marginRight: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: "#FFF", }}>
-                  <Text style={{ color: '#000' }}>{p}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <View style={{ borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: "#FFF", }}>
-              {/* Instruction input */}
-              <TextInput
-                style={[styles.input, { borderColor: "transparent", minHeight: 120, textAlignVertical: 'top' }]}
-                value={regenText}
-                onChangeText={setRegenText}
-                placeholder="How do you want to edit this?"
-                multiline
-              />
-
-              {/* Actions */}
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 }}>
-                <TouchableOpacity style={[styles.blackBtnPrimary, regenSubmitting && { opacity: 0.7, backgroundColor: "#000" }]} disabled={regenSubmitting} onPress={submitRegenerateField}>
-                  <Text style={{ color: '#fff' }}>{regenSubmitting ? 'Generating…' : <Icon name="arrow-right" size={18} color={'#FFF'} />}</Text>
-                </TouchableOpacity>
-              </View>
-
-
-
-            </View>
-
           </View>
         </>
       )}
@@ -3482,10 +2762,6 @@ const styles = StyleSheet.create({
   section: { marginTop: 8 },
   platform: { color: '#000', fontWeight: '700', marginBottom: 4 },
   field: { color: '#000', marginBottom: 2 },
-  // zIndex above the glass header (~5000), the bottom bar (100) and field modals (6000) so the
-  // versions panel sits on top of everything when open.
-  versionsBackdrop: { position: 'absolute', top: 0, left: 0, bottom: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 7000 },
-  versionsSheet: { position: 'absolute', top: 0, right: 0, bottom: 0, width: '78%', backgroundColor: '#fff', borderLeftColor: '#E5E5E5', borderLeftWidth: 1, paddingVertical: 70, paddingHorizontal: 20, zIndex: 7001, ...CHAT_SHADOWS.elevated },
   // Docked scanner close to the notch / bezel
   scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
   scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },

@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Sparkles } from 'lucide-react-native';
 import { styles } from './styles';
 
-export function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegenerate, refilled }: { label: string; valueArray?: string[]; onChangeArray: (arr: string[]) => void; onInfo?: () => void; onRegenerate?: () => void; refilled?: boolean }) {
+export function ChipsField({ label, valueArray, onChangeArray, onInfo, refilled }: { label: string; valueArray?: string[]; onChangeArray: (arr: string[]) => void; onInfo?: () => void; refilled?: boolean }) {
   const [text, setText] = useState('');
   const arr = Array.isArray(valueArray) ? valueArray : [];
   return (
@@ -17,14 +16,6 @@ export function ChipsField({ label, valueArray, onChangeArray, onInfo, onRegener
               <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
             </View>
           ) : null}
-          {!!onRegenerate && (
-
-            <TouchableOpacity onPress={onRegenerate} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-              <Sparkles size={14} color={'#000'} />
-            </TouchableOpacity>
-
-
-          )}
         </View>
         {!!onInfo && (
           <TouchableOpacity onPress={onInfo}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>

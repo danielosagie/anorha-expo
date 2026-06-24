@@ -4147,7 +4147,6 @@ const ProductDetailScreen = observer(
                 });
               }}
               onChangeImages={(next) => { setOptimisticImages(next); reorderImages(next); }}
-              onOpenFieldPanel={undefined}
               pendingImages={pendingImages}
               onOpenBarcodeScanner={(onResult) => {
                 openBarcodeScanner(onResult);
