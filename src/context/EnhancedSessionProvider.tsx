@@ -124,6 +124,14 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     
     if (!shouldValidate) {
       log.debug('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
+      // shouldValidate was false because needsBridgeSetup was false → the bridge IS
+      // configured. The init effect can re-run (callback deps churn) and reset
+      // bridgeReady=false; a skipped validation must NOT leave it stuck false, or the
+      // app bounces to the reconnect screen over a perfectly live bridge. Re-affirm.
+      if (configuredRef.current) {
+        setBridgeReady(true);
+        setReady(true);
+      }
       return;
     }
 
@@ -268,7 +276,19 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
     log.debug('[EnhancedSessionProvider] Checking persisted auth state...');
-    
+
+    // If the live bridge is already up, this is an effect RE-RUN (the init effect's
+    // callback deps churned), not a fresh boot. Do NOT demote the session back to
+    // cached/bridgeReady=false — that, combined with the 30-min skip in
+    // validateAuthIfNeeded, left bridgeReady stuck false and bounced the app to the
+    // reconnect screen over a healthy session. Re-affirm the live state and bail.
+    if (configuredRef.current) {
+      setBridgeReady(true);
+      setReady(true);
+      setInitializing(false);
+      return;
+    }
+
     const persistedState = await authPersistence.current.getAuthState();
     const cachedEntitlements = await loadCachedEntitlements();
     
