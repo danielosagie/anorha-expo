@@ -12,6 +12,7 @@ import {
 import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PLATFORM_META } from '../utils/platformConstants';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationModal');
 
@@ -118,6 +119,13 @@ export default function PublishConfirmationModal({
 
     const totalAccounts = calculateTotalAccounts();
     const hasSelection = totalAccounts > 0;
+
+    // Facebook posts through the seller's own computer (Ponder). If FB is selected
+    // and no computer is currently online, give an honest, non-blocking heads-up —
+    // publishing still works (the job queues), it just won't go out until the
+    // computer is on. Never names the automation; says "your computer".
+    const { computerOnline } = useFacebookJobStatus();
+    const showComputerHeadsUp = selectedPlatforms.has('facebook') && !computerOnline;
 
     // Calculate how many platforms actually have connections
     const enabledConnections = allConnections.filter((c: any) => c.IsEnabled);
@@ -260,6 +268,15 @@ export default function PublishConfirmationModal({
                         })()}
                     </ScrollView>
 
+                    {showComputerHeadsUp && (
+                        <View style={styles.computerNotice}>
+                            <Icon name="monitor" size={16} color="#BA7517" style={{ marginTop: 1 }} />
+                            <Text style={styles.computerNoticeText}>
+                                Facebook posts through your own computer. We'll post as soon as it's on — paced to keep your account safe.
+                            </Text>
+                        </View>
+                    )}
+
                     <View style={styles.footer}>
                         <TouchableOpacity
                             onPress={onClose}
@@ -360,6 +377,26 @@ const styles = StyleSheet.create({
         padding: 8,
         backgroundColor: '#F3F4F6',
         borderRadius: 20,
+    },
+    computerNotice: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+        marginHorizontal: 24,
+        marginBottom: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        backgroundColor: '#FBF5EA',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#F0E2C8',
+    },
+    computerNoticeText: {
+        flex: 1,
+        fontSize: 12.5,
+        lineHeight: 17,
+        color: '#8A5A12',
+        fontWeight: '500',
     },
     summaryCard: {
         backgroundColor: '#F9FAFB',

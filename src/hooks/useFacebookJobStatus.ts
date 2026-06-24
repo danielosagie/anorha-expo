@@ -59,7 +59,10 @@ const QUIET_TEXT = '#71717A';
 const QUIET_DOT = '#9CA3AF';
 
 function isFacebook(job: BrowserJobDoc): boolean {
-  return (job.platform || '').toLowerCase() === 'facebook';
+  // Backend stores the discrete value "facebook_marketplace" (browserJobs.create
+  // union); the connection platform key is "facebook". Match either via substring
+  // so the realtime status binds regardless of which namespace produced the job.
+  return (job.platform || '').toLowerCase().includes('facebook');
 }
 
 /**
@@ -221,7 +224,7 @@ export function useFacebookJobStatus(): FacebookJobStatus {
     // also count an explicit facebook worker.
     return presence.some((d) => {
       const fresh = now - (d.lastSeenAt || 0) < PRESENCE_TTL_MS;
-      const platformOk = !d.platform || d.platform.toLowerCase() === 'facebook';
+      const platformOk = !d.platform || d.platform.toLowerCase().includes('facebook');
       return fresh && platformOk;
     });
     // forceTick re-runs this via re-render; presence is the real dep.
