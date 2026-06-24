@@ -8,12 +8,12 @@ function buildMatchAnalyzeProducts(publicImageUrls, itemsForAnalyze, quickMatchH
     const quickMatchHint = (
       hint &&
       typeof selectedIndex === 'number' &&
-      Array.isArray(hint.serpApiData) &&
-      hint.serpApiData[selectedIndex]
+      Array.isArray(hint.matchRows) &&
+      hint.matchRows[selectedIndex]
     ) ? {
       source: hint.source || 'quick_scan_auto',
       selectedIndex,
-      candidates: hint.serpApiData,
+      candidates: hint.matchRows,
       confidence: hint.confidence,
       reasoning: hint.reasoning,
     } : undefined;
