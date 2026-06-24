@@ -62,7 +62,7 @@ const AttachedImages = ({ urls }: { urls: string[] }) => {
   );
 };
 
-const TypingDot = ({ delay }: { delay: number }) => {
+const TypingDot = ({ delay, color = '#93C822', size = 7 }: { delay: number; color?: string; size?: number }) => {
   const progress = useSharedValue(0.3);
   useEffect(() => {
     progress.value = withDelay(
@@ -74,14 +74,18 @@ const TypingDot = ({ delay }: { delay: number }) => {
     opacity: 0.35 + progress.value * 0.65,
     transform: [{ scale: 0.85 + progress.value * 0.2 }],
   }));
-  return <Animated.View style={[styles.typingDot, style]} />;
+  return (
+    <Animated.View
+      style={[styles.typingDot, { width: size, height: size, borderRadius: size / 2, backgroundColor: color }, style]}
+    />
+  );
 };
 
-const TypingIndicator = () => (
+const TypingIndicator = ({ color, size }: { color?: string; size?: number }) => (
   <View style={styles.typingRow}>
-    <TypingDot delay={0} />
-    <TypingDot delay={140} />
-    <TypingDot delay={280} />
+    <TypingDot delay={0} color={color} size={size} />
+    <TypingDot delay={140} color={color} size={size} />
+    <TypingDot delay={280} color={color} size={size} />
   </View>
 );
 
@@ -131,6 +135,55 @@ const toolStepIcon = (tool: string): string => {
   return 'cog-outline';
 };
 
+// Title-case a raw identifier as a last resort. The seller must NEVER see a
+// snake_case tool name (query_listings) in the feed — it reads as plumbing.
+const prettify = (s: string): string => {
+  const cleaned = (s || '').replace(/[_-]+/g, ' ').trim();
+  if (!cleaned) return 'Done';
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+};
+
+// A backend label that's a raw identifier (snake_case or a bare lowercase verb)
+// shouldn't be shown as-is — humanize it from the tool family instead.
+const isRawIdent = (s?: string): boolean => !!s && (/[_]/.test(s) || /^[a-z]+$/.test(s.trim()));
+
+// Present-tense phrase for what the agent is doing RIGHT NOW — the calm
+// "Creating task…" line a good assistant shows while it works. Outcome, not tool.
+const toolActivePhrase = (tool: string): string => {
+  const t = (tool || '').toLowerCase();
+  if (t.includes('query') || t.startsWith('supabase')) return 'Checking your listings';
+  if (t.includes('search') || t.includes('research')) return 'Researching the market';
+  if (t.includes('price')) return 'Working out pricing';
+  if (t.includes('delist')) return 'Taking items down';
+  if (t.includes('publish') || t.includes('listing')) return 'Updating your listings';
+  if (t.includes('flash') || t.includes('campaign')) return 'Setting up the campaign';
+  if (t.includes('text') || t.includes('sms')) return 'Drafting a message';
+  if (t.includes('email')) return 'Drafting an email';
+  if (t.includes('note')) return 'Saving a note';
+  if (t.includes('reminder')) return 'Setting a reminder';
+  if (t.includes('slow')) return 'Finding slow movers';
+  return 'Working on it';
+};
+
+// Past-tense receipt label for a finished step. Prefer a human label the backend
+// already wrote; only humanize when it handed us a raw tool identifier.
+const toolDoneLabel = (tool: string, label?: string): string => {
+  if (label && !isRawIdent(label)) return label;
+  const t = (tool || '').toLowerCase();
+  if (t.includes('query') || t.startsWith('supabase')) return 'Checked your listings';
+  if (t.includes('search') || t.includes('research')) return 'Researched the market';
+  if (t.includes('price')) return 'Reviewed pricing';
+  if (t.includes('delist')) return 'Took items down';
+  if (t.includes('publish') || t.includes('listing')) return 'Updated your listings';
+  if (t.includes('flash') || t.includes('campaign')) return 'Launched the campaign';
+  if (t.includes('text') || t.includes('sms')) return 'Sent a message';
+  if (t.includes('email')) return 'Sent an email';
+  if (t.includes('note')) return 'Saved a note';
+  if (t.includes('reminder')) return 'Set a reminder';
+  if (t.includes('slow')) return 'Found slow movers';
+  return prettify(label || tool);
+};
+
 // Collapsible "activity" card — the agent's reasoning + the tools it ran, shown
 // the way Poke/Claude surface their work: a tidy header you can fold away, with
 // one clean row per step. Arguments/SQL never reach here (arg-free by contract),
@@ -146,31 +199,51 @@ const ToolActivityCard = ({
 }) => {
   const hasReasoning = !!(reasoning && reasoning.trim().length);
   const count = steps.length;
-  // Collapsed by default — the header (Working · N / N steps · Xs) is enough at a
-  // glance; tap to open the step list. Keeps the chat feeling like a chat.
+  // Collapsed by default — the header is enough at a glance; tap to open the step
+  // list. Keeps the chat feeling like a chat, not a build log.
   const [expanded, setExpanded] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
 
-  if (!count && !hasReasoning) return null;
+  // When the turn is done with no tools and no reasoning, there's nothing to show.
+  if (!streaming && !count && !hasReasoning) return null;
 
   const totalMs = steps.reduce((sum, s) => sum + (typeof s.durationMs === 'number' ? s.durationMs : 0), 0);
   const totalSecs = totalMs > 0 ? (totalMs / 1000).toFixed(1) : null;
-  const summary = count > 0
-    ? `${count} step${count === 1 ? '' : 's'}${totalSecs ? ` · ${totalSecs}s` : ''}`
-    : 'Thinking';
+  const canExpand = count > 0 || hasReasoning;
+
+  // The live narration line: present-tense, outcome-first ("Checking your
+  // listings…"), driven by the most recent step the agent has taken.
+  const lastStep = count ? steps[count - 1] : null;
+  const livePhrase = lastStep ? toolActivePhrase(lastStep.tool) : 'Working on it';
+
+  // The finished receipt line: a quiet "Done · N steps · Xs".
+  const doneSummary = count > 0
+    ? `Done · ${count} step${count === 1 ? '' : 's'}${totalSecs ? ` · ${totalSecs}s` : ''}`
+    : 'Thought it through';
 
   return (
-    <View style={styles.activityCard}>
-      {/* Quiet summary line — no loud icon; just status, a count, and a fold toggle. */}
-      <TouchableOpacity style={styles.activityHeader} onPress={() => setExpanded(e => !e)} activeOpacity={0.6}>
+    <View style={[styles.activityCard, streaming && styles.activityCardLive]}>
+      <TouchableOpacity
+        style={styles.activityHeader}
+        onPress={() => canExpand && setExpanded(e => !e)}
+        activeOpacity={canExpand ? 0.6 : 1}
+        disabled={!canExpand}
+      >
         {streaming ? (
-          <ActivityIndicator size="small" color="#9CA3AF" style={styles.activitySpinner} />
-        ) : null}
-        <Text style={styles.activityHeaderText}>
-          {streaming ? `Working${count ? ` · ${count}` : ''}` : summary}
+          <ActivityIndicator size="small" color="#8A95A3" style={styles.activitySpinner} />
+        ) : (
+          <View style={styles.activityDoneChip}>
+            <Icon name="check" size={11} color="#5D7E16" />
+          </View>
+        )}
+        <Text style={[styles.activityHeaderText, streaming && styles.activityHeaderTextLive]} numberOfLines={1}>
+          {streaming ? livePhrase : doneSummary}
         </Text>
+        {streaming ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
         <View style={styles.activitySpacer} />
-        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color="#C4C4CC" />
+        {canExpand ? (
+          <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color="#C4C4CC" />
+        ) : null}
       </TouchableOpacity>
 
       {expanded ? (
@@ -181,9 +254,8 @@ const ToolActivityCard = ({
                 <View style={styles.activityIconChip}>
                   <Icon name="lightbulb-on-outline" size={13} color="#5D7E16" />
                 </View>
-                <Text style={styles.activityRowLabel}>Reasoning</Text>
+                <Text style={styles.activityRowLabel}>Thinking</Text>
                 <View style={styles.activitySpacer} />
-                <Text style={styles.activityRowMeta}>{reasoning!.trim().length} chars</Text>
                 <Icon name={showReasoning ? 'chevron-up' : 'chevron-right'} size={14} color="#C4C4CC" />
               </TouchableOpacity>
               {showReasoning ? <Text style={styles.reasoningText}>{reasoning!.trim()}</Text> : null}
@@ -199,9 +271,9 @@ const ToolActivityCard = ({
                   color={step.status === 'failed' ? '#D04848' : '#5D7E16'}
                 />
               </View>
-              {/* Label + the data the tool returned (a short, safe outcome line). */}
+              {/* Humanized label + the short, safe outcome line the tool returned. */}
               <View style={styles.activityRowTextCol}>
-                <Text style={styles.activityRowLabel} numberOfLines={1}>{step.label}</Text>
+                <Text style={styles.activityRowLabel} numberOfLines={1}>{toolDoneLabel(step.tool, step.label)}</Text>
                 {step.resultSummary ? (
                   <Text style={styles.activityRowResult} numberOfLines={2}>{step.resultSummary}</Text>
                 ) : null}
@@ -309,9 +381,12 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           </View>
         ) : null}
 
-        {/* Reasoning + tool steps, folded into one collapsible activity card.
-            Tool rows appear only once each RESULT lands (arg-free by contract). */}
-        {!isUser ? (
+        {/* Reasoning + tool steps, folded into one activity surface: a quiet live
+            status pill while working ("Checking your listings…"), a foldable
+            "Done · N steps" receipt once finished. Tool rows appear only once each
+            RESULT lands (arg-free by contract). We only surface the pure-thinking
+            pill before the first token — once text streams, the text IS the signal. */}
+        {!isUser && (toolSteps.length > 0 || (reasoning && reasoning.trim().length) || (isStreaming && !content)) ? (
           <ToolActivityCard steps={toolSteps} reasoning={reasoning} streaming={isStreaming} />
         ) : null}
 
@@ -329,8 +404,6 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           <MarkdownBoundary content={content}>
             <Markdown style={styles.markdown}>{content}</Markdown>
           </MarkdownBoundary>
-        ) : isStreaming ? (
-          <TypingIndicator />
         ) : null}
 
         {/* The tappable cart card sits BELOW the agent's message response (the seller
@@ -731,6 +804,23 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     maxWidth: '100%',
   },
+  // Live state: a soft, borderless gray pill — the calm "Creating task…" look
+  // rather than a boxed build-log row.
+  activityCardLive: {
+    backgroundColor: '#F1F2F0',
+    borderWidth: 0,
+    borderRadius: 16,
+  },
+  // Green check chip that replaces the spinner once the work lands.
+  activityDoneChip: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(147,200,34,0.16)',
+    marginRight: 1,
+  },
   activityHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -743,6 +833,12 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     fontFamily: 'Inter_500Medium',
     letterSpacing: 0.1,
+  },
+  // The live narration reads as the foreground action, so give it ink-soft weight.
+  activityHeaderTextLive: {
+    color: '#52525B',
+    fontFamily: 'Inter_500Medium',
+    flexShrink: 1,
   },
   activitySpacer: {
     flex: 1,
