@@ -755,14 +755,22 @@ const AppNavigator = () => {
               log.error('[AuthContext] Sign out error:', e);
             }
           }
-          // The benign "origin" error above is swallowed as success, but it can leave a
-          // dangling Clerk session in SecureStore — which strands the user on the login
-          // screen and triggers "You're already signed in" on the next sign-in attempt.
-          // Verify the session actually cleared and force it once more if it survived.
+          // The benign "origin" error can RESOLVE signOut() without actually clearing
+          // the in-memory session — so `isSignedIn` stays true and the app stays on the
+          // home tree instead of returning to auth (no restart needed to reproduce).
+          // If a session survived, force it: retry signOut(), then fall back to
+          // setActive({session:null}), which nulls the active session DIRECTLY and flips
+          // isSignedIn false without the redirect path that throws "origin".
+          const sessionSurvives = () =>
+            !!clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0;
           try {
-            if (clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0) {
-              log.debug('[AuthContext] Clerk session survived signOut; forcing clear');
-              await clerk.signOut();
+            if (sessionSurvives()) {
+              log.debug('[AuthContext] Clerk session survived signOut; retrying signOut()');
+              try { await clerk.signOut(); } catch { /* fall through to setActive */ }
+            }
+            if (sessionSurvives() && typeof (clerk as any)?.setActive === 'function') {
+              log.debug('[AuthContext] Session still present; clearing via setActive({session:null})');
+              await (clerk as any).setActive({ session: null });
             }
           } catch (verifyErr: any) {
             const vMsg = verifyErr?.message || String(verifyErr);
