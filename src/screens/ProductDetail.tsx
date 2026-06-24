@@ -1998,11 +1998,7 @@ const ProductDetailScreen = observer(
 
     // Publish product to a new platform
     const [isPublishing, setIsPublishing] = useState<string | null>(null);
-    const [facebookSyncMeta, setFacebookSyncMeta] = useState<{
-      status: 'idle' | 'pending' | 'syncing' | 'success' | 'error';
-      lastSyncAt: string | null;
-      lastError: string | null;
-    }>({ status: 'idle', lastSyncAt: null, lastError: null });
+    // FB dispatch status is now realtime (useFacebookJobStatus) — no local poll state.
 
     const handlePublishToPlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id || isPublishing) return;
@@ -2152,10 +2148,6 @@ const ProductDetailScreen = observer(
           },
         };
 
-        if (platformKey.toLowerCase() === 'facebook') {
-          setFacebookSyncMeta({ status: 'syncing', lastSyncAt: null, lastError: null });
-        }
-
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/publish`, {
           method: 'POST',
           headers: {
@@ -2171,44 +2163,10 @@ const ProductDetailScreen = observer(
           throw new Error(responseData.message || `Publish failed: ${response.status}`);
         }
 
-        if (platformKey.toLowerCase() === 'facebook') {
-          const deadline = Date.now() + 10_000;
-          let lastPending = 0;
-
-          while (Date.now() < deadline) {
-            const reconcileResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/reconcile`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ variantId: detailedItem.Id }),
-            });
-
-            if (reconcileResponse.ok) {
-              const reconcile = await reconcileResponse.json().catch(() => ({}));
-              const updated = Number(reconcile?.updated || 0);
-              const failed = Number(reconcile?.failed || 0);
-              lastPending = Number(reconcile?.pending || 0);
-
-              if (failed > 0) {
-                setFacebookSyncMeta({ status: 'error', lastSyncAt: null, lastError: 'Facebook Marketplace publish failed.' });
-                throw new Error('Facebook Marketplace publish failed. Please retry.');
-              }
-              if (updated > 0 || lastPending === 0) {
-                setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
-                break;
-              }
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 1200));
-          }
-
-          if (lastPending > 0) {
-            setFacebookSyncMeta({ status: 'pending', lastSyncAt: null, lastError: null });
-            showBanner('Facebook publish is still finishing. We will keep syncing in background.');
-          }
-        }
+        // Facebook posts asynchronously through the user's computer — no blocking
+        // reconcile poll here (it delayed the UI ~10s for an unrendered result).
+        // loadPlatformData() below refreshes the row, which shows the live dispatch
+        // status (useFacebookJobStatus).
 
         // Check if any platforms need reauth
         if (responseData.reauthRequired && responseData.reauthRequired.length > 0) {
@@ -2244,14 +2202,6 @@ const ProductDetailScreen = observer(
 
       } catch (error: any) {
         log.error('[ProductDetail] Publish failed:', error);
-        if (platformKey.toLowerCase() === 'facebook') {
-          setFacebookSyncMeta({
-            status: 'error',
-            lastSyncAt: facebookSyncMeta.lastSyncAt,
-            lastError: error?.message || 'Facebook publish failed',
-          });
-        }
-
         // Check for reauth error in exception message
         const errorMessage = error.message?.toLowerCase() || '';
         const isReauthError =
@@ -2284,7 +2234,6 @@ const ProductDetailScreen = observer(
                     try {
                       const token = await ensureSupabaseJwt();
                       if (!token) return;
-                      setFacebookSyncMeta({ status: 'syncing', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: null });
                       await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/sync-now`, {
                         method: 'POST',
                         headers: {
@@ -2293,18 +2242,9 @@ const ProductDetailScreen = observer(
                         },
                         body: JSON.stringify({ connectionId: targetConnection.Id, variantId: detailedItem.Id }),
                       });
-                      await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/reconcile`, {
-                        method: 'POST',
-                        headers: {
-                          'Authorization': `Bearer ${token}`,
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ variantId: detailedItem.Id }),
-                      });
-                      setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
                       showBanner('Facebook sync requested.');
                     } catch (syncErr: any) {
-                      setFacebookSyncMeta({ status: 'error', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: syncErr?.message || 'Sync failed' });
+                      showBanner('Sync failed. Please try again.');
                     }
                   }
                 },
@@ -2322,7 +2262,7 @@ const ProductDetailScreen = observer(
       } finally {
         setIsPublishing(null);
       }
-    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation, facebookSyncMeta.lastSyncAt]);
+    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation]);
     // Handle Delist / Remove Mapping
     const handleDelist = useCallback(async (connectionId: string, mappingId: string, platformName: string) => {
       Alert.alert('Delist', `Remove listing from ${platformName}?`, [

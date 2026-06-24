@@ -717,12 +717,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [facebookSyncMeta, setFacebookSyncMeta] = useState<{
-    status: 'idle' | 'pending' | 'syncing' | 'success' | 'error';
-    lastSyncAt: string | null;
-    lastError: string | null;
-  }>({ status: 'idle', lastSyncAt: null, lastError: null });
-
   const openScanner = (onResult: (code: string) => void) => {
     scannerHeight.stopAnimation();
     scannerHeight.setValue(0);
@@ -2135,48 +2129,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
 
         // Don't clear data on error - user can fix and retry
-        if (facebookRequested) {
-          setFacebookSyncMeta({ status: 'error', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: errorText });
-        }
         return;
       }
 
-      if (facebookRequested) {
-        setFacebookSyncMeta({ status: 'syncing', lastSyncAt: null, lastError: null });
-        const deadline = Date.now() + 10_000;
-        let lastPending = 0;
-
-        while (Date.now() < deadline) {
-          const reconcileRes = await fetch(`${baseUrl}/api/products/facebook-personal/reconcile`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ variantId }),
-          });
-
-          if (reconcileRes.ok) {
-            const reconcileData = await reconcileRes.json().catch(() => ({}));
-            const updated = Number(reconcileData?.updated || 0);
-            const failed = Number(reconcileData?.failed || 0);
-            lastPending = Number(reconcileData?.pending || 0);
-
-            if (failed > 0) {
-              setFacebookSyncMeta({ status: 'error', lastSyncAt: null, lastError: 'Facebook Marketplace publish failed.' });
-              throw new Error('Facebook Marketplace publish failed. Please retry.');
-            }
-            if (updated > 0 || lastPending === 0) {
-              setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
-              break;
-            }
-          }
-
-          await new Promise(res => setTimeout(res, 1200));
-        }
-
-        if (lastPending > 0) {
-          setFacebookSyncMeta({ status: 'pending', lastSyncAt: null, lastError: null });
-          log.debug('[confirmAndPublish] Facebook publish still pending after 10s; background sync will continue.');
-        }
-      }
+      // Facebook posts asynchronously through the user's computer — we no longer
+      // block here on a reconcile poll (it delayed navigation ~10s and fed an
+      // unrendered state). Navigate straight to the confirmation, which shows the
+      // live dispatch status (useFacebookJobStatus, by variant).
 
       // Success! Navigate to confirmation screen
       // The product is now being created/synced in the background on the backend
@@ -2195,13 +2154,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     } catch (err) {
       log.error('Error in confirmAndPublish:', err);
       setIsPublishing(false);
-      if (facebookRequested) {
-        setFacebookSyncMeta({
-          status: 'error',
-          lastSyncAt: facebookSyncMeta.lastSyncAt,
-          lastError: (err as any)?.message || 'Facebook publish failed',
-        });
-      }
       alert('Failed to publish. Please try again.');
     }
   };
