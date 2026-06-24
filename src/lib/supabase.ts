@@ -394,6 +394,12 @@ export async function configureClerkSupabaseBridge(options: {
     // accessToken callback on demand. Just warm the token for sync getters/state.
     currentSupabaseJwt = await options.getClerkToken().catch(() => null);
     lastExchangeOutcome = currentSupabaseJwt ? 'success' : 'clerk_token_missing';
+    // Push the token to Realtime too: supabase-js only fetches accessToken at CONNECT
+    // time, so RLS channels otherwise hold the first token forever and silently 401
+    // (dead live updates) once it rotates. setAuth re-auths all joined channels.
+    if (currentSupabaseJwt) {
+      try { (supabase as any)?.realtime?.setAuth?.(currentSupabaseJwt); } catch { /* realtime optional */ }
+    }
     emitSupabaseJwtState();
     return;
   }
@@ -415,8 +421,13 @@ export async function configureClerkSupabaseBridge(options: {
 export async function forceRefreshSupabaseJwt(): Promise<boolean> {
   if (!getClerkTokenFn) return false;
   if (CLERK_NATIVE_AUTH) {
-    // No timer to realign; just re-warm the cached token.
+    // No timer to realign; re-warm the cached token AND re-auth Realtime — on
+    // foreground the OS may have let the token the channels hold expire while
+    // backgrounded, so without this live updates stay dead until a full reconnect.
     currentSupabaseJwt = await getClerkTokenFn().catch(() => null);
+    if (currentSupabaseJwt) {
+      try { (supabase as any)?.realtime?.setAuth?.(currentSupabaseJwt); } catch { /* realtime optional */ }
+    }
     emitSupabaseJwtState();
     return !!currentSupabaseJwt;
   }

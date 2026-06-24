@@ -22,6 +22,37 @@ const log = createLogger('useImportSession');
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
+// CSV cells carry human-formatted prices ("$1,299.00", "€1.299,00", "1 299").
+// Strip currency symbols and grouping separators before Number() so a real
+// price never silently coerces to 0.
+function parseCsvPrice(raw: any): number {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+  if (raw == null) return 0;
+  let s = String(raw).trim();
+  if (!s) return 0;
+  // Keep only digits, separators and a leading sign.
+  s = s.replace(/[^0-9.,-]/g, '');
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  if (lastComma > -1 && lastDot > -1) {
+    // Whichever separator is rightmost is the decimal point; the other groups.
+    if (lastComma > lastDot) {
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      s = s.replace(/,/g, '');
+    }
+  } else if (lastComma > -1) {
+    // Comma only: decimal if it looks like cents (",NN"), else thousands.
+    s = /,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+  } else {
+    // Dot only (or none): any extra dots are thousands separators.
+    const firstDot = s.indexOf('.');
+    if (firstDot !== lastDot) s = s.replace(/\./g, '');
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
 // Module-level cache + in-flight coalescing for the active org id. Several import
 // effects need it, and a render loop was firing one of them dozens of times a
 // second — each hitting /api/organizations/me/active and flooding the server logs.
@@ -303,7 +334,15 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   }, [externalPlatformConnections]);
 
   const fetchMappingSuggestions = useCallback(async () => {
-    if (!connectionId || connectionId === 'csv-import') return;
+    if (!connectionId) return;
+    // The CSV connection insert failed upstream (placeholder id). Don't leave
+    // the flow spinning — show a clear error so the user can go back and retry.
+    if (connectionId === 'csv-import') {
+      setLoading(false);
+      setSuggestions([]);
+      setError("We couldn't set up this import. Please go back and try again.");
+      return;
+    }
     if (isCSVImport && importedProducts) {
       const mapped: MappingSuggestion[] = importedProducts.map((p: any, index: number) => ({
         action: 'CREATE_NEW',
@@ -311,7 +350,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
           id: `csv-${index}`,
           sku: p.sku || `CSV-${index}`,
           title: p.title || 'Untitled',
-          price: Number(p.price) || 0,
+          // CSV prices are user-formatted ("$1,299.00", "1.299,00"): strip
+          // currency symbols and thousands separators before Number() so a
+          // real price never coerces to 0.
+          price: parseCsvPrice(p.price),
           imageUrl: p.imageUrl || null,
         },
         suggestedCanonicalProduct: null,
@@ -455,7 +497,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                       sku: item.suggestedCanonicalVariant.Sku,
                       title: item.suggestedCanonicalVariant.Title,
                       price: item.suggestedCanonicalVariant.Price,
-                      imageUrl: item.suggestedCanonicalVariant.ImageUrl,
+                      imageUrl: item.suggestedCanonicalVariant.PrimaryImageUrl ?? item.suggestedCanonicalVariant.ImageUrl,
                     };
                     existing.matchType = item.matchType || existing.matchType;
                     existing.confidence = item.confidence ?? existing.confidence;
@@ -532,7 +574,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                     sku: item.suggestedCanonicalVariant.Sku,
                     title: item.suggestedCanonicalVariant.Title,
                     price: item.suggestedCanonicalVariant.Price,
-                    imageUrl: item.suggestedCanonicalVariant.ImageUrl,
+                    imageUrl: item.suggestedCanonicalVariant.PrimaryImageUrl ?? item.suggestedCanonicalVariant.ImageUrl,
                   } : null,
                   direction: direction === 'bidirectional' ? 'bidirectional' : 'platform_to_anorha',
                   isSelected,
@@ -748,7 +790,10 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   useEffect(() => {
     const t = setTimeout(async () => {
       try {
-        if (!connectionId || !Array.isArray(suggestions) || isCSVImport) return;
+        // Don't PUT an empty confirmedMatches: suggestions is set to [] on a
+        // fetch error, and saving that empty draft would clobber a real
+        // server-side draft. Only autosave when there is something to save.
+        if (!connectionId || !Array.isArray(suggestions) || suggestions.length === 0 || isCSVImport) return;
         const confirmedMatches = suggestions.map((s) => ({
           platformProductId: s.platformProduct.id,
           sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
@@ -961,7 +1006,14 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   }, [poolNameInput, connectionId, connection, displayConnectionLocations, locationPoolAssignments]);
 
   const submitImport = useCallback(async () => {
-    if (!connectionId || connectionId === 'csv-import') return;
+    if (!connectionId) return;
+    // 'csv-import' is the placeholder used when the CSV connection insert
+    // failed upstream — there is no real connection to commit against, so
+    // surface the failure instead of silently no-op'ing into a dead-end.
+    if (connectionId === 'csv-import') {
+      Alert.alert('Import unavailable', "We couldn't set up this import. Please go back and try again.");
+      return;
+    }
     // The server builds the commit items from its own decision log — the app
     // just sends the sync rules and triggers the commit (POST import-draft/commit).
     setIsSubmitting(true);
@@ -1041,6 +1093,25 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               : s.action === 'LINK_EXISTING'
                 ? 'LINK_EXISTING'
                 : 'CREATE_NEW';
+          // CSV imports carry the full mapped row in originalData. Lift the
+          // fields the backend create-new path can persist (quantity, barcode,
+          // cost, description, …) so they aren't silently dropped at commit.
+          const csv = s.originalData;
+          const csvFields = csv
+            ? {
+                description: csv.description ?? null,
+                barcode: csv.barcode ?? null,
+                quantity: csv.quantity != null && csv.quantity !== '' ? Math.trunc(parseCsvPrice(csv.quantity)) : null,
+                cost: csv.cost != null && csv.cost !== '' ? parseCsvPrice(csv.cost) : null,
+                compareAtPrice: csv.compareAtPrice != null && csv.compareAtPrice !== '' ? parseCsvPrice(csv.compareAtPrice) : null,
+                weight: csv.weight != null && csv.weight !== '' ? parseCsvPrice(csv.weight) : null,
+                brand: csv.brand ?? null,
+                category: csv.category ?? null,
+                condition: csv.condition ?? null,
+                size: csv.size ?? null,
+                color: csv.color ?? null,
+              }
+            : null;
           return {
             platformProduct: {
               id: s.platformProduct.id,
@@ -1049,6 +1120,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               price: s.platformProduct.price ?? null,
               imageUrl: s.platformProduct.imageUrl ?? null,
               parentId,
+              ...(csvFields ? { csvFields } : {}),
             },
             action,
             direction: s.direction || 'platform_to_anorha',
@@ -1067,6 +1139,17 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
                 : null,
           };
         });
+
+      // Nothing actionable to import (everything UNMATCHED/IGNORE and no
+      // replayable decisions): short-circuit to a clear empty state instead of
+      // POSTing an empty body — which the server either 500s on or "completes"
+      // with 0 items, both of which read as a confusing dead-end.
+      if (commitItems.length === 0 && (!Array.isArray(draftLog) || draftLog.length === 0)) {
+        setIsSubmitting(false);
+        setWizardVisible(false);
+        Alert.alert('Nothing to import', 'No items were selected to import. Match or create at least one item, then try again.');
+        return;
+      }
 
       const confirmRes = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/import-draft/commit`, {
         method: 'POST',
@@ -1099,7 +1182,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
               connectionId,
               // Best-effort total for the progress banner: everything the user
               // decided plus what the server auto-matched.
-              itemsTotal: committedCount || (importDraft?.completed.length || 0) + (importDraft?.summary.autoResolved || 0),
+              itemsTotal: committedCount || (importDraft?.completed?.length || 0) + (importDraft?.summary?.autoResolved || 0),
               startedAt: new Date().toISOString(),
             }),
           );

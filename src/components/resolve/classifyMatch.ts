@@ -401,8 +401,8 @@ function matchWhy(s: DraftItem): string | undefined {
       return canon?.sku ? `same SKU · ${canon.sku}` : 'same SKU';
     case 'TITLE':
       return 'titles look alike';
-    case 'AI_SEMANTIC':
-      return 'AI thinks they’re the same product';
+    case 'MANUAL':
+      return 'matched by you';
     default:
       return canon?.id ? 'similar listing' : undefined;
   }

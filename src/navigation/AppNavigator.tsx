@@ -4,6 +4,7 @@ import { withSwipeBack } from '../components/withSwipeBack';
 import { SwipeBackProvider } from '../components/SwipeBackContext';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { purgeClerkAndAuthCaches } from '../utils/authCleanup';
 import TabBar from '../components/TabBar';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 // import { Camera } from 'lucide-react-native';
@@ -56,8 +57,19 @@ import TeamScreen from '../screens/TeamScreen';
 import MappingReviewScreen from '../screens/MappingReviewScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
-import LoadingScreen from '../screens/LoadingScreen';
-import MatchSelectionScreen, { JobResponse } from '../screens/MatchSelectionScreen';
+// LoadingScreen + MatchSelectionScreen were deprecated and deleted. Their param
+// SHAPES are retained in AppStackParamList below (the LoadingScreen entry is the
+// canonical "active flow" payload used by activeFlowPersistence; no route is
+// registered, so nothing can navigate to either).
+// Relocated from the deleted MatchSelectionScreen — the match-job submit response
+// shape, still referenced by the param types below.
+export interface JobResponse {
+  jobId: string;
+  status?: string;
+  estimatedTimeMinutes?: number;
+  totalProducts?: number;
+  message?: string;
+}
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
@@ -605,14 +617,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
         cardStyle: { backgroundColor: '#000000' },
       }}
     />
-    <AppStackNav.Screen name="LoadingScreen" component={LoadingScreen} />
-    <AppStackNav.Screen
-      name="MatchSelectionScreen"
-      component={sb(MatchSelectionScreen)}
-      options={{
-        cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
-      }}
-    />
+    {/* LoadingScreen + MatchSelectionScreen deprecated and removed — no routes registered. */}
     <AppStackNav.Screen
       name="GenerateDetailsScreen"
       component={sb(GenerateDetailsScreen)}
@@ -750,14 +755,22 @@ const AppNavigator = () => {
               log.error('[AuthContext] Sign out error:', e);
             }
           }
-          // The benign "origin" error above is swallowed as success, but it can leave a
-          // dangling Clerk session in SecureStore — which strands the user on the login
-          // screen and triggers "You're already signed in" on the next sign-in attempt.
-          // Verify the session actually cleared and force it once more if it survived.
+          // The benign "origin" error can RESOLVE signOut() without actually clearing
+          // the in-memory session — so `isSignedIn` stays true and the app stays on the
+          // home tree instead of returning to auth (no restart needed to reproduce).
+          // If a session survived, force it: retry signOut(), then fall back to
+          // setActive({session:null}), which nulls the active session DIRECTLY and flips
+          // isSignedIn false without the redirect path that throws "origin".
+          const sessionSurvives = () =>
+            !!clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0;
           try {
-            if (clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0) {
-              log.debug('[AuthContext] Clerk session survived signOut; forcing clear');
-              await clerk.signOut();
+            if (sessionSurvives()) {
+              log.debug('[AuthContext] Clerk session survived signOut; retrying signOut()');
+              try { await clerk.signOut(); } catch { /* fall through to setActive */ }
+            }
+            if (sessionSurvives() && typeof (clerk as any)?.setActive === 'function') {
+              log.debug('[AuthContext] Session still present; clearing via setActive({session:null})');
+              await (clerk as any).setActive({ session: null });
             }
           } catch (verifyErr: any) {
             const vMsg = verifyErr?.message || String(verifyErr);
@@ -771,6 +784,12 @@ const AppNavigator = () => {
         // clear the bridge while Clerk still holds a session. `finally` guarantees the
         // bridge (token + refresh timer) is always cleared, even if clerkSignOut throws.
         try { stopClerkSupabaseBridge(); } catch { }
+
+        // Purge persisted Clerk + AuthPersistence caches so the signed-out session
+        // can't re-hydrate on the next launch (Clerk's RN "origin" error otherwise
+        // leaves the session in SecureStore; AuthPersistence's 30-min window otherwise
+        // restores the cached user). Single shared cleanup — see authCleanup.ts.
+        await purgeClerkAndAuthCaches();
       }
       return Promise.resolve();
     },

@@ -10,6 +10,13 @@ const SSSYNC_API_BASE_URL = (
 ).replace(/\/$/, '');
 
 const TERMINAL = new Set(['completed', 'completed_with_errors', 'failed']);
+// Statuses we know mean "still working". Anything outside this set is treated
+// as terminal so an unrecognized backend status (e.g. 'success'/'cancelled')
+// can't leave the banner spinning forever.
+const ACTIVE = new Set(['queued', 'pending', 'processing', 'running', 'in_progress', 'active']);
+// Hard stop: never resume a stored import older than this, even if the backend
+// keeps reporting an active/unknown status.
+const STALE_AFTER_MS = 30 * 60 * 1000;
 
 export interface ImportProgress {
   operationId: string;
@@ -53,6 +60,15 @@ export function useImportProgress(pollMs = 5000) {
       return;
     }
 
+    // Stale-guard: a record older than STALE_AFTER_MS is abandoned (the import
+    // finished or errored while we weren't polling), so clear it rather than
+    // spinning on every launch.
+    const startedAtMs = stored?.startedAt ? Date.parse(stored.startedAt) : NaN;
+    if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > STALE_AFTER_MS) {
+      await clear();
+      return;
+    }
+
     try {
       const token = await ensureSupabaseJwt();
       const res = await fetch(
@@ -62,12 +78,20 @@ export function useImportProgress(pollMs = 5000) {
       if (res.ok) {
         const d = await res.json();
         const status = String(d?.status || 'queued');
-        const isTerminal = TERMINAL.has(status);
+        const processed = Number(d?.itemsProcessed ?? 0);
+        const total = Number(d?.itemsTotal ?? stored.itemsTotal ?? 0);
+        // Terminal if it's an explicit terminal status, OR any status we don't
+        // recognize as active (so unknown success aliases don't spin forever),
+        // OR all known items have been processed.
+        const isTerminal =
+          TERMINAL.has(status) ||
+          !ACTIVE.has(status) ||
+          (total > 0 && processed >= total);
         setProgress({
           operationId: stored.operationId,
           status,
-          processed: Number(d?.itemsProcessed ?? 0),
-          total: Number(d?.itemsTotal ?? stored.itemsTotal ?? 0),
+          processed,
+          total,
           failed: Number(d?.failedCount ?? 0),
           active: !isTerminal,
         });

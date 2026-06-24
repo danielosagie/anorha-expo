@@ -72,7 +72,8 @@ export interface MappingSuggestion {
   } | null;
   direction?: 'platform_to_anorha' | 'anorha_to_platform' | 'bidirectional';
   isSelected: boolean;
-  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE' | 'AI_SEMANTIC';
+  // Backend contract (import.contract.ts MATCH_TYPES) — aligned exactly.
+  matchType?: 'BARCODE' | 'SKU' | 'TITLE' | 'NONE' | 'MANUAL';
   confidence?: number;
   resolved?: boolean;
   prevTab?: 'all' | 'needs_review' | 'matched' | 'ignored';

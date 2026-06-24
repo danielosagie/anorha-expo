@@ -1,4 +1,4 @@
-import { listPlatforms, getPlatform } from '../config/platforms';
+import { listPlatforms } from '../config/platforms';
 
 export type RequirementMap = Record<string, string[]>;
 
@@ -7,9 +7,30 @@ const DEFAULT_REQUIREMENTS: RequirementMap = Object.fromEntries(
   listPlatforms().map((d) => [d.key, d.capabilities.requiredFields]),
 );
 
-/** Whether a platform requires a category (has a browsable taxonomy). */
-const needsCategory = (platformKey?: string): boolean =>
-  !!getPlatform(platformKey)?.capabilities.supportsTaxonomy;
+/** The registry's required-field list for a platform (falls back to title+price). */
+const requiredFieldsFor = (platformKey: string): string[] =>
+  DEFAULT_REQUIREMENTS[platformKey] || ['title', 'price'];
+
+/** Whether a single required-field key is satisfied by the platform data. */
+const hasRequiredField = (platformData: any, field: string): boolean => {
+  switch (field) {
+    case 'title':
+      return (platformData.title?.toString().trim().length || 0) > 0;
+    case 'sku':
+      return (platformData.sku?.toString().trim().length || 0) > 0;
+    case 'price':
+      return hasPlatformPrice(platformData);
+    case 'description':
+      return (platformData.description?.toString().trim().length || 0) > 0;
+    case 'images':
+      return Array.isArray(platformData.images) && platformData.images.length > 0;
+    case 'category':
+      return !!(platformData.productCategoryId || platformData.categoryId);
+    default:
+      // Unknown required key — be permissive rather than block valid listings.
+      return true;
+  }
+};
 
 export function getPlatformRequirements(overrides?: RequirementMap): RequirementMap {
   if (!overrides) return DEFAULT_REQUIREMENTS;
@@ -45,43 +66,29 @@ export function hasPlatformPrice(platformData: any): boolean {
 }
 
 /**
- * Check if a platform is ready to publish
- * Requires: title, sku, and valid price (flexible)
+ * Check if a platform is ready to publish.
+ * Validation is driven by the registry's requiredFields for the platform (not a
+ * hardcoded title/sku/price list), so SKU-less channels aren't falsely blocked
+ * and channels needing description/images aren't falsely passed.
  */
 export function isPlatformReady(platformData: any, platformKey: string, ignoredPlatforms: string[] = []): boolean {
   if (!platformData || ignoredPlatforms.includes(platformKey)) {
     return false;
   }
 
-  const hasTitle = platformData.title?.toString().trim().length > 0;
-  const hasSku = platformData.sku?.toString().trim().length > 0;
-  const hasPrice = hasPlatformPrice(platformData);
-  const categoryRequired = needsCategory(platformKey);
-  const hasCategory = !!(platformData.productCategoryId || platformData.categoryId);
-
-  return hasTitle && hasSku && hasPrice && (!categoryRequired || hasCategory);
+  return requiredFieldsFor(platformKey).every((field) => hasRequiredField(platformData, field));
 }
 
 /**
- * Get missing fields for a platform
+ * Get missing fields for a platform, derived from the registry requiredFields.
  */
 export function getMissingPlatformFields(platformData: any, platformKey: string): string[] {
   const missing: string[] = [];
 
-  if (!platformData.title?.toString().trim()) {
-    missing.push('title');
-  }
-
-  if (!platformData.sku?.toString().trim()) {
-    missing.push('sku');
-  }
-
-  if (!hasPlatformPrice(platformData)) {
-    missing.push('price (either flat or all variants)');
-  }
-
-  if (needsCategory(platformKey) && !platformData.productCategoryId && !platformData.categoryId) {
-    missing.push('category');
+  for (const field of requiredFieldsFor(platformKey)) {
+    if (!hasRequiredField(platformData, field)) {
+      missing.push(field === 'price' ? 'price (either flat or all variants)' : field);
+    }
   }
 
   return missing;

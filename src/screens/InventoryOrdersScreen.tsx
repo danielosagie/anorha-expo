@@ -901,6 +901,36 @@ const InventoryOrdersScreen = observer(() => {
         return 0;
       }
 
+      // When the list is filtered to a specific platform and/or location, the
+      // displayed stock must reflect THAT context — not the fixed primary-platform
+      // winner — otherwise a Square-filtered view shows Shopify quantities and the
+      // low/out-of-stock badges are wrong for the filtered context.
+      const platformFilterActive = !!selectedPlatformType;
+      const locationFilterActive = selectedLocationIds.length > 0;
+      if (platformFilterActive || locationFilterActive) {
+        const platformFilter = selectedPlatformType ? selectedPlatformType.toLowerCase() : null;
+        return variantLevels.reduce((sum, level) => {
+          if (platformFilter) {
+            const levelPlatform = level.PlatformConnectionId
+              ? (connectionToPlatform.get(level.PlatformConnectionId) || 'unknown')
+              : 'pool';
+            if (levelPlatform.toLowerCase() !== platformFilter) {
+              return sum;
+            }
+          }
+          if (locationFilterActive) {
+            const locationId = level.PlatformLocationId || 'unknown';
+            const poolId = level.PoolId;
+            const isLocationMatch = selectedLocationIds.includes(locationId);
+            const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
+            if (!isLocationMatch && !isPoolMatch) {
+              return sum;
+            }
+          }
+          return sum + (level.Quantity || 0);
+        }, 0);
+      }
+
       const hasRealPlatformLevels = variantLevels.some(level => !!level.PlatformConnectionId);
 
       // Group by platform (or 'pool' for levels without connection)
