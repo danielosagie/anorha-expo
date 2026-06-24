@@ -365,7 +365,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const refresh = useCallback(async () => {
     log.debug('[EnhancedSessionProvider] Manual refresh requested');
     try {
-      if (!bridgeReady) {
+      // Gate on configuredRef (a stable ref), NOT the bridgeReady STATE — reading
+      // state here would force bridgeReady into the deps and churn refresh's identity.
+      if (!configuredRef.current) {
         await validateAuthIfNeeded(true);
       }
 
@@ -376,31 +378,40 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       const { user: me } = await getUserLike();
       const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());
-      
+
       // Update persisted state
       await authPersistence.current.saveAuthState({
         isAuthenticated: true,
         userId: me?.id || null,
         email: me?.email || null,
       });
-      
+
       setUser(me);
       setEntitlements(ents);
       await persistEntitlements(ents);
-      setBridgeReady(true);
-      setSessionMode('live');
-      setUsingCachedSession(false);
+      if (configuredRef.current) {
+        setBridgeReady(true);
+        setSessionMode('live');
+        setUsingCachedSession(false);
+      }
       setBootstrapError(null);
       setLastReadyAt(Date.now());
     } catch (error) {
       log.error('[EnhancedSessionProvider] Refresh failed:', error);
-      // Don't clear state on refresh failures - might be network issue
-      setBridgeReady(false);
-      setSessionMode('cached');
-      setUsingCachedSession(true);
+      // TRANSIENT failure (getUserLike/entitlements timeout, token-rotation race,
+      // network flake): do NOT demote a LIVE bridge. Demoting here bounced a healthy
+      // signed-in session to the reconnect screen and made "Try again" LOOP — each tap
+      // re-failed transiently and re-demoted. Genuine token loss is already handled by
+      // validateAuthIfNeeded's null-token path (degrades after retries). Only surface
+      // degraded if the bridge isn't actually up.
+      if (!configuredRef.current) {
+        setBridgeReady(false);
+        setSessionMode('cached');
+        setUsingCachedSession(true);
+      }
       setBootstrapError('Refresh failed. Cached account data is still available.');
     }
-  }, [bridgeReady, loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
+  }, [loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
 
   const value: SessionContextType = useMemo(() => ({ 
     ready: ready && !initializing, 
