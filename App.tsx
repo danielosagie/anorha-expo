@@ -36,6 +36,8 @@ import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
 import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
+import SessionReconnectScreen from './src/components/SessionReconnectScreen';
+import { purgeClerkAndAuthCaches } from './src/utils/authCleanup';
 import {
   ActiveFlowCheckpoint,
   clearActiveFlowCheckpoint,
@@ -89,8 +91,45 @@ const App: React.FC = () => {
   const AuthedAppContent: React.FC<{ navigationRef: React.RefObject<NavigationContainerRef<any> | null> }> = ({ navigationRef }) => {
     const [legendStateModules, setLegendStateModules] = useState<LegendStateObservables | null>(null);
     const [showProcessModal, setShowProcessModal] = useState(false);
-    const { isLoaded: clerkLoaded, isSignedIn } = useAuth();
+    const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
     const session = useContext(SessionContext);
+
+    // Fail-loud reconnect gating: when signed in but the live Supabase bridge isn't
+    // up yet, show a brief "Connecting" shell, then (after a grace window) a loud,
+    // recoverable reconnect screen — NEVER the app on a dead bridge (which silently
+    // showed empty data on every page).
+    const [bridgeGraceElapsed, setBridgeGraceElapsed] = useState(false);
+    const [reconnecting, setReconnecting] = useState(false);
+    useEffect(() => {
+      if (!isSignedIn || session?.bridgeReady) {
+        setBridgeGraceElapsed(false);
+        return;
+      }
+      const t = setTimeout(() => setBridgeGraceElapsed(true), 12000);
+      return () => clearTimeout(t);
+    }, [isSignedIn, session?.bridgeReady]);
+    const handleReconnect = useCallback(async () => {
+      setReconnecting(true);
+      try {
+        await session?.refresh?.();
+      } catch {
+        /* failure surfaces via session.bootstrapError */
+      } finally {
+        setReconnecting(false);
+      }
+    }, [session]);
+    const handleReconnectSignOut = useCallback(async () => {
+      try {
+        await clerkSignOut?.();
+      } catch {
+        /* ignore; purge below still runs */
+      }
+      try {
+        await purgeClerkAndAuthCaches();
+      } catch {
+        /* best-effort */
+      }
+    }, [clerkSignOut]);
 
     // Call the hook unconditionally (rules-of-hooks); it has no side effects
     // until initializeProcessSystem() is invoked, so gating the *result* is safe.
@@ -267,8 +306,9 @@ const App: React.FC = () => {
         return;
       }
 
-      // Wait until the Clerk→Supabase bridge has been configured
-      if (!session?.ready) return;
+      // Wait until the Clerk→Supabase bridge is LIVE (not just cached-ready) — else the
+      // observables get created with no valid token and every query returns empty.
+      if (!session?.bridgeReady) return;
 
       const userId = session?.user?.id;
       if (!userId) {
@@ -294,9 +334,14 @@ const App: React.FC = () => {
         try {
           if (legendStateModules && legendStateModules.userId === userId) return;
 
+          // Give the FIRST real fetch a generous window before unblocking the UI with
+          // empty observables. A 4s cap fired before real data arrived on slow networks
+          // / large catalogs, flashing "no data" on every page even with a LIVE bridge.
+          // The "Preparing local data" shell shows during this window, and the real
+          // modules replace the fallback as soon as init resolves.
           fallbackTimer = setTimeout(() => {
             applyFallbackLegendState('timeout');
-          }, 4000);
+          }, 12000);
 
           console.log(`[App] Initializing Legend State for user: ${userId}`);
           const initialized = await initializeLegendState(supabase, userId);
@@ -338,7 +383,7 @@ const App: React.FC = () => {
           clearTimeout(fallbackTimer);
         }
       };
-    }, [clerkLoaded, isSignedIn, session?.ready, session?.user?.id]);
+    }, [clerkLoaded, isSignedIn, session?.bridgeReady, session?.user?.id]);
 
     useEffect(() => {
       if (!clerkLoaded || !isSignedIn || !session?.ready) return;
@@ -568,12 +613,30 @@ const App: React.FC = () => {
             ) : !isSignedIn ? (
               // If not signed in, don't wait for session/legend state
               <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
-            ) : !session?.ready ? (
+            ) : (!session || session.bootstrapState === 'initializing') ? (
               <AppStartupShell
                 title="Restoring your workspace"
                 message={session?.bootstrapError || 'Checking your session and loading cached account data.'}
               />
-            ) : (!legendStateModules && session?.bootstrapState !== 'degraded') ? (
+            ) : !session.bridgeReady ? (
+              // Signed in, but the live Supabase bridge isn't up — RLS queries would
+              // return empty. NEVER render the app on a dead bridge (that silently
+              // showed no data everywhere). Brief shell during the grace window, then a
+              // loud, recoverable reconnect screen.
+              bridgeGraceElapsed ? (
+                <SessionReconnectScreen
+                  message={session.bootstrapError || undefined}
+                  reconnecting={reconnecting}
+                  onRetry={handleReconnect}
+                  onSignOut={handleReconnectSignOut}
+                />
+              ) : (
+                <AppStartupShell
+                  title="Connecting"
+                  message="Securing your session and loading your data…"
+                />
+              )
+            ) : !legendStateModules ? (
               <AppStartupShell
                 title="Preparing local data"
                 message="Reconnecting shared app state and restoring your last workspace."

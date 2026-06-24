@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SessionContext, SessionContextType, SessionMode, SessionUser } from './SessionContext';
-import { configureClerkSupabaseBridge, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
+import { configureClerkSupabaseBridge, forceRefreshSupabaseJwt, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
@@ -133,6 +133,26 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       const token = await getClerkToken();
 
       if (!token) {
+        // A null Clerk token is almost always TRANSIENT — the token is mid-rotation, a
+        // concurrent validation grabbed it, or the SDK is still warming on cold start.
+        // It is NOT a sign-out. Do NOT tear down a HEALTHY bridge or flip the app to the
+        // reconnect screen on the first null (that's what made a normal online login
+        // briefly show home, then bounce to "Can't reach your account" until Try again).
+        // Retry QUIETLY, leaving bridgeReady as-is so the app stays up; only after the
+        // retries are exhausted do we treat the token as genuinely gone and degrade.
+        if (retryCount < 4) {
+          const retryDelay = Math.min(Math.pow(2, retryCount) * 500, 4000); // 0.5s,1s,2s,4s
+          log.debug(
+            `[EnhancedSessionProvider] Clerk token unavailable; retrying quietly in ${retryDelay}ms (attempt ${retryCount + 2})`,
+          );
+          setTimeout(() => {
+            validateAuthIfNeeded(force, retryCount + 1).catch(log.error);
+          }, retryDelay);
+          return;
+        }
+
+        // Retries exhausted — token genuinely unavailable. NOW tear down the bridge and
+        // degrade (cached data → loud reconnect screen, or clear if there's no cache).
         if (configuredRef.current) {
           try {
             stopClerkSupabaseBridge();
@@ -328,6 +348,11 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       if (!bridgeReady) {
         await validateAuthIfNeeded(true);
       }
+
+      // Always re-warm the token + re-auth Realtime on a manual refresh, even if the
+      // bridge already reads ready — the reconnect "Try again" must recover stale
+      // Realtime channels (validateAuthIfNeeded skips reconfigure once configured).
+      await forceRefreshSupabaseJwt().catch(() => false);
 
       const { user: me } = await getUserLike();
       const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());

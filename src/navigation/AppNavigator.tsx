@@ -4,6 +4,7 @@ import { withSwipeBack } from '../components/withSwipeBack';
 import { SwipeBackProvider } from '../components/SwipeBackContext';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { purgeClerkAndAuthCaches } from '../utils/authCleanup';
 import TabBar from '../components/TabBar';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 // import { Camera } from 'lucide-react-native';
@@ -775,6 +776,12 @@ const AppNavigator = () => {
         // clear the bridge while Clerk still holds a session. `finally` guarantees the
         // bridge (token + refresh timer) is always cleared, even if clerkSignOut throws.
         try { stopClerkSupabaseBridge(); } catch { }
+
+        // Purge persisted Clerk + AuthPersistence caches so the signed-out session
+        // can't re-hydrate on the next launch (Clerk's RN "origin" error otherwise
+        // leaves the session in SecureStore; AuthPersistence's 30-min window otherwise
+        // restores the cached user). Single shared cleanup — see authCleanup.ts.
+        await purgeClerkAndAuthCaches();
       }
       return Promise.resolve();
     },
