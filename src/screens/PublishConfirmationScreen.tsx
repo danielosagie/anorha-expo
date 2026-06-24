@@ -5,6 +5,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, PackagePlus } from 'lucide-react-native';
 import PlatformLogo from '../components/PlatformLogo';
 import { normalizeDisplayName } from '../config/platforms';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { createLogger } from '../utils/logger';
@@ -33,6 +34,12 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     backRoute,
     savedToInventory,
   } = params;
+
+  // Facebook posts asynchronously through the user's computer — show its live
+  // dispatch status here instead of implying a synchronous "Published!".
+  const fbDispatch = useFacebookJobStatus();
+  const fbSelected = (platforms || []).map((p: string) => String(p).toLowerCase()).includes('facebook');
+  const fbStatus = fbSelected ? fbDispatch.statusForVariant(variantId) : null;
 
   const handleCreateAnother = () => {
     // Go to the add product flow in the current stack
@@ -116,6 +123,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             {savedToInventory ? 'Saved to Inventory' : (origin === 'import' ? 'Import Complete!' : 'Product Published!')}
           </Text>
         </View>
+
+        {fbStatus && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 2 }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: fbStatus.dotColor }} />
+            <Text style={{ color: fbStatus.color, fontSize: 13, fontWeight: '600' }}>Facebook · {fbStatus.label}</Text>
+          </View>
+        )}
 
         {/* Details Card */}
         <View style={{}}>
