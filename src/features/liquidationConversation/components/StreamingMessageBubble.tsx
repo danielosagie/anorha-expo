@@ -326,8 +326,17 @@ function activitySignature(metadata: ConversationMessage['metadata']): string {
       return `${x?.kind || ''}:${x?.status || ''}:${c ? `${c.from ?? ''}>${c.to ?? ''}` : ''}:${x?.routine?.paused ? 1 : 0}`;
     })
     .join('|');
+  // Tool steps carry `changes` when a diff streams in (a reprice/publish promoted
+  // to a value-change card). Fold them in so the bubble re-renders as it lands.
+  const steps = Array.isArray(meta.toolSteps) ? meta.toolSteps : [];
+  const stepSig = steps
+    .map((s: any) => {
+      const c = s?.changes?.[0];
+      return `${s?.status || ''}:${s?.changes?.length || 0}:${c ? `${c.from ?? ''}>${c.to ?? ''}` : ''}`;
+    })
+    .join('|');
   const routineSig = meta.routine ? `r:${meta.routine.id || ''}:${meta.routine.paused ? 1 : 0}` : '';
-  return `${acts.length}#${actSig}#${routineSig}`;
+  return `${acts.length}#${actSig}#${routineSig}#${steps.length}@${stepSig}`;
 }
 
 const styles = StyleSheet.create({
