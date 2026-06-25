@@ -37,9 +37,9 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
-import type { ActivityPayload, ValueChange } from '../../types';
+import type { ActivityPayload, ConversationToolStep, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
-import { activityGlyph, humanizeCadence } from './humanizers';
+import { activityGlyph, humanizeCadence, humanizeChannel, toolDoneLabel, toolStepIcon } from './humanizers';
 
 const SCREEN_H = Dimensions.get('window').height;
 const DEFAULT_H = Math.round(SCREEN_H * 0.62);
@@ -48,7 +48,12 @@ const EXPANDED_H = Math.round(SCREEN_H * 0.92);
 type TrayPage =
   | { kind: 'root'; title: string }
   | { kind: 'change-detail'; title: string; change: ValueChange }
+  | { kind: 'step-detail'; title: string; step: ConversationToolStep }
   | { kind: 'evidence'; title: string };
+
+// A tool step is worth its own detail page only if it carries structured extras.
+const stepHasDetail = (step: ConversationToolStep): boolean =>
+  !!((step.changes && step.changes.length) || step.evidence || step.reason);
 
 export interface ActivityTraySheetProps {
   visible: boolean;
@@ -99,8 +104,11 @@ export default function ActivityTraySheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, payload?.id]);
 
-  const depth = stack.length;
-  const top = stack[depth - 1];
+  // Default to a root page so the FIRST committed render (before the seed effect
+  // below has run) never derefs an empty stack — that window would otherwise
+  // crash PageBody/Footer with `undefined.kind` on every open.
+  const top: TrayPage = stack[stack.length - 1] ?? { kind: 'root', title: rootTitle };
+  const depth = Math.max(stack.length, 1);
 
   const push = (page: TrayPage) => {
     Haptics.selectionAsync().catch(() => undefined);
@@ -176,11 +184,11 @@ export default function ActivityTraySheet({
                     <Icon name="chevron-left" size={20} color={CHAT_COLORS.dim} />
                   </TouchableOpacity>
                 ) : (
-                  <View style={[styles.tile, payload.status === 'failed' && styles.tileFail]}>
+                  <View style={[styles.tile, payload.status === 'failed' && styles.tileFail, payload.status === 'syncing' && styles.tileSync]}>
                     <Icon
                       name={activityGlyph(payload)}
                       size={17}
-                      color={payload.status === 'failed' ? CHAT_COLORS.error : CHAT_COLORS.brandDeep}
+                      color={payload.status === 'failed' ? CHAT_COLORS.error : payload.status === 'syncing' ? CHAT_COLORS.amber : CHAT_COLORS.brandDeep}
                     />
                   </View>
                 )}
@@ -205,7 +213,14 @@ export default function ActivityTraySheet({
                 contentContainerStyle={styles.content}
                 showsVerticalScrollIndicator={false}
               >
-                <PageBody page={top} payload={payload} onPushChange={(c) => push({ kind: 'change-detail', title: c.itemName || c.label, change: c })} onPushEvidence={() => push({ kind: 'evidence', title: "What it's based on" })} onOpenItem={openItem} />
+                <PageBody
+                  page={top}
+                  payload={payload}
+                  onPushChange={(c) => push({ kind: 'change-detail', title: c.itemName || c.label, change: c })}
+                  onPushStep={(step) => push({ kind: 'step-detail', title: toolDoneLabel(step.tool, step.label), step })}
+                  onPushEvidence={() => push({ kind: 'evidence', title: "What it's based on" })}
+                  onOpenItem={openItem}
+                />
               </ScrollView>
             </Animated.View>
 
@@ -242,12 +257,14 @@ function PageBody({
   page,
   payload,
   onPushChange,
+  onPushStep,
   onPushEvidence,
   onOpenItem,
 }: {
   page: TrayPage;
   payload: ActivityPayload;
   onPushChange: (c: ValueChange) => void;
+  onPushStep: (step: ConversationToolStep) => void;
   onPushEvidence: () => void;
   onOpenItem: (productId?: string | null) => void;
 }) {
@@ -273,6 +290,43 @@ function PageBody({
 
   if (page.kind === 'change-detail') {
     return <ChangeDetailBody change={page.change} payload={payload} onOpenItem={onOpenItem} onPushEvidence={undefined} />;
+  }
+
+  if (page.kind === 'step-detail') {
+    const step = page.step;
+    const stepChanges = step.changes ?? [];
+    return (
+      <View style={{ gap: 14 }}>
+        {step.resultSummary ? <Text style={styles.stepDetailSummary}>{step.resultSummary}</Text> : null}
+        {step.reason ? <ReasonBanner text={step.reason} /> : null}
+        {stepChanges.length ? (
+          <View style={{ gap: 10 }}>
+            {stepChanges.map((c, i) => (
+              <View key={`${c.field}-${i}`} style={styles.detailBlock}>
+                {stepChanges.length > 1 ? <Text style={styles.heroLabel}>{c.itemName || c.label}</Text> : null}
+                <ValueDiff from={c.from} to={c.to} unit={c.unit} kind={c.kind} direction={c.direction} variant="hero" />
+              </View>
+            ))}
+          </View>
+        ) : null}
+        {step.evidence ? (
+          <View style={{ gap: 8 }}>
+            <Text style={styles.sectionLabel}>BASED ON</Text>
+            <Text style={styles.evidenceHeadline}>{step.evidence.headline}</Text>
+            {step.evidence.items.map((it, i) => (
+              <View key={i} style={styles.evidenceRow}>
+                {it.imageUrl ? <Image source={{ uri: it.imageUrl }} style={styles.evidenceThumb} /> : null}
+                <View style={styles.flex}>
+                  <Text style={styles.evidenceLabel} numberOfLines={2}>{it.label}</Text>
+                  {it.sub ? <Text style={styles.evidenceSub} numberOfLines={1}>{it.sub}</Text> : null}
+                </View>
+                {it.value ? <Text style={styles.evidenceValue}>{it.value}</Text> : null}
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
   }
 
   // root
@@ -328,7 +382,7 @@ function PageBody({
             {payload.channels.map((ch) => (
               <View key={ch} style={styles.channelRow}>
                 <Icon name="storefront-outline" size={16} color={CHAT_COLORS.dim} />
-                <Text style={styles.channelName}>{ch}</Text>
+                <Text style={styles.channelName}>{humanizeChannel(ch)}</Text>
                 <Icon name="check-circle" size={16} color={CHAT_COLORS.brand} style={{ marginLeft: 'auto' }} />
               </View>
             ))}
@@ -366,8 +420,50 @@ function PageBody({
     );
   }
 
-  // tool-run rarely reaches the tray (it expands inline); show a gentle note.
-  return <EmptyNote text="This one shows its steps right in the chat." />;
+  if (payload.kind === 'tool-run') {
+    const steps = payload.steps ?? [];
+    return (
+      <View style={{ gap: 12 }}>
+        {payload.reasoning && payload.reasoning.trim() ? (
+          <View style={styles.reasoningBlock}>
+            <View style={styles.reasoningHead}>
+              <Icon name="lightbulb-on-outline" size={14} color={CHAT_COLORS.brandDeep} />
+              <Text style={styles.reasoningHeadText}>Thinking</Text>
+            </View>
+            <Text style={styles.reasoningBody}>{payload.reasoning.trim()}</Text>
+          </View>
+        ) : null}
+        {steps.map((step, i) => {
+          const drill = stepHasDetail(step);
+          return (
+            <TouchableOpacity
+              key={`${step.tool}-${i}`}
+              style={styles.stepRow}
+              activeOpacity={drill ? 0.7 : 1}
+              disabled={!drill}
+              onPress={() => onPushStep(step)}
+            >
+              <View style={[styles.stepChip, step.status === 'failed' && styles.stepChipFail]}>
+                <Icon name={toolStepIcon(step.tool)} size={14} color={step.status === 'failed' ? CHAT_COLORS.error : CHAT_COLORS.brandDeep} />
+              </View>
+              <View style={styles.flex}>
+                <Text style={styles.stepLabel} numberOfLines={1}>{toolDoneLabel(step.tool, step.label)}</Text>
+                {step.resultSummary ? <Text style={styles.stepResult} numberOfLines={2}>{step.resultSummary}</Text> : null}
+              </View>
+              {step.status === 'failed' ? <Text style={styles.stepFail}>failed</Text> : null}
+              {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
+                <Text style={styles.stepMeta}>{(step.durationMs / 1000).toFixed(1)}s</Text>
+              ) : null}
+              {drill ? <Icon name="chevron-right" size={16} color={CHAT_COLORS.faint} /> : null}
+            </TouchableOpacity>
+          );
+        })}
+        {!steps.length ? <EmptyNote text="Nothing to show here." /> : null}
+      </View>
+    );
+  }
+
+  return <EmptyNote text="Nothing to show here." />;
 }
 
 function ChangeDetailBody({
@@ -601,6 +697,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(147,200,34,0.14)',
   },
   tileFail: { backgroundColor: CHAT_COLORS.errorSurface },
+  tileSync: { backgroundColor: 'rgba(245,158,11,0.14)' },
   circleBtn: {
     width: 30,
     height: 30,
@@ -667,6 +764,27 @@ const styles = StyleSheet.create({
   evidenceLabel: { fontSize: 13, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.inkSoft },
   evidenceSub: { fontSize: 11.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, marginTop: 1 },
   evidenceValue: { fontSize: 13, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+
+  // tool-run steps overview + step detail
+  reasoningBlock: { backgroundColor: CHAT_COLORS.surface, borderRadius: 12, padding: 12, gap: 6 },
+  reasoningHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  reasoningHeadText: { fontSize: 12.5, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+  reasoningBody: { fontSize: 13, lineHeight: 19, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.inkSoft },
+  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  stepChip: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(147,200,34,0.14)',
+  },
+  stepChipFail: { backgroundColor: CHAT_COLORS.errorSurface },
+  stepLabel: { fontSize: 13, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.inkSoft },
+  stepResult: { fontSize: 11.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.faint, marginTop: 1 },
+  stepFail: { fontSize: 11, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.error },
+  stepMeta: { fontSize: 11, fontFamily: CHAT_FONT.medium, color: '#A1A1AA' },
+  stepDetailSummary: { fontSize: 14, lineHeight: 20, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.inkSoft },
 
   // channels
   sectionLabel: { fontSize: 11, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim, letterSpacing: 0.4 },

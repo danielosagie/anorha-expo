@@ -1,25 +1,25 @@
 // ActivityCard — the ONE typed inline card the chat feed renders for everything
 // Sprout did in a turn. A thin switch over the ActivityPayload union:
 //
-//   tool-run     -> the familiar collapsible receipt (expands INLINE, like today)
+//   tool-run     -> the calm receipt; while working it's the live pill, once done
+//                   it's a tappable summary that opens the tray (steps overview)
 //   value-change -> a rich card showing the diff at a glance; tap opens the tray
 //   publish      -> same chassis (Draft -> Live on N channels)
 //   routine /
 //   reminder     -> the brand-tinted standing card (delegated to RoutineCard)
 //
-// Calm law: the normal finished turn stays a quiet one/two-line receipt; only
-// a failed / out-of-sync activity goes loud (amber / red).
-import React, { useState } from 'react';
+// Every finished activity is tappable and opens ONE review tray. Calm law: the
+// normal finished turn stays quiet; only failed / out-of-sync goes loud.
+import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import Animated, { FadeIn } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
-import type { ActivityPayload, ConversationToolStep, ValueChange } from '../../types';
+import type { ActivityPayload, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import RoutineCard from './RoutineCard';
 import { TypingIndicator } from './Typing';
-import { activityGlyph, changeKindGlyph, toolActivePhrase, toolDoneLabel, toolStepIcon } from './humanizers';
+import { activityGlyph, changeKindGlyph, humanizeChannel, toolActivePhrase } from './humanizers';
 
 export interface ActivityCardProps {
   payload: ActivityPayload;
@@ -28,13 +28,13 @@ export interface ActivityCardProps {
   onOpenItem?: (productId: string) => void;
 }
 
-export default function ActivityCard({ payload, streaming, onOpenTray, onOpenItem }: ActivityCardProps) {
+export default function ActivityCard({ payload, streaming, onOpenTray }: ActivityCardProps) {
   switch (payload.kind) {
     case 'routine':
     case 'reminder':
       return <RoutineCard payload={payload} onOpenTray={onOpenTray} />;
     case 'tool-run':
-      return <ToolRunCard steps={payload.steps} reasoning={payload.reasoning} streaming={streaming} />;
+      return <ToolRunCard payload={payload} streaming={streaming} onOpenTray={onOpenTray} />;
     case 'value-change':
     case 'publish':
       return <RichActivityCard payload={payload} onOpenTray={onOpenTray} />;
@@ -61,7 +61,7 @@ function RichActivityCard({
   const subParts: string[] = [];
   if (itemRef?.name) subParts.push(itemRef.name);
   if (itemRef?.listingCount) subParts.push(`${itemRef.listingCount} listing${itemRef.listingCount === 1 ? '' : 's'}`);
-  else if (channels?.length) subParts.push(channels.length === 1 ? channels[0] : `${channels.length} channels`);
+  else if (channels?.length) subParts.push(channels.length === 1 ? humanizeChannel(channels[0]) : `${channels.length} channels`);
   const subtitle = subParts.join(' · ');
 
   const single = changes.length === 1;
@@ -121,43 +121,49 @@ function RichActivityCard({
   );
 }
 
-// ── Tool-run receipt — ported from the original ToolActivityCard. Expands
-// INLINE (chevron-down); the calm "Creating task…" live pill is byte-identical
-// to before. This kind does NOT open the tray. ──
+// ── Tool-run receipt. While streaming, the calm "Creating task…" live pill
+// (byte-identical to before). Once finished, a tappable summary that opens the
+// tray to the full step list — so every activity is reviewable in one place. ──
 
 function ToolRunCard({
-  steps,
-  reasoning,
+  payload,
   streaming,
+  onOpenTray,
 }: {
-  steps: ConversationToolStep[];
-  reasoning?: string;
+  payload: Extract<ActivityPayload, { kind: 'tool-run' }>;
   streaming: boolean;
+  onOpenTray?: (payload: ActivityPayload) => void;
 }) {
+  const steps = payload.steps ?? [];
+  const reasoning = payload.reasoning;
   const hasReasoning = !!(reasoning && reasoning.trim().length);
   const count = steps.length;
-  const [expanded, setExpanded] = useState(false);
-  const [showReasoning, setShowReasoning] = useState(false);
 
   if (!streaming && !count && !hasReasoning) return null;
 
   const totalMs = steps.reduce((sum, s) => sum + (typeof s.durationMs === 'number' ? s.durationMs : 0), 0);
   const totalSecs = totalMs > 0 ? (totalMs / 1000).toFixed(1) : null;
-  const canExpand = count > 0 || hasReasoning;
 
   const lastStep = count ? steps[count - 1] : null;
   const livePhrase = lastStep ? toolActivePhrase(lastStep.tool) : 'Working on it';
   const doneSummary =
     count > 0 ? `Done · ${count} step${count === 1 ? '' : 's'}${totalSecs ? ` · ${totalSecs}s` : ''}` : 'Thought it through';
 
+  const canOpen = !streaming && (count > 0 || hasReasoning);
+  const press = () => {
+    if (!canOpen) return;
+    Haptics.selectionAsync().catch(() => undefined);
+    onOpenTray?.(payload);
+  };
+
   return (
-    <View style={[styles.activityCard, streaming && styles.activityCardLive]}>
-      <TouchableOpacity
-        style={styles.activityHeader}
-        onPress={() => canExpand && setExpanded((e) => !e)}
-        activeOpacity={canExpand ? 0.6 : 1}
-        disabled={!canExpand}
-      >
+    <TouchableOpacity
+      style={[styles.activityCard, streaming && styles.activityCardLive]}
+      activeOpacity={canOpen ? 0.7 : 1}
+      disabled={!canOpen}
+      onPress={press}
+    >
+      <View style={styles.activityHeader}>
         {streaming ? (
           <ActivityIndicator size="small" color="#8A95A3" style={styles.activitySpinner} />
         ) : (
@@ -170,43 +176,9 @@ function ToolRunCard({
         </Text>
         {streaming ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
         <View style={styles.activitySpacer} />
-        {canExpand ? <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color="#C4C4CC" /> : null}
-      </TouchableOpacity>
-
-      {expanded ? (
-        <View style={styles.activityBody}>
-          {hasReasoning ? (
-            <>
-              <TouchableOpacity style={styles.activityRow} onPress={() => setShowReasoning((s) => !s)} activeOpacity={0.7}>
-                <View style={styles.activityIconChip}>
-                  <Icon name="lightbulb-on-outline" size={13} color={CHAT_COLORS.brandDeep} />
-                </View>
-                <Text style={styles.activityRowLabel}>Thinking</Text>
-                <View style={styles.activitySpacer} />
-                <Icon name={showReasoning ? 'chevron-up' : 'chevron-right'} size={14} color="#C4C4CC" />
-              </TouchableOpacity>
-              {showReasoning ? <Text style={styles.reasoningText}>{reasoning!.trim()}</Text> : null}
-            </>
-          ) : null}
-
-          {steps.map((step, index) => (
-            <Animated.View key={`${step.tool}-${index}`} entering={FadeIn.duration(180)} style={styles.activityRow}>
-              <View style={[styles.activityIconChip, step.status === 'failed' && styles.activityIconChipFail]}>
-                <Icon name={toolStepIcon(step.tool)} size={13} color={step.status === 'failed' ? '#D04848' : CHAT_COLORS.brandDeep} />
-              </View>
-              <View style={styles.activityRowTextCol}>
-                <Text style={styles.activityRowLabel} numberOfLines={1}>{toolDoneLabel(step.tool, step.label)}</Text>
-                {step.resultSummary ? <Text style={styles.activityRowResult} numberOfLines={2}>{step.resultSummary}</Text> : null}
-              </View>
-              {step.status === 'failed' ? <Text style={styles.activityRowFail}>failed</Text> : null}
-              {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
-                <Text style={styles.activityRowMeta}>{(step.durationMs / 1000).toFixed(1)}s</Text>
-              ) : null}
-            </Animated.View>
-          ))}
-        </View>
-      ) : null}
-    </View>
+        {canOpen ? <Icon name="chevron-right" size={15} color="#C4C4CC" /> : null}
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -249,7 +221,7 @@ const styles = StyleSheet.create({
   previewDiff: { marginLeft: 'auto' },
   moreLine: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.faint },
 
-  // ── Tool-run receipt (ported, unchanged behavior) ──
+  // ── Tool-run receipt (live pill + tappable done summary) ──
   activityCard: {
     marginBottom: 10,
     borderRadius: 14,
@@ -275,28 +247,4 @@ const styles = StyleSheet.create({
   activityHeaderTextLive: { color: '#52525B', fontFamily: CHAT_FONT.medium, flexShrink: 1 },
   activitySpacer: { flex: 1 },
   activitySpinner: { transform: [{ scale: 0.7 }], marginRight: 2 },
-  activityBody: { paddingHorizontal: 12, paddingBottom: 10, paddingTop: 2, gap: 7 },
-  activityRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  activityIconChip: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(147,200,34,0.14)',
-  },
-  activityIconChipFail: { backgroundColor: 'rgba(208,72,72,0.12)' },
-  activityRowTextCol: { flex: 1, minWidth: 0, gap: 1 },
-  activityRowLabel: { fontSize: 12.5, color: CHAT_COLORS.inkSoft, fontFamily: CHAT_FONT.medium, flexShrink: 1 },
-  activityRowResult: { fontSize: 11.5, color: CHAT_COLORS.faint, fontFamily: CHAT_FONT.regular },
-  activityRowMeta: { fontSize: 11, color: '#A1A1AA', fontFamily: CHAT_FONT.medium },
-  activityRowFail: { fontSize: 11, color: '#D04848', fontFamily: CHAT_FONT.semibold },
-  reasoningText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: CHAT_COLORS.dim,
-    fontFamily: CHAT_FONT.regular,
-    paddingLeft: 31,
-    paddingRight: 4,
-  },
 });

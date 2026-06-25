@@ -344,24 +344,76 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       return;
     }
     if (isCSVImport && importedProducts) {
-      const mapped: MappingSuggestion[] = importedProducts.map((p: any, index: number) => ({
-        action: 'CREATE_NEW',
-        platformProduct: {
+      // Run the SAME match system on CSV rows as a platform scan: match each row
+      // against the existing catalog by SKU then title. Brand-new rows settle as
+      // CREATE_NEW (no needless card); likely-duplicates carry a suggested match
+      // (unresolved) so the deck/classifier auto-links the identical ones and
+      // only asks the seller about the genuinely ambiguous ones.
+      let catalog: any[] = [];
+      try {
+        await ensureSupabaseJwt();
+        const { data } = await supabase
+          .from('ProductVariants')
+          .select('Id, ProductId, Sku, Title, Price, PrimaryImageUrl')
+          .limit(2000);
+        catalog = data || [];
+      } catch (err: any) {
+        log.error('[useImportSession] CSV catalog fetch failed:', err?.message);
+      }
+      const norm = (v?: string | null) => (v || '').trim().toLowerCase();
+      const bySku = new Map<string, any>();
+      const byTitle = new Map<string, any>();
+      for (const v of catalog) {
+        if (v.Sku) bySku.set(norm(v.Sku), v);
+        if (v.Title && !byTitle.has(norm(v.Title))) byTitle.set(norm(v.Title), v);
+      }
+
+      const mapped: MappingSuggestion[] = importedProducts.map((p: any, index: number) => {
+        const sku = p.sku ? String(p.sku) : '';
+        const title = p.title ? String(p.title) : '';
+        const platformProduct = {
           id: `csv-${index}`,
-          sku: p.sku || `CSV-${index}`,
-          title: p.title || 'Untitled',
+          sku: sku || `CSV-${index}`,
+          title: title || 'Untitled',
           // CSV prices are user-formatted ("$1,299.00", "1.299,00"): strip
           // currency symbols and thousands separators before Number() so a
           // real price never coerces to 0.
           price: parseCsvPrice(p.price),
           imageUrl: p.imageUrl || null,
-        },
-        suggestedCanonicalProduct: null,
-        isSelected: true,
-        matchType: 'NONE',
-        confidence: 1.0,
-        originalData: p,
-      }));
+        };
+        const skuMatch = sku ? bySku.get(norm(sku)) : null;
+        const match = skuMatch || (title ? byTitle.get(norm(title)) : null);
+        if (match) {
+          // Unresolved → the deck classifies it (auto-link if every field agrees,
+          // else a single "same item?" decision). This is how duplicates surface.
+          return {
+            action: 'LINK_EXISTING' as const,
+            platformProduct,
+            suggestedCanonicalProduct: {
+              id: match.Id,
+              sku: match.Sku || '',
+              title: match.Title || 'Item',
+              price: typeof match.Price === 'number' ? match.Price : undefined,
+              imageUrl: match.PrimaryImageUrl || null,
+            },
+            isSelected: true,
+            matchType: skuMatch ? ('SKU' as const) : ('TITLE' as const),
+            confidence: skuMatch ? 0.97 : 0.85,
+            originalData: p,
+          };
+        }
+        // Brand-new product → settle as CREATE_NEW so it never becomes a card.
+        return {
+          action: 'CREATE_NEW' as const,
+          platformProduct,
+          suggestedCanonicalProduct: null,
+          isSelected: true,
+          resolved: true,
+          matchType: 'NONE' as const,
+          confidence: 1.0,
+          originalData: p,
+        };
+      });
       setSuggestions(mapped);
       setLoading(false);
       setError(null);

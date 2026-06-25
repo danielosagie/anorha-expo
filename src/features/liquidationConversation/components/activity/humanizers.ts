@@ -27,9 +27,15 @@ export const toolStepIcon = (tool: string): string => {
 };
 
 // Title-case a raw identifier as a last resort. The seller must NEVER see a
-// snake_case tool name (query_listings) — it reads as plumbing.
+// snake_case (query_listings) OR camelCase (awaitingReview) name — it reads as
+// plumbing — so split both before title-casing.
 export const prettify = (s: string): string => {
-  const cleaned = (s || '').replace(/[_-]+/g, ' ').trim();
+  const cleaned = (s || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // camelCase -> two words
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
   if (!cleaned) return 'Done';
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 };
@@ -85,13 +91,16 @@ const groupThousands = (n: number): string => {
   return `${neg ? '-' : ''}${grouped}${dec ? `.${dec}` : ''}`;
 };
 
+// Keep the sign OUTSIDE the dollar mark ("-$50", not "$-50").
+const withSign = (n: number): string => (n < 0 ? `-$${groupThousands(Math.abs(n))}` : `$${groupThousands(n)}`);
+
 /** Format a money value. Numbers gain a $ + thousands; pre-formatted strings pass through. */
 export const formatMoney = (v: string | number | null | undefined): string => {
   if (v === null || v === undefined || v === '') return '';
-  if (typeof v === 'number') return `$${groupThousands(v)}`;
+  if (typeof v === 'number') return withSign(v);
   const s = String(v).trim();
-  if (s.startsWith('$')) return s;
-  return /^-?\d/.test(s) ? `$${groupThousands(Number(s.replace(/,/g, ''))) }` : s;
+  if (s.startsWith('$') || s.startsWith('-$')) return s;
+  return /^-?\d/.test(s) ? withSign(Number(s.replace(/,/g, ''))) : s;
 };
 
 /** Format a count. Numbers gain thousands separators; strings pass through. */
@@ -138,6 +147,78 @@ export const humanizeStatus = (raw: string | number | null | undefined): string 
 export const isFailureStatus = (raw: string | number | null | undefined): boolean => {
   const s = String(raw ?? '').trim().toLowerCase();
   return s === 'failed' || s === 'error';
+};
+
+// ── Outcome title for a promoted value-change card ──────────────────────
+
+const priceDirection = (changes: ValueChange[]): 'up' | 'down' | 'mixed' => {
+  let down = 0;
+  let up = 0;
+  for (const c of changes) {
+    let dir = c.direction;
+    if (!dir) {
+      const a = numericOf(c.from);
+      const b = numericOf(c.to);
+      dir = a !== null && b !== null ? (b < a ? 'down' : b > a ? 'up' : 'neutral') : 'neutral';
+    }
+    if (dir === 'down') down++;
+    else if (dir === 'up') up++;
+  }
+  if (down && !up) return 'down';
+  if (up && !down) return 'up';
+  return 'mixed';
+};
+
+/** A warm, outcome-first title for a value change ("Lowered the price", "Put it live"). */
+export const summarizeChangeTitle = (tool: string, changes: ValueChange[]): string => {
+  if (!changes.length) return prettify(tool);
+  const n = changes.length;
+  const many = n > 1;
+  const kinds = new Set(changes.map((c) => c.kind || 'text'));
+  if (kinds.size === 1) {
+    const kind = changes[0].kind;
+    if (kind === 'price') {
+      const dir = priceDirection(changes);
+      if (dir === 'down') return many ? `Lowered ${n} prices` : 'Lowered the price';
+      if (dir === 'up') return many ? `Raised ${n} prices` : 'Raised the price';
+      return many ? `Updated ${n} prices` : 'Updated the price';
+    }
+    if (kind === 'inventory') return many ? `Updated ${n} stock counts` : 'Updated inventory';
+    if (kind === 'status') {
+      const to = humanizeStatus(changes[0].to).toLowerCase();
+      if (to === 'live') return many ? `Put ${n} live` : 'Put it live';
+      if (to === 'taken down') return many ? `Took ${n} down` : 'Took it down';
+      if (to === 'sold') return many ? `Marked ${n} sold` : 'Marked it sold';
+      return many ? `Updated ${n} statuses` : 'Updated status';
+    }
+  }
+  return many ? `Updated ${n} details` : 'Updated the listing';
+};
+
+// ── Sales-channel display names (never render a raw channel key) ─────────
+
+const CHANNEL_NAMES: Record<string, string> = {
+  ebay: 'eBay',
+  shopify: 'Shopify',
+  shopify_pos: 'Shopify POS',
+  amazon: 'Amazon',
+  etsy: 'Etsy',
+  facebook: 'Facebook',
+  facebook_marketplace: 'Facebook',
+  square: 'Square',
+  clover: 'Clover',
+  whatnot: 'Whatnot',
+  depop: 'Depop',
+  poshmark: 'Poshmark',
+  mercari: 'Mercari',
+  grailed: 'Grailed',
+  woocommerce: 'WooCommerce',
+};
+
+/** A seller-facing channel name. Known keys map to brand casing; anything else is humanized. */
+export const humanizeChannel = (raw: string): string => {
+  const key = String(raw ?? '').trim().toLowerCase();
+  return CHANNEL_NAMES[key] || prettify(String(raw));
 };
 
 // ── Routine cadence ("Every day · 9:00 AM") — derived CLIENT-SIDE ────────

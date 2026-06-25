@@ -8,9 +8,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { OptimizerBatchGenerateView } from '../components/optimizer/OptimizerBatchGenerateView';
 import { OptimizerPhotoModeView } from '../components/optimizer/OptimizerPhotoModeView';
+import OptimizerReviewView from '../components/optimizer/OptimizerReviewView';
 import { useOptimizerQueues, ClassifiedProduct } from '../hooks/useOptimizerQueues';
 import { RC } from '../components/resolve/ResolveKit';
 import { OptimizeResolver, OptimizeCase, Decision } from '../components/resolve/optimizeResolvers';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { getPlatform } from '../config/platforms';
 import {
   LobbyHeader,
   HeaderPill,
@@ -25,6 +28,7 @@ type Bucket = 'photo' | 'data' | 'manual';
 type ScreenView =
   | { kind: 'lobby' }
   | { kind: 'explainer' }
+  | { kind: 'review' }
   | { kind: 'lesson'; q: 'photo' | 'data' }
   | { kind: 'datachoose' }
   | { kind: 'dataselect' }
@@ -124,6 +128,21 @@ export function BackfillOptimizerScreen() {
   const attention = photoQueue.length + dataQueue.length + manualQueue.length;
   const firstBucket = BUCKET_ORDER.find((b) => remainingFor(b) > 0) || null;
 
+  // The product-detail review walks a snapshot of ids but reads the LIVE rows so
+  // edits/generation show fresh. Channel pills come from the connected platforms.
+  const [reviewIds, setReviewIds] = useState<Set<string>>(new Set());
+  const { connections } = usePlatformConnections();
+  const platformKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of connections || []) {
+      if (c?.IsEnabled === false) continue;
+      const def = getPlatform(c?.PlatformType);
+      if (def) set.add(def.key);
+    }
+    return Array.from(set);
+  }, [connections]);
+  const reviewProducts = useMemo(() => products.filter((p) => reviewIds.has(p.Id)), [products, reviewIds]);
+
   const dataChooseCase: OptimizeCase = useMemo(
     () => ({
       id: 'data-choose',
@@ -167,14 +186,13 @@ export function BackfillOptimizerScreen() {
 
   const enterBucket = (b: Bucket) => {
     if (remainingFor(b) === 0) return;
-    if (b === 'manual') {
-      setManualDeck(manualQueue.map(manualCaseFor));
-      setView({ kind: 'manual', i: 0 });
-    } else if (b === 'data') {
-      setView({ kind: 'datachoose' });
-    } else {
-      setView({ kind: 'lesson', q: b });
+    if (b === 'photo') {
+      setView({ kind: 'lesson', q: 'photo' });
+      return;
     }
+    // Details (data + manual) → the product-detail review editor.
+    setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
+    setView({ kind: 'review' });
   };
 
   const handleLessonComplete = useCallback(
@@ -235,22 +253,51 @@ export function BackfillOptimizerScreen() {
           </Text>
         </View>
         <View style={[styles.introFooter, { paddingBottom: insets.bottom + 18 }]}>
-          <TouchableOpacity activeOpacity={0.9} onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')} style={styles.introPrimary}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
+              if (dataQueue.length > 0) setView({ kind: 'lesson', q: 'data' });
+              else setView({ kind: 'review' });
+            }}
+            style={styles.introPrimary}
+          >
             <MaterialCommunityIcons name="star-four-points" size={18} color="#fff" />
             <Text style={styles.introPrimaryText}>Generate details for {n}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setView({ kind: 'lobby' })} style={styles.introSkip}>
+          <TouchableOpacity onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')} style={styles.introSkip}>
             <Text style={styles.introSkipText}>I&rsquo;ll write them myself</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
+
+  // ── Review — product-detail editor with per-channel readiness pills ────────
+  if (view.kind === 'review') {
+    return (
+      <OptimizerReviewView
+        products={reviewProducts}
+        platforms={platformKeys}
+        onBack={() => setView({ kind: 'lobby' })}
+        onComplete={(ids) => {
+          const done = ids.length ? ids : reviewProducts.map((p) => p.Id);
+          markDone(done);
+          setView({ kind: 'done', n: done.length, label: 'details ready' });
+        }}
+      />
+    );
+  }
+
+  // AI bulk-generate (existing view), then drop into the review to confirm.
   if (view.kind === 'lesson' && view.q === 'data') {
     return (
       <OptimizerBatchGenerateView
-        onBack={() => setView({ kind: 'datachoose' })}
-        onComplete={handleLessonComplete('listings drafted')}
+        onBack={() => setView({ kind: 'lobby' })}
+        onComplete={(ids: string[]) => {
+          markDone(ids);
+          setView({ kind: 'review' });
+        }}
         queueProducts={dataSubset && dataSubset.length ? dataSubset : dataQueue}
       />
     );
