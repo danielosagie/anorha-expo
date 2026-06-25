@@ -393,6 +393,16 @@ const CampaignThreadScreen = () => {
             navigation.navigate('AddProduct', { sessionId });
           }
         }}
+        // Activity cards: open the product, undo a change, or control a routine —
+        // all dispatched through the same action pipeline the quick chips use.
+        onOpenItem={(productId: string) => navigation.navigate('ProductDetail', { productId })}
+        onUndo={(payload, change) => {
+          const undo = (payload as any)?.undo as { actionType?: string; payload?: Record<string, unknown>; revertLabel?: string } | undefined;
+          if (undo?.actionType) {
+            sendAction(undo.actionType, undo.revertLabel || 'Undo change', { ...(undo.payload || {}), changeField: change?.field });
+          }
+        }}
+        onRoutineAction={(id, action) => sendAction(`routine_${action}`, `Routine ${action}`, { routineId: id })}
         contentTopInset={headerH + 8}
         contentBottomInset={footerH + 8 + feedKeyboardInset}
       />

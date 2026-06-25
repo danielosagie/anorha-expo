@@ -13,7 +13,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { MappingSuggestion } from '../../types/importSession';
-import { applyMatchDecision, reviewDeckCases } from '../resolve/classifyMatch';
+import { applyMatchDecision, classifyMatch, reviewDeckCases } from '../resolve/classifyMatch';
 import {
   MatchResolver,
   MatchCase,
@@ -108,6 +108,7 @@ const STATUS_COLOR: Record<Status['tone'], string> = { review: '#B45309', ok: '#
 
 const FILTERS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'auto', label: 'Matched automatically' },
   { key: 'review', label: 'Needs review' },
   { key: 'linked', label: 'Linked' },
   { key: 'new', label: 'New' },
@@ -139,6 +140,27 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
   const [future, setFuture] = useState<MappingSuggestion[][]>([]);
   const total = deck.length;
 
+  // Snapshot, at mount, the items the system matched to the catalog WITHOUT
+  // asking — the "here's what I got right" set. Fixed for the session so the
+  // seller's own decisions never inflate it; browsable via All items → "Matched
+  // automatically", where any wrong one can be pulled back into the deck.
+  const [autoMatchedIds] = useState<Set<string>>(() => {
+    const reviewIds = new Set(
+      reviewDeckCases(suggestions, platformName).flatMap((c) => c.itemIds || []),
+    );
+    const set = new Set<string>(classifyMatch(suggestions, platformName).autoResolved);
+    for (const s of suggestions) {
+      const id = s.platformProduct.id;
+      if (reviewIds.has(id)) continue;
+      if (s.direction === 'anorha_to_platform') continue;
+      if (s.action === 'IGNORE') continue;
+      if ((s.resolved && s.action !== 'CREATE_NEW') || s.alreadyMapped || s.suggestedCanonicalProduct?.id) {
+        set.add(id);
+      }
+    }
+    return set;
+  });
+
   // Platforms the user's anorha account currently has connected (canonical keys,
   // e.g. 'ebay','shopify'). A LINKED item is an anorha-managed product, so its
   // card shows the anorha mark + every connected channel — not just the single
@@ -160,6 +182,13 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
   const remainingLive = useMemo(
     () => buildDeck(suggestions, platformName),
     [suggestions, platformName],
+  );
+
+  // "Came in" for the first-card confidence beat — everything the import sent,
+  // excluding catalog-only items that were already in the seller's account.
+  const cameIn = useMemo(
+    () => suggestions.filter((s) => s.direction !== 'anorha_to_platform').length,
+    [suggestions],
   );
 
   // Record a change so it can be undone; clears the redo stack. Caps history so
@@ -341,27 +370,52 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
   }, [remainingLive]);
 
   const counts = useMemo(() => {
-    const out: Record<string, number> = { all: suggestions.length, review: 0, linked: 0, new: 0, catalog: 0, ignored: 0 };
-    for (const s of suggestions) out[statusOf(s).key] += 1;
+    const out: Record<string, number> = { all: suggestions.length, auto: 0, review: 0, linked: 0, new: 0, catalog: 0, ignored: 0 };
+    for (const s of suggestions) {
+      out[statusOf(s).key] += 1;
+      if (autoMatchedIds.has(s.platformProduct.id) && statusOf(s).key !== 'review') out.auto += 1;
+    }
     return out;
-  }, [suggestions]);
+  }, [suggestions, autoMatchedIds]);
 
   const allItems = useMemo(() => {
     const qq = query.trim().toLowerCase();
     return suggestions.filter((s) => {
       const st = statusOf(s);
-      if (filter !== 'all' && st.key !== filter) return false;
+      if (filter === 'auto') {
+        if (!autoMatchedIds.has(s.platformProduct.id) || st.key === 'review') return false;
+      } else if (filter !== 'all' && st.key !== filter) {
+        return false;
+      }
       if (!qq) return true;
       const p = s.platformProduct;
       return (p.title || '').toLowerCase().includes(qq) || (p.sku || '').toLowerCase().includes(qq);
     });
-  }, [suggestions, query, filter]);
+  }, [suggestions, query, filter, autoMatchedIds]);
 
   const undoOne = useCallback(
     (id: string) => {
       const updated = suggestions.map((s) => (s.platformProduct.id === id ? { ...s, resolved: false, action: 'UNMATCHED' as const, isSelected: false } : s));
       applyChange(updated);
       setDeck(buildDeck(updated, platformName));
+    },
+    [suggestions, platformName, applyChange],
+  );
+
+  // "Actually, not the same" — from the auto-matched list, drop the machine's
+  // link and re-open the item as a fresh decision. Clearing the canonical forces
+  // a Find card (search/link the right one, or add new) instead of silently
+  // re-auto-linking an identical-looking record.
+  const demoteToReview = useCallback(
+    (id: string) => {
+      const updated = suggestions.map((s) =>
+        s.platformProduct.id === id
+          ? { ...s, resolved: false, isSelected: false, action: 'UNMATCHED' as const, alreadyMapped: false, suggestedCanonicalProduct: null }
+          : s,
+      );
+      applyChange(updated);
+      setDeck(buildDeck(updated, platformName));
+      setIdx(0);
     },
     [suggestions, platformName, applyChange],
   );
@@ -517,6 +571,10 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
                 <TouchableOpacity style={styles.detailPrimary} activeOpacity={0.88} onPress={() => { const id = detailSug.platformProduct.id; setDetailId(null); openItem(id); }}>
                   <Text style={styles.detailPrimaryText}>Review this</Text>
                 </TouchableOpacity>
+              ) : autoMatchedIds.has(detailSug.platformProduct.id) ? (
+                <TouchableOpacity style={styles.detailPrimary} activeOpacity={0.88} onPress={() => { demoteToReview(detailSug.platformProduct.id); setDetailId(null); }}>
+                  <Text style={styles.detailPrimaryText}>Actually, not the same</Text>
+                </TouchableOpacity>
               ) : (
                 <TouchableOpacity style={styles.detailPrimary} activeOpacity={0.88} onPress={() => { undoOne(detailSug.platformProduct.id); setDetailId(null); }}>
                   <Text style={styles.detailPrimaryText}>Undo decision</Text>
@@ -578,6 +636,7 @@ const MatchDeck: React.FC<MatchDeckProps> = ({
           canUndo: past.length > 0,
           onRedo: redo,
           canRedo: future.length > 0,
+          intro: past.length === 0 ? { cameIn, needYou: remainingLive.length } : null,
         }}
       >
         <ResolveActions.Provider
