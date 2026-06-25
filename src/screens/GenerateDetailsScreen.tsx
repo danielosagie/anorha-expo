@@ -2225,9 +2225,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                     try {
                       const assets = await captureOrPickImageAssets({ multiple: true });
                       if (!assets.length) return;
-                      // Upload the picked (camera or library) images to Supabase.
-                      const uploadedUrls = await uploadLocalImagesToSupabase(assets.map(asset => asset.uri));
-                      if (uploadedUrls.length > 0) onResult(uploadedUrls);
+                      const localUris = assets.map(asset => asset.uri);
+                      // Never let an upload hiccup hide the photo. Try to host it on Supabase,
+                      // but ALWAYS fall back to the local capture so it shows immediately — local
+                      // files get re-uploaded at publish time (uploadLocalImagesToSupabase runs there too).
+                      let urisToShow = localUris;
+                      try {
+                        const uploadedUrls = await uploadLocalImagesToSupabase(localUris);
+                        if (uploadedUrls.length > 0) urisToShow = uploadedUrls;
+                      } catch (uploadErr) {
+                        log.error('[GEN-DETAILS] Photo upload failed; showing local copy, will upload at publish:', uploadErr);
+                      }
+                      onResult(urisToShow);
                     } catch (error: any) {
                       log.error('Error picking images:', error);
                       Alert.alert('Couldn’t add photo', error?.message || 'Failed to add images. Please try again.');
@@ -2288,6 +2297,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </TouchableOpacity>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {/* Form | Steps — Form is the resting view; tap Steps to walk the listing field-by-field. */}
+            <View style={styles.modeToggle}>
+              <View style={[styles.modeSeg, styles.modeSegActive]}>
+                <Text style={[styles.modeSegText, styles.modeSegTextActive]}>Form</Text>
+              </View>
+              <TouchableOpacity style={styles.modeSeg} activeOpacity={0.8} onPress={() => listingEditorRef.current?.startStepsWalk()}>
+                <Text style={styles.modeSegText}>Steps</Text>
+              </TouchableOpacity>
+            </View>
             {items.length > 1 ? (
               <TouchableOpacity style={styles.itemsPill} onPress={() => setItemMenuOpen(open => !open)} activeOpacity={0.85}>
                 <Boxes size={16} color={CHAT_COLORS.ink} />
@@ -2744,6 +2762,11 @@ const styles = StyleSheet.create({
   glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
   navCircle: { ...GLASS_HEADER_STYLES.navCircle },
   titlePill: { ...GLASS_HEADER_STYLES.titlePill },
+  modeToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: CHAT_COLORS.bubble, borderRadius: 999, padding: 3 },
+  modeSeg: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999 },
+  modeSegActive: { backgroundColor: CHAT_COLORS.white },
+  modeSegText: { fontSize: 12.5, fontWeight: '600', color: CHAT_COLORS.dim },
+  modeSegTextActive: { color: CHAT_COLORS.ink, fontWeight: '700' },
   pillTitle: { ...GLASS_HEADER_STYLES.pillTitle },
   pillSub: { ...GLASS_HEADER_STYLES.pillSub },
   itemsPill: { ...GLASS_HEADER_STYLES.actionPill },

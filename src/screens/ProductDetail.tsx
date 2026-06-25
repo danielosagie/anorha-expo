@@ -567,10 +567,9 @@ const ProductDetailScreen = observer(
       log.debug('[ProductDetail] Updated platforms, triggering auto-save...');
     };
 
-    // Collaboration state
+    // Collaboration state — advisory only. We never block editing on a lock
+    // (last-write-wins); a conflict surfaces as a quiet, dismissable banner.
     const collaboration = useCollaboration();
-    const [isLockedByOther, setIsLockedByOther] = useState(false);
-    const [lockOwner, setLockOwner] = useState<string | null>(null);
 
     // Phase 2: Draft state for auto-save and versioning
     const [draftData, setDraftData] = useState<Record<string, any> | null>(null);
@@ -3756,14 +3755,10 @@ const ProductDetailScreen = observer(
 
       // Request edit lock when opening product
       collaboration.startEditing(detailedItem.ProductId).then((response) => {
+        // Advisory presence only — editing is never blocked. If a teammate also
+        // has this open, give a quiet heads-up instead of the old blocking alert.
         if (!response.success && response.lockedBy) {
-          setIsLockedByOther(true);
-          setLockOwner(response.lockedBy);
-          Alert.alert(
-            'Product Locked',
-            `${response.lockedBy} is currently editing this product. You can view but not edit.`,
-            [{ text: 'OK' }]
-          );
+          showBanner(`${response.lockedBy} is also editing — your changes will still save.`);
         }
       });
 
@@ -3811,17 +3806,13 @@ const ProductDetailScreen = observer(
       // Listen for edit started events
       const unsubscribeEditStart = collaboration.onEditStarted((event) => {
         if (event.productId === detailedItem.ProductId) {
-          setIsLockedByOther(true);
-          setLockOwner(event.userName);
+          showBanner(`${event.userName} is also editing this product.`);
         }
       });
 
       // Listen for edit ended events
-      const unsubscribeEditEnd = collaboration.onEditEnded((event) => {
-        if (event.productId === detailedItem.ProductId) {
-          setIsLockedByOther(false);
-          setLockOwner(null);
-        }
+      const unsubscribeEditEnd = collaboration.onEditEnded(() => {
+        // No-op: presence is advisory, so there is no lock to release in the UI.
       });
 
       // Cleanup: Release lock when leaving
