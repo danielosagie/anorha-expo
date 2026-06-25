@@ -9,6 +9,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
+import { getListingQuality } from '../utils/listingQuality';
 import { Boxes, X, Pencil, ChevronLeft, PencilIcon } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
@@ -17,6 +18,7 @@ import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActio
 import { MessageComposer } from '../components/chat/MessageComposer';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import FieldSheet from '../components/ListingEditor/FieldSheet';
+import PrePublishQualitySheet from '../components/ListingEditor/PrePublishQualitySheet';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
@@ -666,6 +668,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [qualitySheetOpen, setQualitySheetOpen] = useState(false);
   const openScanner = (onResult: (code: string) => void) => {
     scannerHeight.stopAnimation();
     scannerHeight.setValue(0);
@@ -887,6 +890,17 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     [results, currentProductIndex]
   );
   const effectiveResult = hasMultipleResults ? currentResult : first;
+
+  // Advisory pre-publish quality check — scores the canonical (shopify-else-first)
+  // platform + the same filtered photo set the form sees. Pure heuristic; never blocks.
+  const listingQuality = useMemo(() => {
+    const keys = Object.keys(displayedPlatforms || {});
+    const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
+    const canonical = (displayedPlatforms?.[canonicalKey] || {}) as any;
+    const photoCount = (userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || [])
+      .filter((url: string) => typeof url === 'string' && url.trim().length > 0).length;
+    return getListingQuality({ canonical, photoCount });
+  }, [displayedPlatforms, userImagesByIndex, effectiveResult]);
 
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
@@ -1651,6 +1665,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     } catch (err) {
       log.error('Error in doPublish:', err);
       alert('Failed to prepare publish. Please try again.');
+    }
+  };
+
+  // Advisory gate: if the listing is weak, surface "Before you publish" first.
+  // If it's strong, proceed straight to the normal publish flow (the modal).
+  const handlePublishPress = () => {
+    if (!listingQuality.isStrong) {
+      setQualitySheetOpen(true);
+    } else {
+      doPublish();
     }
   };
 
@@ -2496,7 +2520,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   : 'Publish listing'
               }
               primaryDisabled={!canPublish}
-              onPrimary={doPublish}
+              onPrimary={handlePublishPress}
               secondaryLabel={'Save Draft'}
               onSecondary={doSaveToInventory}
               tertiaryContent={hasMultipleResults ? (
@@ -2627,6 +2651,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </>
       )}
+
+      {/* Pre-publish quality check — advisory gate before the publish modal */}
+      <PrePublishQualitySheet
+        visible={qualitySheetOpen}
+        rows={listingQuality.rows}
+        onClose={() => setQualitySheetOpen(false)}
+        onPublishAnyway={() => { setQualitySheetOpen(false); doPublish(); }}
+      />
 
       {/* Publish Confirmation Modal */}
       <PublishConfirmationModal

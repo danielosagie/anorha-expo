@@ -3058,12 +3058,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   </Text>
                 </TouchableOpacity>
               ))} */}
-              {/* Pricing capability indicator moved here */}
-              <View style={{ marginLeft: 'auto', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, backgroundColor: activePlatformKey === 'shopify' ? '#E3F2FD' : '' }}>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: activePlatformKey === 'shopify' ? '#1976D2' : '' }}>
-                  {activePlatformKey === 'shopify' ? 'Global Price' : ''}
-                </Text>
-              </View>
+              {/* Global Price badge removed — no special "global card" for Shopify;
+                  inventory is structured the same on every platform tab. */}
             </View>
           )}
         </View>
@@ -3621,7 +3617,7 @@ const styles = StyleSheet.create({
   pillDashed: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', marginRight: 8 },
   // Flattened: sections are borderless now (stripped-down look).
   card: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 14 },
-  darkerCard: { marginTop: 16, backgroundColor: '#F3F4F6', borderRadius: 14, borderWidth: 1, borderColor: '#F1F2F4', padding: 12 },
+  darkerCard: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#F1F2F4', padding: 12 },
   priceAllChannels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   priceAllChannelsLabel: { fontSize: 10.5, fontWeight: '700', color: '#71717A', letterSpacing: 0.5 },
   priceAllChannelsValue: { fontSize: 18, fontWeight: '700', color: '#18181B', marginTop: 2 },

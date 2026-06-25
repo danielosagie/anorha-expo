@@ -318,6 +318,8 @@ const styles = StyleSheet.create({
   platformCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#F1F2F4',
     overflow: 'hidden',
   },
   variantSection: {
