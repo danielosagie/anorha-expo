@@ -8,7 +8,7 @@
  *
  * Contract (verified against sssync-bknd/convex):
  *   - workerPresence:getForUser({ userId }) → presence docs
- *       { userId, orgId, workerId, platform?, lastSeenAt, updatedAt }
+ *       { _id, userId, orgId, workerId, platform?, lastSeenAt, updatedAt }
  *   - browserJobs:getForUser({ userId }) → projected jobs
  *       { _id, type, platform, operation, status, paused, pausedReason,
  *         queuePosition, nextEligibleAt, productId, variantId, listingId,

@@ -143,27 +143,38 @@ export function LinkComputerBody({
       installed = null;
     }
 
-    // 2. Reachability via the backend health check.
+    // 2. Reachability via the backend health check. Guarded by an 8s timeout so a
+    //    hung request can never leave the sheet stuck on 'checking' (RN fetch has
+    //    no default timeout) — on abort we fall through to a real state below.
     let reachable = false;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
     try {
       const token = await ensureSupabaseJwt();
       const res = await fetch(
         `${SSSYNC_API_BASE_URL}/api/platform-execution/ponder/health${
           orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''
         }`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined, signal: ctrl.signal },
       );
       if (res.ok) {
         const d = await res.json();
         reachable = !!d?.reachable;
       }
     } catch {
+      // Network error OR the timeout abort — treat as not reachable.
       reachable = false;
+    } finally {
+      clearTimeout(timer);
     }
 
+    // Backend reachability is authoritative: actually reaching the computer's
+    // runtime means it's linked. canOpenURL is only a weak local hint (iOS returns
+    // false/throws unless the scheme is declared) and must NOT downgrade a
+    // confirmed-reachable computer to not_installed/unknown.
     let next: LinkComputerState;
-    if (installed === true && reachable) next = 'installed';
-    else if (installed === true && !reachable) next = 'runtime_unreachable';
+    if (reachable) next = 'installed';
+    else if (installed === true) next = 'runtime_unreachable';
     else if (installed === false) next = 'not_installed';
     else next = 'unknown';
 

@@ -15,7 +15,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { getPlatform } from '../config/platforms';
 import {
   LobbyHeader,
-  HeaderPill,
+  UpNextRow,
   IconName,
 } from '../components/quest/LobbyKit';
 
@@ -257,7 +257,6 @@ export function BackfillOptimizerScreen() {
         title="Optimize"
         countSuffix={`${counts.total} items`}
         onBack={() => navigation.goBack()}
-        right={<HeaderPill label={`${counts.total - attention} ready`} icon="star-four-points" iconColor={RC.green} />}
       />
 
       {loading ? (
@@ -266,49 +265,20 @@ export function BackfillOptimizerScreen() {
         </View>
       ) : (
         <View style={styles.taskList}>
-          {/* Photos */}
-          <TouchableOpacity
-            activeOpacity={photosLeft === 0 ? 1 : 0.85}
-            disabled={photosLeft === 0}
-            onPress={() => enterBucket('photo')}
-            style={styles.taskRow}
-          >
-            <View style={styles.taskIcon}>
-              <MaterialCommunityIcons name="camera" size={20} color={RC.greenDark} />
-            </View>
-            <Text style={styles.taskTitle}>Photos</Text>
-            {photosLeft === 0 ? (
-              <View style={styles.badgeDone}>
-                <MaterialCommunityIcons name="check" size={16} color={RC.greenDark} />
-              </View>
-            ) : (
-              <View style={styles.badgeTodo}>
-                <Text style={styles.badgeTodoText}>{photosLeft}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-
-          {/* Details */}
-          <TouchableOpacity
-            activeOpacity={detailsLeft === 0 ? 1 : 0.85}
-            disabled={detailsLeft === 0}
-            onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')}
-            style={styles.taskRow}
-          >
-            <View style={styles.taskIcon}>
-              <MaterialCommunityIcons name="star-four-points" size={20} color={RC.greenDark} />
-            </View>
-            <Text style={styles.taskTitle}>Details</Text>
-            {detailsLeft === 0 ? (
-              <View style={styles.badgeDone}>
-                <MaterialCommunityIcons name="check" size={16} color={RC.greenDark} />
-              </View>
-            ) : (
-              <View style={styles.badgeTodo}>
-                <Text style={styles.badgeTodoText}>{detailsLeft}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          <UpNextRow
+            icon="camera"
+            title="Photos"
+            count={photosLeft}
+            state={photosLeft > 0 ? 'active' : 'done'}
+            onPress={photosLeft > 0 ? () => enterBucket('photo') : undefined}
+          />
+          <UpNextRow
+            icon="star-four-points"
+            title="Details"
+            count={detailsLeft}
+            state={detailsLeft > 0 ? (photosLeft > 0 ? 'locked' : 'active') : 'done'}
+            onPress={detailsLeft > 0 ? () => enterBucket(dataQueue.length > 0 ? 'data' : 'manual') : undefined}
+          />
         </View>
       )}
 
@@ -356,13 +326,7 @@ const styles = StyleSheet.create({
   // ── Step 0 intro + explainer (task framing) ───────────────────────────────
   introTitle: { fontSize: 27, fontWeight: '800', color: RC.ink, letterSpacing: -0.6, lineHeight: 32 },
   introSub: { fontSize: 14.5, fontWeight: '500', color: RC.muted, marginTop: 8 },
-  taskList: { paddingHorizontal: 16, paddingTop: 14, gap: 10 },
-  taskRow: { flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16 },
-  taskIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: RC.greenSoft, alignItems: 'center', justifyContent: 'center' },
-  taskTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: RC.ink, letterSpacing: -0.2 },
-  badgeTodo: { minWidth: 28, height: 28, borderRadius: 14, backgroundColor: RC.dangerSoft, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 9 },
-  badgeTodoText: { fontSize: 14, fontWeight: '800', color: RC.danger, fontVariant: ['tabular-nums'] },
-  badgeDone: { width: 28, height: 28, borderRadius: 14, backgroundColor: RC.greenSoft, alignItems: 'center', justifyContent: 'center' },
+  taskList: { paddingHorizontal: 16, paddingTop: 14 },
 
   introBackRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: 40 },
   introBackBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center' },

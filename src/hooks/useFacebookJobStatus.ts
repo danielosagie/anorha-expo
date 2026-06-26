@@ -211,7 +211,7 @@ export function useFacebookJobStatus(): FacebookJobStatus {
   );
 
   // Local tick so presence-staleness flips offline without a Convex push.
-  const [, forceTick] = useState(0);
+  const [tick, forceTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => forceTick((n) => n + 1), TICK_MS);
     return () => clearInterval(t);
@@ -227,8 +227,10 @@ export function useFacebookJobStatus(): FacebookJobStatus {
       const platformOk = !d.platform || d.platform.toLowerCase().includes('facebook');
       return fresh && platformOk;
     });
-    // forceTick re-runs this via re-render; presence is the real dep.
-  }, [presence]);
+    // `tick` forces a recompute against a fresh Date.now() every TICK_MS, so a
+    // gone-stale heartbeat flips offline even with no new presence push.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presence, tick]);
 
   const fbJobs = useMemo(
     () => (jobs || []).filter(isFacebook),

@@ -347,7 +347,7 @@ export function UpNextRow({
       <View style={[lk.upIcon, active && lk.upIconActiveGreen, done && lk.upIconDone]}>
         <MaterialCommunityIcons
           name={done ? 'check-bold' : icon}
-          size={26}
+          size={22}
           color={done || active ? RC.greenDark : RC.muted}
         />
       </View>
@@ -355,12 +355,12 @@ export function UpNextRow({
         <Text style={[lk.upTitle, done && { color: RC.muted }]} numberOfLines={1}>{title}</Text>
         {!!sub && <Text style={lk.upSub} numberOfLines={1}>{sub}</Text>}
       </View>
-      {typeof count === 'number' && count > 0 && !active && (
-        <View style={lk.upPill}>
-          <Text style={lk.upPillText}>{count}</Text>
+      {typeof count === 'number' && count > 0 && (
+        <View style={[lk.upPill, active && lk.upPillGreen]}>
+          <Text style={[lk.upPillText, active && lk.upPillGreenText]}>{count}</Text>
         </View>
       )}
-      {active && <MaterialCommunityIcons name="arrow-right" size={22} color={RC.greenDark} />}
+      {active && <MaterialCommunityIcons name="arrow-right" size={20} color={RC.greenDark} />}
     </TouchableOpacity>
   );
 }
@@ -701,20 +701,23 @@ const lk = StyleSheet.create({
   stripMore: { backgroundColor: '#C5C5C5', alignItems: 'center', justifyContent: 'center', marginRight: 0 },
   stripMoreText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 
-  // Up-next stage row (shared by UpNextRow + IssueLane — the "button press" card)
-  upRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: RC.bg, borderWidth: 2, borderColor: 'rgba(153,153,153,0.5)', borderRadius: 18, padding: 16, marginBottom: 12 },
+  // Up-next stage row (shared by UpNextRow + IssueLane). Clean ProfileScreen-style
+  // card: hairline border, soft icon tile, subtle pill — not the old chunky look.
+  upRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10 },
   upRowActive: { backgroundColor: '#FFF7EC', borderColor: 'rgba(245,166,35,0.45)' },
   upRowActiveGreen: { backgroundColor: RC.greenSoft, borderColor: RC.greenLine },
   upRowDone: { backgroundColor: RC.surface, borderColor: RC.line },
-  upIcon: { width: 55, height: 54, borderRadius: 8, backgroundColor: '#F4F4F4', alignItems: 'center', justifyContent: 'center' },
+  upIcon: { width: 42, height: 42, borderRadius: 11, backgroundColor: RC.surface2, alignItems: 'center', justifyContent: 'center' },
   upIconActive: { backgroundColor: '#FDEBD2' },
   upIconActiveGreen: { backgroundColor: '#fff' },
   upIconDone: { backgroundColor: RC.greenSoft },
-  upTitle: { fontSize: 16, fontWeight: '600', color: '#15181A', letterSpacing: -0.3 },
-  upSub: { fontSize: 14, fontWeight: '500', color: '#6B6F73', marginTop: 2 },
-  upPill: { backgroundColor: '#F4F4F4', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4 },
+  upTitle: { fontSize: 16, fontWeight: '600', color: RC.ink, letterSpacing: -0.2 },
+  upSub: { fontSize: 13.5, fontWeight: '500', color: RC.muted, marginTop: 2 },
+  upPill: { minWidth: 28, alignItems: 'center', backgroundColor: RC.surface2, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   upPillActive: { backgroundColor: '#FDEBD2' },
-  upPillText: { fontSize: 14, fontWeight: '600', color: '#6B6F73' },
+  upPillGreen: { backgroundColor: '#fff' },
+  upPillText: { fontSize: 14, fontWeight: '700', color: RC.muted },
+  upPillGreenText: { color: RC.greenDark },
 
   // Issue lane container
   lane: { width: '100%' },

@@ -16,7 +16,7 @@
  * The client is a process-wide singleton keyed by URL (mirrors
  * src/providers/ConvexProvider.tsx) so we never spin up more than one socket.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../lib/apiClient';
@@ -48,6 +48,13 @@ function getClientFor(url: string | null): ConvexReactClient | null {
   if (!url) return null;
   if (clientInstance && clientUrl === url) return clientInstance;
   try {
+    // URL changed (or first build): tear down any prior socket so we keep exactly
+    // one open connection. Fire-and-forget — getClientFor is sync (runs in a memo).
+    if (clientInstance) {
+      clientInstance.close().catch((err) => log.warn('Failed to close stale browserJobs Convex client', err));
+      clientInstance = null;
+      clientUrl = null;
+    }
     clientInstance = new ConvexReactClient(url);
     clientUrl = url;
     return clientInstance;
@@ -74,20 +81,37 @@ export function useBrowserJobsConvex(
 ): BrowserJobsConvexValue {
   const [bootstrap, setBootstrap] = useState<BrowserJobsBootstrap | null>(memoBootstrap);
 
+  // Clear the cross-user module cache on sign-out so the next user can never
+  // inherit the previous user's bootstrap (it is user-scoped data).
+  useEffect(() => {
+    if (signedIn) return;
+    memoBootstrap = null;
+    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+    setBootstrap(null);
+  }, [signedIn]);
+
   useEffect(() => {
     if (!signedIn) return;
     let cancelled = false;
 
     const resolve = async () => {
-      // 1. Warm from AsyncStorage so a cold/offline start has a last-known URL.
+      // Drop a module memo that belongs to a DIFFERENT user before warming.
+      if (memoBootstrap && fallbackUserId && memoBootstrap.userId !== fallbackUserId) {
+        memoBootstrap = null;
+        setBootstrap(null);
+      }
+      // 1. Warm from AsyncStorage so a cold/offline start has a last-known URL —
+      //    but only accept it when it belongs to the current user.
       if (!memoBootstrap) {
         try {
           const cached = await AsyncStorage.getItem(STORAGE_KEY);
           if (cached && !cancelled) {
             const parsed = JSON.parse(cached) as BrowserJobsBootstrap;
-            if (parsed?.convexURL) {
+            if (parsed?.convexURL && (!fallbackUserId || parsed.userId === fallbackUserId)) {
               memoBootstrap = parsed;
               setBootstrap(parsed);
+            } else if (parsed && fallbackUserId && parsed.userId !== fallbackUserId) {
+              AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
             }
           }
         } catch {
@@ -120,14 +144,20 @@ export function useBrowserJobsConvex(
     };
   }, [signedIn, fallbackUserId]);
 
-  // When signed out, present a degraded value but keep any singleton alive.
-  if (!signedIn) {
-    return { client: null, userId: null };
-  }
+  // Only trust a bootstrap that belongs to the current user; otherwise fall back
+  // to the session user id. Build the client in a memo (keyed by url) so it isn't
+  // constructed during every render, and stabilize the returned object reference
+  // so context consumers don't re-render needlessly. When signed out we keep the
+  // singleton socket alive (url=null returns the cached client untouched).
+  const resolvedUserId =
+    bootstrap?.userId && (!fallbackUserId || bootstrap.userId === fallbackUserId)
+      ? bootstrap.userId
+      : fallbackUserId ?? null;
+  const url = signedIn && resolvedUserId ? (bootstrap?.convexURL ?? null) : null;
+  const client = useMemo(() => getClientFor(url), [url]);
 
-  const url = bootstrap?.convexURL ?? null;
-  return {
-    client: getClientFor(url),
-    userId: bootstrap?.userId ?? fallbackUserId ?? null,
-  };
+  return useMemo(
+    () => (signedIn ? { client, userId: resolvedUserId } : { client: null, userId: null }),
+    [signedIn, client, resolvedUserId],
+  );
 }

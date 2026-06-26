@@ -4206,7 +4206,7 @@ const ProductDetailScreen = observer(
                     // dispatch job is in flight / waiting / paused / failed, show its
                     // realtime status instead of the sync status \u2014 same dot+label idiom.
                     const fbStatus = rawType.toLowerCase() === 'facebook'
-                      ? fbDispatch.statusForVariant(detailedItem?.Id)
+                      ? fbDispatch.statusForVariant(mapping.ProductVariantId)
                       : null;
                     const dotColor = fbStatus ? fbStatus.dotColor : statusColor;
                     const textColor = fbStatus ? fbStatus.color : statusColor;

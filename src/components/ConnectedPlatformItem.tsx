@@ -401,7 +401,12 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
                                 onPress={() => {
-                                    if (connection.PlatformType === 'csv') {
+                                    // FB rows needing attention (needs-a-check / computer offline)
+                                    // open the computer-link sheet; everything else keeps the
+                                    // existing generic flow.
+                                    if (isFacebookRow && onOpenComputerSheet && (fbNeedsCheck || computerOnline === false)) {
+                                        onOpenComputerSheet(connection.Id, platformConfig.name);
+                                    } else if (connection.PlatformType === 'csv') {
                                         openManageMenu();
                                     } else {
                                         navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name });
