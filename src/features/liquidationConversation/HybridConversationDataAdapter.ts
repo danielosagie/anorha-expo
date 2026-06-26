@@ -419,6 +419,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 ...(Array.isArray((payload as any).changes) ? { changes: (payload as any).changes } : {}),
                 ...(readString((payload as any).reason) ? { reason: readString((payload as any).reason) } : {}),
                 ...((payload as any).itemRef && typeof (payload as any).itemRef === 'object' ? { itemRef: (payload as any).itemRef } : {}),
+                ...((payload as any).undo && typeof (payload as any).undo === 'object' ? { undo: (payload as any).undo } : {}),
                 threadId,
               });
               break;
