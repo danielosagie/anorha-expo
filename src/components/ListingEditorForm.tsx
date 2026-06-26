@@ -982,20 +982,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
   }, [pricingResearchInput]);
 
-  // Auto-load sold-comps pricing research the moment the Price sheet opens, so the
-  // going-rate bar + recent comps are there waiting (matches the Paper Price sheet),
-  // instead of hiding behind a "See what it sells for" tap.
+  // Auto-load sold-comps pricing research the moment the Price step appears — in the
+  // bottom sheet (openField) AND the full-screen wizard — so the going-rate bar + recent
+  // comps are there waiting, instead of hiding behind a "See what it sells for" tap.
   useEffect(() => {
-    if (openField === 'price' && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
+    const onPriceStep = openField === 'price' || (wizardOpen && wizardSteps[wizardIdx] === 'price');
+    if (onPriceStep && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
       fetchPricingResearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField, titleForPricingResearch]);
+  }, [openField, wizardOpen, wizardIdx, wizardSteps, titleForPricingResearch]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
-      const weightVal = override ? parseFloat(override.weight) : (typeof activeData.weight === 'number' ? activeData.weight : parseFloat(String(activeData.weight ?? '')));
-      const num = weightVal;
+      // Fall back to the AI's estimated weight (shipping vision) when the seller hasn't
+      // set one yet — so a freshly generated item shows a shipping estimate without a tap.
+      const ew = (activeData as any).estimatedWeight;
+      const ownWeight = typeof activeData.weight === 'number' ? activeData.weight : parseFloat(String(activeData.weight ?? ''));
+      const fallbackWeight = (Number.isFinite(ownWeight) && ownWeight > 0)
+        ? ownWeight
+        : (ew && Number(ew.value) > 0 ? Number(ew.value) : NaN);
+      const num = override ? parseFloat(override.weight) : fallbackWeight;
       if (!Number.isFinite(num) || num <= 0) {
         setShippingEstimateResult(null);
         return;
@@ -1005,7 +1012,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       try {
         const token = await ensureSupabaseJwt();
         const dims = override?.estimatedDimensions ?? (activeData as any).estimatedDimensions;
-        const weightUnit = override?.weightUnit ?? (activeData.weightUnit || 'lb');
+        const weightUnit = override?.weightUnit ?? (activeData.weightUnit || ew?.unit || 'lb');
         const params = new URLSearchParams({
           weight: override ? override.weight : String(num),
           weightUnit,
@@ -1039,13 +1046,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         setShippingEstimateLoading(false);
       }
     },
-    [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions],
+    [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, (activeData as any).estimatedWeight],
   );
 
   useEffect(() => {
     if (shippingEstimateDebounceRef.current) clearTimeout(shippingEstimateDebounceRef.current);
-    const w = activeData.weight;
-    const num = typeof w === 'number' ? w : parseFloat(String(w ?? ''));
+    const ew = (activeData as any).estimatedWeight;
+    const ownW = typeof activeData.weight === 'number' ? activeData.weight : parseFloat(String(activeData.weight ?? ''));
+    const num = (Number.isFinite(ownW) && ownW > 0) ? ownW : (ew && Number(ew.value) > 0 ? Number(ew.value) : NaN);
     if (!Number.isFinite(num) || num <= 0) {
       setShippingEstimateResult(null);
       return;
@@ -1056,7 +1064,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return () => {
       if (shippingEstimateDebounceRef.current) clearTimeout(shippingEstimateDebounceRef.current);
     };
-  }, [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, fetchShippingEstimate]);
+  }, [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, (activeData as any).estimatedWeight, fetchShippingEstimate]);
 
   // When in 'all' tab, aggregate locations and quantities from all platforms
   const aggregatedLocations = useMemo(() => {
@@ -2033,7 +2041,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       case 'sku':
         return <SheetTextField value={d.sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" />;
       case 'barcode':
-        return <SheetTextField value={d.barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN" />;
+        return (
+          <View>
+            <SheetTextField value={d.barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN" />
+            <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
+              <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
+              <Text style={rowStyles.researchBtnText}>Scan barcode</Text>
+            </TouchableOpacity>
+          </View>
+        );
       case 'tags':
         return <ChipsField label="Tags" hideLabel valueArray={d.tags} onChangeArray={(arr) => patchField('tags', arr)} />;
       case 'price': {
@@ -3064,8 +3080,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 width: dims?.width != null ? String(dims.width) : '',
                 height: dims?.height != null ? String(dims.height) : '',
               });
-              setEditableWeight(String(activeData.weight ?? ''));
-              setEditableWeightUnit(activeData.weightUnit || 'lb');
+              const ewInit = (activeData as any).estimatedWeight;
+              const wInit = (activeData.weight != null && String(activeData.weight) !== '' && Number(activeData.weight) > 0) ? activeData.weight : (ewInit?.value ?? '');
+              setEditableWeight(String(wInit ?? ''));
+              setEditableWeightUnit(activeData.weightUnit || ewInit?.unit || 'lb');
               setDeliverySheetVisible(true);
             }}
           >
