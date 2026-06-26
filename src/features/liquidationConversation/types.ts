@@ -302,6 +302,8 @@ export interface ConversationToolStep {
   durationMs?: number;
   /** Short, user-safe outcome shown under the step label ("12 found", "$650 median"). */
   resultSummary?: string;
+  /** A richer, still-safe result for the step-detail page: scalar lines + sample rows. */
+  resultDetail?: { lines?: string[]; items?: Array<{ label: string; value?: string; sub?: string }> };
   // ── Optional structured fields (light up the diff / review tray) ──
   /** Value changes this step made — drives the diff row + reprice/restock cards. */
   changes?: ValueChange[];

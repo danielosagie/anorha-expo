@@ -416,6 +416,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 resultSummary: readString(payload.resultSummary) || undefined,
                 // Structured value changes (price/status diffs) so the diff card renders
                 // live, not only after a cold reload. Arg-free + already humanized server-side.
+                ...((payload as any).resultDetail && typeof (payload as any).resultDetail === 'object' ? { resultDetail: (payload as any).resultDetail } : {}),
                 ...(Array.isArray((payload as any).changes) ? { changes: (payload as any).changes } : {}),
                 ...(readString((payload as any).reason) ? { reason: readString((payload as any).reason) } : {}),
                 ...((payload as any).itemRef && typeof (payload as any).itemRef === 'object' ? { itemRef: (payload as any).itemRef } : {}),

@@ -51,10 +51,6 @@ type TrayPage =
   | { kind: 'step-detail'; title: string; step: ConversationToolStep }
   | { kind: 'evidence'; title: string };
 
-// A tool step is worth its own detail page only if it carries structured extras.
-const stepHasDetail = (step: ConversationToolStep): boolean =>
-  !!((step.changes && step.changes.length) || step.evidence || step.reason);
-
 export interface ActivityTraySheetProps {
   visible: boolean;
   payload: ActivityPayload | null;
@@ -295,10 +291,41 @@ function PageBody({
   if (page.kind === 'step-detail') {
     const step = page.step;
     const stepChanges = step.changes ?? [];
+    const detail = step.resultDetail;
+    const failed = step.status === 'failed';
+    const hasBody = !!(
+      step.resultSummary ||
+      step.reason ||
+      stepChanges.length ||
+      step.evidence ||
+      (detail && ((detail.lines && detail.lines.length) || (detail.items && detail.items.length)))
+    );
     return (
       <View style={{ gap: 14 }}>
+        <View style={styles.outcomeRow}>
+          <View style={[styles.outcomePill, failed && styles.outcomePillFail]}>
+            <Icon name={failed ? 'close-circle-outline' : 'check-circle-outline'} size={14} color={failed ? CHAT_COLORS.error : CHAT_COLORS.brandDeep} />
+            <Text style={[styles.outcomeText, failed && { color: CHAT_COLORS.errorDeep }]}>{failed ? "Couldn't finish" : 'Done'}</Text>
+          </View>
+          {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
+            <Text style={styles.outcomeMeta}>{(step.durationMs / 1000).toFixed(1)}s</Text>
+          ) : null}
+        </View>
+
         {step.resultSummary ? <Text style={styles.stepDetailSummary}>{step.resultSummary}</Text> : null}
         {step.reason ? <ReasonBanner text={step.reason} /> : null}
+
+        {detail?.lines?.length ? (
+          <View style={{ gap: 6 }}>
+            {detail.lines.map((ln, i) => (
+              <View key={i} style={styles.resultLineRow}>
+                <View style={styles.resultDot} />
+                <Text style={styles.resultLine}>{ln}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         {stepChanges.length ? (
           <View style={{ gap: 10 }}>
             {stepChanges.map((c, i) => (
@@ -309,6 +336,22 @@ function PageBody({
             ))}
           </View>
         ) : null}
+
+        {detail?.items?.length ? (
+          <View style={{ gap: 8 }}>
+            <Text style={styles.sectionLabel}>RESULTS</Text>
+            {detail.items.map((it, i) => (
+              <View key={i} style={styles.resultItemRow}>
+                <View style={styles.flex}>
+                  <Text style={styles.resultItemLabel} numberOfLines={1}>{it.label}</Text>
+                  {it.sub ? <Text style={styles.resultItemSub} numberOfLines={1}>{it.sub}</Text> : null}
+                </View>
+                {it.value ? <Text style={styles.resultItemValue}>{it.value}</Text> : null}
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         {step.evidence ? (
           <View style={{ gap: 8 }}>
             <Text style={styles.sectionLabel}>BASED ON</Text>
@@ -325,6 +368,8 @@ function PageBody({
             ))}
           </View>
         ) : null}
+
+        {!hasBody ? <EmptyNote text="No extra detail was recorded for this step." /> : null}
       </View>
     );
   }
@@ -433,31 +478,28 @@ function PageBody({
             <Text style={styles.reasoningBody}>{payload.reasoning.trim()}</Text>
           </View>
         ) : null}
-        {steps.map((step, i) => {
-          const drill = stepHasDetail(step);
-          return (
-            <TouchableOpacity
-              key={`${step.tool}-${i}`}
-              style={styles.stepRow}
-              activeOpacity={drill ? 0.7 : 1}
-              disabled={!drill}
-              onPress={() => onPushStep(step)}
-            >
-              <View style={[styles.stepChip, step.status === 'failed' && styles.stepChipFail]}>
-                <Icon name={toolStepIcon(step.tool)} size={14} color={step.status === 'failed' ? CHAT_COLORS.error : CHAT_COLORS.brandDeep} />
-              </View>
-              <View style={styles.flex}>
-                <Text style={styles.stepLabel} numberOfLines={1}>{toolDoneLabel(step.tool, step.label)}</Text>
-                {step.resultSummary ? <Text style={styles.stepResult} numberOfLines={2}>{step.resultSummary}</Text> : null}
-              </View>
-              {step.status === 'failed' ? <Text style={styles.stepFail}>failed</Text> : null}
-              {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
-                <Text style={styles.stepMeta}>{(step.durationMs / 1000).toFixed(1)}s</Text>
-              ) : null}
-              {drill ? <Icon name="chevron-right" size={16} color={CHAT_COLORS.faint} /> : null}
-            </TouchableOpacity>
-          );
-        })}
+        {steps.map((step, i) => (
+          // Every step opens its own detail page — tap to see what it returned.
+          <TouchableOpacity
+            key={`${step.tool}-${i}`}
+            style={styles.stepRow}
+            activeOpacity={0.7}
+            onPress={() => onPushStep(step)}
+          >
+            <View style={[styles.stepChip, step.status === 'failed' && styles.stepChipFail]}>
+              <Icon name={toolStepIcon(step.tool)} size={14} color={step.status === 'failed' ? CHAT_COLORS.error : CHAT_COLORS.brandDeep} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.stepLabel} numberOfLines={1}>{toolDoneLabel(step.tool, step.label)}</Text>
+              {step.resultSummary ? <Text style={styles.stepResult} numberOfLines={2}>{step.resultSummary}</Text> : null}
+            </View>
+            {step.status === 'failed' ? <Text style={styles.stepFail}>failed</Text> : null}
+            {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
+              <Text style={styles.stepMeta}>{(step.durationMs / 1000).toFixed(1)}s</Text>
+            ) : null}
+            <Icon name="chevron-right" size={16} color={CHAT_COLORS.faint} />
+          </TouchableOpacity>
+        ))}
         {!steps.length ? <EmptyNote text="Nothing to show here." /> : null}
       </View>
     );
@@ -785,6 +827,34 @@ const styles = StyleSheet.create({
   stepFail: { fontSize: 11, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.error },
   stepMeta: { fontSize: 11, fontFamily: CHAT_FONT.medium, color: '#A1A1AA' },
   stepDetailSummary: { fontSize: 14, lineHeight: 20, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.inkSoft },
+  outcomeRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  outcomePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: CHAT_COLORS.brandSoft,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  outcomePillFail: { backgroundColor: CHAT_COLORS.errorSurface },
+  outcomeText: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+  outcomeMeta: { fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.faint },
+  resultLineRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  resultDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: CHAT_COLORS.brand, marginTop: 7 },
+  resultLine: { flex: 1, fontSize: 13.5, lineHeight: 19, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.inkSoft },
+  resultItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: CHAT_COLORS.surface,
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 11,
+  },
+  resultItemLabel: { fontSize: 13, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.ink },
+  resultItemSub: { fontSize: 11.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, marginTop: 1 },
+  resultItemValue: { fontSize: 13, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
 
   // channels
   sectionLabel: { fontSize: 11, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim, letterSpacing: 0.4 },
