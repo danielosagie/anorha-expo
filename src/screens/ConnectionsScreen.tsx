@@ -7,8 +7,10 @@ import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2 } from 'lucide-react-native';
+import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import LinkComputerSheet from '../components/LinkComputerSheet';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -32,6 +34,18 @@ const statusOf = (raw?: string): { label: string; color: string } => {
 const shopLabel = (c: any): string =>
   normalizeDisplayName(String(c.DisplayName || c.PlatformType || 'Platform'));
 
+/** "just now" / "5m ago" / "2h ago" / "3d ago" for a last-heartbeat timestamp. */
+const lastSeenLabel = (ms: number): string => {
+  if (!ms) return 'never seen';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'just now';
+  const m = Math.floor(diff / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+};
+
 type Pool = { id: string; name: string; description?: string; isPartnerPool?: boolean };
 
 const APPS = [
@@ -48,6 +62,10 @@ const ConnectionsScreen = () => {
 
   const [pools, setPools] = useState<Pool[]>([]);
   const [managing, setManaging] = useState(false);
+
+  // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
+  const { computers } = useFacebookJobStatus();
+  const [linkComputerOpen, setLinkComputerOpen] = useState(false);
 
   // Wire the global platform-picker overlay so choosing a platform from the
   // "Connect a platform" sheet shows the consent page, then opens the OAuth
@@ -250,6 +268,48 @@ const ConnectionsScreen = () => {
           <Text style={styles.connectText}>Connect a platform</Text>
         </TouchableOpacity>
 
+        {/* Computers — the linked desktop(s) that post to Facebook for you. Tap a
+            row (or "Link a computer") to check status / set one up. */}
+        <Text style={[styles.section, { marginTop: 26 }]}>Computers</Text>
+        <View style={styles.card}>
+          {computers.length === 0 ? (
+            <Text style={styles.empty}>No computers linked yet.</Text>
+          ) : (
+            computers.map((comp, i) => {
+              const color = comp.online ? '#43631A' : '#BA7517';
+              return (
+                <TouchableOpacity
+                  key={comp.id}
+                  style={[styles.row, i > 0 && styles.rowBorder]}
+                  activeOpacity={0.7}
+                  onPress={() => setLinkComputerOpen(true)}
+                >
+                  <View style={styles.poolIcon}>
+                    <Monitor size={20} color="#43631A" />
+                  </View>
+                  <View style={styles.rowInfo}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>
+                      {computers.length <= 1 ? 'Your computer' : `Computer ${i + 1}`}
+                    </Text>
+                    <View style={styles.statusRow}>
+                      <View style={[styles.dot, { backgroundColor: color }]} />
+                      <Text style={[styles.statusText, { color }]} numberOfLines={1}>
+                        {comp.online ? 'Online' : `Offline · ${lastSeenLabel(comp.lastSeenAt)}`}
+                      </Text>
+                    </View>
+                  </View>
+                  <ChevronRight size={20} color="#D4D4D8" />
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </View>
+
+        <TouchableOpacity style={styles.connectBtn} onPress={() => setLinkComputerOpen(true)} activeOpacity={0.85}>
+          <Plus size={18} color="#FFFFFF" />
+          <Text style={styles.connectText}>Link a computer</Text>
+        </TouchableOpacity>
+
         {/* Pools — the location groups that platforms sync and partners share through */}
         <View style={styles.sectionHeaderRow}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Pools</Text>
@@ -354,6 +414,12 @@ const ConnectionsScreen = () => {
           setConsentPlatform(null);
           setConnectError(null);
         }}
+      />
+
+      <LinkComputerSheet
+        visible={linkComputerOpen}
+        orgId={currentOrg?.id}
+        onClose={() => setLinkComputerOpen(false)}
       />
     </View>
   );

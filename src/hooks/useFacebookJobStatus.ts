@@ -185,11 +185,24 @@ function useWatchedQuery<T>(
   return value;
 }
 
+/** One linked computer, derived from a worker-presence heartbeat. */
+export interface ConnectedComputer {
+  /** Stable presence id per worker (unique by user+worker). */
+  id: string;
+  workerId?: string;
+  /** True when the last heartbeat is within PRESENCE_TTL_MS. */
+  online: boolean;
+  /** Epoch ms of the last heartbeat (0 if never seen). */
+  lastSeenAt: number;
+}
+
 export interface FacebookJobStatus {
   /** True when at least one worker has beaten within PRESENCE_TTL_MS. */
   computerOnline: boolean;
   /** True when ANY FB job is paused or dead-lettered (drives the connection row). */
   fbNeedsCheck: boolean;
+  /** The linked computers (worker presence), newest heartbeat first. */
+  computers: ConnectedComputer[];
   /** Per-variant dot+label selector. Returns null when there's no FB job. */
   statusForVariant: (variantId?: string | null) => VariantDispatchStatus | null;
   /** True when the 2nd Convex client is unavailable (degraded / OAuth-only). */
@@ -232,6 +245,22 @@ export function useFacebookJobStatus(): FacebookJobStatus {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presence, tick]);
 
+  // The connected computers — one row per worker (presence is unique per worker),
+  // newest heartbeat first. `tick` keeps `online` fresh as heartbeats go stale.
+  const computers = useMemo<ConnectedComputer[]>(() => {
+    if (!presence || presence.length === 0) return [];
+    const now = Date.now();
+    return [...presence]
+      .sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0))
+      .map((d) => ({
+        id: d._id,
+        workerId: d.workerId,
+        online: now - (d.lastSeenAt || 0) < PRESENCE_TTL_MS,
+        lastSeenAt: d.lastSeenAt || 0,
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presence, tick]);
+
   const fbJobs = useMemo(
     () => (jobs || []).filter(isFacebook),
     [jobs],
@@ -255,6 +284,7 @@ export function useFacebookJobStatus(): FacebookJobStatus {
   return {
     computerOnline,
     fbNeedsCheck,
+    computers,
     statusForVariant,
     degraded: !client || !userId,
   };
