@@ -4,70 +4,62 @@ import {
     Text,
     StyleSheet,
     TouchableOpacity,
-    Dimensions,
     Image,
     Alert,
-    Platform,
+    ScrollView,
     Animated,
+    ActivityIndicator,
 } from 'react-native';
-import { Camera, CameraView, CameraType, FlashMode } from 'expo-camera';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import { CameraView, CameraType, FlashMode } from 'expo-camera';
+import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { useAuth } from '@clerk/clerk-expo';
+import * as ImagePicker from 'expo-image-picker';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
 import { OPTIMIZER_THRESHOLDS } from '../../hooks/useOptimizerQueues';
+import { uploadProductImage } from '../../utils/uploadProductImage';
+import { API_BASE_URL } from '../../config/env';
 import { createLogger } from '../../utils/logger';
 const log = createLogger('OptimizerPhotoModeView');
 
-
-const { width } = Dimensions.get('window');
-
-const COLORS = {
-    primary: '#8cc63f',
-    accent: '#ffc800',
-    surface: '#ffffff',
-    text: '#1a1a1a',
-    textLight: '#6c757d',
-    error: '#dc3545',
-};
+// Same camera language as AddProduct: black canvas, a rounded inset viewfinder,
+// a horizontal photo strip up top, an 80px shutter. Shared brand green.
+const GREEN = '#93C822';
+const TOP_BAR_HEIGHT = 116; // label row + 64px photo strip
+const CAMERA_BOTTOM_GAP = 184;
+const CAMERA_SETTLE_MS = 650; // guard the cold-first-frame (matches AddProduct)
+const HIT = { top: 8, bottom: 8, left: 8, right: 8 };
 
 interface OptimizerPhotoModeViewProps {
     onBack: () => void;
     onComplete: (ids: string[]) => void;
-    /** When provided, use this list instead of fetching (real queue data from useOptimizerQueues) */
+    /** When provided, use this list instead of fetching (real queue from useOptimizerQueues) */
     queueProducts?: any[];
 }
 
 export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: OptimizerPhotoModeViewProps) {
-    const { getToken } = useAuth();
+    const insets = useSafeAreaInsets();
     const cameraRef = useRef<CameraView>(null);
-    const [facing, setFacing] = useState<CameraType>('back');
+    const cameraReadyAtRef = useRef(0);
     const [flash, setFlash] = useState<FlashMode>('off');
     const [cameraActive, setCameraActive] = useState(true);
 
-    const handleBack = () => {
-        setCameraActive(false);
-        setTimeout(() => onBack(), 100);
-    };
-
-    // Data State
     const [products, setProducts] = useState<any[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(true);
+    // Photos captured for the CURRENT item this session (uris); first one = cover.
     const [capturedPhotos, setCapturedPhotos] = useState<string[]>([]);
-    const [sessionStreak, setSessionStreak] = useState(0);
-    const [sessionProductIds, setSessionProductIds] = useState<Set<string>>(new Set());
+    const [persisting, setPersisting] = useState(false);
+    // Items whose photos actually SAVED — a ref so onComplete reads it without a
+    // stale closure right after an async persist. Only saved items leave the queue.
+    const touchedRef = useRef<Set<string>>(new Set());
 
-    // Animations
-    const cardAnim = useRef(new Animated.Value(0)).current;
-    const shutterAnim = useRef(new Animated.Value(1)).current;
+    const shutterScale = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
         if (queueProducts && queueProducts.length > 0) {
             setProducts(queueProducts);
             setLoading(false);
-            Animated.spring(cardAnim, { toValue: 1, useNativeDriver: true, tension: 50, friction: 8 }).start();
         } else {
             loadNeedPhotosProducts();
         }
@@ -83,13 +75,11 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
                     ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
                 `)
                 .limit(100);
-
             if (error) throw error;
             const needingPhotos = (data || []).filter(
-                p => !p.ProductImages || (Array.isArray(p.ProductImages) ? p.ProductImages.length : 0) < OPTIMIZER_THRESHOLDS.minImages
+                (p) => !p.ProductImages || (Array.isArray(p.ProductImages) ? p.ProductImages.length : 0) < OPTIMIZER_THRESHOLDS.minImages,
             );
             setProducts(needingPhotos);
-            Animated.spring(cardAnim, { toValue: 1, useNativeDriver: true, tension: 50, friction: 8 }).start();
         } catch (err) {
             log.error('[OptimizerPhoto] Error loading products', err);
             Alert.alert('Error', 'Failed to load products.');
@@ -98,25 +88,78 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
         }
     };
 
+    const handleBack = async () => {
+        if (persisting) return;
+        await saveCurrent();
+        setCameraActive(false);
+        setTimeout(() => onBack(), 100);
+    };
+
+    const toggleFlash = () => setFlash((f) => (f === 'off' ? 'on' : f === 'on' ? 'auto' : 'off'));
+    const flashIcon = flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-auto' : 'flash-off';
+
+    const markTouched = (id: string) => { touchedRef.current.add(id); };
+
+    // Upload this item's captured photos and append them to the variant's images
+    // via the same path the Photos sheet uses (PUT /api/products/:id ImageUrls).
+    // Returns false on failure so the caller can keep the photos and warn.
+    const persistItem = async (product: any, uris: string[]): Promise<boolean> => {
+        if (!uris.length) return true;
+        try {
+            const uploaded = (
+                await Promise.all(
+                    uris.map((u, i) =>
+                        uploadProductImage(u, `opt-${product.Id}-${i}-${Date.now()}`).catch((e) => {
+                            log.error('[OptimizerPhoto] upload failed', e);
+                            return null;
+                        }),
+                    ),
+                )
+            ).filter(Boolean) as string[];
+            if (!uploaded.length) return false;
+
+            const existing = (product.ProductImages || []).map((im: any) => im.ImageUrl).filter(Boolean);
+            const token = await ensureSupabaseJwt();
+            if (token) {
+                const res = await fetch(`${API_BASE_URL}/api/products/${product.Id}`, {
+                    method: 'PUT',
+                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ImageUrls: [...existing, ...uploaded] }),
+                });
+                if (!res.ok) throw new Error(`Save failed (${res.status})`);
+            }
+            // Keep local state fresh so re-visiting the item appends instead of clobbering.
+            setProducts((prev) =>
+                prev.map((p) =>
+                    p.Id === product.Id
+                        ? { ...p, ProductImages: [...(p.ProductImages || []), ...uploaded.map((url) => ({ ImageUrl: url }))] }
+                        : p,
+                ),
+            );
+            markTouched(product.Id);
+            return true;
+        } catch (e) {
+            log.error('[OptimizerPhoto] persist failed', e);
+            return false;
+        }
+    };
+
     const handleCapture = async () => {
         if (!cameraRef.current) return;
-
+        // Settle: the first frame after the preview attaches is dark/blurry.
+        const since = Date.now() - cameraReadyAtRef.current;
+        if (cameraReadyAtRef.current === 0 || since < CAMERA_SETTLE_MS) {
+            await new Promise((r) => setTimeout(r, Math.max(120, CAMERA_SETTLE_MS - since)));
+        }
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         Animated.sequence([
-            Animated.timing(shutterAnim, { toValue: 0.8, duration: 50, useNativeDriver: true }),
-            Animated.timing(shutterAnim, { toValue: 1, duration: 100, useNativeDriver: true }),
+            Animated.timing(shutterScale, { toValue: 0.82, duration: 60, useNativeDriver: true }),
+            Animated.spring(shutterScale, { toValue: 1, useNativeDriver: true, tension: 60, friction: 6 }),
         ]).start();
-
         try {
             const photo = await cameraRef.current.takePictureAsync({ quality: 0.7 });
             if (photo) {
-                setCapturedPhotos(prev => [...prev, photo.uri]);
-                setSessionStreak(prev => prev + 1);
-
-                // Track this product as "touched"
-                const currentId = products[currentIndex].Id;
-                setSessionProductIds(prev => new Set(prev).add(currentId));
-
+                setCapturedPhotos((prev) => [...prev, photo.uri]);
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
         } catch (error) {
@@ -124,282 +167,191 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
         }
     };
 
-    const nextProduct = () => {
-        if (currentIndex < products.length - 1) {
-            // "Next up" logic can happen here if we wanted an interstitial
-            setCurrentIndex(prev => prev + 1);
-            setCapturedPhotos([]);
-        } else {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            onComplete(Array.from(sessionProductIds));
+    const handleImport = async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsMultipleSelection: true,
+                quality: 0.7,
+            });
+            if (!result.canceled && result.assets?.length) {
+                setCapturedPhotos((prev) => [...prev, ...result.assets.map((a) => a.uri)]);
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            }
+        } catch (error) {
+            log.error('[OptimizerPhoto] Import failed', error);
         }
     };
 
-    const prevProduct = () => {
-        if (currentIndex > 0) {
-            setCurrentIndex(prev => prev - 1);
+    const removePhoto = (uri: string) => setCapturedPhotos((prev) => prev.filter((u) => u !== uri));
+
+    // Save the current item's captures before leaving it. Blocks the move on a
+    // failed save so the photos aren't silently lost.
+    const saveCurrent = async (): Promise<boolean> => {
+        if (!capturedPhotos.length) return true;
+        setPersisting(true);
+        const ok = await persistItem(products[currentIndex], capturedPhotos);
+        setPersisting(false);
+        if (!ok) Alert.alert("Couldn't save", 'Check your connection and try again.');
+        return ok;
+    };
+
+    const nextProduct = async () => {
+        if (persisting) return;
+        if (!(await saveCurrent())) return;
+        if (currentIndex < products.length - 1) {
+            setCurrentIndex((i) => i + 1);
             setCapturedPhotos([]);
+        } else {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            onComplete(Array.from(touchedRef.current));
         }
+    };
+
+    const prevProduct = async () => {
+        if (persisting || currentIndex === 0) return;
+        if (!(await saveCurrent())) return;
+        setCurrentIndex((i) => i - 1);
+        setCapturedPhotos([]);
     };
 
     if (loading) {
         return (
-            <View style={styles.loadingContainer}>
-                <Text>Loading Camera Session...</Text>
+            <View style={styles.center}>
+                <Text style={styles.centerText}>Loading…</Text>
             </View>
         );
     }
 
     if (products.length === 0) {
         return (
-            <View style={styles.loadingContainer}>
-                <Text>No products need photos right now!</Text>
-                <TouchableOpacity onPress={handleBack} style={{ marginTop: 20 }}>
-                    <Text style={{ color: COLORS.primary, fontWeight: 'bold' }}>Go Back</Text>
+            <View style={styles.center}>
+                <Text style={styles.centerText}>No items need photos.</Text>
+                <TouchableOpacity onPress={handleBack} style={{ marginTop: 16 }}>
+                    <Text style={{ color: GREEN, fontWeight: '700' }}>Back</Text>
                 </TouchableOpacity>
             </View>
         );
     }
 
     const currentProduct = products[currentIndex];
+    const existing = (currentProduct.ProductImages || []) as any[];
+    const isLast = currentIndex >= products.length - 1;
 
     return (
         <View style={styles.container}>
-            <CameraView
-                ref={cameraRef}
-                style={styles.camera}
-                facing={facing}
-                flash={flash}
-                active={cameraActive}
-            >
-                {/* Header (Top Left Stack + Close) */}
-                <LinearGradient
-                    colors={['rgba(0,0,0,0.6)', 'transparent']}
-                    style={styles.headerOverlay}
-                >
-                    <View style={styles.headerLeft}>
-                        <TouchableOpacity onPress={handleBack} style={styles.closeBtn}>
-                            <MaterialCommunityIcons name="close" size={24} color="#fff" />
-                        </TouchableOpacity>
-
-                        {/* Top Left Product Stack */}
-                        <Animated.View style={[styles.productStack, { opacity: cardAnim }]}>
-                            <View style={styles.stackInfo}>
-                                <Text style={styles.stackLabel}>ITEM {currentIndex + 1} / {products.length}</Text>
-                                <Text style={styles.stackTitle} numberOfLines={1}>{currentProduct.Title}</Text>
-                            </View>
-                            <View style={styles.stackThumbs}>
-                                {/* Show existing + newly captured */}
-                                {(currentProduct.ProductImages || []).slice(0, 1).map((img: any, i: number) => (
-                                    <Image key={`exist-${i}`} source={{ uri: img.ImageUrl }} style={styles.miniThumb} />
-                                ))}
-                                {capturedPhotos.map((uri, idx) => (
-                                    <Image key={`new-${idx}`} source={{ uri }} style={[styles.miniThumb, styles.newThumbBorder]} />
-                                ))}
-                                <View style={styles.addMoreStack}>
-                                    <MaterialCommunityIcons name="plus" size={16} color="#fff" />
-                                </View>
-                            </View>
-                        </Animated.View>
-                    </View>
-
-                    <View style={styles.headerRight}>
-                        <View style={styles.streakContainer}>
-                            <MaterialCommunityIcons name="fire" size={20} color={COLORS.accent} />
-                            <Text style={styles.streakText}>{sessionStreak}</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => setFacing(f => f === 'back' ? 'front' : 'back')} style={styles.flipBtn}>
-                            <MaterialCommunityIcons name="camera-flip" size={24} color="#fff" />
-                        </TouchableOpacity>
-                    </View>
-                </LinearGradient>
-
-                {/* Bottom Controls */}
-                <View style={styles.bottomControls}>
-                    <View style={styles.shutterBar}>
-                        <View style={styles.navAction}>
-                            {currentIndex > 0 ? (
-                                <TouchableOpacity onPress={prevProduct} style={[styles.nextBtn, {}]}>
-                                    <Text style={styles.nextText}>BACK</Text>
-                                    <MaterialCommunityIcons name="chevron-left" size={28} color="#fff" />
-                                </TouchableOpacity>
-                            ) : <View style={{ width: 28 }} />}
-                        </View>
-
-                        <TouchableOpacity onPress={handleCapture} activeOpacity={0.9}>
-                            <Animated.View style={[styles.shutterBtnOuter, { transform: [{ scale: shutterAnim }] }]}>
-
-                                <View style={styles.shutterBtnInner} />
-                            </Animated.View>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={[styles.nextBtn, { backgroundColor: COLORS.primary, paddingVertical: 0, paddingHorizontal: 0 }]} onPress={nextProduct}>
-                            <View style={styles.nextBtn}>
-                                <Text style={styles.nextText}>CONTINUE</Text>
-                                <MaterialCommunityIcons name="chevron-right" size={24} color="#fff" />
-                            </View>
-                        </TouchableOpacity>
-                    </View>
+            {/* Zone 1 — black top bar: item label + horizontal photo strip */}
+            <View style={[styles.topBar, { height: insets.top + TOP_BAR_HEIGHT }]}>
+                <View style={[styles.itemLabel, { marginTop: insets.top + 6 }]}>
+                    <Text style={styles.itemCount}>{currentIndex + 1} / {products.length}</Text>
+                    <Text style={styles.itemTitle} numberOfLines={1}>{currentProduct.Title}</Text>
                 </View>
-            </CameraView>
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.stripContent}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    <TouchableOpacity style={styles.addTile} onPress={handleImport} activeOpacity={0.8}>
+                        <MaterialIcons name="add" size={26} color="rgba(255,255,255,0.85)" />
+                    </TouchableOpacity>
+                    {existing.map((img, i) => (
+                        <Image key={`e-${i}`} source={{ uri: img.ImageUrl }} style={styles.tile} />
+                    ))}
+                    {capturedPhotos.map((uri, i) => (
+                        <View key={`c-${i}`} style={styles.tileWrap}>
+                            <Image
+                                source={{ uri }}
+                                style={[styles.tile, i === 0 && existing.length === 0 && styles.tileCover]}
+                            />
+                            <TouchableOpacity style={styles.tileRemove} hitSlop={HIT} onPress={() => removePhoto(uri)}>
+                                <MaterialIcons name="remove" size={13} color="#FFF" />
+                            </TouchableOpacity>
+                        </View>
+                    ))}
+                </ScrollView>
+            </View>
+
+            {/* Zone 2 — rounded inset viewfinder. CameraView has NO children (Fabric
+                unmount-crash class); back + flash overlays are siblings inside the card. */}
+            <View style={[styles.viewfinder, { top: insets.top + TOP_BAR_HEIGHT, bottom: CAMERA_BOTTOM_GAP }]}>
+                <CameraView
+                    ref={cameraRef}
+                    style={StyleSheet.absoluteFill}
+                    facing="back"
+                    flash={flash}
+                    active={cameraActive}
+                    onCameraReady={() => { cameraReadyAtRef.current = Date.now(); }}
+                />
+                <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.8} hitSlop={HIT}>
+                    <MaterialIcons name="arrow-back" size={24} color="#FFF" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.flashBtn} onPress={toggleFlash} activeOpacity={0.8} hitSlop={HIT}>
+                    <MaterialCommunityIcons name={flashIcon} size={22} color="#FFF" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Zone 3 — bottom controls: prev · 80px shutter · next/done */}
+            <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 18 }]}>
+                <View style={styles.side}>
+                    {currentIndex > 0 && (
+                        <TouchableOpacity onPress={prevProduct} style={styles.navBtn} hitSlop={HIT} activeOpacity={0.85}>
+                            <MaterialCommunityIcons name="chevron-left" size={28} color="#FFF" />
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                <TouchableOpacity onPress={handleCapture} activeOpacity={0.9} disabled={persisting}>
+                    <Animated.View style={[styles.shutterOuter, { transform: [{ scale: shutterScale }], opacity: persisting ? 0.5 : 1 }]}>
+                        <View style={styles.shutterInner} />
+                    </Animated.View>
+                </TouchableOpacity>
+
+                <View style={styles.side}>
+                    <TouchableOpacity onPress={nextProduct} style={styles.continueBtn} activeOpacity={0.9} disabled={persisting}>
+                        {persisting ? (
+                            <ActivityIndicator size="small" color="#FFF" />
+                        ) : (
+                            <>
+                                <Text style={styles.continueText}>{isLast ? 'Done' : 'Next'}</Text>
+                                <MaterialCommunityIcons name="chevron-right" size={20} color="#FFF" />
+                            </>
+                        )}
+                    </TouchableOpacity>
+                </View>
+            </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#000',
-    },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#fff',
-    },
-    camera: {
-        flex: 1,
-    },
-    headerOverlay: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        paddingTop: Platform.OS === 'ios' ? 60 : 40,
-        paddingHorizontal: 20,
-        paddingBottom: 60,
-    },
-    headerLeft: {
-        flex: 1,
-        alignItems: 'flex-start',
-    },
-    headerRight: {
-        alignItems: 'flex-end',
-        gap: 12,
-    },
-    closeBtn: {
-        padding: 8,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        borderRadius: 20,
-        marginBottom: 16,
-    },
-    flipBtn: {
-        padding: 8,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        borderRadius: 20,
-    },
-    // Product Stack (Top Left)
-    productStack: {
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        borderRadius: 16,
-        padding: 12,
-        maxWidth: 220,
-    },
-    stackInfo: {
-        marginBottom: 8,
-    },
-    stackLabel: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 10,
-        fontWeight: 'bold',
-        marginBottom: 2,
-    },
-    stackTitle: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: 'bold',
-    },
-    stackThumbs: {
-        flexDirection: 'column',
-        gap: 6,
-    },
-    miniThumb: {
-        width: 32,
-        height: 32,
-        borderRadius: 6,
-        backgroundColor: '#444',
-    },
-    newThumbBorder: {
-        borderWidth: 2,
-        borderColor: COLORS.primary,
-    },
-    addMoreStack: {
-        width: 32,
-        height: 32,
-        borderRadius: 6,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.3)',
-        borderStyle: 'dashed',
-    },
+    container: { flex: 1, backgroundColor: '#000' },
+    center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
+    centerText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 
-    streakContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-        gap: 4,
-    },
-    streakText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 16,
-    },
-    bottomControls: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 50 : 30,
-        paddingHorizontal: 20,
-    },
-    shutterBar: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingHorizontal: 10,
-    },
-    shutterBtnOuter: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        borderWidth: 4,
-        borderColor: '#fff',
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.2)',
-    },
-    shutterBtnInner: {
-        width: 64,
-        height: 64,
-        borderRadius: 32,
-        backgroundColor: '#fff',
-    },
-    navAction: {
-        width: 100,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    navBtn: {
-        padding: 12,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        borderRadius: 30,
-    },
-    nextBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        paddingVertical: 8,
-        paddingHorizontal: 14,
-        borderRadius: 20,
-    },
-    nextText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 12,
-        marginRight: 2,
-    },
+    // Zone 1 — top bar + strip
+    topBar: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, backgroundColor: '#000', justifyContent: 'flex-end', paddingBottom: 10 },
+    itemLabel: { paddingHorizontal: 16, marginBottom: 8 },
+    itemCount: { color: 'rgba(255,255,255,0.55)', fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
+    itemTitle: { color: '#fff', fontSize: 15, fontWeight: '700', marginTop: 1 },
+    stripContent: { paddingHorizontal: 16, alignItems: 'center', gap: 10, flexDirection: 'row' },
+    addTile: { width: 64, height: 64, borderRadius: 14, borderWidth: 1.5, borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
+    tileWrap: { width: 64, height: 64 },
+    tile: { width: 64, height: 64, borderRadius: 14, backgroundColor: '#1C1C1E' },
+    tileCover: { borderWidth: 2, borderColor: GREEN },
+    tileRemove: { position: 'absolute', top: -6, left: -6, width: 20, height: 20, borderRadius: 10, backgroundColor: '#FF6B4A', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#000' },
+
+    // Zone 2 — viewfinder
+    viewfinder: { position: 'absolute', left: 12, right: 12, borderRadius: 28, overflow: 'hidden', backgroundColor: '#101012' },
+    backBtn: { position: 'absolute', top: 16, left: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', zIndex: 25 },
+    flashBtn: { position: 'absolute', top: 16, right: 16, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', zIndex: 25 },
+
+    // Zone 3 — bottom controls
+    bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 12 },
+    side: { width: 100, alignItems: 'center', justifyContent: 'center' },
+    navBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)' },
+    shutterOuter: { width: 80, height: 80, borderRadius: 40, borderWidth: 4, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.15)' },
+    shutterInner: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff' },
+    continueBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: GREEN, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 24 },
+    continueText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
 });

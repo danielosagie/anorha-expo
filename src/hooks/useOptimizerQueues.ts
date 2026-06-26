@@ -22,6 +22,14 @@ export interface ClassifiedProduct {
   Description?: string | null;
   Sku?: string | null;
   ProductImages?: any[] | null;
+  /** Independent gap flags — an item can need photos AND details at once. */
+  needsPhotos: boolean;
+  /** Weak/missing title or description (AI-generatable). */
+  needsContent: boolean;
+  /** Missing SKU (must be entered by hand). */
+  needsSku: boolean;
+  /** Any details gap (content or SKU). */
+  needsDetails: boolean;
   queue: OptimizerQueue;
   /** Primary reason for this queue assignment */
   reason: string;
@@ -31,28 +39,39 @@ export interface OptimizerQueueCounts {
   photoNeeded: number;
   dataNeeded: number;
   manualQueue: number;
+  /** Distinct items needing ANY work (photos OR details) — never double-counts. */
+  attention: number;
   total: number;
 }
 
-function classifyProduct(p: any): ClassifiedProduct & { queue: OptimizerQueue; reason: string } {
+// Classify each item against TWO independent dimensions — photos and details —
+// so an item that needs photos is STILL assessed for details. (The old chain
+// short-circuited on photos, which made "Details: Done" lie while every item
+// was stuck at the photo stage.)
+function classifyProduct(p: any): ClassifiedProduct {
   const images = p.ProductImages || [];
   const imageCount = Array.isArray(images) ? images.length : 0;
-  const hasEnoughPhotos = imageCount >= OPTIMIZER_THRESHOLDS.minImages;
-  const desc = p.Description || '';
-  const descOk = desc.length >= OPTIMIZER_THRESHOLDS.minDescriptionLength;
+  const needsPhotos = imageCount < OPTIMIZER_THRESHOLDS.minImages;
+  const descOk = (p.Description || '').length >= OPTIMIZER_THRESHOLDS.minDescriptionLength;
   const titleOk = (p.Title || '').trim().length >= OPTIMIZER_THRESHOLDS.minTitleLength;
-  const hasSku = !!(p.Sku && String(p.Sku).trim());
+  const needsSku = !(p.Sku && String(p.Sku).trim());
+  const needsContent = !descOk || !titleOk;
+  const needsDetails = needsContent || needsSku;
 
-  if (!hasEnoughPhotos) {
-    return { ...p, queue: 'photo-needed' as const, reason: `${imageCount} photos (need ${OPTIMIZER_THRESHOLDS.minImages})` };
-  }
-  if (!hasSku) {
-    return { ...p, queue: 'manual-queue' as const, reason: 'Missing SKU' };
-  }
-  if (!descOk || !titleOk) {
-    return { ...p, queue: 'data-needed' as const, reason: !descOk ? 'Weak or missing description' : 'Weak title' };
-  }
-  return { ...p, queue: 'manual-queue' as const, reason: 'Ready' };
+  // `queue` is the item's primary bucket for the camera/generate sub-views'
+  // priority sort only — counts/queues below use the independent flags.
+  const queue: OptimizerQueue = needsPhotos ? 'photo-needed' : needsContent ? 'data-needed' : 'manual-queue';
+  const reason = needsPhotos
+    ? `${imageCount} photos (need ${OPTIMIZER_THRESHOLDS.minImages})`
+    : !descOk
+      ? 'Weak or missing description'
+      : !titleOk
+        ? 'Weak title'
+        : needsSku
+          ? 'Missing SKU'
+          : 'Ready';
+
+  return { ...p, needsPhotos, needsContent, needsSku, needsDetails, queue, reason };
 }
 
 export interface UseOptimizerQueuesOptions {
@@ -81,6 +100,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
     photoNeeded: 0,
     dataNeeded: 0,
     manualQueue: 0,
+    attention: 0,
     total: 0,
   });
 
@@ -129,19 +149,24 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
       const classified = raw.map(classifyProduct);
       setProducts(classified);
 
-      const photoNeeded = classified.filter((x) => x.queue === 'photo-needed').length;
-      const dataNeeded = classified.filter((x) => x.queue === 'data-needed').length;
-      const manualQueue = classified.filter((x) => x.queue === 'manual-queue' && x.reason !== 'Ready').length;
+      // Independent dimensions — an item can need both photos and details.
+      // photoNeeded + content/sku counts can overlap; `attention` is the distinct
+      // union (the honest "items needing any work").
+      const photoNeeded = classified.filter((x) => x.needsPhotos).length;
+      const dataNeeded = classified.filter((x) => x.needsContent).length;
+      const manualQueue = classified.filter((x) => !x.needsContent && x.needsSku).length;
+      const attention = classified.filter((x) => x.needsPhotos || x.needsDetails).length;
       setCounts({
         photoNeeded,
         dataNeeded,
         manualQueue,
+        attention,
         total: classified.length,
       });
     } catch (e) {
       log.error('[useOptimizerQueues] Error:', e);
       setProducts([]);
-      setCounts({ photoNeeded: 0, dataNeeded: 0, manualQueue: 0, total: 0 });
+      setCounts({ photoNeeded: 0, dataNeeded: 0, manualQueue: 0, attention: 0, total: 0 });
     } finally {
       setLoading(false);
     }
@@ -151,9 +176,13 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
     fetchData();
   }, [fetchData]);
 
-  const photoNeededItems = products.filter((x) => x.queue === 'photo-needed');
-  const dataNeededItems = products.filter((x) => x.queue === 'data-needed');
-  const manualQueueItems = products.filter((x) => x.queue === 'manual-queue' && x.reason !== 'Ready');
+  // Disjoint details split so [...dataNeededItems, ...manualQueueItems] = every
+  // item needing details, with no dupes: content gaps go to AI-generate/review,
+  // SKU-only gaps go straight to manual review. Photo-needing items still appear
+  // here too if they also lack details (the fix for the "Details: Done" lie).
+  const photoNeededItems = products.filter((x) => x.needsPhotos);
+  const dataNeededItems = products.filter((x) => x.needsContent);
+  const manualQueueItems = products.filter((x) => !x.needsContent && x.needsSku);
 
   return {
     loading,

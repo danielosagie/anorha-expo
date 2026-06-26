@@ -80,8 +80,9 @@ const ImportOverviewScreen = () => {
   // catalog-wide query with different thresholds — the source of the "188 here,
   // Done there" mismatch.)
   const { counts: optimizerCounts, refresh: refreshOptimizer } = useOptimizerQueues({ connectionId });
-  const optimizeCount =
-    optimizerCounts.photoNeeded + optimizerCounts.dataNeeded + optimizerCounts.manualQueue;
+  // Distinct items needing any work (photos OR details). photoNeeded/dataNeeded
+  // overlap now (an item can need both), so a naive sum would double-count.
+  const optimizeCount = optimizerCounts.attention;
 
   useEffect(() => {
     const unsub = navigation.addListener('focus', () => {
@@ -140,13 +141,6 @@ const ImportOverviewScreen = () => {
   const prepStages: StageId[] = ['match', 'optimize', 'preferences'];
   const prepDone = prepStages.filter((st) => stageDone[st]).length;
   const prepPct = Math.round((prepDone / prepStages.length) * 100);
-  const summarySub = canComplete
-    ? 'Everything’s set — sync when you are.'
-    : !matchDone
-      ? `${matchCases.length} ${matchCases.length === 1 ? 'item needs' : 'items need'} a quick look`
-      : !optimizerDone
-        ? `${optimizeCount} ${optimizeCount === 1 ? 'item' : 'items'} to optimize`
-        : 'Set how syncing behaves, then sync';
 
   type StageView = { icon: IconName; title: string; upSub: string; count: number | null; cta: string };
   const stageView = (st: StageId): StageView => {
@@ -166,6 +160,12 @@ const ImportOverviewScreen = () => {
   const av = stageView(activeStage);
   const upcoming = stageOrder.filter((st) => st !== activeStage && !stageDone[st]);
   const completed = stageOrder.filter((st) => stageDone[st]);
+
+  // The card orients: the "N of 3 ready" status title + this terse "what's next"
+  // line (names the active step + its count) instead of a bare item count.
+  const summarySub = canComplete
+    ? 'Ready to sync'
+    : `Next · ${av.title}${typeof av.count === 'number' && av.count > 0 ? ` · ${av.count}` : ''}`;
 
   const platformPill = (
     <HeaderPill
@@ -208,7 +208,7 @@ const ImportOverviewScreen = () => {
             </View>
             <View style={[styles.summaryBadge, canComplete && styles.summaryBadgeReady]}>
               <MaterialCommunityIcons
-                name={canComplete ? 'check' : 'progress-clock'}
+                name={canComplete ? 'check' : av.icon}
                 size={20}
                 color={canComplete ? '#fff' : RC.greenDark}
               />

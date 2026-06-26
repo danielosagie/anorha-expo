@@ -51,35 +51,34 @@ export function BackfillOptimizerScreen() {
   const connectionId: string | undefined = route.params?.connectionId || undefined;
 
   const [view, setView] = useState<ScreenView>({ kind: 'lobby' });
-  const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
+  // Per-task completion so finishing photos never evicts an item that ALSO needs
+  // details from the details queue (and vice-versa).
+  const [completedPhotoIds, setCompletedPhotoIds] = useState<Set<string>>(new Set());
+  const [completedDetailIds, setCompletedDetailIds] = useState<Set<string>>(new Set());
 
   const { loading, products, counts, photoNeededItems, dataNeededItems, manualQueueItems, refresh } =
     useOptimizerQueues({ connectionId });
 
   const prioritize = useCallback(
-    (list: ClassifiedProduct[]) => {
-      const remaining = list.filter((i) => !completedIds.has(i.Id));
+    (list: ClassifiedProduct[], done: Set<string>) => {
+      const remaining = list.filter((i) => !done.has(i.Id));
       return [...remaining].sort((a, b) => {
         const an = newlyImportedSet.has(a.Id) ? 0 : 1;
         const bn = newlyImportedSet.has(b.Id) ? 0 : 1;
         return an - bn;
       });
     },
-    [completedIds, newlyImportedSet],
+    [newlyImportedSet],
   );
 
-  const photoQueue = useMemo(() => prioritize(photoNeededItems), [prioritize, photoNeededItems]);
-  const dataQueue = useMemo(() => prioritize(dataNeededItems), [prioritize, dataNeededItems]);
-  const manualQueue = useMemo(() => prioritize(manualQueueItems), [prioritize, manualQueueItems]);
+  const photoQueue = useMemo(() => prioritize(photoNeededItems, completedPhotoIds), [prioritize, photoNeededItems, completedPhotoIds]);
+  const dataQueue = useMemo(() => prioritize(dataNeededItems, completedDetailIds), [prioritize, dataNeededItems, completedDetailIds]);
+  const manualQueue = useMemo(() => prioritize(manualQueueItems, completedDetailIds), [prioritize, manualQueueItems, completedDetailIds]);
 
   const queueFor = (b: Bucket) => (b === 'photo' ? photoQueue : b === 'data' ? dataQueue : manualQueue);
   const remainingFor = (b: Bucket) => queueFor(b).length;
 
-  const polishedCount = Math.max(
-    counts.total - counts.photoNeeded - counts.dataNeeded - counts.manualQueue,
-    0,
-  );
-  const attention = photoQueue.length + dataQueue.length + manualQueue.length;
+  const polishedCount = Math.max(counts.total - counts.attention, 0);
   const firstBucket = BUCKET_ORDER.find((b) => remainingFor(b) > 0) || null;
 
   // The product-detail review walks a snapshot of ids but reads the LIVE rows so
@@ -98,8 +97,9 @@ export function BackfillOptimizerScreen() {
   const reviewProducts = useMemo(() => products.filter((p) => reviewIds.has(p.Id)), [products, reviewIds]);
 
   const markDone = useCallback(
-    (ids: string[]) => {
-      setCompletedIds((prev) => new Set([...prev, ...ids]));
+    (ids: string[], task: 'photo' | 'details') => {
+      const setter = task === 'photo' ? setCompletedPhotoIds : setCompletedDetailIds;
+      setter((prev) => new Set([...prev, ...ids]));
       refresh();
     },
     [refresh],
@@ -133,7 +133,7 @@ export function BackfillOptimizerScreen() {
       <OptimizerPhotoModeView
         onBack={() => setView({ kind: 'lobby' })}
         onComplete={(ids: string[]) => {
-          markDone(ids);
+          markDone(ids, 'photo');
           // Photos done → name the next task (the explainer) when details remain,
           // otherwise fall through to the between-flows done beat.
           if (dataQueue.length + manualQueue.length > 0) setView({ kind: 'explainer' });
@@ -201,7 +201,7 @@ export function BackfillOptimizerScreen() {
         onBack={() => setView({ kind: 'lobby' })}
         onComplete={(ids) => {
           const done = ids.length ? ids : reviewProducts.map((p) => p.Id);
-          markDone(done);
+          markDone(done, 'details');
           setView({ kind: 'done', n: done.length, label: 'details ready' });
         }}
       />
@@ -214,7 +214,7 @@ export function BackfillOptimizerScreen() {
       <OptimizerBatchGenerateView
         onBack={() => setView({ kind: 'lobby' })}
         onComplete={(ids: string[]) => {
-          markDone(ids);
+          markDone(ids, 'details');
           setView({ kind: 'review' });
         }}
         queueProducts={dataQueue}
