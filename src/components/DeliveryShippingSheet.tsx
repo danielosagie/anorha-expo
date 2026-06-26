@@ -465,7 +465,7 @@ export default function DeliveryShippingSheet({
                             <TouchableOpacity style={s.optionRow} activeOpacity={0.7} onPress={() => setExpandedRow((rr) => rr === 'fulfillment' ? null : 'fulfillment')}>
                                 <Text style={s.optionLabel}>{tabKeyLower === 'facebook' ? 'Handoff' : 'Fulfillment'}</Text>
                                 <View style={{ flex: 1 }} />
-                                <Text style={s.optionValue}>{currentDeliveryMethod === 'in_person' ? 'Pickup' : currentDeliveryMethod === 'both' ? 'Both' : 'Ship'}</Text>
+                                <Text style={s.optionValue}>{currentDeliveryMethod === 'in_person' ? 'Pickup' : currentDeliveryMethod === 'both' ? 'Both (Ship + Pickup)' : 'Ship'}</Text>
                                 <Icon name={expandedRow === 'fulfillment' ? 'chevron-down' : 'chevron-right'} size={18} color="#9CA3AF" />
                             </TouchableOpacity>
                             {expandedRow === 'fulfillment' && (

@@ -259,8 +259,10 @@ export type ListingEditorFormRef = {
   /** Open a specific field's edit sheet (optionally on a given platform tab). Used by the
    *  action-bar "needs you" pill and the missing-fields checklist to jump straight to the gap. */
   openFieldSheet: (field: string, platform?: string) => void;
-  /** Steps mode: walk the listing's fields as sheets, one at a time. */
+  /** Steps mode: walk the listing's key fields in the full-screen wizard. */
   startStepsWalk: () => void;
+  /** Open the full-screen wizard over only the empty required fields (the "N fields need you" CTA). */
+  startFixGaps: () => void;
 };
 
 type Variant = {
@@ -417,6 +419,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // Declared early (used by the imperative handle below); body assigned later where
   // supportsTaxonomy + the gap-queue refs are in scope.
   const startStepsWalkRef = useRef<() => void>(() => {});
+  const startFixGapsRef = useRef<() => void>(() => {});
   // Full-screen Steps wizard (replaces the old open-sheets-one-by-one walk).
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardSteps, setWizardSteps] = useState<string[]>([]);
@@ -557,6 +560,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setOpenField(map[field] || field);
     },
     startStepsWalk: () => startStepsWalkRef.current(),
+    startFixGaps: () => startFixGapsRef.current(),
   }), [platformPickerOverlay, platforms]);
 
   const lastPlatformRef = useRef<string>('');
@@ -1157,6 +1161,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     setWizardOpen(true);
   };
   const startFixGaps = () => openWizard(computeGaps());
+  startFixGapsRef.current = startFixGaps;
   startStepsWalkRef.current = () => openWizard([
     '__quality__', 'title', 'price',
     ...(supportsTaxonomy ? ['category'] : []),

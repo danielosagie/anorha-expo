@@ -482,6 +482,21 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         weightUnit: firstPlatformData.weightUnit || 'kg',
         tags: firstPlatformData.tags || [],
         images: imageUrls,
+        // Carry the backend's pre-computed enrichment onto the synthesized canonical so it
+        // isn't lost when generation didn't send a shopify platform — otherwise the product
+        // reopens with no category / pricing band / shipping estimate (the "it's not there" bug).
+        categorySuggestion: firstPlatformData.categorySuggestion,
+        categoryPath: firstPlatformData.categoryPath,
+        category: firstPlatformData.category,
+        productCategory: firstPlatformData.productCategory,
+        taxonomyConfidence: firstPlatformData.taxonomyConfidence,
+        taxonomySource: firstPlatformData.taxonomySource,
+        aiPriceRecommendation: firstPlatformData.aiPriceRecommendation,
+        aiRecommendedPrice: firstPlatformData.aiRecommendedPrice,
+        estimatedDimensions: firstPlatformData.estimatedDimensions,
+        estimatedWeight: firstPlatformData.estimatedWeight,
+        shippingTier: firstPlatformData.shippingTier,
+        shippingTierReason: firstPlatformData.shippingTierReason,
       };
     }
 
@@ -2321,15 +2336,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </TouchableOpacity>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            {/* Form | Steps — Form is the resting view; tap Steps to walk the listing field-by-field. */}
-            <View style={styles.modeToggle}>
-              <View style={[styles.modeSeg, styles.modeSegActive]}>
-                <Text style={[styles.modeSegText, styles.modeSegTextActive]}>Form</Text>
-              </View>
-              <TouchableOpacity style={styles.modeSeg} activeOpacity={0.8} onPress={() => listingEditorRef.current?.startStepsWalk()}>
-                <Text style={styles.modeSegText}>Steps</Text>
-              </TouchableOpacity>
-            </View>
+            {/* When fields are missing, the Steps slot becomes a loud "N fields need you"
+                signal that opens the wizard over just the gaps. When complete, it's the
+                Form | Steps toggle (Steps = walk the key fields for a review). */}
+            {(() => {
+              const gapCount = allMissingRequiredFields.length;
+              if (gapCount > 0) {
+                return (
+                  <TouchableOpacity style={styles.gapPill} activeOpacity={0.85} onPress={() => listingEditorRef.current?.startFixGaps()}>
+                    <View style={styles.gapPillDot} />
+                    <Text style={styles.gapPillText}>{gapCount} field{gapCount !== 1 ? 's' : ''} need you</Text>
+                  </TouchableOpacity>
+                );
+              }
+              return (
+                <View style={styles.modeToggle}>
+                  <View style={[styles.modeSeg, styles.modeSegActive]}>
+                    <Text style={[styles.modeSegText, styles.modeSegTextActive]}>Form</Text>
+                  </View>
+                  <TouchableOpacity style={styles.modeSeg} activeOpacity={0.8} onPress={() => listingEditorRef.current?.startStepsWalk()}>
+                    <Text style={styles.modeSegText}>Steps</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })()}
             {items.length > 1 ? (
               <TouchableOpacity style={styles.itemsPill} onPress={() => setItemMenuOpen(open => !open)} activeOpacity={0.85}>
                 <Boxes size={16} color={CHAT_COLORS.ink} />
@@ -2794,6 +2824,9 @@ const styles = StyleSheet.create({
   glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
   navCircle: { ...GLASS_HEADER_STYLES.navCircle },
   titlePill: { ...GLASS_HEADER_STYLES.titlePill },
+  gapPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(186,117,23,0.12)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  gapPillDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#BA7517' },
+  gapPillText: { fontSize: 12.5, fontWeight: '700', color: '#BA7517' },
   modeToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: CHAT_COLORS.bubble, borderRadius: 999, padding: 3 },
   modeSeg: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999 },
   modeSegActive: { backgroundColor: CHAT_COLORS.white },
