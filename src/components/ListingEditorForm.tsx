@@ -10,7 +10,8 @@ import DeliveryShippingSheet from './DeliveryShippingSheet';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, Plus } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, ChevronLeft, Plus, Check, ArrowRight, AlertTriangle } from 'lucide-react-native';
+import { getListingQuality } from '../utils/listingQuality';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
@@ -58,6 +59,26 @@ const toPrice = (v: any): number => {
   const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(n) ? n : 0;
 };
+
+// Full-screen Steps wizard (one field per screen, progress + Next).
+const wizStyles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, height: 44 },
+  headerBtn: { minWidth: 48, height: 44, justifyContent: 'center' },
+  stepCount: { fontSize: 13, fontWeight: '700', color: CHAT_COLORS.dim },
+  doneText: { fontSize: 15, fontWeight: '700', color: BRAND_PRIMARY, textAlign: 'right' },
+  progress: { flexDirection: 'row', gap: 4, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
+  seg: { flex: 1, height: 4, borderRadius: 2 },
+  body: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  headline: { fontSize: 26, fontWeight: '800', color: CHAT_COLORS.ink, marginBottom: 18, letterSpacing: -0.3 },
+  footer: { paddingHorizontal: 20, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EEF0F2' },
+  nextBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 54, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
+  nextText: { fontSize: 17, fontWeight: '800', color: '#FFFFFF' },
+  qRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  qIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  qLabel: { fontSize: 15, fontWeight: '600', color: CHAT_COLORS.ink },
+  qHint: { fontSize: 13, fontWeight: '600', color: '#BA7517' },
+});
 
 // Styles for the row→sheet redesign (clickable detail rows + focused field sheets).
 const rowStyles = StyleSheet.create({
@@ -396,6 +417,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // Declared early (used by the imperative handle below); body assigned later where
   // supportsTaxonomy + the gap-queue refs are in scope.
   const startStepsWalkRef = useRef<() => void>(() => {});
+  // Full-screen Steps wizard (replaces the old open-sheets-one-by-one walk).
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardSteps, setWizardSteps] = useState<string[]>([]);
+  const [wizardIdx, setWizardIdx] = useState(0);
   // Which variant ("size") tab is selected inside the Photos sheet. null → manage the
   // shared set. Set when the seller taps a specific variant's photo in the inventory row.
   const [photoSizeTab, setPhotoSizeTab] = useState<string | null>(null);
@@ -1110,12 +1135,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const categoryRequired = requiredFields?.includes?.('category');
   const categoryMissing = categoryRequired && !selectedCategoryId;
 
-  // ── Fix-the-gaps fast-path ──────────────────────────────────────────────
-  // Tap "N fields need you" → open ONLY the empty required fields, one sheet at
-  // a time (gap → save → next gap → … → done). Reuses the existing field sheets
-  // + openField state; nothing new to render, no giant form to scroll.
-  const gapQueueRef = useRef<string[]>([]);
-  const gapFlowActiveRef = useRef(false);
+  // ── Fix-the-gaps + Steps wizard ─────────────────────────────────────────
+  // Both open a real full-screen wizard (renderStepsWizard) — Steps walks the key
+  // fields, Fix-gaps walks only the empty required ones. One field per full step.
   const computeGaps = (): string[] => {
     const d: any = activeData;
     const gaps: string[] = [];
@@ -1128,34 +1150,18 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     if (categoryRequired && !selectedCategoryId) gaps.push('category');
     return gaps;
   };
-  const startFixGaps = () => {
-    const gaps = computeGaps();
-    if (!gaps.length) return;
-    gapFlowActiveRef.current = true;
-    gapQueueRef.current = gaps.slice(1);
-    setOpenField(gaps[0]);
+  const openWizard = (steps: string[]) => {
+    if (!steps.length) return;
+    setWizardSteps(steps);
+    setWizardIdx(0);
+    setWizardOpen(true);
   };
-  // When a gap sheet closes during the flow, advance to the next gap (or finish).
-  useEffect(() => {
-    if (openField === null && gapFlowActiveRef.current) {
-      const next = gapQueueRef.current.shift();
-      if (next) {
-        const t = setTimeout(() => setOpenField(next), 280);
-        return () => clearTimeout(t);
-      }
-      gapFlowActiveRef.current = false;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField]);
-
-  // Steps mode body (latest-closure ref): walk the whole listing field-by-field,
-  // reusing the same queue + advance effect as the gap flow.
-  startStepsWalkRef.current = () => {
-    const order = ['title', 'description', 'price', ...(supportsTaxonomy ? ['category'] : []), 'condition', 'sku', 'barcode', 'tags'];
-    gapFlowActiveRef.current = true;
-    gapQueueRef.current = order.slice(1);
-    setOpenField(order[0]);
-  };
+  const startFixGaps = () => openWizard(computeGaps());
+  startStepsWalkRef.current = () => openWizard([
+    '__quality__', 'title', 'price',
+    ...(supportsTaxonomy ? ['category'] : []),
+    'condition', 'sku', 'tags',
+  ]);
 
   const patchField = (key: string, value: any) => {
     if (activeTab === 'all') {
@@ -1979,6 +1985,213 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     );
   };
 
+  // ── Steps wizard: one field per full screen (NOT a bottom sheet) ─────────
+  const STEP_META: Record<string, string> = {
+    __quality__: 'Quick check',
+    title: 'Name it',
+    description: 'Describe it',
+    price: "What's it worth?",
+    category: 'Category',
+    condition: 'Condition',
+    sku: 'SKU',
+    barcode: 'Barcode',
+    tags: 'Tags',
+    weight: 'Weight',
+  };
+
+  // The focused editor for a single wizard step. Reuses the same field
+  // components as the sheets; price/category/condition are focused variants.
+  const renderStepEditor = (field: string): React.ReactNode => {
+    const d: any = activeData;
+    switch (field) {
+      case '__quality__': {
+        const q = getListingQuality({ canonical: d, photoCount: (images || []).filter(Boolean).length });
+        return (
+          <View style={{ gap: 10 }}>
+            {q.rows.map((r) => (
+              <View key={r.key} style={wizStyles.qRow}>
+                <View style={[wizStyles.qIcon, { backgroundColor: r.ok ? CHAT_COLORS.brandSoft : '#FBF1DF' }]}>
+                  {r.ok ? <Check size={15} color={BRAND_PRIMARY} /> : <AlertTriangle size={14} color="#BA7517" />}
+                </View>
+                <Text style={wizStyles.qLabel}>{r.label}</Text>
+                <View style={{ flex: 1 }} />
+                {!r.ok ? <Text style={wizStyles.qHint}>{r.hint}</Text> : null}
+              </View>
+            ))}
+          </View>
+        );
+      }
+      case 'title':
+        return <SheetTextField value={d.title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" maxLength={80} showCount />;
+      case 'description':
+        return <SheetTextField value={d.description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe it…" />;
+      case 'sku':
+        return <SheetTextField value={d.sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" />;
+      case 'barcode':
+        return <SheetTextField value={d.barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN" />;
+      case 'tags':
+        return <ChipsField label="Tags" hideLabel valueArray={d.tags} onChangeArray={(arr) => patchField('tags', arr)} />;
+      case 'price': {
+        const currentPrice = Number(d.price) || 0;
+        return (
+          <View>
+            <View style={rowStyles.priceInputWrap}>
+              <Text style={rowStyles.priceCurrency}>$</Text>
+              <TextInput style={rowStyles.priceInput} value={String(d.price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
+            </View>
+            {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
+              <View style={{ marginTop: 16 }}>
+                <PricingGuidanceCard
+                  headers="none"
+                  pricing={pricingResearchResult}
+                  currentPrice={currentPrice}
+                  onApplyPrice={(price) => {
+                    const low = pricingResearchResult.low ?? 0;
+                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
+                    const high = pricingResearchResult.high ?? 0;
+                    patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
+                  }}
+                />
+              </View>
+            ) : titleForPricingResearch ? (
+              <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={rowStyles.researchBtn}>
+                {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={15} color={BRAND_PRIMARY} />}
+                <Text style={rowStyles.researchBtnText}>{pricingResearchLoading ? 'Researching…' : 'See what it sells for'}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        );
+      }
+      case 'condition':
+        return (
+          <View style={{ gap: 8 }}>
+            {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
+              ebayConditionsLoading ? (
+                <ActivityIndicator color={BRAND_PRIMARY} style={{ marginVertical: 16 }} />
+              ) : (
+                ebayConditions.map((c: any) => {
+                  const sel = String(d.conditionID || ebayConditions[0]?.conditionId) === String(c.conditionId);
+                  return (
+                    <TouchableOpacity
+                      key={c.conditionId}
+                      style={[rowStyles.radioRow, sel && rowStyles.radioRowSel]}
+                      onPress={() => {
+                        const condId = parseInt(String(c.conditionId), 10);
+                        const generic = mapEbayConditionIdToGeneric(String(c.conditionId)) as PlatformState['condition'];
+                        patchPlatform((prev) => ({ ...prev, conditionID: Number.isFinite(condId) ? condId : undefined, condition: generic }));
+                      }}
+                    >
+                      <View style={[rowStyles.radioOuter, sel && rowStyles.radioOuterSel]}>{sel && <View style={rowStyles.radioInner} />}</View>
+                      <Text style={rowStyles.radioLabel}>{c.conditionName}</Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )
+            ) : (
+              ([{ label: 'New', value: 'new' }, { label: 'Like New', value: 'like_new' }, { label: 'Good', value: 'good' }, { label: 'Fair', value: 'fair' }, { label: 'Used', value: 'used' }, { label: 'Refurbished', value: 'refurbished' }, { label: 'For Parts', value: 'for_parts' }] as any[]).map((opt) => {
+                const sel = (d.condition || 'good') === opt.value;
+                return (
+                  <TouchableOpacity key={opt.value} style={[rowStyles.radioRow, sel && rowStyles.radioRowSel]} onPress={() => patchField('condition', opt.value)}>
+                    <View style={[rowStyles.radioOuter, sel && rowStyles.radioOuterSel]}>{sel && <View style={rowStyles.radioInner} />}</View>
+                    <Text style={rowStyles.radioLabel}>{opt.label}</Text>
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        );
+      case 'category': {
+        if (!supportsTaxonomy) return <Text style={{ color: CHAT_COLORS.dim, fontSize: 14 }}>No category needed.</Text>;
+        const catDisplay: string | null = d.categoryPath || d.category || d.productCategory || null;
+        return (
+          <View>
+            <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
+              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
+              <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding…' : (catDisplay ? 'Re-detect' : 'Auto-find')}</Text>
+            </TouchableOpacity>
+            {!!catDisplay && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: CHAT_COLORS.brandSoft, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 14 }}>
+                <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}><Check size={14} color="#FFFFFF" /></View>
+                <Text style={{ flex: 1, color: CHAT_COLORS.ink, fontSize: 14, fontWeight: '600' }}>{String(catDisplay).replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
+              </View>
+            )}
+            <Text style={rowStyles.sectionLabel}>{catDisplay ? 'Change' : 'Or search'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12 }}>
+              <Icon name="magnify" size={18} color="#9CA3AF" />
+              <TextInput style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }} value={activeTaxonomyQuery} onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text }))} placeholder="Search categories" placeholderTextColor="#9CA3AF" />
+              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
+            </View>
+            {!!activeTaxonomyQuery && taxonomyDropdownData.length > 0 && (
+              <View style={{ marginTop: 8, borderWidth: 1, borderColor: '#EEF0F2', borderRadius: 12, overflow: 'hidden' }}>
+                {taxonomyDropdownData.slice(0, 8).map((item: any, idx: number) => (
+                  <TouchableOpacity
+                    key={`${item.value}-${idx}`}
+                    style={{ paddingVertical: 11, paddingHorizontal: 14, borderBottomWidth: idx < Math.min(taxonomyDropdownData.length, 8) - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: '#F1F2F4' }}
+                    onPress={() => {
+                      const path = item.path || item.label || item.value;
+                      if (activePlatformKeyLower === 'shopify') {
+                        patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                      } else {
+                        patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                      }
+                      setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: '' }));
+                    }}
+                  >
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }} numberOfLines={2}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+      }
+      default:
+        return <SheetTextField value={String(d[field] ?? '')} onChangeText={(t) => patchField(field, t)} autoFocus />;
+    }
+  };
+
+  const renderStepsWizard = () => {
+    if (!wizardOpen || wizardSteps.length === 0) return null;
+    const total = wizardSteps.length;
+    const idx = Math.min(wizardIdx, total - 1);
+    const field = wizardSteps[idx];
+    const isLast = idx === total - 1;
+    const headline = STEP_META[field] || field;
+    const close = () => setWizardOpen(false);
+    const goBack = () => setWizardIdx((i) => Math.max(0, i - 1));
+    const goNext = () => { if (isLast) close(); else setWizardIdx((i) => Math.min(total - 1, i + 1)); };
+    return (
+      <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
+        <View style={[wizStyles.screen, { paddingTop: insets.top + 4 }]}>
+          <View style={wizStyles.header}>
+            <TouchableOpacity onPress={idx === 0 ? close : goBack} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              {idx === 0 ? <X size={22} color={CHAT_COLORS.ink} /> : <ChevronLeft size={24} color={CHAT_COLORS.ink} />}
+            </TouchableOpacity>
+            <Text style={wizStyles.stepCount}>{idx + 1} / {total}</Text>
+            <TouchableOpacity onPress={close} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={wizStyles.doneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={wizStyles.progress}>
+            {wizardSteps.map((s, i) => (
+              <View key={`${s}-${i}`} style={[wizStyles.seg, { backgroundColor: i <= idx ? BRAND_PRIMARY : '#E9EBEF' }]} />
+            ))}
+          </View>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={wizStyles.body} keyboardShouldPersistTaps="handled">
+            <Text style={wizStyles.headline}>{headline}</Text>
+            {renderStepEditor(field)}
+          </ScrollView>
+          <View style={[wizStyles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <TouchableOpacity onPress={goNext} style={wizStyles.nextBtn} activeOpacity={0.9}>
+              <Text style={wizStyles.nextText}>{isLast ? 'Done' : 'Next'}</Text>
+              {!isLast && <ArrowRight size={18} color="#FFFFFF" />}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
   const renderFieldSheets = () => {
     const platformBadge = activeTab === 'all' ? 'All channels' : (getPlatform(activePlatformKey)?.label || activePlatformKey);
     const scopeText = activeTab === 'all' ? 'Changes everywhere' : `Only ${getPlatform(activePlatformKey)?.label || activePlatformKey}`;
@@ -2559,6 +2772,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Details — clickable rows; each opens its focused field sheet */}
       {renderDetailsCard()}
       {renderFieldSheets()}
+      {renderStepsWizard()}
 
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
           Suppressed while the Price sheet is open — that sheet inlines the same card. */}
