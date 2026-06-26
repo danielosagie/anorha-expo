@@ -63,12 +63,12 @@ const toPrice = (v: any): number => {
 // Full-screen Steps wizard (one field per screen, progress + Next).
 const wizStyles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, height: 44 },
+  header: { width: "100%", flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, height: 44 },
   headerBtn: { minWidth: 48, height: 44, justifyContent: 'center' },
   stepCount: { fontSize: 13, fontWeight: '700', color: CHAT_COLORS.dim },
   doneText: { fontSize: 15, fontWeight: '700', color: BRAND_PRIMARY, textAlign: 'right' },
-  progress: { flexDirection: 'row', gap: 4, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
-  seg: { flex: 1, height: 4, borderRadius: 2 },
+  progress: { flex: 1, flexDirection: 'row', gap: 4, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
+  seg: { flex: 1,  height: 4, borderRadius: 2 },
   body: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
   headline: { fontSize: 26, fontWeight: '800', color: CHAT_COLORS.ink, marginBottom: 18, letterSpacing: -0.3 },
   footer: { paddingHorizontal: 20, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EEF0F2' },
@@ -2194,26 +2194,24 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const field = wizardSteps[idx];
     const isLast = idx === total - 1;
     const headline = STEP_META[field] || field;
-    const close = () => setWizardOpen(false);
+    const close = () => { setWizardOpen(false); setPricingResearchModalVisible(false); };
     const goBack = () => setWizardIdx((i) => Math.max(0, i - 1));
     const goNext = () => { if (isLast) close(); else setWizardIdx((i) => Math.min(total - 1, i + 1)); };
     return (
       <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
         <View style={[wizStyles.screen, { paddingTop: insets.top + 4 }]}>
           <View style={wizStyles.header}>
-            <TouchableOpacity onPress={idx === 0 ? close : goBack} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              {idx === 0 ? <X size={22} color={CHAT_COLORS.ink} /> : <ChevronLeft size={24} color={CHAT_COLORS.ink} />}
-            </TouchableOpacity>
             <Text style={wizStyles.stepCount}>{idx + 1} / {total}</Text>
+            <View style={wizStyles.progress}>
+              {wizardSteps.map((s, i) => (
+                <View key={`${s}-${i}`} style={[wizStyles.seg, { backgroundColor: i <= idx ? BRAND_PRIMARY : '#E9EBEF' }]} />
+              ))}
+            </View>
             <TouchableOpacity onPress={close} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={wizStyles.doneText}>Done</Text>
             </TouchableOpacity>
           </View>
-          <View style={wizStyles.progress}>
-            {wizardSteps.map((s, i) => (
-              <View key={`${s}-${i}`} style={[wizStyles.seg, { backgroundColor: i <= idx ? BRAND_PRIMARY : '#E9EBEF' }]} />
-            ))}
-          </View>
+          
           <ScrollView style={{ flex: 1 }} contentContainerStyle={wizStyles.body} keyboardShouldPersistTaps="handled">
             <Text style={wizStyles.headline}>{headline}</Text>
             {renderStepEditor(field)}
@@ -2813,17 +2811,18 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
           Suppressed while the Price sheet is open — that sheet inlines the same card. */}
-      <Modal visible={pricingResearchModalVisible && openField !== 'price'} transparent animationType="slide">
+      <Modal visible={pricingResearchModalVisible && openField !== 'price' && !wizardOpen} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingTop: 20, paddingBottom: 12 }}>
+          <Pressable style={{ backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%', paddingHorizontal: 16, paddingBottom: 8 }} onPress={e => e.stopPropagation()}>
+            <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 999, backgroundColor: '#E5E7EB', marginTop: 8, marginBottom: 4 }} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, paddingBottom: 12 }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
               <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
                 <Icon name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
             </View>
             {pricingResearchResult?.error ? (
-              <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
+              <View style={{ paddingBottom: 20 }}>
                 <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
               </View>
             ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
@@ -2843,7 +2842,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 />
               </ScrollView>
             ) : (
-              <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
+              <View style={{ paddingBottom: 20 }}>
                 <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
               </View>
             )}
