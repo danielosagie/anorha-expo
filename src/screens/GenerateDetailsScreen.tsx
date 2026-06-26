@@ -1202,6 +1202,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return missing;
   }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
 
+  // Distinct missing required fields mapped to the wizard's step keys — the SINGLE source
+  // for the header's "N fields need you" count AND the wizard it opens, so the number and
+  // the walked steps always agree. ('images' has no wizard step, so it's dropped.)
+  const gapFields = useMemo(() => {
+    const allowed = ['title', 'description', 'price', 'sku', 'barcode', 'category', 'condition', 'tags', 'weight'];
+    const mapped = allMissingRequiredFields.map((m) => (m.field === 'price (either flat or all variants)' ? 'price' : m.field));
+    return Array.from(new Set(mapped.filter((f) => allowed.includes(f))));
+  }, [allMissingRequiredFields]);
+
   // Helper: get missing fields for a platform
   const getMissingFields = (platformKey: string) => {
     const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
@@ -2316,34 +2325,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <ChevronLeft size={22} color={CHAT_COLORS.ink} />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.titlePill}
-            activeOpacity={0.85}
-            onPress={() => setItemMenuOpen(open => !open)}
-          >
-            <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
-            {(() => {
-              // Save status takes the subtitle slot transiently, then fades to just the
-              // title (multi-item keeps its position there). No separate "Saved" chip.
-              const saveLabel = saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Save failed' : '';
-              const sub = saveStatusVisible && saveLabel
-                ? saveLabel
-                : (items.length > 1 ? `Item ${currentItemPosition} of ${items.length}` : '');
-              if (!sub) return null;
-              const color = saveStatusVisible && saveState === 'error' ? CHAT_COLORS.error : CHAT_COLORS.dim;
-              return <Text style={[styles.pillSub, { color }]} numberOfLines={1}>{sub}</Text>;
-            })()}
-          </TouchableOpacity>
-
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {/* When fields are missing, the Steps slot becomes a loud "N fields need you"
                 signal that opens the wizard over just the gaps. When complete, it's the
                 Form | Steps toggle (Steps = walk the key fields for a review). */}
             {(() => {
-              const gapCount = allMissingRequiredFields.length;
+              const gapCount = gapFields.length;
               if (gapCount > 0) {
                 return (
-                  <TouchableOpacity style={styles.gapPill} activeOpacity={0.85} onPress={() => listingEditorRef.current?.startFixGaps()}>
+                  <TouchableOpacity style={styles.gapPill} activeOpacity={0.85} onPress={() => listingEditorRef.current?.startFixGaps(gapFields)}>
                     <View style={styles.gapPillDot} />
                     <Text style={styles.gapPillText}>{gapCount} field{gapCount !== 1 ? 's' : ''} need you</Text>
                   </TouchableOpacity>
@@ -2366,6 +2356,29 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 <Text style={styles.itemsPillText}>{currentItemPosition}/{items.length}</Text>
               </TouchableOpacity>
             ) : null}
+          </View>
+
+          {/* Title pill — absolutely centered in the header so it's ALWAYS dead-center,
+              independent of the back button + right-side controls' widths. */}
+          <View pointerEvents="box-none" style={styles.headerCenter}>
+            <TouchableOpacity
+              style={styles.titlePill}
+              activeOpacity={0.85}
+              onPress={() => setItemMenuOpen(open => !open)}
+            >
+              <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
+              {(() => {
+                // Save status takes the subtitle slot transiently, then fades to just the
+                // title (multi-item keeps its position there). No separate "Saved" chip.
+                const saveLabel = saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Save failed' : '';
+                const sub = saveStatusVisible && saveLabel
+                  ? saveLabel
+                  : (items.length > 1 ? `Item ${currentItemPosition} of ${items.length}` : '');
+                if (!sub) return null;
+                const color = saveStatusVisible && saveState === 'error' ? CHAT_COLORS.error : CHAT_COLORS.dim;
+                return <Text style={[styles.pillSub, { color }]} numberOfLines={1}>{sub}</Text>;
+              })()}
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -2827,6 +2840,7 @@ const styles = StyleSheet.create({
   gapPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(186,117,23,0.12)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
   gapPillDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#BA7517' },
   gapPillText: { fontSize: 12.5, fontWeight: '700', color: '#BA7517' },
+  headerCenter: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   modeToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: CHAT_COLORS.bubble, borderRadius: 999, padding: 3 },
   modeSeg: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999 },
   modeSegActive: { backgroundColor: CHAT_COLORS.white },

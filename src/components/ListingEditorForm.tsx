@@ -261,8 +261,10 @@ export type ListingEditorFormRef = {
   openFieldSheet: (field: string, platform?: string) => void;
   /** Steps mode: walk the listing's key fields in the full-screen wizard. */
   startStepsWalk: () => void;
-  /** Open the full-screen wizard over only the empty required fields (the "N fields need you" CTA). */
-  startFixGaps: () => void;
+  /** Open the full-screen wizard over the empty required fields. Pass an explicit field
+   *  list (e.g. from the parent's cross-platform missing-field count) so the wizard walks
+   *  exactly those; omit to use the active tab's own computed gaps. */
+  startFixGaps: (fields?: string[]) => void;
 };
 
 type Variant = {
@@ -419,7 +421,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // Declared early (used by the imperative handle below); body assigned later where
   // supportsTaxonomy + the gap-queue refs are in scope.
   const startStepsWalkRef = useRef<() => void>(() => {});
-  const startFixGapsRef = useRef<() => void>(() => {});
+  const startFixGapsRef = useRef<(fields?: string[]) => void>(() => {});
   // Full-screen Steps wizard (replaces the old open-sheets-one-by-one walk).
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardSteps, setWizardSteps] = useState<string[]>([]);
@@ -560,7 +562,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setOpenField(map[field] || field);
     },
     startStepsWalk: () => startStepsWalkRef.current(),
-    startFixGaps: () => startFixGapsRef.current(),
+    startFixGaps: (fields?: string[]) => startFixGapsRef.current(fields),
   }), [platformPickerOverlay, platforms]);
 
   const lastPlatformRef = useRef<string>('');
@@ -993,6 +995,23 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openField, wizardOpen, wizardIdx, wizardSteps, titleForPricingResearch]);
 
+  // The Category editor only renders on a taxonomy platform tab (Shopify/eBay), never on
+  // 'all'. When the wizard reaches the Category step from the 'all' tab, switch to the
+  // taxonomy platform that's actually missing a category — otherwise it shows the dead
+  // "No category needed." fallback.
+  useEffect(() => {
+    if (!(wizardOpen && wizardSteps[wizardIdx] === 'category')) return;
+    if (activeTab !== 'all') return;
+    const needsCat = (k: string) => {
+      const pd: any = (platforms as any)[k];
+      if (!pd) return false;
+      return k === 'shopify' ? !pd.productCategoryId : !pd.categoryId;
+    };
+    const target = ['shopify', 'ebay'].find(needsCat) || ['shopify', 'ebay'].find((k) => (platforms as any)[k]);
+    if (target) setActiveTab(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wizardOpen, wizardIdx, wizardSteps, activeTab]);
+
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
       // Fall back to the AI's estimated weight (shipping vision) when the seller hasn't
@@ -1168,7 +1187,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     setWizardIdx(0);
     setWizardOpen(true);
   };
-  const startFixGaps = () => openWizard(computeGaps());
+  const startFixGaps = (fields?: string[]) => openWizard(fields && fields.length ? fields : computeGaps());
   startFixGapsRef.current = startFixGaps;
   startStepsWalkRef.current = () => openWizard([
     '__quality__', 'title', 'price',
@@ -1927,18 +1946,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
     return (
       <View style={{ paddingTop: 18 }}>
-        {(() => {
-          const gaps = computeGaps();
-          if (!gaps.length) return null;
-          return (
-            <TouchableOpacity onPress={startFixGaps} activeOpacity={0.85} style={rowStyles.gapCta}>
-              <View style={rowStyles.gapDot} />
-              <Text style={rowStyles.gapCtaText}>{gaps.length} field{gaps.length > 1 ? 's' : ''} need you</Text>
-              <View style={{ flex: 1 }} />
-              <Icon name="chevron-right" size={18} color="#BA7517" />
-            </TouchableOpacity>
-          );
-        })()}
+        {/* The "N fields need you" signal lives only in the header now (single source of
+            truth for the count); the in-form banner was removed to avoid a mismatch. */}
         <View style={rowStyles.detailsCard}>
           <View onLayout={recordFieldLayout('title')}>
             <FieldRow label="Title" layout="stacked" required value={(activeData as any).title} placeholder="Add a title" error={!!titleError} externalUpdate={hasExternalUpdate('title')} refilled={refilledIncludes('title')} onPress={() => setOpenField('title')} />
@@ -2122,7 +2131,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </View>
         );
       case 'category': {
-        if (!supportsTaxonomy) return <Text style={{ color: CHAT_COLORS.dim, fontSize: 14 }}>No category needed.</Text>;
+        if (!supportsTaxonomy) {
+          // On the 'all' tab the category editor can't render; an effect switches to the
+          // taxonomy platform that needs a category. Show a spinner during that beat instead
+          // of a misleading "No category needed" when a Shopify/eBay platform is present.
+          const hasTaxPlat = ['shopify', 'ebay'].some((k) => (platforms as any)[k]);
+          if (hasTaxPlat) return <ActivityIndicator size="small" color={BRAND_PRIMARY} style={{ marginTop: 8 }} />;
+          return <Text style={{ color: CHAT_COLORS.dim, fontSize: 14 }}>No category needed.</Text>;
+        }
         const catDisplay: string | null = d.categoryPath || d.category || d.productCategory || null;
         return (
           <View>
@@ -3067,7 +3083,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             style={{
               marginTop: 8,
               padding: 14,
-              backgroundColor: '#F7F8FA',
+              backgroundColor: '#FFFFFF',
+              borderWidth: 1,
+              borderColor: '#F1F2F4',
               borderRadius: 14,
               flexDirection: 'row',
               alignItems: 'center',
