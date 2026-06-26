@@ -265,67 +265,58 @@ export function BackfillOptimizerScreen() {
           <ActivityIndicator size="large" color={RC.green} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.introScroll} showsVerticalScrollIndicator={false}>
-          <Text style={styles.introTitle}>
-            {attention > 0 ? `Let’s finish your ${attention} item${plural(attention)}` : 'Everything’s polished'}
-          </Text>
-          <Text style={styles.introSub}>
-            {attention > 0 ? 'Two quick tasks and they’re ready to sell.' : 'Every listing has photos & details.'}
-          </Text>
+        <View style={styles.taskList}>
+          {/* Photos */}
+          <TouchableOpacity
+            activeOpacity={photosLeft === 0 ? 1 : 0.85}
+            disabled={photosLeft === 0}
+            onPress={() => enterBucket('photo')}
+            style={styles.taskRow}
+          >
+            <View style={styles.taskIcon}>
+              <MaterialCommunityIcons name="camera" size={20} color={RC.greenDark} />
+            </View>
+            <Text style={styles.taskTitle}>Photos</Text>
+            {photosLeft === 0 ? (
+              <View style={styles.badgeDone}>
+                <MaterialCommunityIcons name="check" size={16} color={RC.greenDark} />
+              </View>
+            ) : (
+              <View style={styles.badgeTodo}>
+                <Text style={styles.badgeTodoText}>{photosLeft}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
 
-          <View style={styles.taskList}>
-            {/* 1 · Photos */}
-            <TouchableOpacity
-              activeOpacity={photosLeft === 0 ? 1 : 0.85}
-              disabled={photosLeft === 0}
-              onPress={() => enterBucket('photo')}
-              style={styles.taskRow}
-            >
-              <View style={[styles.taskIcon, photosLeft === 0 && styles.taskIconDone]}>
-                <MaterialCommunityIcons name={photosLeft === 0 ? 'check-bold' : 'camera'} size={23} color={RC.greenDark} />
+          {/* Details */}
+          <TouchableOpacity
+            activeOpacity={detailsLeft === 0 ? 1 : 0.85}
+            disabled={detailsLeft === 0}
+            onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')}
+            style={styles.taskRow}
+          >
+            <View style={styles.taskIcon}>
+              <MaterialCommunityIcons name="star-four-points" size={20} color={RC.greenDark} />
+            </View>
+            <Text style={styles.taskTitle}>Details</Text>
+            {detailsLeft === 0 ? (
+              <View style={styles.badgeDone}>
+                <MaterialCommunityIcons name="check" size={16} color={RC.greenDark} />
               </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.taskTitle}>1 · Photos</Text>
-                <Text style={styles.taskSub} numberOfLines={1}>Snap each item — one at a time.</Text>
+            ) : (
+              <View style={styles.badgeTodo}>
+                <Text style={styles.badgeTodoText}>{detailsLeft}</Text>
               </View>
-              {photosLeft === 0 ? (
-                <Text style={styles.taskDoneTag}>Done</Text>
-              ) : (
-                <Text style={styles.taskCount}>{photosLeft}</Text>
-              )}
-            </TouchableOpacity>
-
-            {/* 2 · Details */}
-            <TouchableOpacity
-              activeOpacity={detailsLeft === 0 ? 1 : 0.85}
-              disabled={detailsLeft === 0}
-              onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')}
-              style={styles.taskRow}
-            >
-              <View style={[styles.taskIcon, detailsLeft === 0 && styles.taskIconDone]}>
-                <MaterialCommunityIcons name={detailsLeft === 0 ? 'check-bold' : 'star-four-points'} size={23} color={RC.greenDark} />
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.taskTitle}>2 · Details</Text>
-                <Text style={styles.taskSub} numberOfLines={1}>We write them — you just review.</Text>
-              </View>
-              {detailsLeft === 0 ? (
-                <Text style={styles.taskDoneTag}>Done</Text>
-              ) : (
-                <Text style={styles.taskTag}>auto</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {attention > 0 && <Text style={styles.introTime}>About 2 minutes</Text>}
-        </ScrollView>
+            )}
+          </TouchableOpacity>
+        </View>
       )}
 
       <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
       <View style={[styles.introFooter, { paddingBottom: insets.bottom + 18 }]}>
         {startBucket ? (
           <TouchableOpacity activeOpacity={0.9} onPress={() => enterBucket(startBucket)} style={styles.introPrimary}>
-            <Text style={styles.introPrimaryText}>{startBucket === 'photo' ? 'Start with photos' : 'Start with details'}</Text>
+            <Text style={styles.introPrimaryText}>Start</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity activeOpacity={0.9} onPress={finishOptimize} style={styles.introPrimary}>
@@ -333,7 +324,7 @@ export function BackfillOptimizerScreen() {
           </TouchableOpacity>
         )}
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.introSkip}>
-          <Text style={styles.introSkipText}>{startBucket ? 'Do it later' : 'Back to inventory'}</Text>
+          <Text style={styles.introSkipText}>{startBucket ? 'Later' : 'Back'}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -363,19 +354,15 @@ const styles = StyleSheet.create({
   doneBtnText: { fontSize: 15, fontWeight: '800', color: '#fff' },
 
   // ── Step 0 intro + explainer (task framing) ───────────────────────────────
-  introScroll: { paddingHorizontal: 22, paddingTop: 18, paddingBottom: 170 },
   introTitle: { fontSize: 27, fontWeight: '800', color: RC.ink, letterSpacing: -0.6, lineHeight: 32 },
   introSub: { fontSize: 14.5, fontWeight: '500', color: RC.muted, marginTop: 8 },
-  taskList: { gap: 12, marginTop: 24 },
-  taskRow: { flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderColor: RC.line, borderRadius: 16, padding: 16 },
-  taskIcon: { width: 48, height: 48, borderRadius: 14, backgroundColor: RC.greenSoft, alignItems: 'center', justifyContent: 'center' },
-  taskIconDone: { backgroundColor: RC.greenSoft },
-  taskTitle: { fontSize: 16, fontWeight: '700', color: RC.ink, letterSpacing: -0.2 },
-  taskSub: { fontSize: 13.5, fontWeight: '500', color: RC.muted, marginTop: 2 },
-  taskCount: { fontSize: 14, fontWeight: '800', color: RC.muted, fontVariant: ['tabular-nums'] },
-  taskTag: { fontSize: 12, fontWeight: '700', color: RC.greenDark, backgroundColor: RC.greenSoft, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, overflow: 'hidden' },
-  taskDoneTag: { fontSize: 13, fontWeight: '700', color: RC.greenDark },
-  introTime: { fontSize: 12.5, fontWeight: '500', color: RC.faint, textAlign: 'center', marginTop: 20 },
+  taskList: { paddingHorizontal: 16, paddingTop: 14, gap: 10 },
+  taskRow: { flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16 },
+  taskIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: RC.greenSoft, alignItems: 'center', justifyContent: 'center' },
+  taskTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: RC.ink, letterSpacing: -0.2 },
+  badgeTodo: { minWidth: 28, height: 28, borderRadius: 14, backgroundColor: RC.dangerSoft, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 9 },
+  badgeTodoText: { fontSize: 14, fontWeight: '800', color: RC.danger, fontVariant: ['tabular-nums'] },
+  badgeDone: { width: 28, height: 28, borderRadius: 14, backgroundColor: RC.greenSoft, alignItems: 'center', justifyContent: 'center' },
 
   introBackRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: 40 },
   introBackBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center' },
