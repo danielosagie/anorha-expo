@@ -11,7 +11,6 @@ import { OptimizerPhotoModeView } from '../components/optimizer/OptimizerPhotoMo
 import OptimizerReviewView from '../components/optimizer/OptimizerReviewView';
 import { useOptimizerQueues, ClassifiedProduct } from '../hooks/useOptimizerQueues';
 import { RC } from '../components/resolve/ResolveKit';
-import { OptimizeResolver, OptimizeCase, Decision } from '../components/resolve/optimizeResolvers';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { getPlatform } from '../config/platforms';
 import {
@@ -30,58 +29,11 @@ type ScreenView =
   | { kind: 'explainer' }
   | { kind: 'review' }
   | { kind: 'lesson'; q: 'photo' | 'data' }
-  | { kind: 'datachoose' }
-  | { kind: 'dataselect' }
-  | { kind: 'manual'; i: number }
-  | { kind: 'datamanual'; i: number }
   | { kind: 'done'; n: number; label: string };
 
 const BUCKET_ORDER: Bucket[] = ['photo', 'data', 'manual'];
 
 const plural = (n: number) => (n === 1 ? '' : 's');
-
-function firstImage(p: ClassifiedProduct): string | null {
-  const imgs = (p.ProductImages as any[]) || [];
-  return imgs[0]?.ImageUrl || imgs[0]?.imageUrl || null;
-}
-
-function manualCaseFor(p: ClassifiedProduct): OptimizeCase {
-  const any = p as any;
-  const price = any.Price ?? any.price;
-  const stock = any.Quantity ?? any.InventoryQuantity ?? any.quantity;
-  const barcode = any.Barcode ?? any.barcode;
-  return {
-    id: p.Id,
-    kind: 'manual',
-    title: 'Fill the gaps',
-    note: 'Can’t auto-guess',
-    itemTitle: p.Title || 'Item',
-    itemImage: firstImage(p),
-    itemSub: p.reason,
-    fields: [
-      { label: 'SKU', value: p.Sku || '', placeholder: 'e.g. 1001-B', required: !p.Sku },
-      { label: 'Price', value: price ? `$${price}` : '', placeholder: '$0.00', required: !price, half: true },
-      { label: 'Stock', value: stock != null ? String(stock) : '', placeholder: '0', half: true },
-      { label: 'Barcode / UPC', value: barcode || '', placeholder: 'optional' },
-    ],
-  };
-}
-
-// "Fill by hand" for the details bucket — title + description, not SKU/price.
-function dataManualCase(p: ClassifiedProduct): OptimizeCase {
-  return {
-    id: p.Id,
-    kind: 'manual',
-    title: 'Write the details',
-    note: p.reason,
-    itemTitle: p.Title || 'Item',
-    itemImage: firstImage(p),
-    fields: [
-      { label: 'Title', value: p.Title || '', placeholder: 'Product title', required: (p.Title || '').trim().length < 5 },
-      { label: 'Description', value: p.Description || '', placeholder: 'Describe the item' },
-    ],
-  };
-}
 
 export function BackfillOptimizerScreen() {
   const navigation = useNavigation<StackNavigationProp<any>>();
@@ -93,14 +45,16 @@ export function BackfillOptimizerScreen() {
     : [];
   const newlyImportedSet = useMemo(() => new Set(newlyImportedIds), [newlyImportedIds]);
 
+  // When entered from the import hub, scope the queues to THIS import's connection
+  // so the counts here match the hub exactly (same hook, same scope). A standalone
+  // entry with no connectionId falls back to the whole catalog.
+  const connectionId: string | undefined = route.params?.connectionId || undefined;
+
   const [view, setView] = useState<ScreenView>({ kind: 'lobby' });
   const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
-  const [manualDeck, setManualDeck] = useState<OptimizeCase[]>([]);
-  const [dataDeck, setDataDeck] = useState<OptimizeCase[]>([]); // details "fill by hand"
-  const [dataSubset, setDataSubset] = useState<ClassifiedProduct[] | null>(null); // chosen by "pick how many"
 
   const { loading, products, counts, photoNeededItems, dataNeededItems, manualQueueItems, refresh } =
-    useOptimizerQueues({ limit: 100 });
+    useOptimizerQueues({ connectionId });
 
   const prioritize = useCallback(
     (list: ClassifiedProduct[]) => {
@@ -143,28 +97,6 @@ export function BackfillOptimizerScreen() {
   }, [connections]);
   const reviewProducts = useMemo(() => products.filter((p) => reviewIds.has(p.Id)), [products, reviewIds]);
 
-  const dataChooseCase: OptimizeCase = useMemo(
-    () => ({
-      id: 'data-choose',
-      kind: 'datachoose',
-      title: `${dataQueue.length} need details`,
-      note: 'Weak titles & thin copy',
-      count: dataQueue.length,
-      chips: ['Title', 'Description', 'Tags', 'Category'],
-    }),
-    [dataQueue.length],
-  );
-  const dataSelectCase: OptimizeCase = useMemo(
-    () => ({
-      id: 'data-select',
-      kind: 'dataselect',
-      title: 'Pick how many',
-      note: 'Tap to include',
-      rows: dataQueue.map((it) => ({ id: it.Id, title: it.Title || 'Item', sub: it.Sku || undefined, miss: it.reason, on: true })),
-    }),
-    [dataQueue],
-  );
-
   const markDone = useCallback(
     (ids: string[]) => {
       setCompletedIds((prev) => new Set([...prev, ...ids]));
@@ -194,19 +126,6 @@ export function BackfillOptimizerScreen() {
     setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
     setView({ kind: 'review' });
   };
-
-  const handleLessonComplete = useCallback(
-    (label: string) => (ids: string[]) => {
-      markDone(ids);
-      setView({ kind: 'done', n: ids.length, label });
-    },
-    [markDone],
-  );
-
-  // If the active manual card's queue empties, fall back to the lobby.
-  useEffect(() => {
-    if (view.kind === 'manual' && manualDeck.length === 0) setView({ kind: 'lobby' });
-  }, [view, manualDeck.length]);
 
   // ── Photo / Details lessons keep the real camera + AI views ───────────────
   if (view.kind === 'lesson' && view.q === 'photo') {
@@ -298,99 +217,9 @@ export function BackfillOptimizerScreen() {
           markDone(ids);
           setView({ kind: 'review' });
         }}
-        queueProducts={dataSubset && dataSubset.length ? dataSubset : dataQueue}
+        queueProducts={dataQueue}
       />
     );
-  }
-
-  // ── Details flow: Choose how → (generate all · pick subset · by hand) ──────
-  if (view.kind === 'datachoose') {
-    return (
-      <OptimizeResolver
-        c={dataChooseCase}
-        idx={1}
-        total={1}
-        topInset={insets.top}
-        onBack={() => setView({ kind: 'lobby' })}
-        onResolve={(d, meta) => {
-          if (d === 'alt') return setView({ kind: 'lobby' });
-          const r = meta?.route || 'all';
-          if (r === 'pick') return setView({ kind: 'dataselect' });
-          if (r === 'hand') {
-            setDataDeck(dataQueue.map(dataManualCase));
-            return setView({ kind: 'datamanual', i: 0 });
-          }
-          setDataSubset(null);
-          setView({ kind: 'lesson', q: 'data' });
-        }}
-      />
-    );
-  }
-  if (view.kind === 'dataselect') {
-    return (
-      <OptimizeResolver
-        c={dataSelectCase}
-        idx={1}
-        total={1}
-        topInset={insets.top}
-        onBack={() => setView({ kind: 'datachoose' })}
-        onResolve={(d, meta) => {
-          if (d === 'alt') {
-            setDataSubset(null); // "select all" → generate for everyone
-          } else {
-            const ids = new Set(meta?.selectedIds || []);
-            setDataSubset(dataQueue.filter((it) => ids.has(it.Id)));
-          }
-          setView({ kind: 'lesson', q: 'data' });
-        }}
-      />
-    );
-  }
-  if (view.kind === 'datamanual') {
-    const total = dataDeck.length;
-    const di = Math.min(view.i, Math.max(total - 1, 0));
-    const cur = dataDeck[di];
-    if (cur) {
-      return (
-        <OptimizeResolver
-          key={cur.id}
-          c={cur}
-          idx={di + 1}
-          total={total}
-          topInset={insets.top}
-          onBack={() => (di > 0 ? setView({ kind: 'datamanual', i: di - 1 }) : setView({ kind: 'datachoose' }))}
-          onResolve={() => {
-            markDone([cur.id]);
-            if (di + 1 < total) setView({ kind: 'datamanual', i: di + 1 });
-            else setView({ kind: 'done', n: total, label: 'details written' });
-          }}
-        />
-      );
-    }
-  }
-
-  // ── Manual "Fill the gaps" resolver deck ──────────────────────────────────
-  if (view.kind === 'manual') {
-    const total = manualDeck.length;
-    const di = Math.min(view.i, Math.max(total - 1, 0));
-    const cur = manualDeck[di];
-    if (cur) {
-      return (
-        <OptimizeResolver
-          key={cur.id}
-          c={cur}
-          idx={di + 1}
-          total={total}
-          topInset={insets.top}
-          onBack={() => (di > 0 ? setView({ kind: 'manual', i: di - 1 }) : setView({ kind: 'lobby' }))}
-          onResolve={(_d: Decision) => {
-            markDone([cur.id]);
-            if (di + 1 < total) setView({ kind: 'manual', i: di + 1 });
-            else setView({ kind: 'done', n: total, label: 'gaps filled' });
-          }}
-        />
-      );
-    }
   }
 
   // ── Done — between flows ──────────────────────────────────────────────────

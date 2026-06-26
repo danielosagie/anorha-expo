@@ -365,6 +365,8 @@ export type AppStackParamList = {
   BackfillOptimizer: {
     newlyImportedIds?: string[];
     source?: string;
+    connectionId?: string;
+    platformName?: string;
   } | undefined;
   CSVColumnMapping: {
     csvHeaders: string[];

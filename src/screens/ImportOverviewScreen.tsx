@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,8 +17,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { supabase } from '../../lib/supabase';
 import { useImportSession } from '../hooks/useImportSession';
+import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
 import { ImportWizardSheet } from '../components/import/ImportWizardSheet';
 import { RC } from '../components/resolve/ResolveKit';
 import { reviewDeckCases } from '../components/resolve/classifyMatch';
@@ -74,39 +74,22 @@ const ImportOverviewScreen = () => {
     refreshSuggestions,
   } = session;
 
-  const [optimizeCount, setOptimizeCount] = useState(0);
-
-  // The optimizer queue is driven off the seller's catalog rows that are still
-  // missing photos / SKU / a real description — the same gaps the optimize step
-  // walks them through. One count, used for the summary and the step row.
-  const fetchOptimizerCounts = useCallback(async () => {
-    const { data: variants, error } = await supabase
-      .from('ProductVariants')
-      .select('Id, Sku, Title, Description, ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)')
-      .limit(200);
-    if (!error && variants) {
-      let needsOptimize = 0;
-      for (const v of variants) {
-        const noImages = !v.ProductImages || (v.ProductImages as any[]).length === 0;
-        const noSku = !v.Sku || v.Sku.trim() === '';
-        const weakDescription = !v.Description || v.Description.length < 30;
-        if (noImages || noSku || weakDescription) needsOptimize += 1;
-      }
-      setOptimizeCount(needsOptimize);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchOptimizerCounts();
-  }, [fetchOptimizerCounts]);
+  // Optimize count — import-scoped (only THIS connection's mapped variants) and
+  // read from the SAME hook the optimize screen walks, so the hub badge, the
+  // subtitle, and the optimize screen can never disagree. (Was a separate
+  // catalog-wide query with different thresholds — the source of the "188 here,
+  // Done there" mismatch.)
+  const { counts: optimizerCounts, refresh: refreshOptimizer } = useOptimizerQueues({ connectionId });
+  const optimizeCount =
+    optimizerCounts.photoNeeded + optimizerCounts.dataNeeded + optimizerCounts.manualQueue;
 
   useEffect(() => {
     const unsub = navigation.addListener('focus', () => {
       session.refreshSuggestions();
-      fetchOptimizerCounts();
+      refreshOptimizer();
     });
     return unsub;
-  }, [navigation, refreshSuggestions, fetchOptimizerCounts]);
+  }, [navigation, refreshSuggestions, refreshOptimizer]);
 
   const optimizerDone = optimizeCount === 0;
   // The real "to review" count is the deck's decision cards — classifyMatch groups
@@ -145,7 +128,7 @@ const ImportOverviewScreen = () => {
     if (st === 'match') {
       navigation.navigate('MappingReview' as any, { connectionId, platformName });
     } else if (st === 'optimize') {
-      navigation.navigate('BackfillOptimizer' as any, { source: 'import' });
+      navigation.navigate('BackfillOptimizer' as any, { source: 'import', connectionId, platformName });
     } else if (st === 'preferences') {
       setWizardVisible(true);
     } else {
@@ -162,7 +145,7 @@ const ImportOverviewScreen = () => {
     : !matchDone
       ? `${matchCases.length} ${matchCases.length === 1 ? 'item needs' : 'items need'} a quick look`
       : !optimizerDone
-        ? `${optimizeCount} ${optimizeCount === 1 ? 'item needs' : 'items need'} a few details`
+        ? `${optimizeCount} ${optimizeCount === 1 ? 'item' : 'items'} to optimize`
         : 'Set how syncing behaves, then sync';
 
   type StageView = { icon: IconName; title: string; upSub: string; count: number | null; cta: string };

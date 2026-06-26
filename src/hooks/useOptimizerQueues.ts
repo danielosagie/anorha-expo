@@ -56,11 +56,25 @@ function classifyProduct(p: any): ClassifiedProduct & { queue: OptimizerQueue; r
 }
 
 export interface UseOptimizerQueuesOptions {
+  /**
+   * Scope the queues to ONE import: only the variants mapped to this platform
+   * connection (via PlatformProductMappings.PlatformConnectionId) are counted —
+   * the same scope the backend uses. This is what keeps the import hub and the
+   * optimize screen on ONE number. When omitted, falls back to the whole
+   * catalog (for a standalone "optimize everything" entry).
+   */
+  connectionId?: string;
+  /** Runaway safety ceiling for the catalog-wide fallback only (ignored when import-scoped). */
   limit?: number;
 }
 
+const VARIANT_SELECT = `
+  Id, Title, Description, Sku,
+  ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
+`;
+
 export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
-  const { limit = 200 } = options;
+  const { connectionId, limit = 20000 } = options;
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<ClassifiedProduct[]>([]);
   const [counts, setCounts] = useState<OptimizerQueueCounts>({
@@ -74,16 +88,44 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
     setLoading(true);
     try {
       await ensureSupabaseJwt();
-      const { data, error } = await supabase
-        .from('ProductVariants')
-        .select(`
-          Id, Title, Description, Sku,
-          ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
-        `)
-        .limit(limit);
 
-      if (error) throw error;
-      const raw = data || [];
+      let raw: any[] = [];
+      if (connectionId) {
+        // Import-scoped: resolve this connection's mapped variant ids, then load
+        // only those rows (chunked so a large import never hits the IN() limit).
+        const { data: maps, error: mapErr } = await supabase
+          .from('PlatformProductMappings')
+          .select('ProductVariantId')
+          .eq('PlatformConnectionId', connectionId);
+        if (mapErr) throw mapErr;
+        const ids = Array.from(
+          new Set((maps || []).map((m: any) => m.ProductVariantId).filter(Boolean)),
+        );
+        for (let i = 0; i < ids.length; i += 300) {
+          const chunk = ids.slice(i, i + 300);
+          const { data, error } = await supabase
+            .from('ProductVariants')
+            .select(VARIANT_SELECT)
+            .in('Id', chunk);
+          if (error) throw error;
+          if (data) raw.push(...data);
+        }
+      } else {
+        // Catalog-wide fallback (no import scope) — page until the catalog is
+        // exhausted (a short/empty page) so the count is the real total, not a
+        // capped page. `limit` is only a runaway safety ceiling.
+        for (let from = 0; from < limit; from += 1000) {
+          const { data, error } = await supabase
+            .from('ProductVariants')
+            .select(VARIANT_SELECT)
+            .range(from, from + 999);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          raw.push(...data);
+          if (data.length < 1000) break;
+        }
+      }
+
       const classified = raw.map(classifyProduct);
       setProducts(classified);
 
@@ -103,7 +145,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
     } finally {
       setLoading(false);
     }
-  }, [limit]);
+  }, [connectionId, limit]);
 
   useEffect(() => {
     fetchData();

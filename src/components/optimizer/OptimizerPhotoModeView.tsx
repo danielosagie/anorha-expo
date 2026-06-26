@@ -131,11 +131,7 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
             setCapturedPhotos([]);
         } else {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            Alert.alert(
-                'Mission Accomplished! 🏆',
-                `You captured ${sessionStreak} new angles. Your listings are looking great!`,
-                [{ text: 'View Dashboard', onPress: () => onComplete(Array.from(sessionProductIds)) }]
-            );
+            onComplete(Array.from(sessionProductIds));
         }
     };
 
