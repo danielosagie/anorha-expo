@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useAuth, useUser } from '@clerk/expo';
 import { API_BASE_URL } from '../config/env';
 import { getActiveThread } from '../lib/activeThread';
 import { createLogger } from '../utils/logger';

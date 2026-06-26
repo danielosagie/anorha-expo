@@ -7,7 +7,11 @@ import Button from '../components/Button';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSignIn, useSignUp, useSSO, useAuth, useClerk } from '@clerk/clerk-expo';
+import { useSSO, useAuth, useClerk } from '@clerk/expo';
+// Core 3 split: the main useSignIn/useSignUp are the new Future/signals API.
+// The custom email/password + code flows here use the classic resource API
+// (attemptFirstFactor, setActive, createdSessionId), which lives under /legacy.
+import { useSignIn, useSignUp } from '@clerk/expo/legacy';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';

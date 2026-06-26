@@ -15,8 +15,8 @@ import { PlatformConnectionsProvider, usePlatformConnections } from './src/conte
 import { PlatformPickerOverlayProvider, usePlatformPickerOverlay } from './src/context/PlatformPickerOverlayContext';
 import BottomNav from './src/components/BottomNav';
 import { Text } from 'react-native';
-import { ClerkProvider, useAuth, SignedIn, SignedOut } from '@clerk/clerk-expo';
-import { tokenCache as clerkTokenCache } from '@clerk/clerk-expo/token-cache';
+import { ClerkProvider, useAuth } from '@clerk/expo';
+import { tokenCache as clerkTokenCache } from '@clerk/expo/token-cache';
 import * as SecureStore from 'expo-secure-store';
 import { EnhancedSessionProvider } from './src/context/EnhancedSessionProvider';
 import { SessionContext } from './src/context/SessionContext';

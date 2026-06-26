@@ -1,7 +1,7 @@
 // sssync_mobile_test/src/context/OrgContext.tsx
 
 import React, { createContext, useState, useEffect, useCallback, useContext, useRef } from 'react';
-import { useUser, useOrganizationList } from '@clerk/clerk-expo';
+import { useUser, useOrganizationList } from '@clerk/expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../lib/supabase';
 import { SessionContext } from './SessionContext';

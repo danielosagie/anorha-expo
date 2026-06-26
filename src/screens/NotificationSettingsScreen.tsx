@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Switch, ScrollView, Alert, TouchableOpacity, Ac
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CheckCircle2, Package, Sprout, AlertTriangle, Megaphone } from 'lucide-react-native';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { API_BASE_URL } from '../config/env';
 import PageHeader from '../components/ui/PageHeader';
 import { createLogger } from '../utils/logger';

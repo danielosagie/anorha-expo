@@ -19,7 +19,7 @@ import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { setActiveThread } from '../lib/activeThread';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { ChevronLeft, Menu, MessageCircle, Package, Search, Settings, AlertCircle, CheckCircle2, X, Plus } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';

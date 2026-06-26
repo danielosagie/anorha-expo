@@ -22,7 +22,7 @@ const contextWebMocks = {
   PlatformConnectionsContext: path.join(__dirname, 'mocks', 'contexts', 'PlatformConnectionsContext.tsx'),
 };
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (platform === 'web' && moduleName.startsWith('@clerk/clerk-expo')) {
+  if (platform === 'web' && moduleName.startsWith('@clerk/expo')) {
     return { filePath: clerkWebMock, type: 'sourceFile' };
   }
   if (platform === 'web' && moduleName === 'expo-camera') {

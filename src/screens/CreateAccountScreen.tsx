@@ -25,7 +25,7 @@ import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { CompositeNavigationProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import type { AuthStackParamList, AppStackParamList } from '../navigation/AppNavigator';
-import { useOrganizationList, useUser } from '@clerk/clerk-expo';
+import { useOrganizationList, useUser } from '@clerk/expo';
 import { useOrg } from '../context/OrgContext';
 import { AuthContext } from '../context/AuthContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';

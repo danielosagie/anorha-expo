@@ -22,7 +22,7 @@
 
 import React, { useCallback, useMemo } from 'react';
 import { ConvexProviderWithAuth, ConvexReactClient } from 'convex/react';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 
 // The agent-chat Convex deployment — MUST match the adapter (EXPO_PUBLIC_CONVEX_URL)
 // so useQuery reads the same deployment the message cache writes to. We refuse to

@@ -1,5 +1,5 @@
 /**
- * Web-only mock for @clerk/clerk-expo (and @clerk/clerk-expo/token-cache).
+ * Web-only mock for @clerk/expo (and @clerk/expo/token-cache, @clerk/expo/legacy).
  * Metro aliases both to this file when platform === 'web' (see metro.config.js).
  *
  * The real Clerk hooks throw without a ClerkProvider and pull in native-only
@@ -96,7 +96,7 @@ export const useOrganization = () => ({
   membership: { role: 'org:admin' },
 });
 
-// @clerk/clerk-expo/token-cache
+// @clerk/expo/token-cache
 export const tokenCache = {
   getToken: async () => null,
   saveToken: async () => {},

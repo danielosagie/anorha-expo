@@ -21,7 +21,7 @@ import * as Application from 'expo-application';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Picker } from '@react-native-picker/picker';
-import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useAuth, useUser } from '@clerk/expo';
 import { useTheme } from '../context/ThemeContext';
 
 const API_BASE_RAW = API_BASE_URL;
