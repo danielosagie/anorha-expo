@@ -1035,6 +1035,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wizardOpen, wizardIdx, wizardSteps, activeTab]);
 
+  // Barcodes are scanned, not typed — when the Barcode step opens (wizard OR sheet) with no
+  // code yet, open the scanner straight away. No second tap on a tiny "Scan" button.
+  const barcodeAutoScanRef = useRef(false);
+  useEffect(() => {
+    const onBarcode = openField === 'barcode' || (wizardOpen && wizardSteps[wizardIdx] === 'barcode');
+    if (!onBarcode) { barcodeAutoScanRef.current = false; return; }
+    if (barcodeAutoScanRef.current || (activeData as any).barcode || !onOpenBarcodeScanner) return;
+    barcodeAutoScanRef.current = true;
+    const t = setTimeout(() => onOpenBarcodeScanner((code: string) => patchField('barcode', code)), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openField, wizardOpen, wizardIdx, wizardSteps]);
+
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
       // Fall back to the AI's estimated weight (shipping vision) when the seller hasn't
@@ -1210,18 +1223,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     setWizardIdx(0);
     setWizardOpen(true);
   };
-  // Every wizard ends on a "__review__" step that takes the seller to publish, so Steps
-  // and Fix-gaps both guide all the way to completion instead of dumping back to the form.
+  // The wizard's LAST field step's button is "Publish" → hands off to the publish settings.
+  // No separate review/overview step — the quality check already leads the Steps walk, so a
+  // second one at the end is redundant (per the seller's ask).
   const startFixGaps = (fields?: string[]) => {
     const steps = fields && fields.length ? fields : computeGaps();
     if (!steps.length) return;
-    openWizard([...steps, '__review__']);
+    openWizard(steps);
   };
   startFixGapsRef.current = startFixGaps;
   startStepsWalkRef.current = () => openWizard([
     '__quality__', 'title', 'price',
     ...(supportsTaxonomy ? ['category'] : []),
-    'condition', 'sku', 'tags', '__review__',
+    'condition', 'sku', 'tags',
   ]);
 
   const patchField = (key: string, value: any) => {
@@ -2049,7 +2063,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     tags: 'Tags',
     weight: 'Weight',
     photos: 'Photos',
-    __review__: 'Ready to publish',
   };
 
   // The focused editor for a single wizard step. Reuses the same field
@@ -2057,16 +2070,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const renderStepEditor = (field: string): React.ReactNode => {
     const d: any = activeData;
     switch (field) {
-      case '__quality__':
-      case '__review__': {
+      case '__quality__': {
         const q = getListingQuality({ canonical: d, photoCount: (images || []).filter(Boolean).length });
         return (
           <View style={{ gap: 10 }}>
-            {field === '__review__' ? (
-              <Text style={{ fontSize: 14, color: CHAT_COLORS.dim, marginBottom: 4 }}>
-                {q.weakCount === 0 ? 'Everything looks good.' : `${q.weakCount} thing${q.weakCount > 1 ? 's' : ''} could be stronger — publish anyway or tweak.`}
-              </Text>
-            ) : null}
             {q.rows.map((r) => (
               <View key={r.key} style={wizStyles.qRow}>
                 <View style={[wizStyles.qIcon, { backgroundColor: r.ok ? CHAT_COLORS.brandSoft : '#FBF1DF' }]}>
@@ -2246,8 +2253,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const close = () => { setWizardOpen(false); setPricingResearchModalVisible(false); };
     const goBack = () => setWizardIdx((i) => Math.max(0, i - 1));
     const goNext = () => { if (isLast) close(); else setWizardIdx((i) => Math.min(total - 1, i + 1)); };
-    const isReview = field === '__review__';
-    // Close the wizard, then (after it slides away) hand off to the parent's publish flow.
+    // The last field step's button publishes: close the wizard, then (after it slides away)
+    // hand off to the parent's publish settings (which platforms + publish).
     const goPublish = () => { close(); setTimeout(() => onRequestPublish?.(), 320); };
     return (
       <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
@@ -2269,8 +2276,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             {renderStepEditor(field)}
           </ScrollView>
           <View style={[wizStyles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <TouchableOpacity onPress={isReview ? goPublish : goNext} style={wizStyles.nextBtn} activeOpacity={0.9}>
-              <Text style={wizStyles.nextText}>{isReview ? 'Publish' : (isLast ? 'Done' : 'Next')}</Text>
+            <TouchableOpacity onPress={isLast ? goPublish : goNext} style={wizStyles.nextBtn} activeOpacity={0.9}>
+              <Text style={wizStyles.nextText}>{isLast ? 'Publish' : 'Next'}</Text>
               {!isLast && <ArrowRight size={18} color="#FFFFFF" />}
             </TouchableOpacity>
           </View>

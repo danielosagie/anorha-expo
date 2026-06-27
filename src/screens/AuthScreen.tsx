@@ -171,35 +171,54 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
   }, [clerk]);
 
   const handleBiometricLogin = useCallback(async () => {
+    // If this device already holds an active Clerk session, just activate it — a fresh
+    // signIn.create() would be rejected with `session_exists` and leave us stuck on Auth.
+    if (isSignedIn) {
+      await activateExistingSession();
+      return;
+    }
     try {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Log in with Face ID',
         fallbackLabel: 'Use Password',
       });
-      if (result.success) {
-        const e = await SecureStore.getItemAsync('biometric_email');
-        const p = await SecureStore.getItemAsync('biometric_password');
-        if (!e || !p) {
-          showErrorModal('Set up Face ID', "Log in with your password once and we'll turn on Face ID for next time.", 'info');
-          return;
-        }
-        setLoading(true);
-        if (signIn) {
-          try {
-            const res = await signIn.create({ identifier: e, password: p });
-            if (res.status === 'complete' && res.createdSessionId) {
-              await signInSetActive!({ session: res.createdSessionId });
-            }
-          } catch (err: any) {
-            showErrorModal('Login Failed', err.errors?.[0]?.message || 'Biometric login failed', 'error');
+      if (!result.success) return;
+
+      const e = await SecureStore.getItemAsync('biometric_email');
+      const p = await SecureStore.getItemAsync('biometric_password');
+      if (!e || !p) {
+        showErrorModal('Set up Face ID', "Log in with your password once and we'll turn on Face ID for next time.", 'info');
+        return;
+      }
+      if (!signIn) return;
+      setLoading(true);
+      try {
+        const res = await signIn.create({ identifier: e, password: p });
+        if (res.status === 'complete' && res.createdSessionId) {
+          await signInSetActive!({ session: res.createdSessionId });
+        } else if ((res as any)?.status === 'needs_first_factor') {
+          const r2 = await signIn.attemptFirstFactor({ strategy: 'password', password: p });
+          if (r2.status === 'complete' && r2.createdSessionId) {
+            await signInSetActive!({ session: r2.createdSessionId });
           }
         }
+      } catch (err: any) {
+        // The session may already exist (e.g. a prior tap that activated but didn't route
+        // before this one). Recover by activating it instead of showing a dead error.
+        const code = err?.errors?.[0]?.code ?? err?.code;
+        const msg = err?.errors?.[0]?.message ?? err?.message ?? '';
+        if (code === 'session_exists' || /already signed in/i.test(msg)) {
+          await activateExistingSession();
+        } else {
+          showErrorModal('Login Failed', err?.errors?.[0]?.message || 'Biometric login failed', 'error');
+        }
+      } finally {
         setLoading(false);
       }
     } catch {
       setLoading(false);
     }
-  }, [signIn, signInSetActive, showErrorModal]);
+  }, [isSignedIn, activateExistingSession, signIn, signInSetActive, showErrorModal]);
 
   // One-tap entry from the splash: auto-prompt Face ID when asked + ready.
   const autoFaceTriggered = useRef(false);

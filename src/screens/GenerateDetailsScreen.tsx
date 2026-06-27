@@ -1564,7 +1564,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) {
-        log.debug('[doSaveToInventory] Missing required data');
+        log.debug('[doSaveToInventory] Missing required data', { productId, variantId, token: !!token });
+        showErrorModal('Couldn’t save', !token ? 'Your session expired — sign in again.' : "This item isn't ready to save yet. Give it a moment and try again.", 'warning');
         return;
       }
 
@@ -1827,8 +1828,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       log.debug('[confirmAndPublish] Got IDs:', { productId, variantId, baseUrl: !!baseUrl, token: !!token });
       if (!baseUrl || !productId || !variantId || !token) {
-        log.debug('[confirmAndPublish] Missing required data, aborting');
+        log.debug('[confirmAndPublish] Missing required data, aborting', { baseUrl: !!baseUrl, productId, variantId, token: !!token });
         setIsPublishing(false);
+        // Surface WHY instead of silently doing nothing (the seller tapped Publish and "nothing happened").
+        const reason = !token
+          ? 'your session expired — sign in again'
+          : (!productId || !variantId)
+            ? "this item isn't fully saved yet. Tap Save Draft, wait for “Saved”, then publish"
+            : 'a connection setting is missing';
+        showErrorModal('Couldn’t publish', `We couldn’t publish — ${reason}.`, 'warning');
         return;
       }
 
