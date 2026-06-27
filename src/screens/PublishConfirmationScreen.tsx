@@ -61,6 +61,9 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // inline error + Retry — never a false success, never an abrupt pop-back.
   const [phase, setPhase] = useState<'publishing' | 'done' | 'error'>(mode === 'publishing' ? 'publishing' : 'done');
   const [errorMsg, setErrorMsg] = useState('');
+  // Per-platform "open the live listing" URLs. Seeded from params (for non-owning callers),
+  // then filled from the publish response so channel rows deep-link to the real marketplace page.
+  const [liveUrls, setLiveUrls] = useState<Record<string, any>>(params.liveUrls || {});
   const ranRef = useRef(false);
 
   const runPublish = useCallback(async () => {
@@ -89,6 +92,12 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         setPhase('error');
         return;
       }
+      // Capture the live-listing URLs the publish endpoint resolved (eBay item, Shopify
+      // admin product, …) so the channel rows deep-link to the real page.
+      const body = await res.json().catch(() => null);
+      if (body?.listings && typeof body.listings === 'object') {
+        setLiveUrls((prev) => ({ ...prev, ...body.listings }));
+      }
       setPhase('done'); // success → the receipt tears off + morphs
     } catch (e: any) {
       log.error('[PublishConfirmation] Publish error:', e);
@@ -102,6 +111,12 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     ranRef.current = true;
     runPublish();
   }, [mode, runPublish]);
+
+  // True once at least one channel has resolved a real live-listing link.
+  const anyLiveLink = (platforms.length ? platforms : ['shopify']).some((p: string) => {
+    const l: any = (liveUrls || {})[String(p).toLowerCase()];
+    return typeof l === 'string' ? !!l : !!l?.url;
+  });
 
   const handleCreateAnother = () => {
     // Go to the add product flow in the current stack
@@ -242,7 +257,8 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
           />
         </View>
       ) : (
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, alignContent: "space-between" }}>
+        
           <View style={styles.heroBlock}>
             {imageUrl ? (
               <Image source={{ uri: imageUrl }} style={styles.cover} />
@@ -264,11 +280,16 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
               {(platforms.length ? platforms : ['shopify']).map((p: string, i: number) => {
                 const lower = String(p).toLowerCase();
                 const isFb = lower === 'facebook';
+                // Live URL may arrive as a {url,id} object (new) or a bare string (legacy param).
+                const live: any = (liveUrls || {})[lower];
+                const url: string | undefined = typeof live === 'string' ? live : live?.url;
+                const hasLink = !!url;
                 const st = isFb
                   ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
-                  : { dotColor: '#93C822', color: '#93C822', label: lower === 'shopify' ? 'Live · view in store' : 'Live · view' };
-                const url = (params.liveUrls || {})[lower];
-                const tappable = !isFb;
+                  : { dotColor: '#93C822', color: '#93C822', label: hasLink ? (lower === 'shopify' ? 'Live · view in store' : 'Live · view') : 'Live' };
+                // A real listing link → open the marketplace page. Otherwise the row still
+                // opens the in-app product (where they can manage/retry); FB without a link is inert.
+                const tappable = hasLink || !isFb;
                 return (
                   <View key={`${p}-${i}`}>
                     {i > 0 && <View style={styles.rowDivider} />}
@@ -281,7 +302,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                           <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
                         </View>
                       </View>
-                      {tappable ? <Icon name="open-in-new" size={16} color="#6B7280" /> : null}
+                      {hasLink ? <Icon name="open-in-new" size={16} color="#6B7280" /> : null}
                       {tappable ? <Icon name="chevron-right" size={18} color="#C4C8CE" /> : null}
                     </TouchableOpacity>
                   </View>
@@ -290,7 +311,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             </View>
           </View>
 
-          <Text style={styles.hint}>Tap a channel to open the live listing.</Text>
+          <Text style={styles.hint}>{anyLiveLink ? 'Tap a channel to open the live listing.' : 'Tap a channel to manage it.'}</Text>
 
           <View style={{ flex: 1 }} />
 
@@ -347,7 +368,7 @@ const styles = StyleSheet.create({
   // ── 1ABT-0 "Published!" card ──────────────────────────────────────────────
   headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 6 },
   backCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  heroBlock: { alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 6, paddingBottom: 18 },
+  heroBlock: { marginTop: "20%", alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 6, paddingBottom: 18 },
   cover: { width: 140, height: 140, borderRadius: 16, borderWidth: 2, borderColor: '#E5E7EB' },
   coverPlaceholder: { backgroundColor: '#E7E1D6' },
   publishedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
