@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import PlatformLogo from './PlatformLogo';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { createLogger } from '../utils/logger';
@@ -133,12 +134,12 @@ export default function PublishConfirmationModal({
                     <View style={styles.statusPill}>
                         <Text style={styles.statusPillText}>Ready to publish</Text>
                     </View>
-                    <View style={styles.backCircle} />
+                    {/* invisible spacer to keep the pill centered (not a button) */}
+                    <View style={{ width: 38 }} />
                 </View>
 
                 <View style={styles.titleBlock}>
                     <Text style={styles.title}>Publish where?</Text>
-                    <Text style={styles.subtitle}>Pick any — 1, 2, or all. You're never forced to post somewhere.</Text>
                 </View>
 
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
@@ -155,7 +156,7 @@ export default function PublishConfirmationModal({
                             return (
                                 <TouchableOpacity key={platform} style={styles.platformCard} activeOpacity={0.8} onPress={() => togglePlatform(platform)}>
                                     <View style={[styles.logoChip, { backgroundColor: b.bg }]}>
-                                        <Text style={styles.logoGlyph}>{b.label}</Text>
+                                        <PlatformLogo type={platform} size={18} color="#FFFFFF" />
                                     </View>
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.platformName}>{labelFor(platform)}</Text>
@@ -207,8 +208,9 @@ export default function PublishConfirmationModal({
                         )}
                     </TouchableOpacity>
                     {onSaveToInventory ? (
-                        <TouchableOpacity onPress={onSaveToInventory} disabled={isPublishing} activeOpacity={0.7}>
-                            <Text style={styles.saveOnly}>Just save to inventory</Text>
+                        <TouchableOpacity onPress={onSaveToInventory} disabled={isPublishing} activeOpacity={0.85} style={styles.saveBtn}>
+                            <Icon name="content-save-outline" size={18} color="#52525B" />
+                            <Text style={styles.saveBtnText}>Just save to inventory</Text>
                         </TouchableOpacity>
                     ) : null}
                 </View>
@@ -224,8 +226,7 @@ const styles = StyleSheet.create({
     statusPill: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 18 },
     statusPillText: { color: '#3F3F46', fontSize: 13, fontWeight: '600' },
     titleBlock: { paddingHorizontal: 22, paddingTop: 14, gap: 7 },
-    title: { color: '#18181B', fontSize: 24, fontWeight: '800', letterSpacing: -0.4, lineHeight: 30 },
-    subtitle: { color: '#6B7280', fontSize: 14, lineHeight: 20 },
+    title: { color: '#18181B', fontSize: 26, fontWeight: '800', letterSpacing: -0.3, lineHeight: 32 },
     list: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 8, gap: 10 },
     platformCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 14 },
     logoChip: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
@@ -246,5 +247,6 @@ const styles = StyleSheet.create({
     publishBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', height: 54, borderRadius: 999, backgroundColor: BRAND_PRIMARY },
     publishBtnDisabled: { backgroundColor: '#D6D6D1' },
     publishText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-    saveOnly: { color: '#71717A', fontSize: 14, fontWeight: '500' },
+    saveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', height: 52, borderRadius: 999, backgroundColor: '#ECECE8' },
+    saveBtnText: { color: '#52525B', fontSize: 15, fontWeight: '700' },
 });
