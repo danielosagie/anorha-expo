@@ -2260,14 +2260,18 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
         <View style={[wizStyles.screen, { paddingTop: insets.top + 4 }]}>
           <View style={wizStyles.header}>
+            {/* Back to the previous step (or exit on the first); "Exit" always leaves the wizard. */}
+            <TouchableOpacity onPress={idx === 0 ? close : goBack} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <ChevronLeft size={22} color={CHAT_COLORS.ink} />
+            </TouchableOpacity>
             <Text style={wizStyles.stepCount}>{idx + 1} / {total}</Text>
-            <View style={wizStyles.progress}>
+            <View style={[wizStyles.progress, { flex: 1 }]}>
               {wizardSteps.map((s, i) => (
                 <View key={`${s}-${i}`} style={[wizStyles.seg, { backgroundColor: i <= idx ? BRAND_PRIMARY : '#E9EBEF' }]} />
               ))}
             </View>
             <TouchableOpacity onPress={close} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={wizStyles.doneText}>Done</Text>
+              <Text style={wizStyles.doneText}>Exit</Text>
             </TouchableOpacity>
           </View>
           

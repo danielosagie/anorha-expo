@@ -1742,11 +1742,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Advisory gate: if the listing is weak, surface "Before you publish" first.
   // If it's strong, proceed straight to the normal publish flow (the modal).
   const handlePublishPress = () => {
-    if (!listingQuality.isStrong) {
-      setQualitySheetOpen(true);
-    } else {
-      doPublish();
-    }
+    // Go straight to the publish settings ("Publish where?"). The quality check already leads
+    // the Steps wizard, so re-gating publish behind the "Before you publish" sheet was both
+    // redundant AND broke the flow — closing that sheet and opening the publish modal in the
+    // same tick stacked two RN Modals and the publish modal never appeared (the "loop").
+    doPublish();
   };
 
   // Upload local image URIs to Supabase and return public URLs
