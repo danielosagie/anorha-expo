@@ -1,39 +1,26 @@
 // PlatformBrandChip — the rounded brand square used in the publish + published screens.
 //
-// Each channel gets its AUTHENTIC mark, matching the Paper publish designs:
-//   • eBay → its multicolour wordmark (e·b·a·y) on a light neutral chip — never a
-//     white glyph on red, which is what a plain colour-chip would produce.
-//   • everyone else → a white glyph on the platform's brand colour (yellow brands
-//     get a dark glyph so the mark stays legible).
+// Each channel shows its REAL logo asset (from the platform registry) in its native
+// brand colours, sitting on a neutral light chip with a hairline border — the familiar
+// app-icon look. eBay's asset is already the full multicolour mark, so it just works;
+// no hand-rolled wordmark and no white-on-colour glyphs.
 
 import React from 'react';
-import { View, Text, StyleSheet, StyleProp, ViewStyle } from 'react-native';
+import { View, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import PlatformLogo from './PlatformLogo';
-import { getPlatform } from '../config/platforms';
 
-// eBay's wordmark is four letters in four brand colours — reproduced here so it
-// reads correctly on a light chip instead of collapsing to a single fill.
-const EBAY_LETTERS: Array<{ ch: string; color: string }> = [
-  { ch: 'e', color: '#E53238' },
-  { ch: 'b', color: '#0064D2' },
-  { ch: 'a', color: '#F5AF02' },
-  { ch: 'y', color: '#86B817' },
-];
-
-// Chip backgrounds tuned to each brand (matches the design swatches).
+// Neutral chip behind every logo (the logos carry their own colour).
 const CHIP_BG: Record<string, string> = {
-  shopify: '#95BF47',
-  facebook: '#1877F2',
-  square: '#1C1C1C',
-  clover: '#4B9E3F',
-  amazon: '#FF9900',
-  whatnot: '#FFC700',
-  etsy: '#F1641E',
-  depop: '#FF2300',
+  shopify: '#f4f4f4',
+  ebay: '#f4f4f4',
+  facebook: '#f4f4f4',
+  square: '#f4f4f4',
+  clover: '#f4f4f4',
+  amazon: '#f4f4f4',
+  whatnot: '#f4f4f4',
+  etsy: '#f4f4f4',
+  depop: '#f4f4f4',
 };
-
-// Light/yellow chips need a dark glyph for contrast.
-const DARK_GLYPH = new Set(['whatnot', 'amazon']);
 
 interface Props {
   platform: string;
@@ -45,37 +32,23 @@ interface Props {
 const PlatformBrandChip: React.FC<Props> = ({ platform, size = 32, style }) => {
   const p = String(platform || '').toLowerCase();
   const radius = Math.round(size * 0.27); // 9 at both 32 and 34 — matches the design
-
-  if (p === 'ebay') {
-    return (
-      <View
-        style={[
-          styles.chip,
-          { width: size, height: size, borderRadius: radius, backgroundColor: '#F4F4F1', borderWidth: 1, borderColor: '#E5E7EB' },
-          style,
-        ]}
-      >
-        <Text style={[styles.wordmark, { fontSize: Math.round(size * 0.45) }]} allowFontScaling={false}>
-          {EBAY_LETTERS.map((l) => (
-            <Text key={l.ch} style={{ color: l.color }}>{l.ch}</Text>
-          ))}
-        </Text>
-      </View>
-    );
-  }
-
-  const bg = CHIP_BG[p] || getPlatform(p)?.brandColor || '#6B7280';
-  const glyph = DARK_GLYPH.has(p) ? '#18181B' : '#FFFFFF';
+  const bg = CHIP_BG[p] || '#f4f4f4';
   return (
-    <View style={[styles.chip, { width: size, height: size, borderRadius: radius, backgroundColor: bg }, style]}>
-      <PlatformLogo type={p} size={Math.round(size * 0.55)} color={glyph} />
+    <View
+      style={[
+        styles.chip,
+        { width: size, height: size, borderRadius: radius, backgroundColor: bg, borderWidth: 1, borderColor: '#E5E7EB' },
+        style,
+      ]}
+    >
+      {/* No `color` → the registry SVG renders in its own brand colours. */}
+      <PlatformLogo type={p} size={Math.round(size * 0.66)} />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  chip: { alignItems: 'center', justifyContent: 'center' },
-  wordmark: { fontWeight: '800', letterSpacing: -0.5, includeFontPadding: false },
+  chip: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
 });
 
 export default PlatformBrandChip;
