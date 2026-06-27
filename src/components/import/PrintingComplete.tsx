@@ -38,6 +38,9 @@ export interface PrintingCompleteProps {
   onPrimary: () => void;
   secondaryLabel: string;
   onSecondary: () => void;
+  /** When false, the receipt prints but HOLDS (the work isn't done) — it tears off and
+   *  morphs into the result card only once this flips true. Defaults to true (import). */
+  ready?: boolean;
 }
 
 const PrintingComplete: React.FC<PrintingCompleteProps> = ({
@@ -50,6 +53,7 @@ const PrintingComplete: React.FC<PrintingCompleteProps> = ({
   onPrimary,
   secondaryLabel,
   onSecondary,
+  ready = true,
 }) => {
   const [bodyH, setBodyH] = useState(0);
   const printH = useSharedValue(0);
@@ -65,22 +69,29 @@ const PrintingComplete: React.FC<PrintingCompleteProps> = ({
     return () => clearTimeout(t);
   }, [bodyH]);
 
-  // Run the timeline once the receipt content's natural height is measured.
+  const [printed, setPrinted] = useState(false);
+
+  // Feed the paper out as soon as we know its height.
   useEffect(() => {
     if (!bodyH) return;
     const E = Easing.bezier(0.2, 0, 0, 1);
     printH.value = withTiming(bodyH, { duration: 2200, easing: E });
-    const t1 = setTimeout(() => {
-      printerOut.value = withTiming(1, { duration: 480, easing: E });
-    }, 2400);
+    const tp = setTimeout(() => setPrinted(true), 2200);
+    return () => clearTimeout(tp);
+  }, [bodyH, printH]);
+
+  // Tear off + morph only once the paper has fully fed AND the work is done (`ready`). For
+  // publish, `ready` flips true when the POST returns 2xx; until then the printed receipt
+  // holds with the "syncing…" line — so we never show a false "done".
+  useEffect(() => {
+    if (!printed || !ready) return;
+    const E = Easing.bezier(0.2, 0, 0, 1);
+    printerOut.value = withTiming(1, { duration: 480, easing: E });
     const t2 = setTimeout(() => {
       morph.value = withTiming(1, { duration: 460, easing: E });
-    }, 2900);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [bodyH, printH, printerOut, morph]);
+    }, 380);
+    return () => clearTimeout(t2);
+  }, [printed, ready, printerOut, morph]);
 
   const sheetStyle = useAnimatedStyle(() => ({
     height: printH.value,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -7,6 +7,8 @@ import PlatformLogo from '../components/PlatformLogo';
 import PrintingComplete from '../components/import/PrintingComplete';
 import { normalizeDisplayName } from '../config/platforms';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { API_BASE_URL } from '../config/env';
+import { ensureSupabaseJwt } from '../lib/supabase';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { createLogger } from '../utils/logger';
@@ -34,6 +36,8 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
     backRoute,
     savedToInventory,
+    mode,            // 'publishing' → this screen owns the publish POST
+    publishPayload,  // the ready-to-send body for /api/products/publish
   } = params;
 
   // Facebook posts asynchronously through the user's computer — show its live
@@ -41,6 +45,54 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   const fbDispatch = useFacebookJobStatus();
   const fbSelected = (platforms || []).map((p: string) => String(p).toLowerCase()).includes('facebook');
   const fbStatus = fbSelected ? fbDispatch.statusForVariant(variantId) : null;
+
+  // ── Publish phase ──────────────────────────────────────────────────────────
+  // When we arrive in 'publishing' mode this screen OWNS the POST: the receipt prints
+  // while it runs, then morphs to "Published!" only on a real 2xx. On failure it shows an
+  // inline error + Retry — never a false success, never an abrupt pop-back.
+  const [phase, setPhase] = useState<'publishing' | 'done' | 'error'>(mode === 'publishing' ? 'publishing' : 'done');
+  const [errorMsg, setErrorMsg] = useState('');
+  const ranRef = useRef(false);
+
+  const runPublish = useCallback(async () => {
+    if (!publishPayload) { setPhase('done'); return; }
+    setPhase('publishing');
+    setErrorMsg('');
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!token) { setErrorMsg('Your session expired — sign in again.'); setPhase('error'); return; }
+      const res = await fetch(`${API_BASE_URL}/api/products/publish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(publishPayload),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        log.error('[PublishConfirmation] Publish failed:', res.status, text);
+        let msg = text;
+        try {
+          const j = JSON.parse(text);
+          msg = (j.statusCode === 409 && j.details?.sku)
+            ? `“${j.details.sku}” is already used by another product. Change the SKU and try again.`
+            : (j.message || text);
+        } catch { /* keep raw text */ }
+        setErrorMsg(msg || 'Something went wrong while publishing.');
+        setPhase('error');
+        return;
+      }
+      setPhase('done'); // success → the receipt tears off + morphs
+    } catch (e: any) {
+      log.error('[PublishConfirmation] Publish error:', e);
+      setErrorMsg('Something went wrong while publishing. Please try again.');
+      setPhase('error');
+    }
+  }, [publishPayload]);
+
+  useEffect(() => {
+    if (mode !== 'publishing' || ranRef.current) return;
+    ranRef.current = true;
+    runPublish();
+  }, [mode, runPublish]);
 
   const handleCreateAnother = () => {
     // Go to the add product flow in the current stack
@@ -143,22 +195,46 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         </TouchableOpacity>
       </View>
       <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
-        <PrintingComplete
-          title={savedToInventory ? 'Saved to inventory' : 'Published!'}
-          subtitle={savedToInventory ? 'In your inventory' : (platforms.length > 0 ? `Live on ${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : 'Live')}
-          platforms={platforms}
-          stamp={savedToInventory ? '· SAVED' : '· LIVE'}
-          syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
-          primaryLabel="View listing"
-          onPrimary={handleReviewInInventory}
-          secondaryLabel="List another"
-          onSecondary={handleCreateAnother}
-        />
-        {fbStatus && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: fbStatus.dotColor }} />
-            <Text style={{ color: fbStatus.color, fontSize: 13, fontWeight: '600' }}>Facebook · {fbStatus.label}</Text>
+        {phase === 'error' ? (
+          <View style={{ alignItems: 'center', gap: 14 }}>
+            <View style={{ width: 70, height: 70, borderRadius: 35, backgroundColor: '#FDECEC', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="alert-circle-outline" size={38} color="#D9534F" />
+            </View>
+            <Text style={{ fontSize: 22, fontWeight: '700', color: '#18181B', letterSpacing: -0.4 }}>Couldn’t publish</Text>
+            <Text style={{ fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20 }}>{errorMsg}</Text>
+            <View style={{ alignSelf: 'stretch', gap: 9, marginTop: 6 }}>
+              <TouchableOpacity onPress={runPublish} style={[styles.primaryBtn, { marginTop: 0 }]}>
+                <Text style={styles.primaryText}>Try again</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); }}
+                style={[styles.secondaryBtn, { marginTop: 0 }]}
+              >
+                <Text style={styles.secondaryText}>Back to editor</Text>
+              </TouchableOpacity>
+            </View>
           </View>
+        ) : (
+          <>
+            <PrintingComplete
+              title={savedToInventory ? 'Saved to inventory' : 'Published!'}
+              subtitle={savedToInventory ? 'In your inventory' : (platforms.length > 0 ? `Live on ${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : 'Live')}
+              platforms={platforms}
+              stamp={savedToInventory ? '· SAVED' : '· LIVE'}
+              syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
+              primaryLabel="View listing"
+              onPrimary={handleReviewInInventory}
+              secondaryLabel="List another"
+              onSecondary={handleCreateAnother}
+              ready={phase === 'done'}
+            />
+            {fbStatus && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
+                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: fbStatus.dotColor }} />
+                <Text style={{ color: fbStatus.color, fontSize: 13, fontWeight: '600' }}>Facebook · {fbStatus.label}</Text>
+              </View>
+            )}
+          </>
         )}
       </View>
     </View>

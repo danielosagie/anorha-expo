@@ -1817,7 +1817,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const confirmAndPublish = async () => {
     let facebookRequested = false;
-    let navigated = false;
     try {
       log.debug('[confirmAndPublish] Starting publish...');
       setPublishModalOpen(false);
@@ -1917,65 +1916,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         isPublishing: true, // Tell the confirmation screen we're still publishing
       };
 
-      // Optimistic: jump to the printing-receipt confirmation NOW, while the publish POST
-      // is still in flight — the receipt prints "while it's loading". On failure we pop back
-      // and surface the error so the seller can retry.
-      navigation.navigate('PublishConfirmation', { ...navigationParams } as any);
-      navigated = true;
-
-      // Send the publish request
-      const publishRes = await fetch(`${baseUrl}/api/products/publish`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(publishPayload),
-      });
-
-      log.debug('[confirmAndPublish] Response status:', publishRes.status);
-
-      if (!publishRes.ok) {
-        const errorText = await publishRes.text();
-        log.error('Publish failed:', errorText);
-        setIsPublishing(false);
-        if (navigated) navigation.goBack(); // pop the optimistic confirmation back to the editor
-
-        // Parse error for better user messaging
-        try {
-          const errorJson = JSON.parse(errorText);
-          if (errorJson.statusCode === 409 && errorJson.details?.sku) {
-            showErrorModal('SKU already in use', `“${errorJson.details.sku}” is already used by another product. Change the SKU and try again.`, 'warning');
-          } else {
-            showErrorModal('Couldn’t publish', errorJson.message || errorText, 'error');
-          }
-        } catch {
-          showErrorModal('Couldn’t publish', errorText, 'error');
-        }
-
-        // Don't clear data on error - user can fix and retry
-        return;
-      }
-
-      // Facebook posts asynchronously through the user's computer — we no longer
-      // block here on a reconcile poll (it delayed navigation ~10s and fed an
-      // unrendered state). Navigate straight to the confirmation, which shows the
-      // live dispatch status (useFacebookJobStatus, by variant).
-
-      // Success! Navigate to confirmation screen
-      // The product is now being created/synced in the background on the backend
+      // The confirmation screen OWNS the publish POST now: it prints the receipt WHILE the
+      // request runs, and only morphs to "Published!" on a real 2xx — on failure it shows an
+      // inline error + Retry (no false success, no abrupt pop-back). Hand it the ready-to-send
+      // payload + the display params + the publish endpoint.
       setIsPublishing(false);
-      capture(AnalyticsEvents.PUBLISH_COMPLETED, {
-        origin: 'generate',
-        product_id: navigationParams?.productId,
-        variant_id: navigationParams?.variantId,
-        platforms: navigationParams?.platforms || [],
-      });
-      // Already on the confirmation screen (navigated optimistically) — its printing receipt
-      // finishes its print → morph. Nothing more to do on success.
+      navigation.navigate('PublishConfirmation', {
+        ...navigationParams,
+        mode: 'publishing',
+        publishPayload,
+        facebookRequested,
+      } as any);
 
     } catch (err) {
-      log.error('Error in confirmAndPublish:', err);
+      log.error('[confirmAndPublish] Error preparing publish:', err);
       setIsPublishing(false);
-      if (navigated) navigation.goBack();
-      showErrorModal('Couldn’t publish', 'Something went wrong while publishing. Please try again.', 'error');
+      showErrorModal('Couldn’t publish', 'Something went wrong while preparing the publish. Please try again.', 'error');
     }
   };
 
