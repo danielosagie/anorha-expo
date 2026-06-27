@@ -1860,8 +1860,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     let facebookRequested = false;
     try {
       log.debug('[confirmAndPublish] Starting publish...');
-      setPublishModalOpen(false);
-      setIsPublishing(true); // Show publishing indicator immediately
+      // Keep the publish sheet up (with its spinner) through prep — closing it here, then
+      // awaiting the image upload, briefly flashed the editor underneath before navigation.
+      // We close it AFTER navigating, so the sheet reveals the receipt, not the editor.
+      setIsPublishing(true);
 
       const baseUrl = API_BASE_URL;
       const token = await ensureSupabaseJwt();
@@ -1871,6 +1873,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (!baseUrl || !productId || !variantId || !token) {
         log.debug('[confirmAndPublish] Missing required data, aborting', { baseUrl: !!baseUrl, productId, variantId, token: !!token });
         setIsPublishing(false);
+        setPublishModalOpen(false);
         // Surface WHY instead of silently doing nothing (the seller tapped Publish and "nothing happened").
         const reason = !token
           ? 'your session expired — sign in again'
@@ -1948,6 +1951,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         title: canonical.title,
         description: canonical.description,
         price: Number(canonical.price || 0),
+        sku: canonical.sku,
         imageUrl,
         platforms: platformsToPublish,
         accountNames: accountNamesList,
@@ -1961,17 +1965,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // request runs, and only morphs to "Published!" on a real 2xx — on failure it shows an
       // inline error + Retry (no false success, no abrupt pop-back). Hand it the ready-to-send
       // payload + the display params + the publish endpoint.
-      setIsPublishing(false);
       navigation.navigate('PublishConfirmation', {
         ...navigationParams,
         mode: 'publishing',
         publishPayload,
         facebookRequested,
       } as any);
+      // Now that the receipt screen is pushed underneath, dismiss the sheet — it slides away
+      // to reveal the receipt rather than the editor. Defer so the push settles first.
+      setTimeout(() => { setPublishModalOpen(false); setIsPublishing(false); }, 0);
 
     } catch (err) {
       log.error('[confirmAndPublish] Error preparing publish:', err);
       setIsPublishing(false);
+      setPublishModalOpen(false);
       showErrorModal('Couldn’t publish', 'Something went wrong while preparing the publish. Please try again.', 'error');
     }
   };
@@ -2426,17 +2433,28 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               activeOpacity={0.85}
               onPress={() => setItemMenuOpen(open => !open)}
             >
-              <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
               {(() => {
-                // Save status takes the subtitle slot transiently, then fades to just the
-                // title (multi-item keeps its position there). No separate "Saved" chip.
+                // While the save signal is up it OWNS the pill — the "Item N" title gives way
+                // to a clean "Saved" (with a check), so we never show "Item 1 · Saved" stacked.
                 const saveLabel = saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Save failed' : '';
-                const sub = saveStatusVisible && saveLabel
-                  ? saveLabel
-                  : (items.length > 1 ? `Item ${currentItemPosition} of ${items.length}` : '');
-                if (!sub) return null;
-                const color = saveStatusVisible && saveState === 'error' ? CHAT_COLORS.error : CHAT_COLORS.dim;
-                return <Text style={[styles.pillSub, { color }]} numberOfLines={1}>{sub}</Text>;
+                if (saveStatusVisible && saveLabel) {
+                  const isSaved = saveState === 'saved';
+                  const color = saveState === 'error' ? CHAT_COLORS.error : isSaved ? '#3B6300' : CHAT_COLORS.dim;
+                  return (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                      {isSaved ? <Icon name="check-circle" size={14} color="#3B6300" /> : null}
+                      <Text style={[styles.pillTitle, { color }]} numberOfLines={1}>{saveLabel}</Text>
+                    </View>
+                  );
+                }
+                return (
+                  <>
+                    <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
+                    {items.length > 1 ? (
+                      <Text style={[styles.pillSub, { color: CHAT_COLORS.dim }]} numberOfLines={1}>{`Item ${currentItemPosition} of ${items.length}`}</Text>
+                    ) : null}
+                  </>
+                );
               })()}
             </TouchableOpacity>
           </View>

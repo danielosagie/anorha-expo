@@ -184,14 +184,14 @@ export default function PublishConfirmationModal({
                                 <View key={platform} style={styles.platformCard}>
                                     {/* Top row — selection */}
                                     <TouchableOpacity style={styles.cardRow} activeOpacity={0.8} onPress={() => togglePlatform(platform)}>
-                                        <PlatformBrandChip platform={platform} size={34} />
+                                        <PlatformBrandChip platform={platform} size={48} />
                                         <View style={{ flex: 1 }}>
                                             <Text style={styles.platformName}>{labelFor(platform)}</Text>
                                             <Text style={styles.platformStatus} numberOfLines={1}>{storeNameFor(platform)}</Text>
                                         </View>
                                         {selected ? (
                                             <View style={styles.checkOn}>
-                                                <Icon name="check" size={14} color="#FFFFFF" />
+                                                <Icon name="check" size={16} color="#FFFFFF" />
                                             </View>
                                         ) : (
                                             <View style={styles.checkOff} />
@@ -268,10 +268,10 @@ const styles = StyleSheet.create({
     list: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 10 },
     platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 12 },
     cardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 11 },
-    platformName: { color: '#18181B', fontSize: 15, fontWeight: '700', lineHeight: 18 },
-    platformStatus: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', lineHeight: 16, marginTop: 1 },
-    checkOn: { width: 24, height: 24, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
-    checkOff: { width: 24, height: 24, borderRadius: 7, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
+    platformName: { color: '#18181B', fontSize: 18, fontWeight: '700', lineHeight: 18 },
+    platformStatus: { color: '#9CA3AF', fontSize: 16, fontWeight: '500', lineHeight: 16, marginTop: 1 },
+    checkOn: { width: 32, height: 32, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
+    checkOff: { width: 32, height: 32, borderRadius: 7, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
     optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#F1F2F4' },
     optPill: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
     optPillGood: { backgroundColor: 'rgba(147,200,34,0.12)' },
@@ -289,10 +289,10 @@ const styles = StyleSheet.create({
     computerNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 2, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#FBF5EA', borderRadius: 12, borderWidth: 1, borderColor: '#F0E2C8' },
     computerNoticeText: { flex: 1, fontSize: 12.5, lineHeight: 17, color: '#8A5A12', fontWeight: '500' },
     footer: { alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 12 },
-    publishBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: BRAND_PRIMARY },
+    publishBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 18, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
     publishBtnDisabled: { backgroundColor: '#D6D6D1' },
-    publishText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-    saveBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: '#E5E7EB' },
-    saveBtnText: { color: '#3F3F46', fontSize: 15, fontWeight: '600' },
+    publishText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+    saveBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 18, borderRadius: 16, backgroundColor: '#EFEFEC' },
+    saveBtnText: { color: '#3F3F46', fontSize: 16, fontWeight: '600' },
     pressed: { transform: [{ scale: 0.96 }], opacity: 0.96 },
 });

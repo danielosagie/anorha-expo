@@ -50,6 +50,11 @@ export interface PrintingCompleteProps {
   onSecondary: () => void;
   /** When false the receipt prints but HOLDS until this flips true. Defaults true (import). */
   ready?: boolean;
+  /** Product line items on the receipt — the listing title, SKU, qty and price. */
+  productTitle?: string;
+  sku?: string;
+  price?: number;
+  qty?: number;
 }
 
 const PrintingComplete: React.FC<PrintingCompleteProps> = ({
@@ -63,6 +68,10 @@ const PrintingComplete: React.FC<PrintingCompleteProps> = ({
   secondaryLabel,
   onSecondary,
   ready = true,
+  productTitle,
+  sku,
+  price,
+  qty,
 }) => {
   const [bodyH, setBodyH] = useState(0);
   const [printed, setPrinted] = useState(false);
@@ -117,6 +126,12 @@ const PrintingComplete: React.FC<PrintingCompleteProps> = ({
   const channels = platforms.slice(0, 6);
   const n = channels.length;
 
+  const money = (v?: number) => (typeof v === 'number' && !Number.isNaN(v) ? `$${v.toFixed(2)}` : '');
+  const q = qty && qty > 0 ? qty : 1;
+  const unit = typeof price === 'number' && !Number.isNaN(price) && price > 0 ? price : undefined;
+  const total = unit != null ? unit * q : undefined;
+  const totalText = total != null ? money(total) : n > 0 ? `${n} CHANNEL${n === 1 ? '' : 'S'}` : 'SAVED';
+
   const dashes = '- '.repeat(21).trim();
 
   return (
@@ -147,22 +162,37 @@ const PrintingComplete: React.FC<PrintingCompleteProps> = ({
               <Text style={s.meta}>{timeStr}</Text>
             </View>
             <View style={s.metaRow}>
-              <Text style={s.meta}>CASHIER: ANORHA</Text>
+              <Text style={s.meta} numberOfLines={1}>{sku ? `SKU: ${String(sku).toUpperCase()}` : 'CASHIER: ANORHA'}</Text>
               <Text style={s.meta}>#{ref}</Text>
             </View>
 
             <Text style={s.rule}>{dashes}</Text>
 
-            {channels.length > 0 ? (
-              channels.map((p) => (
-                <View key={p} style={s.itemRow}>
-                  <Text style={s.itemName} numberOfLines={1}>{normalizeDisplayName(p).toUpperCase()}</Text>
-                  <View style={s.itemVal}>
-                    <Icon name="check" size={12} color={GREEN_DARK} />
-                    <Text style={s.itemValText}>LIVE</Text>
-                  </View>
+            {/* Product line item */}
+            {!!productTitle && (
+              <>
+                <Text style={s.itemTitle} numberOfLines={2}>{String(productTitle).toUpperCase()}</Text>
+                <View style={s.qtyRow}>
+                  <Text style={s.meta}>QTY {q}</Text>
+                  {unit != null ? <Text style={s.meta}>{money(unit)} EA</Text> : null}
                 </View>
-              ))
+                <Text style={s.rule}>{dashes}</Text>
+              </>
+            )}
+
+            {channels.length > 0 ? (
+              <>
+                <Text style={s.colLabel}>LISTED ON</Text>
+                {channels.map((p) => (
+                  <View key={p} style={s.itemRow}>
+                    <Text style={s.itemName} numberOfLines={1}>{normalizeDisplayName(p).toUpperCase()}</Text>
+                    <View style={s.itemVal}>
+                      <Icon name="check" size={12} color={GREEN_DARK} />
+                      <Text style={s.itemValText}>LIVE</Text>
+                    </View>
+                  </View>
+                ))}
+              </>
             ) : (
               <View style={s.itemRow}>
                 <Text style={s.itemName}>LISTING</Text>
@@ -174,7 +204,7 @@ const PrintingComplete: React.FC<PrintingCompleteProps> = ({
 
             <View style={s.totalRow}>
               <Text style={s.totalLabel}>TOTAL</Text>
-              <Text style={s.totalVal}>{n > 0 ? `${n} CHANNEL${n === 1 ? '' : 'S'}` : 'SAVED'}</Text>
+              <Text style={s.totalVal}>{totalText}</Text>
             </View>
 
             <Text style={s.rule}>{dashes}</Text>
@@ -239,6 +269,9 @@ const s = StyleSheet.create({
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 },
   meta: { fontFamily: MONO, fontSize: 11, color: INK_SOFT, letterSpacing: 0.5 },
 
+  itemTitle: { fontFamily: MONO, fontSize: 13, fontWeight: '700', color: INK, letterSpacing: 0.5, lineHeight: 17 },
+  qtyRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+  colLabel: { fontFamily: MONO, fontSize: 10, fontWeight: '700', color: INK_FAINT, letterSpacing: 1, marginBottom: 4 },
   itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 4 },
   itemName: { flex: 1, fontFamily: MONO, fontSize: 12.5, fontWeight: '700', color: INK, letterSpacing: 0.5 },
   itemVal: { flexDirection: 'row', alignItems: 'center', gap: 4 },

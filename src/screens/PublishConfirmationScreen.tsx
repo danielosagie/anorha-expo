@@ -27,6 +27,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     title,
     description,
     price,
+    sku,
     imageUrl,
     platforms = [],
     accountNames = [],
@@ -47,6 +48,12 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   const fbDispatch = useFacebookJobStatus();
   const fbSelected = (platforms || []).map((p: string) => String(p).toLowerCase()).includes('facebook');
   const fbStatus = fbSelected ? fbDispatch.statusForVariant(variantId) : null;
+
+  // Representative quantity for the receipt (the largest per-channel inventory, ≥1).
+  const receiptQty = (() => {
+    const vals = Object.values(quantityByPlatform || {}).map((v: any) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
+    return vals.length ? Math.max(...vals) : 1;
+  })();
 
   // ── Publish phase ──────────────────────────────────────────────────────────
   // When we arrive in 'publishing' mode this screen OWNS the POST: the receipt prints
@@ -218,9 +225,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
           {/* Prints the receipt from a static top slot and HOLDS (ready=false) until the POST returns. */}
           <PrintingComplete
-            title={savedToInventory ? 'Saving…' : 'Going live'}
+            title={savedToInventory ? 'Saving' : 'Going live'}
             subtitle={platforms.length > 0 ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : ''}
             platforms={platforms}
+            productTitle={title}
+            sku={sku}
+            price={Number(price) || undefined}
+            qty={receiptQty}
             stamp={savedToInventory ? '· SAVED' : '· LIVE'}
             syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
             primaryLabel="View listing"
@@ -350,10 +361,10 @@ const styles = StyleSheet.create({
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 12, fontWeight: '600' },
   hint: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', paddingHorizontal: 20, paddingTop: 9 },
-  createBtn: { backgroundColor: '#93C822', borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
-  createText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-  viewBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
-  viewText: { color: '#3F3F46', fontSize: 15, fontWeight: '600' },
+  createBtn: { backgroundColor: '#93C822', borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
+  createText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  viewBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
+  viewText: { color: '#3F3F46', fontSize: 16, fontWeight: '600' },
 });
 
 export default PublishConfirmationScreen;
