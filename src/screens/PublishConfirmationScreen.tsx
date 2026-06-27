@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, Linking } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, PackagePlus } from 'lucide-react-native';
 import PlatformLogo from '../components/PlatformLogo';
 import PrintingComplete from '../components/import/PrintingComplete';
-import { normalizeDisplayName } from '../config/platforms';
+import { normalizeDisplayName, getPlatform } from '../config/platforms';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -214,27 +214,85 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
               </TouchableOpacity>
             </View>
           </View>
+        ) : phase === 'publishing' ? (
+          // Prints the receipt and HOLDS (ready=false) until the POST returns; then we swap
+          // in the rich card below.
+          <PrintingComplete
+            title={savedToInventory ? 'Saving…' : 'Going live'}
+            subtitle={platforms.length > 0 ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : ''}
+            platforms={platforms}
+            stamp={savedToInventory ? '· SAVED' : '· LIVE'}
+            syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
+            primaryLabel="View listing"
+            onPrimary={handleReviewInInventory}
+            secondaryLabel="List another"
+            onSecondary={handleCreateAnother}
+            ready={false}
+          />
         ) : (
-          <>
-            <PrintingComplete
-              title={savedToInventory ? 'Saved to inventory' : 'Published!'}
-              subtitle={savedToInventory ? 'In your inventory' : (platforms.length > 0 ? `Live on ${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : 'Live')}
-              platforms={platforms}
-              stamp={savedToInventory ? '· SAVED' : '· LIVE'}
-              syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
-              primaryLabel="View listing"
-              onPrimary={handleReviewInInventory}
-              secondaryLabel="List another"
-              onSecondary={handleCreateAnother}
-              ready={phase === 'done'}
-            />
-            {fbStatus && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
-                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: fbStatus.dotColor }} />
-                <Text style={{ color: fbStatus.color, fontSize: 13, fontWeight: '600' }}>Facebook · {fbStatus.label}</Text>
+          // phase 'done' — the rich result: cover, status, per-channel live rows, actions.
+          <View style={{ flex: 1, alignSelf: 'stretch', paddingTop: 8 }}>
+            <View style={{ alignItems: 'center', gap: 14 }}>
+              {imageUrl ? (
+                <Image source={{ uri: imageUrl }} style={{ width: 132, height: 132, borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB' }} />
+              ) : (
+                <View style={{ width: 132, height: 132, borderRadius: 16, backgroundColor: '#E7E1D6', borderWidth: 1, borderColor: '#E5E7EB' }} />
+              )}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name="check" size={15} color="#FFFFFF" />
+                </View>
+                <Text style={{ color: '#18181B', fontSize: 22, fontWeight: '800', letterSpacing: -0.3 }}>{savedToInventory ? 'Saved!' : 'Published!'}</Text>
               </View>
-            )}
-          </>
+            </View>
+
+            <Text style={{ color: '#9CA3AF', fontSize: 10, fontWeight: '700', letterSpacing: 0.6, marginTop: 22, marginBottom: 8 }}>{savedToInventory ? 'IN INVENTORY' : 'LIVE ON'}</Text>
+
+            <View style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, overflow: 'hidden' }}>
+              {(platforms.length ? platforms : ['shopify']).map((p: string, i: number) => {
+                const lower = String(p).toLowerCase();
+                const isFb = lower === 'facebook';
+                const st = isFb
+                  ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
+                  : { dotColor: '#93C822', color: '#93C822', label: 'Live' };
+                const brand = getPlatform(lower)?.brandColor || '#6B7280';
+                const url = (params.liveUrls || {})[lower];
+                const tappable = !isFb;
+                return (
+                  <View key={`${p}-${i}`}>
+                    {i > 0 && <View style={{ height: 1, backgroundColor: '#F1F2F4' }} />}
+                    <TouchableOpacity disabled={!tappable} activeOpacity={0.7} onPress={() => { if (url) Linking.openURL(url).catch(() => undefined); else handleReviewInInventory(); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 13 }}>
+                      <View style={{ width: 32, height: 32, borderRadius: 9, backgroundColor: brand, alignItems: 'center', justifyContent: 'center' }}>
+                        <PlatformLogo type={lower} size={17} color="#FFFFFF" />
+                      </View>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={{ color: '#18181B', fontSize: 15, fontWeight: '700' }}>{platformLabel(lower)}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: st.dotColor }} />
+                          <Text style={{ color: st.color, fontSize: 12, fontWeight: '600' }}>{st.label}{tappable ? ' · view' : ''}</Text>
+                        </View>
+                      </View>
+                      {tappable ? <Icon name="open-in-new" size={16} color="#6B7280" /> : null}
+                      {tappable ? <Icon name="chevron-right" size={18} color="#C4C8CE" /> : null}
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+
+            <Text style={{ color: '#9CA3AF', fontSize: 12, fontWeight: '500', marginTop: 9 }}>Tap a channel to open the live listing.</Text>
+
+            <View style={{ flex: 1 }} />
+
+            <View style={{ gap: 10, paddingBottom: 10 }}>
+              <TouchableOpacity onPress={handleCreateAnother} activeOpacity={0.9} style={{ backgroundColor: '#93C822', borderRadius: 14, paddingVertical: 15, alignItems: 'center' }}>
+                <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '800' }}>Create another listing</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleReviewInInventory} activeOpacity={0.85} style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, paddingVertical: 15, alignItems: 'center' }}>
+                <Text style={{ color: '#3F3F46', fontSize: 15, fontWeight: '600' }}>View in inventory</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         )}
       </View>
     </View>
