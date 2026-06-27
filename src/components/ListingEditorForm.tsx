@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
 import BaseModal from './BaseModal';
 import DeliveryShippingSheet from './DeliveryShippingSheet';
+import { VoiceRecorder } from './VoiceRecorder';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -427,6 +428,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const startFixGapsRef = useRef<(fields?: string[]) => void>(() => {});
   // Full-screen Steps wizard (replaces the old open-sheets-one-by-one walk).
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [categoryVoiceOpen, setCategoryVoiceOpen] = useState(false);
   const [wizardSteps, setWizardSteps] = useState<string[]>([]);
   const [wizardIdx, setWizardIdx] = useState(0);
   // Which variant ("size") tab is selected inside the Photos sheet. null → manage the
@@ -2102,18 +2104,32 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const alts = ranked.slice(1, 3);
     return (
       <View>
-        {/* Describe-it search */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 13, backgroundColor: '#FFFFFF' }}>
-          <Icon name="magnify" size={18} color="#9CA3AF" />
-          <TextInput
-            style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }}
-            value={activeTaxonomyQuery}
-            onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [catLower]: text }))}
-            placeholder="Describe it — a few words"
-            placeholderTextColor="#9CA3AF"
+        {/* Describe-it search — type, or say it (voice → fills the query → ranked match) */}
+        {categoryVoiceOpen ? (
+          <VoiceRecorder
+            apiBaseUrl={API_BASE_URL}
+            getAuthToken={ensureSupabaseJwt}
+            onTranscription={(t) => { setTaxonomyQueries((prev) => ({ ...prev, [catLower]: t })); setCategoryVoiceOpen(false); }}
+            onCancel={() => setCategoryVoiceOpen(false)}
           />
-          {loading ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
-        </View>
+        ) : (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 13, backgroundColor: '#FFFFFF' }}>
+              <Icon name="magnify" size={18} color="#9CA3AF" />
+              <TextInput
+                style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }}
+                value={activeTaxonomyQuery}
+                onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [catLower]: text }))}
+                placeholder="Describe it — a few words"
+                placeholderTextColor="#9CA3AF"
+              />
+              {loading ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
+            </View>
+            <TouchableOpacity onPress={() => setCategoryVoiceOpen(true)} activeOpacity={0.85} style={{ width: 50, height: 50, borderRadius: 13, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="microphone" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+        )}
         <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={loading} style={[rowStyles.researchBtn, { marginTop: 12, marginBottom: 4 }]}>
           {loading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
           <Text style={rowStyles.researchBtnText}>{loading ? 'Finding the best match…' : (detected ? 'Re-detect from photo + title' : 'Auto-find')}</Text>

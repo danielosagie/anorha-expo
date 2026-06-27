@@ -1817,6 +1817,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const confirmAndPublish = async () => {
     let facebookRequested = false;
+    let navigated = false;
     try {
       log.debug('[confirmAndPublish] Starting publish...');
       setPublishModalOpen(false);
@@ -1916,6 +1917,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         isPublishing: true, // Tell the confirmation screen we're still publishing
       };
 
+      // Optimistic: jump to the printing-receipt confirmation NOW, while the publish POST
+      // is still in flight — the receipt prints "while it's loading". On failure we pop back
+      // and surface the error so the seller can retry.
+      navigation.navigate('PublishConfirmation', { ...navigationParams } as any);
+      navigated = true;
+
       // Send the publish request
       const publishRes = await fetch(`${baseUrl}/api/products/publish`, {
         method: 'POST',
@@ -1929,6 +1936,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const errorText = await publishRes.text();
         log.error('Publish failed:', errorText);
         setIsPublishing(false);
+        if (navigated) navigation.goBack(); // pop the optimistic confirmation back to the editor
 
         // Parse error for better user messaging
         try {
@@ -1960,14 +1968,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         variant_id: navigationParams?.variantId,
         platforms: navigationParams?.platforms || [],
       });
-      navigation.navigate('PublishConfirmation', {
-        ...navigationParams,
-        isPublishing: false, // Publish completed successfully
-      } as any);
+      // Already on the confirmation screen (navigated optimistically) — its printing receipt
+      // finishes its print → morph. Nothing more to do on success.
 
     } catch (err) {
       log.error('Error in confirmAndPublish:', err);
       setIsPublishing(false);
+      if (navigated) navigation.goBack();
       showErrorModal('Couldn’t publish', 'Something went wrong while publishing. Please try again.', 'error');
     }
   };
