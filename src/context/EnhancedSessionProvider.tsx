@@ -13,13 +13,17 @@ const log = createLogger('EnhancedSessionProvider');
 interface EnhancedSessionProviderProps {
   children: React.ReactNode;
   getClerkToken: () => Promise<string | null>;
+  // Clerk's current signed-in flag. Used to (re)bootstrap on a warm re-login — see the
+  // signed-in-transition effect below.
+  isSignedIn?: boolean;
 }
 
 const ENTITLEMENTS_CACHE_KEY = 'sssync_entitlements_cache_v1';
 
-export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = ({ 
-  children, 
-  getClerkToken 
+export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = ({
+  children,
+  getClerkToken,
+  isSignedIn,
 }) => {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<SessionUser>(null);
@@ -361,6 +365,26 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       appStateManager.current.cleanup();
     };
   }, [initializeFromPersistedState, validateAuthIfNeeded]);
+
+  // Re-bootstrap the session when Clerk transitions to signed-in. The init effect only
+  // runs on mount and AppStateManager only fires on app-foreground, so a WARM sign-in
+  // (sign out → sign back in WITHOUT killing the app, or first login from a cold-booted
+  // signed-out state) would otherwise leave the session in the cleared state that the
+  // sign-out path set (ready=false + bootstrapError="Unable to restore your session…"),
+  // stranding the app on the "Restoring your workspace" shell. We fire ONLY on a strict
+  // false→true transition (so a cold-boot signed-in session, already handled by the init
+  // effect, is not double-bootstrapped); the configuredRef guard + validateAuthIfNeeded's
+  // own guards make any redundant call a no-op.
+  const wasSignedInRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    const was = wasSignedInRef.current;
+    wasSignedInRef.current = isSignedIn;
+    if (was === false && isSignedIn === true && !configuredRef.current) {
+      log.debug('[EnhancedSessionProvider] Signed-in transition; (re)bootstrapping session');
+      setBootstrapError(null);
+      validateAuthIfNeeded(true).catch(log.error);
+    }
+  }, [isSignedIn, validateAuthIfNeeded]);
 
   const refresh = useCallback(async () => {
     log.debug('[EnhancedSessionProvider] Manual refresh requested');

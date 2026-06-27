@@ -31,6 +31,7 @@ import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContex
 import { useJobProgress } from '../hooks/useJobProgress';
 import { useCollaboration } from '../hooks/useCollaboration';
 import PublishConfirmationModal from '../components/PublishConfirmationModal';
+import ErrorModal from '../components/ErrorModal';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -255,6 +256,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     log.debug('[GEN-DETAILS] results raw:', Array.isArray(results) ? `len=${results.length}` : typeof results);
   }, [jobId, status, results, route.params]);
 
+  // In-app error/notice modal (replaces native alert() so publish/save messages match the app).
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; type: 'error' | 'warning' | 'info' | 'success'; title: string; message: string }>({ visible: false, type: 'error', title: '', message: '' });
+  const showErrorModal = useCallback(
+    (title: string, message: string, type: 'error' | 'warning' | 'info' | 'success' = 'error') =>
+      setErrorModal({ visible: true, type, title, message }),
+    [],
+  );
+  const hideErrorModal = useCallback(() => setErrorModal((s) => ({ ...s, visible: false })), []);
+
   // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
   const [updateCounter, setUpdateCounter] = useState(0);
   const platformsRef = useRef<GeneratedPlatformDetails>({});
@@ -346,7 +356,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           next.delete(platformKey);
           return next;
         });
-        Alert.alert('Generation Failed', `Failed to generate details for ${platformKey}. Please try again.`);
+        showErrorModal('Generation failed', `We couldn’t generate ${platformKey} details. Please try again.`, 'error');
       }
     });
 
@@ -698,7 +708,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [allConnections, setAllConnections] = useState<any[]>([]);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Record<string, string>>({});
   const [platformLocations, setPlatformLocations] = useState<Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>>>({});
-  const [mediaGallery, setMediaGallery] = useState<string[]>([]);
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -1622,11 +1631,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       } else {
         const errorText = await res.text();
         log.error('[doSaveToInventory] Save failed:', errorText);
-        Alert.alert('Error', `Failed to save to inventory: ${errorText}`);
+        showErrorModal('Couldn’t save', `We couldn’t save this to inventory.\n\n${errorText}`, 'error');
       }
     } catch (err) {
       log.error('[doSaveToInventory] Error saving:', err);
-      Alert.alert('Error', 'An unexpected error occurred while saving.');
+      showErrorModal('Couldn’t save', 'Something went wrong while saving. Please try again.', 'error');
     }
   };
 
@@ -1667,7 +1676,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       for (const platform of readyPlatforms) {
         const platformKey = String(platform).toLowerCase();
-        const platformData = (payload.platformDetails as any)?.[platformKey] || {};
+        // Mirror the shared photo-strip images in before validating — the seller's photos live
+        // in the shared strip (sent via media.imageUris), not always in each platform's `.images`.
+        // Without this, a listing WITH a cover photo falsely fails as "Missing images".
+        const platformData = withSharedImages((payload.platformDetails as any)?.[platformKey] || {});
         const missing = getMissingPlatformFields(platformData, platformKey);
 
         if (missing.length > 0) {
@@ -1684,9 +1696,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       if (Object.keys(missingByPlatform).length) {
         const lines = Object.entries(missingByPlatform).map(([plat, fields]) =>
-          `${(PLATFORM_META as any)[plat]?.label || plat}: Missing ${fields.join(', ')}`
+          `${(PLATFORM_META as any)[plat]?.label || plat}: ${fields.join(', ')}`
         );
-        alert(`Cannot publish yet!\n\n${lines.join('\n')}\n\nPlease fill in all required fields.`);
+        showErrorModal('Finish these first', `${lines.join('\n')}`, 'warning');
         return;
       }
 
@@ -1722,7 +1734,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
     } catch (err) {
       log.error('Error in doPublish:', err);
-      alert('Failed to prepare publish. Please try again.');
+      showErrorModal('Couldn’t publish', 'Something went wrong getting ready to publish. Please try again.', 'error');
     }
   };
 
@@ -1914,12 +1926,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         try {
           const errorJson = JSON.parse(errorText);
           if (errorJson.statusCode === 409 && errorJson.details?.sku) {
-            alert(`SKU "${errorJson.details.sku}" is already in use by another product. Please change the SKU and try again.`);
+            showErrorModal('SKU already in use', `“${errorJson.details.sku}” is already used by another product. Change the SKU and try again.`, 'warning');
           } else {
-            alert(`Failed to publish: ${errorJson.message || errorText}`);
+            showErrorModal('Couldn’t publish', errorJson.message || errorText, 'error');
           }
         } catch {
-          alert(`Failed to publish: ${errorText}`);
+          showErrorModal('Couldn’t publish', errorText, 'error');
         }
 
         // Don't clear data on error - user can fix and retry
@@ -1948,7 +1960,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     } catch (err) {
       log.error('Error in confirmAndPublish:', err);
       setIsPublishing(false);
-      alert('Failed to publish. Please try again.');
+      showErrorModal('Couldn’t publish', 'Something went wrong while publishing. Please try again.', 'error');
     }
   };
 
@@ -2025,7 +2037,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // Request permissions first (like AddProductScreen)
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission needed', 'We need access to your photo library to upload images.');
+        showErrorModal('Photo access needed', 'Allow photo library access to add images.', 'warning');
         return;
       }
 
@@ -2043,7 +2055,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         try {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) {
-            Alert.alert('User not authenticated');
+            showErrorModal('Sign in needed', 'Please sign in again to add photos.', 'warning');
             return;
           }
 
@@ -2064,7 +2076,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
           if (error) {
             log.error('[Phase2 Media] Upload error:', error);
-            Alert.alert('Failed to upload image to storage');
+            showErrorModal('Upload failed', 'We couldn’t upload that photo. Please try again.', 'error');
             return;
           }
 
@@ -2076,29 +2088,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           const publicUrl = urlData.publicUrl;
           log.debug('[Phase2 Media] Image uploaded:', publicUrl);
 
-          // Add to media gallery
-          setMediaGallery(prev => [...prev, publicUrl]);
+          // Add to the item's real images (photo strip + payload + DB cache) so the gallery,
+          // the strip, and every other surface stay in sync — not a disconnected local list.
+          handleImagesChange([...currentItemImages, publicUrl]);
 
         } catch (uploadError) {
           log.error('[Phase2 Media] Failed to upload image:', uploadError);
-          Alert.alert('Failed to upload image');
+          showErrorModal('Upload failed', 'We couldn’t upload that photo. Please try again.', 'error');
         }
       }
     } catch (error) {
       log.error('[Phase2 Media] Error picking image:', error);
-      Alert.alert('Failed to pick image');
+      showErrorModal('Couldn’t add photo', 'We couldn’t open your photos. Please try again.', 'error');
     }
   };
 
   const handleRemoveMedia = (index: number) => {
-    const removedUrl = mediaGallery[index];
-    setMediaGallery(prev => prev.filter((_, i) => i !== index));
+    const removedUrl = currentItemImages[index];
+    handleImagesChange(currentItemImages.filter((_, i) => i !== index));
     log.debug('[Phase2 Media] Image removed at index:', index, 'URL:', removedUrl);
   };
 
   const handleSetVariantPhoto = (imageUrl: string) => {
     if (!selectedVariantForMedia) {
-      Alert.alert('No variant selected');
+      showErrorModal('Pick a variant', 'Choose which variant this photo is for.', 'info');
       return;
     }
 
@@ -2322,7 +2335,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       onResult(urisToShow);
                     } catch (error: any) {
                       log.error('Error picking images:', error);
-                      Alert.alert('Couldn’t add photo', error?.message || 'Failed to add images. Please try again.');
+                      showErrorModal('Couldn’t add photo', error?.message || 'We couldn’t add those images. Please try again.', 'error');
                     }
                   }}
                   onAddMissingField={(platformKey: string) => {
@@ -2558,12 +2571,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                           setQuickFixDiff({ fixes, userQuery: text, changes });
                           setIsInputExpanded(false);
                         } else {
-                          Alert.alert('No change', 'The AI didn’t suggest any changes for that.');
+                          showErrorModal('No changes', 'We didn’t find anything to change for that.', 'info');
                         }
                       }
                     } catch (e) {
                       log.error('[QuickFix] Error:', e);
-                      Alert.alert('Fix failed', 'Could not apply the AI fix. Please try again.');
+                      showErrorModal('Fix failed', 'We couldn’t apply that change. Please try again.', 'error');
                     } finally {
                       setQuickFixLoading(false);
                     }
@@ -2756,6 +2769,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         onSaveToInventory={() => { setPublishModalOpen(false); doSaveToInventory(); }}
       />
 
+      {/* In-app error/notice modal — replaces native alert() so publish/save messages match the app */}
+      <ErrorModal
+        visible={errorModal.visible}
+        type={errorModal.type}
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={hideErrorModal}
+      />
+
       {/* Quick-fix diff — accept the change or keep the original (never a silent overwrite) */}
       <FieldSheet
         visible={!!quickFixDiff}
@@ -2811,16 +2833,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               </TouchableOpacity>
             </View>
 
-            {/* Media Gallery Display */}
+            {/* Media Gallery Display — reflects the item's real images (same source as the strip) */}
             <ScrollView style={{ marginBottom: 16, maxHeight: 300 }}>
-              {mediaGallery.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).length === 0 ? (
+              {currentItemImages.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).length === 0 ? (
                 <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 32 }}>
                   <Icon name="image-off" size={48} color="#CCC" />
                   <Text style={{ color: '#666', marginTop: 12, fontSize: 14 }}>No images yet. Tap "Add Photos" to get started.</Text>
                 </View>
               ) : (
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                  {mediaGallery.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).map((imageUrl, index) => (
+                  {currentItemImages.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).map((imageUrl, index) => (
                     <View key={index} style={{ position: 'relative', width: '30%', aspectRatio: 1 }}>
                       <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
                       <TouchableOpacity

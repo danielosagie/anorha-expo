@@ -3,6 +3,7 @@
 
 import React, { useContext, useEffect, useState } from 'react';
 import { Alert, Image, Linking, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import ErrorModal from '../components/ErrorModal';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUser } from '@clerk/expo';
@@ -91,12 +92,8 @@ const SettingsScreen = () => {
     ]);
   };
 
-  const signOut = () => {
-    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: () => authContext?.signOut() },
-    ]);
-  };
+  const [showSignOut, setShowSignOut] = useState(false);
+  const signOut = () => setShowSignOut(true);
 
   // Every card goes somewhere REAL — no "coming soon" dead ends.
   const cards: Card[] = [
@@ -115,6 +112,16 @@ const SettingsScreen = () => {
   return (
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" />
+      <ErrorModal
+        visible={showSignOut}
+        type="warning"
+        title="Sign out?"
+        message="You'll need to sign back in to access your inventory/stores."
+        buttonText="Stay signed-in"
+        onClose={() => setShowSignOut(false)}
+        secondaryButtonText="Sign out"
+        onSecondaryPress={() => { setShowSignOut(false); authContext?.signOut(); }}
+      />
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 18, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}

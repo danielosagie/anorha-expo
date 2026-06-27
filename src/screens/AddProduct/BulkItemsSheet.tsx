@@ -16,6 +16,7 @@ import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
 import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
+import { uploadProductImage } from '../../utils/uploadProductImage';
 import { createLogger } from '../../utils/logger';
 const log = createLogger('BulkItemsSheet');
 
@@ -286,6 +287,25 @@ export const BulkItemsSheet: React.FC<{
 
     const rawApiBase = API_BASE_URL;
     const API_BASE = rawApiBase;
+
+    // Guarantee the backend only ever receives uploaded public URLs. A raw device file://
+    // path would be persisted onto the variant (PrimaryImageUrl) + ProductImages and then
+    // never render in the gallery and never publish. Upload any local uri here first.
+    const productsWithHostedImages = await Promise.all(products.map(async (p) => {
+      const urls = Array.isArray(p.imageUrls) ? p.imageUrls : [];
+      const hosted = await Promise.all(urls.map(async (u, i) => {
+        if (typeof u !== 'string' || !u.trim()) return '';
+        if (/^https?:\/\//i.test(u)) return u; // already uploaded
+        try {
+          return await uploadProductImage(u, `${p.productId || p.productIndex}-${i}`);
+        } catch (e) {
+          log.warn('[generate] image upload failed; dropping local uri instead of persisting file://', e);
+          return '';
+        }
+      }));
+      return { ...p, imageUrls: hosted.filter(Boolean) };
+    }));
+
     const response = await fetch(`${API_BASE}/api/products/generate/jobs`, {
       method: 'POST',
       headers: {
@@ -293,7 +313,7 @@ export const BulkItemsSheet: React.FC<{
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        products,
+        products: productsWithHostedImages,
         selectedPlatforms: connectedPlatformKeys,
         options: { useScraping: true },
       }),

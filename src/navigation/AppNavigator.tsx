@@ -676,9 +676,10 @@ const AppNavigator = () => {
 
   // Dev tools to test onboarding flow
   // ── FTUX / session dev toggles ─────────────────────────────────────────────
-  // Master switch for the onboarding slide deck. FALSE = every user (new + returning)
-  // goes straight to login, no slides. Flip to TRUE when the onboarding deck is ready.
-  const [devShowOnboarding] = useState(false);
+  // Master switch for the onboarding entry. TRUE = signed-out users land on the v2
+  // Splash (InitialScreen) — "Continue with email" → Auth, "Continue with Google" → SSO.
+  // FALSE = skip straight to the Auth form (legacy behavior).
+  const [devShowOnboarding] = useState(true);
   const [devExpireSession, setDevExpireSession] = useState(false); // Set true to make you have to login new each time you leave/after session expires
 
   const [fontsLoaded] = useFonts({

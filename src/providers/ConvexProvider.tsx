@@ -20,7 +20,7 @@
  * Must be nested inside a configured `ClerkProvider` (see App.tsx).
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import { ConvexProviderWithAuth, ConvexReactClient } from 'convex/react';
 import { useAuth } from '@clerk/expo';
 
@@ -45,17 +45,27 @@ const convex = new ConvexReactClient(CONVEX_URL);
 // than a "convex"-templated one, so it doesn't depend on a Clerk template existing.
 function useAuthFromClerk() {
     const { isLoaded, isSignedIn, getToken, orgId, orgRole } = useAuth();
+    // Core 3 (@clerk/expo 3.x) rebuilds `getToken` as a BRAND-NEW closure on every
+    // render (its wrapper re-wraps clerk-js v6's getToken to add the SecureStore JWT
+    // cache). clerk-js v6 also drives `useAuth` via useSyncExternalStore and emits a
+    // fresh resource object on every resource change, so every useAuth() consumer
+    // re-renders on every emit. If that churning getToken leaks into the fetcher we
+    // hand ConvexProviderWithAuth, `client.setAuth` re-fires and feeds the re-render
+    // storm (hundreds of pure re-renders with stable isSignedIn). Read getToken through
+    // a ref so the fetcher's identity is PERMANENTLY stable but always calls the latest
+    // getToken — mirrors the WithSessionProvider.getClerkToken pattern in App.tsx.
+    const getTokenRef = useRef(getToken);
+    getTokenRef.current = getToken;
     const fetchAccessToken = useCallback(
         async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
             try {
-                return await getToken({ skipCache: forceRefreshToken });
+                return await getTokenRef.current({ skipCache: forceRefreshToken });
             } catch {
                 return null;
             }
         },
-        // Rebuild the fetcher (→ re-auth) when the active org changes. clerk-expo's
-        // getToken isn't memoized, so it's intentionally left out of the deps.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // Rebuild only on active-org change (re-auth on org switch). getToken is read
+        // via the ref above, so its per-render identity churn can't perturb this.
         [orgId, orgRole],
     );
     return useMemo(

@@ -21,6 +21,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { Camera } from 'expo-camera';
 import { AudioModule } from 'expo-audio';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { CompositeNavigationProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -36,8 +37,14 @@ import Animated, {
   SlideInRight,
   SlideOutLeft,
   FadeInDown,
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  interpolateColor,
 } from 'react-native-reanimated';
 import ConnectAccountsStep from '../components/onboarding/ConnectAccountsStep';
+import WelcomeHero from '../components/onboarding/WelcomeHero';
+import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';
 const log = createLogger('CreateAccountScreen');
 
@@ -47,13 +54,15 @@ const API_BASE = API_BASE_URL;
 
 // --- THEME (matches the app's design language — Profile / Connections) ---
 const ONBOARDING = {
-  bg: '#F6F7F4',           // App light background
+  bg: '#FFFFFF',           // v2 white background
   green: '#93C822',        // Primary green (active buttons, dots, selected cards)
-  title: '#18181B',        // Primary text (ink)
-  subtitle: '#71717A',     // Secondary text
-  dotInactive: '#E4E4E7',  // Inactive pagination dots
-  cardBg: '#FFFFFF',       // White surfaces
-  border: '#ECEBE6',       // Hairline borders
+  greenDeep: '#4A7C00',    // Deep-green links
+  title: '#1C1B17',        // Primary text (warm ink)
+  subtitle: '#6B6A63',     // Secondary text (warm gray)
+  dotInactive: '#ECE9DF',  // Inactive pagination dots
+  cardBg: '#FBFAF6',       // Warm-white surfaces
+  fieldBg: '#F6F5F1',      // Filled field background
+  border: '#EAE6DA',       // Hairline borders
 };
 
 // CreateAccountScreen can live in AuthStack (signup flow) or AppStack (resume incomplete onboarding).
@@ -71,6 +80,9 @@ type Step =
   | 'BUSINESS_TYPE'
   | 'ROLE'
   | 'CONTACT'
+  | 'SELL_WHAT'
+  | 'GOAL'
+  | 'HEARD'
   | 'TEAM'
   | 'FINISH'
   | 'CONNECT';
@@ -81,6 +93,10 @@ interface FormData {
   customBusinessType: string;
   role: string;
   customRole: string;
+  sellCategories: string[];
+  goal: string;
+  goalOther: string;
+  heardFrom: string;
   phone: string;
   region: string | null;
   currency: string | null;
@@ -117,6 +133,29 @@ const ROLES = [
   { id: 'other', label: 'Other', description: 'Something else' },
 ];
 
+const SELL_CATEGORIES = [
+  { id: 'clothing', label: 'Clothing', icon: 'tshirt-crew-outline' },
+  { id: 'electronics', label: 'Electronics', icon: 'cellphone' },
+  { id: 'home', label: 'Home', icon: 'home-outline' },
+  { id: 'collectibles', label: 'Collectibles', icon: 'package-variant-closed' },
+  { id: 'beauty', label: 'Beauty', icon: 'star-four-points-outline' },
+  { id: 'other', label: 'Other', icon: 'view-grid-outline' },
+];
+
+const GOALS = [
+  { id: 'sell_faster', label: 'Sell faster', icon: 'lightning-bolt-outline' },
+  { id: 'list_everywhere', label: 'List everywhere', icon: 'view-grid-outline' },
+  { id: 'clear_stock', label: 'Clear out stock', icon: 'archive-outline' },
+  { id: 'other', label: 'Other', icon: 'dots-horizontal' },
+];
+
+const HEARD_OPTIONS = [
+  { id: 'friend', label: 'A friend', icon: 'account-multiple-outline' },
+  { id: 'social', label: 'Social media', icon: 'share-variant-outline' },
+  { id: 'search', label: 'Search', icon: 'magnify' },
+  { id: 'other', label: 'Other', icon: 'dots-horizontal' },
+];
+
 const STEPS_ORDER: Step[] = [
   'WELCOME',
   'BUSINESS_NAME',
@@ -124,6 +163,9 @@ const STEPS_ORDER: Step[] = [
   'BUSINESS_TYPE',
   'ROLE',
   'CONTACT',
+  'SELL_WHAT',
+  'GOAL',
+  'HEARD',
   'TEAM',
   'FINISH'
 ];
@@ -154,76 +196,122 @@ const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
   );
 });
 
-const WelcomeStep = memo(({ onNext, onBack, showBackButton, onSignOut }: { onNext: () => void; onBack: () => void; showBackButton: boolean; onSignOut?: () => void }) => (
-  <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.stepContainer}>
-    <View style={{ flex: 1, alignContent: "space-between", marginTop: 0 }}>
-      <View style={{
-        marginTop: 30,
-        flex: 1,
-      }}>
-        <View style={styles.logoContainer}>
-          <View style={styles.logoBox}>
-            <Image source={require('../assets/anorha_logo.png')} style={styles.logoImage} resizeMode="contain" />
+const WELCOME_FEATURES = [
+  { icon: 'camera-outline', label: 'Scan it, we list it' },
+  { icon: 'sync', label: 'Synced across every platform' },
+  { icon: 'star-four-points-outline', label: 'Sprout handles the busywork' },
+];
+
+// A row in the mini "My store" preview. When active it lights up + flips its
+// status dot to a green check, mirroring the feature being described below.
+const PhoneTaskRow = ({ active }: { active: boolean }) => {
+  const a = useSharedValue(active ? 1 : 0);
+  useEffect(() => { a.value = withTiming(active ? 1 : 0, { duration: 320 }); }, [active, a]);
+  const rowStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(a.value, [0, 1], ['#FFFFFF', 'rgba(147,200,34,0.18)']),
+    borderColor: interpolateColor(a.value, [0, 1], ['#EEEADE', 'rgba(147,200,34,0.65)']),
+  }));
+  const barStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(a.value, [0, 1], ['#E7E3D6', 'rgba(60,90,20,0.35)']),
+  }));
+  const dotStyle = useAnimatedStyle(() => ({ opacity: 1 - a.value, transform: [{ scale: 1 - a.value * 0.5 }] }));
+  const checkStyle = useAnimatedStyle(() => ({ opacity: a.value, transform: [{ scale: 0.5 + a.value * 0.5 }] }));
+  return (
+    <Animated.View style={[styles.welcomeListRow, rowStyle]}>
+      <View style={styles.welcomeThumb} />
+      <Animated.View style={[styles.welcomeBar, barStyle]} />
+      <View style={styles.welcomeSelSlot}>
+        <Animated.View style={[styles.welcomeDotAbs, dotStyle]} />
+        <Animated.View style={[styles.welcomeCheckAbs, checkStyle]}>
+          <Icon name="check" size={9} color="#FFFFFF" />
+        </Animated.View>
+      </View>
+    </Animated.View>
+  );
+};
+
+// A feature row in the card below the hero — brightens in sync with the phone.
+const FeatureRow = ({ icon, label, active, showBorder, pinned, onPress }: { icon: string; label: string; active: boolean; showBorder: boolean; pinned: boolean; onPress: () => void }) => {
+  const a = useSharedValue(active ? 1 : 0);
+  useEffect(() => { a.value = withTiming(active ? 1 : 0, { duration: 360 }); }, [active, a]);
+  const rowStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(a.value, [0, 1], ['rgba(147,200,34,0)', 'rgba(147,200,34,0.10)']),
+  }));
+  const circleStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(a.value, [0, 1], ['rgba(147,200,34,0.18)', 'rgba(147,200,34,0.36)']),
+    transform: [{ scale: 1 + a.value * 0.06 }],
+  }));
+  return (
+    <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
+      <Animated.View style={[styles.featureRow, showBorder && styles.featureRowBorder, rowStyle]}>
+        <Animated.View style={[styles.featureIconCircle, circleStyle]}>
+          <Icon name={icon} size={20} color="#3C5A14" />
+        </Animated.View>
+        <Text style={styles.featureLabel}>{label}</Text>
+        {active && (
+          <View style={styles.featurePlayBtn}>
+            <Icon name={pinned ? 'play' : 'pause'} size={13} color="#5D7E16" />
           </View>
-          <Text style={styles.logoTitle}>anorha</Text>
-        </View>
-        <Text style={styles.bigTitle}>Finish your setup</Text>
-        <Text style={styles.subtitle}>Let's get your business inventory synced.</Text>
-        <View style={{ flex: 1 }} />
+        )}
+      </Animated.View>
+    </TouchableOpacity>
+  );
+};
+
+const WelcomeStep = memo(({ onNext, showBackButton, onSignOut, firstName }: { onNext: () => void; onBack: () => void; showBackButton: boolean; onSignOut?: () => void; firstName?: string }) => {
+  const [active, setActive] = useState(0);
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    if (paused) return;
+    const id = setInterval(() => setActive(a => (a + 1) % WELCOME_FEATURES.length), 4500);
+    return () => clearInterval(id);
+  }, [paused]);
+  return (
+    <Animated.View entering={FadeIn} exiting={FadeOut} style={styles.stepContainer}>
+      {/* Hero — phone on the left, live activity flowing out on the right */}
+      <LinearGradient
+        colors={['#C7E59B', '#AEDB86']}
+        start={{ x: 0.2, y: 0 }}
+        end={{ x: 0.8, y: 1 }}
+        style={styles.welcomeHero}
+      >
+        <WelcomeHero scene={active} />
+      </LinearGradient>
+
+      <Text style={styles.welcomeTitle}>
+        Welcome to Anorha{firstName ? `, ${firstName}` : ''}
+      </Text>
+
+      <View style={styles.featureCard}>
+        {WELCOME_FEATURES.map((f, i) => (
+          <FeatureRow
+            key={f.label}
+            icon={f.icon}
+            label={f.label}
+            active={active === i}
+            pinned={paused && active === i}
+            showBorder={i > 0}
+            onPress={() => { setActive(i); setPaused(prev => (active === i ? !prev : true)); }}
+          />
+        ))}
       </View>
 
-      <View style={{ gap: 12}}>
-        <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
-          <Text style={styles.primaryButtonText}>Let's Go</Text>
-          <Icon name="arrow-right" size={24} color="#fff" />
+      <View style={{ flex: 1, minHeight: 16 }} />
+
+      <View style={{ alignItems: 'center', gap: 16 }}>
+        <Text style={styles.getDesktop}>Get the desktop app</Text>
+        <TouchableOpacity style={[styles.primaryButton, { width: '100%' }]} onPress={onNext} activeOpacity={0.9}>
+          <Text style={styles.primaryButtonText}>Next</Text>
         </TouchableOpacity>
-
-        {(showBackButton ? (
-          <TouchableOpacity
-            style={{
-              minWidth: "100%",
-              justifyContent: "center",
-              paddingVertical: 20,
-              paddingHorizontal: 32,
-              alignSelf: "auto",
-              backgroundColor: 'rgba(0, 0, 0, 0.1)',
-              borderRadius: 16,
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.2,
-              shadowRadius: 8,
-              elevation: 5,
-              zIndex: 10
-            }}
-            onPress={onBack}
-          >
-            <Text style={{ textAlign: "center", fontSize: 18, color: ONBOARDING.title }}>Back</Text>
+        {!showBackButton && onSignOut && (
+          <TouchableOpacity style={[styles.secondaryButton, { width: '100%' }]} onPress={onSignOut} activeOpacity={0.9}>
+            <Text style={styles.secondaryButtonText}>Not you? Sign out</Text>
           </TouchableOpacity>
-        ) : onSignOut ? (
-          <TouchableOpacity
-            style={{
-              minWidth: "100%",
-              justifyContent: "center",
-              paddingVertical: 20,
-              paddingHorizontal: 32,
-              alignSelf: "auto",
-              backgroundColor: 'rgba(0, 0, 0, 0.1)',
-              borderRadius: 16,
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.2,
-              shadowRadius: 8,
-              elevation: 5,
-              zIndex: 10
-            }}
-            onPress={onSignOut}
-          >
-            <Text style={{ textAlign: "center", fontSize: 18, fontWeight: 600, color: ONBOARDING.title }}>Back</Text>
-          </TouchableOpacity>
-        ) : null)}
+        )}
       </View>
-
-    </View>
-  </Animated.View>
-));
+    </Animated.View>
+  );
+});
 
 const BusinessNameStep = memo(({ value, onChange, onNext }: { value: string, onChange: (t: string) => void, onNext: () => void }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
@@ -369,14 +457,9 @@ const StoreAddressStep = memo(({
     </View>
 
     <View style={{ flex: 1 }} />
-    <View style={{ gap: 12 }}>
-      <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
-        <Text style={styles.primaryButtonText}>Next</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={onSkip} style={{ backgroundColor: "rgba(0, 0, 0, 0.11)", alignItems: 'center', paddingVertical: 24, borderRadius: 12 }}>
-        <Text style={{ color: ONBOARDING.title, fontWeight: 500, fontSize: 16 }}>Skip for now</Text>
-      </TouchableOpacity>
-    </View>
+    <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
+      <Text style={styles.primaryButtonText}>Next</Text>
+    </TouchableOpacity>
   </Animated.View>
 ));
 
@@ -480,6 +563,78 @@ const RoleStep = memo(({
     <View style={{ flex: 1 }} />
     <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
       <Text style={styles.primaryButtonText}>Next</Text>
+    </TouchableOpacity>
+  </Animated.View>
+));
+
+const SelectRow = memo(({ icon, label, selected, multi, onPress }: { icon: string; label: string; selected: boolean; multi?: boolean; onPress: () => void }) => (
+  <TouchableOpacity style={[styles.selectRow, selected && styles.selectRowActive]} onPress={onPress} activeOpacity={0.85}>
+    <View style={styles.selectIconCircle}>
+      <Icon name={icon} size={20} color="#3C5A14" />
+    </View>
+    <Text style={styles.selectLabel}>{label}</Text>
+    <View style={[styles.selectorBox, selected ? styles.selectorSelected : styles.selectorUnselected]}>
+      {selected && (multi ? <Icon name="check" size={14} color="#FFFFFF" /> : <View style={styles.selectorDot} />)}
+    </View>
+  </TouchableOpacity>
+));
+
+const SellWhatStep = memo(({ selected, onToggle, onNext }: { selected: string[]; onToggle: (id: string) => void; onNext: () => void }) => (
+  <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
+    <Text style={styles.stepTitle}>What do you sell?</Text>
+    <Text style={styles.subtitle}>Pick all that fit.</Text>
+    <View style={styles.selectList}>
+      {SELL_CATEGORIES.map(c => (
+        <SelectRow key={c.id} icon={c.icon} label={c.label} multi selected={selected.includes(c.id)} onPress={() => onToggle(c.id)} />
+      ))}
+    </View>
+    <View style={{ flex: 1, minHeight: 12 }} />
+    <TouchableOpacity style={styles.primaryButton} onPress={onNext} activeOpacity={0.9}>
+      <Text style={styles.primaryButtonText}>Continue</Text>
+    </TouchableOpacity>
+  </Animated.View>
+));
+
+const GoalStep = memo(({ goal, goalOther, onSelect, onOtherChange, onNext }: { goal: string; goalOther: string; onSelect: (id: string) => void; onOtherChange: (t: string) => void; onNext: () => void }) => (
+  <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
+    <Text style={styles.stepTitle}>What's your goal?</Text>
+    <View style={styles.selectList}>
+      {GOALS.map(g => (
+        <SelectRow key={g.id} icon={g.icon} label={g.label} selected={goal === g.id} onPress={() => onSelect(g.id)} />
+      ))}
+      {goal === 'other' && (
+        <Animated.View entering={FadeInDown} style={{ gap: 8, marginTop: 6 }}>
+          <Text style={styles.label}>Explain</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Tell us more"
+            placeholderTextColor={ONBOARDING.subtitle}
+            value={goalOther}
+            onChangeText={onOtherChange}
+            autoFocus
+            onSubmitEditing={onNext}
+          />
+        </Animated.View>
+      )}
+    </View>
+    <View style={{ flex: 1, minHeight: 12 }} />
+    <TouchableOpacity style={styles.primaryButton} onPress={onNext} activeOpacity={0.9}>
+      <Text style={styles.primaryButtonText}>Continue</Text>
+    </TouchableOpacity>
+  </Animated.View>
+));
+
+const HeardStep = memo(({ heard, onSelect, onNext }: { heard: string; onSelect: (id: string) => void; onNext: () => void }) => (
+  <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
+    <Text style={styles.stepTitle}>Where'd you hear about us?</Text>
+    <View style={styles.selectList}>
+      {HEARD_OPTIONS.map(h => (
+        <SelectRow key={h.id} icon={h.icon} label={h.label} selected={heard === h.id} onPress={() => onSelect(h.id)} />
+      ))}
+    </View>
+    <View style={{ flex: 1, minHeight: 12 }} />
+    <TouchableOpacity style={styles.primaryButton} onPress={onNext} activeOpacity={0.9}>
+      <Text style={styles.primaryButtonText}>Continue</Text>
     </TouchableOpacity>
   </Animated.View>
 ));
@@ -769,6 +924,10 @@ export default function CreateAccountScreen() {
     customBusinessType: '',
     role: '',
     customRole: '',
+    sellCategories: [],
+    goal: '',
+    goalOther: '',
+    heardFrom: '',
     phone: '',
     region: 'US',
     currency: 'USD',
@@ -796,6 +955,9 @@ export default function CreateAccountScreen() {
 
   const [formattedPhone, setFormattedPhone] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; type: 'error' | 'warning' | 'info' | 'success'; title: string; message: string }>({ visible: false, type: 'warning', title: '', message: '' });
+  const showModal = useCallback((title: string, message: string, type: 'error' | 'warning' | 'info' | 'success' = 'warning') => setErrorModal({ visible: true, type, title, message }), []);
+  const closeModal = useCallback(() => setErrorModal(p => ({ ...p, visible: false })), []);
 
   // --- ACTIONS ---
 
@@ -815,6 +977,15 @@ export default function CreateAccountScreen() {
   const setCustomBusinessType = useCallback((t: string) => setFormData(p => ({ ...p, customBusinessType: t })), []);
   const setRole = useCallback((id: string) => setFormData(p => ({ ...p, role: id })), []);
   const setCustomRole = useCallback((t: string) => setFormData(p => ({ ...p, customRole: t })), []);
+  const toggleSellCategory = useCallback((id: string) => setFormData(p => ({
+    ...p,
+    sellCategories: p.sellCategories.includes(id)
+      ? p.sellCategories.filter(c => c !== id)
+      : [...p.sellCategories, id],
+  })), []);
+  const setGoal = useCallback((id: string) => setFormData(p => ({ ...p, goal: id, goalOther: id === 'other' ? p.goalOther : '' })), []);
+  const setGoalOther = useCallback((t: string) => setFormData(p => ({ ...p, goalOther: t })), []);
+  const setHeardFrom = useCallback((id: string) => setFormData(p => ({ ...p, heardFrom: id })), []);
 
   // Use My Location for address autofill
   const handleUseLocation = useCallback(async () => {
@@ -822,7 +993,7 @@ export default function CreateAccountScreen() {
       setIsLoadingAddress(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Please allow location access to use this feature.');
+        showModal('Permission Denied', 'Please allow location access to use this feature.', 'warning');
         return;
       }
 
@@ -850,11 +1021,11 @@ export default function CreateAccountScreen() {
             country: addr.isoCountryCode || 'US',
           }));
         } else {
-          Alert.alert('Location Error', 'Could not determine your address. Please enter it manually.');
+          showModal('Location Error', 'Could not determine your address. Please enter it manually.', 'error');
         }
       }
     } catch (err) {
-      Alert.alert('Location Error', 'Could not get your location. Please enter your address manually.');
+      showModal('Location Error', 'Could not get your location. Please enter your address manually.', 'error');
     } finally {
       setIsLoadingAddress(false);
     }
@@ -865,39 +1036,53 @@ export default function CreateAccountScreen() {
 
     if (currentStep === 'BUSINESS_NAME') {
       if (!currentFormData.businessName.trim()) {
-        Alert.alert('Missing Info', 'Please enter your business name.');
+        showModal('Missing Info', 'Please enter your business name.', 'warning');
         return;
       }
       goToStep('STORE_ADDRESS');
     } else if (currentStep === 'STORE_ADDRESS') {
-      // Address is optional, just proceed
+      if (
+        !currentFormData.street1.trim() ||
+        !currentFormData.city.trim() ||
+        !currentFormData.state.trim() ||
+        !currentFormData.postalCode.trim()
+      ) {
+        showModal('Address needed', 'Please add your business address so we can set up shipping & returns.', 'warning');
+        return;
+      }
       goToStep('BUSINESS_TYPE');
     } else if (currentStep === 'BUSINESS_TYPE') {
       if (!currentFormData.businessType) {
-        Alert.alert('Missing Info', 'Please select a business type.');
+        showModal('Missing Info', 'Please select a business type.', 'warning');
         return;
       }
       if (currentFormData.businessType === 'other' && !currentFormData.customBusinessType.trim()) {
-        Alert.alert('Missing Info', 'Please specify your business type.');
+        showModal('Missing Info', 'Please specify your business type.', 'warning');
         return;
       }
       goToStep('ROLE');
     } else if (currentStep === 'ROLE') {
       if (!currentFormData.role) {
-        Alert.alert('Missing Info', 'Please select your role.');
+        showModal('Missing Info', 'Please select your role.', 'warning');
         return;
       }
       if (currentFormData.role === 'other' && !currentFormData.customRole.trim()) {
-        Alert.alert('Missing Info', 'Please specify your role.');
+        showModal('Missing Info', 'Please specify your role.', 'warning');
         return;
       }
       goToStep('CONTACT');
     } else if (currentStep === 'CONTACT') {
       if (!formattedPhone || !phoneInputRef.current?.isValidNumber(formattedPhone.replace(/^\+/, ''))) {
-        Alert.alert('Invalid Phone', 'Please enter a valid phone number.');
+        showModal('Invalid Phone', 'Please enter a valid phone number.', 'warning');
         return;
       }
       setFormData(prev => ({ ...prev, phone: formattedPhone }));
+      goToStep('SELL_WHAT');
+    } else if (currentStep === 'SELL_WHAT') {
+      goToStep('GOAL');
+    } else if (currentStep === 'GOAL') {
+      goToStep('HEARD');
+    } else if (currentStep === 'HEARD') {
       goToStep('TEAM');
     } else if (currentStep === 'TEAM') {
       goToStep('FINISH');
@@ -909,11 +1094,11 @@ export default function CreateAccountScreen() {
     if (!email) return;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      showModal('Invalid Email', 'Please enter a valid email address.', 'warning');
       return;
     }
     if (formData.invites.includes(email)) {
-      Alert.alert('Duplicate', 'This email is already added.');
+      showModal('Duplicate', 'This email is already added.', 'warning');
       return;
     }
     setFormData(prev => ({ ...prev, invites: [...prev.invites, email] }));
@@ -1098,7 +1283,7 @@ export default function CreateAccountScreen() {
 
       if (authError || !supabaseUser?.id) {
         log.error('Supabase Auth Error:', authError);
-        Alert.alert('Error', 'Could not identify user. Please restart the app.');
+        showModal('Error', 'Could not identify user. Please restart the app.', 'error');
         return;
       }
 
@@ -1199,7 +1384,12 @@ export default function CreateAccountScreen() {
 
       if (refreshOrgs) await refreshOrgs();
 
-      capture(AnalyticsEvents.ONBOARDING_COMPLETED, { create_organization: !!createOrganization });
+      capture(AnalyticsEvents.ONBOARDING_COMPLETED, {
+        create_organization: !!createOrganization,
+        sell_categories: formData.sellCategories,
+        goal: formData.goal === 'other' ? (formData.goalOther || 'other') : formData.goal,
+        heard_from: formData.heardFrom,
+      });
 
       // Onboarding data is saved and the org exists. Hand off to the (skippable)
       // CONNECT step so the user can hook up their stores — connecting there kicks
@@ -1208,7 +1398,7 @@ export default function CreateAccountScreen() {
       setCurrentStep('CONNECT');
 
     } catch (error: any) {
-      Alert.alert('Error', 'Setup failed. Please try again.');
+      showModal('Error', 'Setup failed. Please try again.', 'error');
     } finally {
       setLoading(false);
     }
@@ -1225,6 +1415,13 @@ export default function CreateAccountScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <ErrorModal
+        visible={errorModal.visible}
+        type={errorModal.type}
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={closeModal}
+      />
       {currentStep !== 'WELCOME' && currentStep !== 'CONNECT' && (
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => {
@@ -1233,19 +1430,28 @@ export default function CreateAccountScreen() {
             if (currentStep === 'BUSINESS_TYPE') goToStep('STORE_ADDRESS');
             if (currentStep === 'ROLE') goToStep('BUSINESS_TYPE');
             if (currentStep === 'CONTACT') goToStep('ROLE');
-            if (currentStep === 'TEAM') goToStep('CONTACT');
+            if (currentStep === 'SELL_WHAT') goToStep('CONTACT');
+            if (currentStep === 'GOAL') goToStep('SELL_WHAT');
+            if (currentStep === 'HEARD') goToStep('GOAL');
+            if (currentStep === 'TEAM') goToStep('HEARD');
             if (currentStep === 'FINISH') goToStep('TEAM');
           }} style={{ padding: 10 }} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
-            <Icon name="arrow-left" size={24} color={ONBOARDING.title} />
+            <Icon name="chevron-left" size={26} color={ONBOARDING.title} />
           </TouchableOpacity>
 
           <Stepper currentStep={currentStep} />
 
-          <View style={{ width: 44 }} />
+          {currentStep === 'SELL_WHAT' || currentStep === 'GOAL' || currentStep === 'HEARD' ? (
+            <TouchableOpacity onPress={handleNext} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={{ minWidth: 44, alignItems: 'flex-end', paddingRight: 4 }}>
+              <Text style={styles.skipHeaderText}>Skip</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 44 }} />
+          )}
         </View>
       )}
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ minHeight: '90%' }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom, 20) }}
           keyboardShouldPersistTaps="handled"
@@ -1257,6 +1463,7 @@ export default function CreateAccountScreen() {
               onBack={() => { if (navigation.canGoBack()) navigation.goBack(); }}
               showBackButton={navigation.canGoBack()}
               onSignOut={() => authContext?.signOut()}
+              firstName={clerkUser?.firstName ?? undefined}
             />
           )}
 
@@ -1319,6 +1526,32 @@ export default function CreateAccountScreen() {
             />
           )}
 
+          {currentStep === 'SELL_WHAT' && (
+            <SellWhatStep
+              selected={formData.sellCategories}
+              onToggle={toggleSellCategory}
+              onNext={handleNext}
+            />
+          )}
+
+          {currentStep === 'GOAL' && (
+            <GoalStep
+              goal={formData.goal}
+              goalOther={formData.goalOther}
+              onSelect={setGoal}
+              onOtherChange={setGoalOther}
+              onNext={handleNext}
+            />
+          )}
+
+          {currentStep === 'HEARD' && (
+            <HeardStep
+              heard={formData.heardFrom}
+              onSelect={setHeardFrom}
+              onNext={handleNext}
+            />
+          )}
+
           {currentStep === 'TEAM' && (
             <TeamStep
               invites={formData.invites}
@@ -1352,7 +1585,12 @@ export default function CreateAccountScreen() {
           )}
 
           {currentStep === 'CONNECT' && (
-            <ConnectAccountsStep orgId={createdOrgId} onDone={finishToApp} />
+            <ConnectAccountsStep
+              orgId={createdOrgId}
+              orgName={formData.businessName}
+              email={clerkUser?.primaryEmailAddress?.emailAddress}
+              onDone={finishToApp}
+            />
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -1432,26 +1670,116 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   divider: {
-    height: 2,
-    backgroundColor: "rgba(0, 0, 0, 0.14)",
-    marginVertical: 15,
+    height: 1,
+    backgroundColor: ONBOARDING.border,
+    marginVertical: 16,
     minWidth: '100%',
     alignSelf: 'center',
   },
   stepTitle: {
-    fontSize: 32,
+    fontSize: 26,
+    lineHeight: 32,
     fontFamily: 'Inter_700Bold',
     color: ONBOARDING.title,
-    marginBottom: 16,
-    textAlign: 'center',
+    letterSpacing: -0.5,
+    marginBottom: 4,
+    textAlign: 'left',
   },
   subtitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontFamily: 'Inter_500Medium',
     color: ONBOARDING.subtitle,
-    textAlign: 'center',
-    lineHeight: 26,
+    textAlign: 'left',
+    lineHeight: 22,
+    marginTop: 6,
   },
+  // Welcome (v2)
+  welcomeHero: {
+    height: 308,
+    borderRadius: 28,
+    marginTop: 4,
+    padding: 16,
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  welcomePhone: {
+    width: 184,
+    height: 258,
+    borderRadius: 34,
+    padding: 7,
+    backgroundColor: '#1C1B17',
+    shadowColor: '#1C1B17',
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 14 },
+  },
+  welcomePhoneInner: {
+    flex: 1,
+    borderRadius: 28,
+    backgroundColor: '#FBFAF6',
+    paddingTop: 18,
+    paddingHorizontal: 12,
+    overflow: 'hidden',
+  },
+  welcomePhoneTitle: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#1C1B17',
+  },
+  welcomeListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 38,
+    marginTop: 9,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEEADE',
+  },
+  welcomeThumb: { width: 22, height: 22, borderRadius: 7, backgroundColor: '#F1EFE6' },
+  welcomeBar: { flex: 1, height: 7, marginLeft: 8, borderRadius: 3, backgroundColor: '#E7E3D6' },
+  welcomeDot: { width: 6, height: 6, borderRadius: 3, marginLeft: 8, backgroundColor: '#16A34A' },
+  welcomeSelSlot: { width: 14, height: 14, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },
+  welcomeDotAbs: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: '#16A34A' },
+  welcomeCheckAbs: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  welcomeTitle: {
+    marginTop: 20,
+    fontSize: 24,
+    lineHeight: 34,
+    fontFamily: 'Inter_700Bold',
+    color: ONBOARDING.title,
+    letterSpacing: -0.5,
+  },
+  featureCard: {
+    marginTop: 18,
+    borderRadius: 18,
+    backgroundColor: ONBOARDING.cardBg,
+    borderWidth: 1,
+    borderColor: ONBOARDING.border,
+    overflow: 'hidden',
+  },
+  featureRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 60,
+    paddingHorizontal: 14,
+    gap: 13,
+  },
+  featureRowBorder: { borderTopWidth: 1, borderTopColor: '#EFEBDF' },
+  featureIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(147,200,34,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  featureLabel: { flex: 1, fontSize: 16, fontFamily: 'Inter_600SemiBold', color: ONBOARDING.title },
+  featureActiveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#93C822' },
+  featurePlayBtn: { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(147,200,34,0.18)', alignItems: 'center', justifyContent: 'center' },
+  getDesktop: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: ONBOARDING.subtitle },
+  signOutLink: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: ONBOARDING.subtitle },
   useLocationButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1471,29 +1799,76 @@ const styles = StyleSheet.create({
     color: ONBOARDING.title,
   },
   label: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Inter_600SemiBold',
     color: ONBOARDING.subtitle,
     marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
   },
   // Buttons
   primaryButton: {
     backgroundColor: ONBOARDING.green,
-    height: 64,
-    borderRadius: 16,
+    height: 54,
+    borderRadius: 999,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     marginBottom: 0,
   },
   primaryButtonText: {
-    fontSize: 18,
+    fontSize: 16,
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
   },
+  secondaryButton: {
+    height: 52,
+    borderRadius: 999,
+    backgroundColor: '#E8E5DC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#57534E',
+  },
+  // Selectable option rows (Sell what / Goal / Heard)
+  selectList: { marginTop: 18, gap: 10 },
+  selectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 62,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    backgroundColor: ONBOARDING.cardBg,
+    borderWidth: 1.5,
+    borderColor: ONBOARDING.border,
+  },
+  selectRowActive: {
+    backgroundColor: 'rgba(147,200,34,0.10)',
+    borderColor: ONBOARDING.green,
+  },
+  selectIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(147,200,34,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectLabel: {
+    flex: 1,
+    marginLeft: 13,
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: ONBOARDING.title,
+  },
+  selectorBox: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  selectorUnselected: { borderWidth: 1.5, borderColor: '#D8D3C4' },
+  selectorSelected: { backgroundColor: ONBOARDING.green },
+  selectorDot: { width: 8, height: 8, borderRadius: 2, backgroundColor: '#FFFFFF' },
+  skipHeaderText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#8A887E' },
   // Grid
   grid: {
     flexDirection: 'row',
@@ -1527,13 +1902,15 @@ const styles = StyleSheet.create({
   },
   // Input
   input: {
-    backgroundColor: 'transparent',
-    borderBottomWidth: 2,
-    borderBottomColor: ONBOARDING.border,
-    fontSize: 24,
+    backgroundColor: ONBOARDING.fieldBg,
+    borderWidth: 1,
+    borderColor: ONBOARDING.border,
+    borderRadius: 14,
+    fontSize: 16,
     fontFamily: 'Inter_500Medium',
     color: ONBOARDING.title,
-    paddingVertical: 12,
+    height: 54,
+    paddingHorizontal: 16,
   },
   // List Layout (Role)
   listContainer: {

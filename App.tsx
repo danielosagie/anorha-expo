@@ -665,7 +665,7 @@ const App: React.FC = () => {
   };
 
   const WithSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { getToken } = useAuth();
+    const { getToken, isSignedIn } = useAuth();
     const template = process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'mobile';
     // Native third-party auth (CLERK_NATIVE_AUTH=true): Supabase validates the
     // Clerk token directly and requires the SESSION token (which carries the
@@ -689,7 +689,7 @@ const App: React.FC = () => {
     );
 
     return (
-      <EnhancedSessionProvider getClerkToken={getClerkToken}>
+      <EnhancedSessionProvider getClerkToken={getClerkToken} isSignedIn={isSignedIn}>
         <PostHogIdentify />
         {children}
       </EnhancedSessionProvider>
@@ -699,9 +699,11 @@ const App: React.FC = () => {
   const DebugClerkState = () => {
     const { isLoaded, isSignedIn } = useAuth();
     const navigationRef = useRef<NavigationContainerRef<any>>(null);
-    console.log('[App] Clerk state:', { isLoaded, isSignedIn });
+    // NOTE: do NOT add a per-render console.log here. Core 3 / clerk-js v6 re-renders
+    // every useAuth() consumer on every resource emit, so a log here floods hundreds of
+    // lines per second and makes the (otherwise cheap) re-renders expensive.
 
-    // Debug what happens when isSignedIn changes
+    // Log only on actual auth-state transitions.
     useEffect(() => {
       if (isLoaded) {
         console.log('[App] ✓ isSignedIn changed to:', isSignedIn);

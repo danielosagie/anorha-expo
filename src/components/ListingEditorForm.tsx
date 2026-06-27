@@ -705,8 +705,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         : undefined;
       const sourceUrls = sources?.map((s: any) => s?.url).filter((u: any) => typeof u === 'string');
 
-      const url = `${API_BASE_URL}/api/taxonomy/${activePlatformKeyLower}/suggest`;
-      const payload = {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+      const taxonomyUrl = `${API_BASE_URL}/api/taxonomy/${activePlatformKeyLower}/suggest`;
+      const taxonomyPayload = {
         query: safeQuery,
         title: activeData.title,
         description: activeData.description,
@@ -720,14 +724,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         limit: 15,
         useLlm: true,
       };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      // eBay: resolve via eBay's own (authoritative + cached) Taxonomy API so the result is
+      // always a real leaf category at high confidence. Fall back to the local taxonomy
+      // resolver if that endpoint is unavailable (e.g. backend not deployed yet) so category
+      // never silently breaks. Shopify always uses the local resolver.
+      let res: Response | undefined;
+      if (activePlatformKeyLower === 'ebay') {
+        res = await fetch(`${API_BASE_URL}/api/ebay/category-suggest`, {
+          method: 'POST', headers, body: JSON.stringify({ query: safeQuery, title: activeData.title, limit: 15 }),
+        }).catch(() => undefined);
+      }
+      if (!res || !res.ok) {
+        res = await fetch(taxonomyUrl, { method: 'POST', headers, body: JSON.stringify(taxonomyPayload) });
+      }
 
       if (!res.ok) throw new Error('Failed to fetch suggestions');
 
@@ -820,15 +829,23 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     try {
       const token = await ensureSupabaseJwt();
       const categorySuggestion = pdata.categorySuggestion || pdata.categoryPath || pdata.productCategory || pdata.category;
-      const res = await fetch(`${API_BASE_URL}/api/taxonomy/${lk}/suggest`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query, title: pdata.title, description: pdata.description, brand: pdata.brand,
-          tags: pdata.tags, categorySuggestion, productType: pdata.productType,
-          preferLeaf: true, limit: 15, useLlm: true,
-        }),
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const taxonomyBody = JSON.stringify({
+        query, title: pdata.title, description: pdata.description, brand: pdata.brand,
+        tags: pdata.tags, categorySuggestion, productType: pdata.productType,
+        preferLeaf: true, limit: 15, useLlm: true,
       });
+      // eBay → authoritative eBay Taxonomy API (real leaf, high confidence), falling back to
+      // the local resolver if it's unavailable (e.g. backend not deployed yet). Shopify → local.
+      let res: Response | undefined;
+      if (lk === 'ebay') {
+        res = await fetch(`${API_BASE_URL}/api/ebay/category-suggest`, {
+          method: 'POST', headers, body: JSON.stringify({ query, title: pdata.title, limit: 15 }),
+        }).catch(() => undefined);
+      }
+      if (!res || !res.ok) {
+        res = await fetch(`${API_BASE_URL}/api/taxonomy/${lk}/suggest`, { method: 'POST', headers, body: taxonomyBody });
+      }
       if (!res.ok) return null;
       const data = await res.json();
       const best = data?.suggested;

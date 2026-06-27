@@ -68,7 +68,7 @@ const GoogleMark = () => (
 
 type AuthScreenProps = {
   navigation: any;
-  route?: { params?: { mode?: 'login' | 'signup' } };
+  route?: { params?: { mode?: 'login' | 'signup'; autoFaceId?: boolean } };
 };
 
 const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
@@ -80,6 +80,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isBiometricSupported, setIsBiometricSupported] = useState(false);
+  const [hasBiometricCreds, setHasBiometricCreds] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   useEffect(() => {
@@ -87,7 +88,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
       const compatible = await LocalAuthentication.hasHardwareAsync();
       const enrolled = await LocalAuthentication.isEnrolledAsync();
       const savedEmail = await SecureStore.getItemAsync('biometric_email');
-      setIsBiometricSupported(compatible && enrolled && !!savedEmail);
+      setIsBiometricSupported(compatible);
+      setHasBiometricCreds(!!savedEmail);
     })();
   }, []);
 
@@ -175,10 +177,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
         fallbackLabel: 'Use Password',
       });
       if (result.success) {
-        setLoading(true);
         const e = await SecureStore.getItemAsync('biometric_email');
         const p = await SecureStore.getItemAsync('biometric_password');
-        if (e && p && signIn) {
+        if (!e || !p) {
+          showErrorModal('Set up Face ID', "Log in with your password once and we'll turn on Face ID for next time.", 'info');
+          return;
+        }
+        setLoading(true);
+        if (signIn) {
           try {
             const res = await signIn.create({ identifier: e, password: p });
             if (res.status === 'complete' && res.createdSessionId) {
@@ -194,6 +200,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
       setLoading(false);
     }
   }, [signIn, signInSetActive, showErrorModal]);
+
+  // One-tap entry from the splash: auto-prompt Face ID when asked + ready.
+  const autoFaceTriggered = useRef(false);
+  useEffect(() => {
+    if (route?.params?.autoFaceId && isLogin && isBiometricSupported && hasBiometricCreds && !autoFaceTriggered.current) {
+      autoFaceTriggered.current = true;
+      handleBiometricLogin();
+    }
+  }, [isLogin, isBiometricSupported, hasBiometricCreds, handleBiometricLogin, route]);
 
   const handleSSO = useCallback(async (
     strategy: 'oauth_google',
