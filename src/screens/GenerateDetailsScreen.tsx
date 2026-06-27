@@ -2239,6 +2239,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <View onLayout={(e) => setListingEditorY(e.nativeEvent.layout.y)}>
                 <ListingEditorForm
                   ref={listingEditorRef}
+                  onRequestPublish={handlePublishPress}
                   highlightedField={allMissingRequiredFields[0]?.field}
                   highlightedPlatform={allMissingRequiredFields[0]?.platform}
                   onScrollToOffset={(y) => {
