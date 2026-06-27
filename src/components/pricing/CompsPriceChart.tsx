@@ -1,29 +1,30 @@
-// CompsPriceChart — a sold-comp distribution for PricingGuidanceCard.
+// CompsPriceChart — a sold-comp PERFORMANCE scatter for PricingGuidanceCard.
 //
-// Replaces the flat "90-day median" sparkline (which collapses to a straight line
-// when the backend only has one median). Instead it charts the ACTUAL comps:
-//   X = sold price, bar height = how many sold in that price range,
-//   bar color = how fast they sold (green = fast → amber = slow).
-// Drag a finger across to read a price band's count + average days-to-sell.
+// The old version binned comps into a price histogram, which hid each comp's
+// sell-time. This plots every comp so you can read performance directly:
+//   X = sold price,  Y = days to sell (higher = sells FASTER, low days at the top),
+//   dot colour = speed (green fast → amber slow). The single fastest seller is ringed
+//   and called out. Drag across to snap to the nearest comp and read its price + days.
 
 import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, PanResponder, LayoutChangeEvent } from 'react-native';
-import Svg, { Rect, Line } from 'react-native-svg';
+import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 import type { PricingComp } from './PricingGuidanceCard';
 
 const GREEN = '#93C822';
 const AMBER = '#BA7517';
 const LABEL = '#8E8E93';
 const TEXT = '#0A0A0B';
-const TRACK = '#EAEAEF';
+const GRID = '#EDEDF1';
 
-const CHART_H = 132; // bar area height
-const TOP_PAD = 22; // room above bars for the tallest bar's count label
-const GAP = 3; // px between bars
+const PLOT_H = 150; // dot area height
+const TOP = 16; // headroom above the plot
+const LEFT = 34; // gutter for day labels
+const RIGHT = 12; // gutter so the rightmost dot isn't clipped
 
 const money = (n: number) => `$${Math.round(n)}`;
+const days = (n: number) => `${Math.round(n)}d`;
 
-// lerp two hex colors by t∈[0,1]
 function mix(a: string, b: string, t: number): string {
   const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
   const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
@@ -31,77 +32,84 @@ function mix(a: string, b: string, t: number): string {
   return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
 
-type Bin = { lo: number; hi: number; count: number; avgDays: number | null; color: string };
+type Pt = { price: number; days: number; title?: string; color: string };
 
 export const CompsPriceChart: React.FC<{ samples: PricingComp[] }> = ({ samples }) => {
   const [width, setWidth] = useState(0);
   const [active, setActive] = useState<number | null>(null);
 
-  const priced = useMemo(
-    () => samples.filter((s) => typeof s.price === 'number' && (s.price as number) > 0),
-    [samples],
-  );
-
-  const { bins, minP, maxP } = useMemo(() => {
-    const prices = priced.map((s) => s.price as number);
-    if (prices.length === 0) return { bins: [] as Bin[], minP: 0, maxP: 0 };
-    const lo = Math.min(...prices);
-    const hi = Math.max(...prices);
-    const binCount = lo === hi ? 1 : Math.min(10, Math.max(4, Math.round(Math.sqrt(prices.length)) + 2));
-    const span = hi - lo || 1;
-    const raw: { count: number; days: number[] }[] = Array.from({ length: binCount }, () => ({ count: 0, days: [] }));
-    for (const s of priced) {
-      const idx = lo === hi ? 0 : Math.min(binCount - 1, Math.floor(((s.price as number) - lo) / span * binCount));
-      raw[idx].count += 1;
-      if (typeof s.estimatedDaysToSell === 'number' && s.estimatedDaysToSell > 0) raw[idx].days.push(s.estimatedDaysToSell);
+  // Performance scatter needs both a price AND a sell-time per comp.
+  const { pts, minP, maxP, maxD, fastest, withoutDays } = useMemo(() => {
+    const priced = samples.filter((s) => typeof s.price === 'number' && (s.price as number) > 0);
+    const timed = priced.filter((s) => typeof s.estimatedDaysToSell === 'number' && (s.estimatedDaysToSell as number) > 0);
+    if (timed.length === 0) {
+      return { pts: [] as Pt[], minP: 0, maxP: 0, maxD: 0, fastest: -1, withoutDays: priced.length };
     }
-    // speed color: scale each bin's avg days across the observed min/max
-    const allAvgs = raw.filter((r) => r.days.length).map((r) => r.days.reduce((a, b) => a + b, 0) / r.days.length);
-    const dLo = allAvgs.length ? Math.min(...allAvgs) : 0;
-    const dHi = allAvgs.length ? Math.max(...allAvgs) : 1;
-    const out: Bin[] = raw.map((r, i) => {
-      const binLo = lo === hi ? lo : lo + (span * i) / binCount;
-      const binHi = lo === hi ? hi : lo + (span * (i + 1)) / binCount;
-      const avgDays = r.days.length ? r.days.reduce((a, b) => a + b, 0) / r.days.length : null;
-      const t = avgDays != null && dHi > dLo ? (avgDays - dLo) / (dHi - dLo) : 0;
-      return { lo: binLo, hi: binHi, count: r.count, avgDays, color: mix(GREEN, AMBER, t) };
-    });
-    return { bins: out, minP: lo, maxP: hi };
-  }, [priced]);
+    const prices = timed.map((s) => s.price as number);
+    const ds = timed.map((s) => s.estimatedDaysToSell as number);
+    const lo = Math.min(...prices), hi = Math.max(...prices);
+    const dHi = Math.max(...ds);
+    const list: Pt[] = timed.map((s) => ({
+      price: s.price as number,
+      days: s.estimatedDaysToSell as number,
+      title: s.title,
+      color: mix(GREEN, AMBER, dHi > 0 ? (s.estimatedDaysToSell as number) / dHi : 0),
+    }));
+    // fastest = lowest days; ties → lowest price (cheap-and-fast wins the callout)
+    let fi = 0;
+    for (let i = 1; i < list.length; i++) {
+      if (list[i].days < list[fi].days || (list[i].days === list[fi].days && list[i].price < list[fi].price)) fi = i;
+    }
+    return { pts: list, minP: lo, maxP: hi, maxD: dHi, fastest: fi, withoutDays: priced.length - timed.length };
+  }, [samples]);
 
-  const maxCount = useMemo(() => bins.reduce((m, b) => Math.max(m, b.count), 0), [bins]);
+  const plotW = Math.max(0, width - LEFT - RIGHT);
+  const spanP = maxP - minP || 1;
+  const xOf = (p: number) => LEFT + 6 + ((p - minP) / spanP) * (plotW - 12);
+  const yOf = (d: number) => TOP + (maxD > 0 ? d / maxD : 0) * PLOT_H; // low days → top (fast)
 
-  const pickBin = (x: number) => {
-    if (!width || bins.length === 0) return;
-    const slot = width / bins.length;
-    const i = Math.max(0, Math.min(bins.length - 1, Math.floor(x / slot)));
-    setActive(i);
+  // Day gridlines (e.g. 10d / 20d / 30d), nicely stepped.
+  const ticks = useMemo(() => {
+    if (maxD <= 0) return [] as number[];
+    const step = Math.max(1, Math.round(maxD / 3));
+    const out: number[] = [];
+    for (let t = step; t <= maxD + 0.001; t += step) out.push(t);
+    return out;
+  }, [maxD]);
+
+  const pickNearest = (x: number) => {
+    if (!width || pts.length === 0) return;
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = Math.abs(xOf(pts[i].price) - x);
+      if (dx < bd) { bd = dx; bi = i; }
+    }
+    setActive(bi);
   };
 
-  // Only claim HORIZONTAL drags so vertical scrolling of the parent sheet still works
-  // when the finger passes over the chart.
+  // Horizontal drags only, so the parent sheet still scrolls vertically.
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > Math.abs(g.dy) && Math.abs(g.dx) > 3,
-      onPanResponderGrant: (e) => pickBin(e.nativeEvent.locationX),
-      onPanResponderMove: (e) => pickBin(e.nativeEvent.locationX),
+      onPanResponderGrant: (e) => pickNearest(e.nativeEvent.locationX),
+      onPanResponderMove: (e) => pickNearest(e.nativeEvent.locationX),
       onPanResponderTerminationRequest: () => true,
     }),
   ).current;
 
-  if (priced.length < 3) return null;
+  if (pts.length < 3) return null;
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
-  const slot = width && bins.length ? width / bins.length : 0;
-  const activeBin = active != null ? bins[active] : null;
-  const tipW = 132;
-  const tipLeft = active != null ? Math.max(0, Math.min(width - tipW, (active + 0.5) * slot - tipW / 2)) : 0;
+  const sel = active != null ? pts[active] : null;
+  const tipW = 140;
+  const tipLeft = sel ? Math.max(0, Math.min(width - tipW, xOf(sel.price) - tipW / 2)) : 0;
+  const fp = pts[fastest];
 
   return (
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
-        <Text style={styles.kicker}>SOLD PRICES · {priced.length}</Text>
+        <Text style={styles.kicker}>SOLD COMPS · {pts.length}</Text>
         <View style={styles.legend}>
           <View style={[styles.dot, { backgroundColor: GREEN }]} />
           <Text style={styles.legendText}>fast</Text>
@@ -109,62 +117,54 @@ export const CompsPriceChart: React.FC<{ samples: PricingComp[] }> = ({ samples 
           <Text style={styles.legendText}>slow</Text>
         </View>
       </View>
+      <Text style={styles.subKicker}>Higher = sells faster · drag to read a comp</Text>
 
       <View style={styles.chartArea} onLayout={onLayout} {...pan.panHandlers}>
-        {/* tooltip */}
-        {activeBin ? (
+        {sel ? (
           <View style={[styles.tooltip, { left: tipLeft, width: tipW }]} pointerEvents="none">
-            <Text style={styles.tipPrice}>{money(activeBin.lo)}–{money(activeBin.hi)}</Text>
-            <Text style={styles.tipMeta}>
-              {activeBin.count} sold{activeBin.avgDays != null ? ` · ~${Math.round(activeBin.avgDays)}d avg` : ''}
+            <Text style={styles.tipPrice}>{money(sel.price)} · {days(sel.days)}</Text>
+            <Text style={styles.tipMeta} numberOfLines={1}>
+              {active === fastest ? 'fastest seller' : sel.title ? sel.title : 'sold comp'}
             </Text>
           </View>
         ) : (
-          <Text style={styles.hint} pointerEvents="none">Drag to explore</Text>
+          <View style={[styles.fastestCallout, { left: Math.max(0, Math.min(width - 150, xOf(fp.price) - 75)) }]} pointerEvents="none">
+            <Text style={styles.fastestText}>Fastest · {money(fp.price)} in {days(fp.days)}</Text>
+          </View>
         )}
 
         {width > 0 && (
-          <Svg width={width} height={CHART_H + TOP_PAD}>
-            {bins.map((b, i) => {
-              const h = maxCount > 0 ? Math.max(2, (b.count / maxCount) * CHART_H) : 2;
-              const x = i * slot + GAP / 2;
-              const w = Math.max(1, slot - GAP);
-              const y = TOP_PAD + (CHART_H - h);
-              const isActive = active === i;
+          <Svg width={width} height={TOP + PLOT_H + 6}>
+            {/* day gridlines + labels */}
+            {ticks.map((t) => (
+              <React.Fragment key={`t${t}`}>
+                <Line x1={LEFT} y1={yOf(t)} x2={width} y2={yOf(t)} stroke={GRID} strokeWidth={1} />
+                <SvgText x={LEFT - 6} y={yOf(t) + 4} fill={LABEL} fontSize={10} fontWeight="600" textAnchor="end">{days(t)}</SvgText>
+              </React.Fragment>
+            ))}
+
+            {/* cursor line */}
+            {sel && <Line x1={xOf(sel.price)} y1={TOP - 6} x2={xOf(sel.price)} y2={TOP + PLOT_H} stroke={TEXT} strokeWidth={1} strokeDasharray="3 3" opacity={0.3} />}
+
+            {/* comp dots */}
+            {pts.map((p, i) => {
+              const isSel = active === i;
+              const isFast = i === fastest;
+              const r = isSel ? 7 : isFast ? 6 : 4.5;
               return (
-                <Rect
-                  key={i}
-                  x={x}
-                  y={y}
-                  width={w}
-                  height={h}
-                  rx={3}
-                  fill={b.color}
-                  opacity={active == null || isActive ? 1 : 0.35}
-                />
+                <React.Fragment key={i}>
+                  {(isFast || isSel) && <Circle cx={xOf(p.price)} cy={yOf(p.days)} r={r + 3} fill="none" stroke={isSel ? TEXT : GREEN} strokeWidth={1.5} opacity={isSel ? 0.5 : 0.6} />}
+                  <Circle cx={xOf(p.price)} cy={yOf(p.days)} r={r} fill={p.color} opacity={active == null || isSel || isFast ? 1 : 0.4} />
+                </React.Fragment>
               );
             })}
-            {/* baseline */}
-            <Line x1={0} y1={TOP_PAD + CHART_H} x2={width} y2={TOP_PAD + CHART_H} stroke={TRACK} strokeWidth={1} />
-            {/* cursor */}
-            {active != null && (
-              <Line
-                x1={(active + 0.5) * slot}
-                y1={TOP_PAD}
-                x2={(active + 0.5) * slot}
-                y2={TOP_PAD + CHART_H}
-                stroke={TEXT}
-                strokeWidth={1}
-                strokeDasharray="3 3"
-                opacity={0.35}
-              />
-            )}
           </Svg>
         )}
       </View>
 
       <View style={styles.axis}>
         <Text style={styles.axisLabel}>{money(minP)}</Text>
+        {withoutDays > 0 ? <Text style={styles.axisNote}>+{withoutDays} more without sell-time</Text> : null}
         <Text style={styles.axisLabel}>{money(maxP)}</Text>
       </View>
     </View>
@@ -173,25 +173,19 @@ export const CompsPriceChart: React.FC<{ samples: PricingComp[] }> = ({ samples 
 
 const styles = StyleSheet.create({
   wrap: { marginTop: 4 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   kicker: { color: LABEL, fontSize: 11, fontWeight: '700', letterSpacing: 0.6 },
+  subKicker: { color: LABEL, fontSize: 11, fontWeight: '500', marginTop: 3, marginBottom: 8 },
   legend: { flexDirection: 'row', alignItems: 'center' },
   dot: { width: 8, height: 8, borderRadius: 4, marginRight: 4 },
   legendText: { color: LABEL, fontSize: 11, fontWeight: '600' },
-  chartArea: { height: CHART_H + TOP_PAD, position: 'relative' },
-  axis: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  chartArea: { height: TOP + PLOT_H + 6, position: 'relative' },
+  axis: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingLeft: LEFT - 6 },
   axisLabel: { color: LABEL, fontSize: 11, fontWeight: '600' },
-  hint: { position: 'absolute', top: 0, alignSelf: 'center', color: LABEL, fontSize: 11, fontWeight: '600' },
-  tooltip: {
-    position: 'absolute',
-    top: 0,
-    zIndex: 5,
-    backgroundColor: TEXT,
-    borderRadius: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-  },
+  axisNote: { color: LABEL, fontSize: 10, fontWeight: '500' },
+  tooltip: { position: 'absolute', top: 0, zIndex: 5, backgroundColor: TEXT, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center' },
   tipPrice: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   tipMeta: { color: '#E5E5EA', fontSize: 11, fontWeight: '600', marginTop: 1 },
+  fastestCallout: { position: 'absolute', top: 0, zIndex: 4, backgroundColor: '#F1FAE2', borderColor: '#CFE7A4', borderWidth: 1, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 9 },
+  fastestText: { color: '#3B6300', fontSize: 11, fontWeight: '700' },
 });

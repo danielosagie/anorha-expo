@@ -99,6 +99,15 @@ const rowStyles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 8,
   },
+  // Filled scan button pinned inside the barcode input.
+  inputScanBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: CHAT_COLORS.brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   moreToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1037,18 +1046,20 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wizardOpen, wizardIdx, wizardSteps, activeTab]);
 
-  // Barcodes are scanned, not typed — when the Barcode step opens (wizard OR sheet) with no
-  // code yet, open the scanner straight away. No second tap on a tiny "Scan" button.
+  // Barcodes are scanned, not typed — when the guided Barcode WIZARD step opens with no
+  // code yet, jump straight to the scanner. The field *sheet* does NOT auto-scan: tapping
+  // the Barcode row opens the editor, and the scan button (row + inside the input) launches
+  // the scanner on demand.
   const barcodeAutoScanRef = useRef(false);
   useEffect(() => {
-    const onBarcode = openField === 'barcode' || (wizardOpen && wizardSteps[wizardIdx] === 'barcode');
+    const onBarcode = wizardOpen && wizardSteps[wizardIdx] === 'barcode';
     if (!onBarcode) { barcodeAutoScanRef.current = false; return; }
     if (barcodeAutoScanRef.current || (activeData as any).barcode || !onOpenBarcodeScanner) return;
     barcodeAutoScanRef.current = true;
     const t = setTimeout(() => onOpenBarcodeScanner((code: string) => patchField('barcode', code)), 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField, wizardOpen, wizardIdx, wizardSteps]);
+  }, [wizardOpen, wizardIdx, wizardSteps]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
@@ -2021,12 +2032,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             placeholder="Add or scan"
             externalUpdate={hasExternalUpdate('barcode')}
             onPress={() => setOpenField('barcode')}
+            showChevron={false}
             trailing={
               <TouchableOpacity
                 style={rowStyles.rowScanBtn}
                 onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Icon name="qrcode-scan" size={18} color={CHAT_COLORS.dim} />
+                <Icon name="barcode-scan" size={20} color={CHAT_COLORS.brand} />
               </TouchableOpacity>
             }
           />
@@ -2203,13 +2216,21 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         return <SheetTextField value={d.sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" />;
       case 'barcode':
         return (
-          <View>
-            <SheetTextField value={d.barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN" />
-            <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
-              <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
-              <Text style={rowStyles.researchBtnText}>Scan barcode</Text>
-            </TouchableOpacity>
-          </View>
+          <SheetTextField
+            value={d.barcode}
+            onChangeText={(t) => patchField('barcode', t)}
+            autoFocus
+            placeholder="UPC / EAN"
+            trailing={
+              <TouchableOpacity
+                style={rowStyles.inputScanBtn}
+                onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Icon name="barcode-scan" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            }
+          />
         );
       case 'tags':
         return <ChipsField label="Tags" hideLabel valueArray={d.tags} onChangeArray={(arr) => patchField('tags', arr)} />;
@@ -2370,13 +2391,25 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           <SheetTextField value={(activeData as any).sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" helper="Your internal code to track this item" scope={scopeText} externalUpdate={hasExternalUpdate('sku')} />
         </FieldSheet>
 
-        {/* Barcode */}
+        {/* Barcode — type it or tap the scan button inside the input. */}
         <FieldSheet visible={openField === 'barcode'} title="Barcode" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN / code128" scope={scopeText} externalUpdate={hasExternalUpdate('barcode')} />
-          <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
-            <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
-            <Text style={rowStyles.researchBtnText}>Scan barcode</Text>
-          </TouchableOpacity>
+          <SheetTextField
+            value={(activeData as any).barcode}
+            onChangeText={(t) => patchField('barcode', t)}
+            autoFocus
+            placeholder="UPC / EAN / code128"
+            scope={scopeText}
+            externalUpdate={hasExternalUpdate('barcode')}
+            trailing={
+              <TouchableOpacity
+                style={rowStyles.inputScanBtn}
+                onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Icon name="barcode-scan" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            }
+          />
         </FieldSheet>
 
         {/* Tags — sheet title is the only heading (ChipsField label hidden), taller sheet. */}

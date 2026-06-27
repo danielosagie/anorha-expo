@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, ReactNode } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
 import { Globe } from 'lucide-react-native';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
@@ -23,6 +23,8 @@ export interface SheetTextFieldProps {
   /** Scope line, e.g. "Changes everywhere" or "Only eBay". */
   scope?: string;
   externalUpdate?: boolean;
+  /** Inline control pinned to the right inside the input (e.g. a barcode-scan button). */
+  trailing?: ReactNode;
 }
 
 export default function SheetTextField({
@@ -37,6 +39,7 @@ export default function SheetTextField({
   showCount = false,
   scope,
   externalUpdate = false,
+  trailing,
 }: SheetTextFieldProps) {
   const [local, setLocal] = useState(value ?? '');
   const [focused, setFocused] = useState(false);
@@ -64,24 +67,28 @@ export default function SheetTextField({
 
   return (
     <View>
-      <TextInput
-        style={[
-          styles.input,
-          multiline && styles.inputMultiline,
-          focused && styles.inputFocused,
-          externalUpdate && styles.inputExternal,
-        ]}
-        value={local}
-        onChangeText={handleChange}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        multiline={multiline}
-        keyboardType={keyboardType}
-        placeholder={placeholder}
-        placeholderTextColor={CHAT_COLORS.faint}
-        autoFocus={autoFocus}
-        maxLength={maxLength}
-      />
+      <View style={styles.inputWrap}>
+        <TextInput
+          style={[
+            styles.input,
+            multiline && styles.inputMultiline,
+            focused && styles.inputFocused,
+            externalUpdate && styles.inputExternal,
+            !!trailing && styles.inputWithTrailing,
+          ]}
+          value={local}
+          onChangeText={handleChange}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          multiline={multiline}
+          keyboardType={keyboardType}
+          placeholder={placeholder}
+          placeholderTextColor={CHAT_COLORS.faint}
+          autoFocus={autoFocus}
+          maxLength={maxLength}
+        />
+        {trailing ? <View style={styles.trailing}>{trailing}</View> : null}
+      </View>
 
       {(helper || (showCount && maxLength)) && (
         <View style={styles.metaRow}>
@@ -128,6 +135,9 @@ const styles = StyleSheet.create({
     borderColor: CHAT_COLORS.brand,
     borderWidth: 2,
   },
+  inputWrap: { position: 'relative' },
+  inputWithTrailing: { paddingRight: 52 },
+  trailing: { position: 'absolute', right: 7, top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
