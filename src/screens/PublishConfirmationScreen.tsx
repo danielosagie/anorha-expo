@@ -167,7 +167,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             <Icon name="chevron-left" size={22} color="#18181B" />
           </TouchableOpacity>
         </View>
-        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
+        <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
           <PrintingComplete
             title={savedToInventory ? 'Saved to inventory' : 'Import complete'}
             subtitle={sub}
@@ -215,8 +215,8 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
           </View>
         </View>
       ) : phase === 'publishing' ? (
-        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
-          {/* Prints the receipt and HOLDS (ready=false) until the POST returns. */}
+        <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
+          {/* Prints the receipt from a static top slot and HOLDS (ready=false) until the POST returns. */}
           <PrintingComplete
             title={savedToInventory ? 'Saving…' : 'Going live'}
             subtitle={platforms.length > 0 ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : ''}
