@@ -52,6 +52,11 @@ export default {
     "**/*.{ttf,png,jpg,jpeg,gif,webp,svg}"
   ],
   plugins: [
+    // Clerk native: its config plugin raises the iOS deployment target to 17.0 so the
+    // ClerkExpo pod (Clerk iOS SDK, requires iOS 17) actually installs. Without this in the
+    // plugins array the target stays at 15.1, CocoaPods skips ClerkExpo, and the autolinked
+    // `import ClerkExpo` fails to compile ("no such module 'ClerkExpo'").
+    "@clerk/expo",
     [
       "@sentry/react-native/expo",
       {
