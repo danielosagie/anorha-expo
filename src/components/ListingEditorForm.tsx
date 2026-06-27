@@ -1178,13 +1178,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const variantSuggestions: Array<{ name: string; values: string[] }> = ((platforms as any)[activePlatformKey]?.__variantSuggestions) || [];
 
   // Compute minimal required fields per platform for highlighting
+  // SKU is required everywhere — it's anorha's cross-platform sync link key (autoLinkBy: sku),
+  // and it's enforced in the registry too (publish-readiness / gap pill / wizard all agree).
   const requiredByPlatform: Record<string, string[]> = useMemo(() => ({
     shopify: ['title', 'sku', 'price', 'category'],
     square: ['title', 'sku', 'price'],
     amazon: ['title', 'sku', 'price'],
-    ebay: ['title', 'price', 'category'],
-    facebook: ['title', 'price'],
-    clover: ['name', 'price'],
+    ebay: ['title', 'sku', 'price', 'category'],
+    facebook: ['title', 'sku', 'price'],
+    clover: ['name', 'sku', 'price'],
   }), []);
   const requiredFields = requiredByPlatform[activePlatformKey] || ['title', 'sku', 'price'];
   const ignoredForPublish = isPlatformIgnored?.(activePlatformKey) ?? false;

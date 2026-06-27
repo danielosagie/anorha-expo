@@ -120,7 +120,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       shipping: true,
       supportsTaxonomy: true,
       categoryField: 'productCategoryId',
-      requiredFields: ['title', 'price', 'description', 'images', 'category'],
+      requiredFields: ['title', 'sku', 'price', 'description', 'images', 'category'],
     },
   },
   square: {
@@ -141,7 +141,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       canPublish: true,
       shipping: false,
       supportsTaxonomy: false,
-      requiredFields: ['title', 'price'],
+      requiredFields: ['title', 'sku', 'price'],
     },
   },
   clover: {
@@ -162,7 +162,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       canPublish: true,
       shipping: false,
       supportsTaxonomy: false,
-      requiredFields: ['title', 'price'],
+      requiredFields: ['title', 'sku', 'price'],
     },
   },
   ebay: {
@@ -184,7 +184,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       shipping: true,
       supportsTaxonomy: true,
       categoryField: 'categoryId',
-      requiredFields: ['title', 'price', 'description', 'images', 'category'],
+      requiredFields: ['title', 'sku', 'price', 'description', 'images', 'category'],
     },
   },
   facebook: {
@@ -209,7 +209,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       writeVia: 'computer',
       shipping: true,
       supportsTaxonomy: false,
-      requiredFields: ['title', 'price', 'description', 'images'],
+      requiredFields: ['title', 'sku', 'price', 'description', 'images'],
     },
   },
   amazon: {
@@ -226,7 +226,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       canPublish: false,
       shipping: false,
       supportsTaxonomy: false,
-      requiredFields: ['title', 'price', 'description', 'images'],
+      requiredFields: ['title', 'sku', 'price', 'description', 'images'],
     },
   },
   whatnot: {
@@ -242,7 +242,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       canPublish: false,
       shipping: false,
       supportsTaxonomy: false,
-      requiredFields: ['title', 'price'],
+      requiredFields: ['title', 'sku', 'price'],
     },
   },
   depop: {
@@ -257,7 +257,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
       canPublish: false,
       shipping: false,
       supportsTaxonomy: false,
-      requiredFields: ['title', 'price'],
+      requiredFields: ['title', 'sku', 'price'],
     },
   },
 };
