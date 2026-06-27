@@ -752,8 +752,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
         const currentId = activePlatformKeyLower === 'shopify' ? activeData.productCategoryId : activeData.categoryId;
         const bestScore = typeof data?.confidence === 'number' ? data.confidence : (typeof best.score === 'number' ? best.score : 0);
-        const minAutoScore = force ? 0.3 : 0.55;
-        if ((force || !currentId) && bestScore >= minAutoScore) {
+        // A manual "Auto-find" tap (force) ALWAYS applies the top candidate — the backend
+        // sometimes returns good matches with no numeric score, and the old `bestScore >= 0.3`
+        // gate silently dropped those (the seller tapped and nothing happened). The silent
+        // auto-run still respects the confidence threshold so it only fills a blank when sure.
+        if (force || (!currentId && bestScore >= 0.55)) {
           const updates: any = {};
           if (activePlatformKeyLower === 'shopify') {
             updates.productCategoryId = best.platformCategoryId || best.value;
@@ -769,7 +772,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
           patchPlatform(prev => ({ ...prev, ...updates }));
         } else if (!currentId) {
-          log.debug(`[Taxonomy] Auto-apply skipped (score ${bestScore} < ${minAutoScore}).`);
+          log.debug(`[Taxonomy] Auto-apply skipped (score ${bestScore} < 0.55).`);
         }
       }
 

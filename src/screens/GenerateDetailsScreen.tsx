@@ -527,12 +527,31 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
     }
 
-    // Hydrate into platformsRef (preserves user edits)
-    const hydrated = hydratePlatformsFromBackend(normalized, platformsRef.current);
-    log.debug('[GEN-DETAILS] Hydrated platforms:', Object.keys(hydrated));
-    updatePlatforms(() => hydrated);
-
-    lastHydratedJobRef.current = currentJobId;
+    // Re-hydration must MERGE UNDER the seller's saved draft. On a fresh mount platformsRef
+    // is EMPTY, so passing it as the "preserve edits" base let the generated data clobber
+    // every edit (price, category, …) each time they navigated back — the autosave was
+    // writing fine, but re-hydration overwrote it on the way back in. Load the local draft
+    // first and use it as the existing edits (which win in the smart-merge).
+    (async () => {
+      let existing: any = platformsRef.current;
+      if (!existing || Object.keys(existing).length === 0) {
+        const vId = (route.params as any)?.variantId || (res as any)?.variantId;
+        const k = vId ? `gen-draft:v:${vId}` : (jobId ? `gen-draft:j:${jobId}:${currentProductIndex}` : null);
+        if (k) {
+          try {
+            const raw = await AsyncStorage.getItem(k);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed?.draftData && Object.keys(parsed.draftData).length > 0) existing = parsed.draftData;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+      const hydrated = hydratePlatformsFromBackend(normalized, existing);
+      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(hydrated));
+      updatePlatforms(() => hydrated);
+      lastHydratedJobRef.current = currentJobId;
+    })();
   }, [results, jobId, currentProductIndex]);
 
 
