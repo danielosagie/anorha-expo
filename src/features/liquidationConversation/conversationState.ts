@@ -3,6 +3,7 @@ import type {
   ConversationQueueItem,
   ConversationThreadState,
   ConversationMessageKind,
+  ConversationToolStep,
 } from './types';
 
 export const HOME_DRAFT_SCOPE = '__home__';
@@ -222,7 +223,7 @@ export const appendAssistantToolStep = (
   state: ConversationThreadState,
   campaignId: string,
   threadId: string,
-  step: { tool: string; label: string; status?: string; durationMs?: number; resultSummary?: string },
+  step: ConversationToolStep,
   assistantMessageId?: string,
 ): ConversationThreadState => {
   const ensured = ensureAssistantPlaceholder(state, campaignId, threadId, assistantMessageId);

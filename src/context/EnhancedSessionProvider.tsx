@@ -124,6 +124,14 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     
     if (!shouldValidate) {
       log.debug('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
+      // shouldValidate was false because needsBridgeSetup was false → the bridge IS
+      // configured. The init effect can re-run (callback deps churn) and reset
+      // bridgeReady=false; a skipped validation must NOT leave it stuck false, or the
+      // app bounces to the reconnect screen over a perfectly live bridge. Re-affirm.
+      if (configuredRef.current) {
+        setBridgeReady(true);
+        setReady(true);
+      }
       return;
     }
 
@@ -268,7 +276,19 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
     log.debug('[EnhancedSessionProvider] Checking persisted auth state...');
-    
+
+    // If the live bridge is already up, this is an effect RE-RUN (the init effect's
+    // callback deps churned), not a fresh boot. Do NOT demote the session back to
+    // cached/bridgeReady=false — that, combined with the 30-min skip in
+    // validateAuthIfNeeded, left bridgeReady stuck false and bounced the app to the
+    // reconnect screen over a healthy session. Re-affirm the live state and bail.
+    if (configuredRef.current) {
+      setBridgeReady(true);
+      setReady(true);
+      setInitializing(false);
+      return;
+    }
+
     const persistedState = await authPersistence.current.getAuthState();
     const cachedEntitlements = await loadCachedEntitlements();
     
@@ -345,7 +365,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const refresh = useCallback(async () => {
     log.debug('[EnhancedSessionProvider] Manual refresh requested');
     try {
-      if (!bridgeReady) {
+      // Gate on configuredRef (a stable ref), NOT the bridgeReady STATE — reading
+      // state here would force bridgeReady into the deps and churn refresh's identity.
+      if (!configuredRef.current) {
         await validateAuthIfNeeded(true);
       }
 
@@ -356,31 +378,40 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       const { user: me } = await getUserLike();
       const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());
-      
+
       // Update persisted state
       await authPersistence.current.saveAuthState({
         isAuthenticated: true,
         userId: me?.id || null,
         email: me?.email || null,
       });
-      
+
       setUser(me);
       setEntitlements(ents);
       await persistEntitlements(ents);
-      setBridgeReady(true);
-      setSessionMode('live');
-      setUsingCachedSession(false);
+      if (configuredRef.current) {
+        setBridgeReady(true);
+        setSessionMode('live');
+        setUsingCachedSession(false);
+      }
       setBootstrapError(null);
       setLastReadyAt(Date.now());
     } catch (error) {
       log.error('[EnhancedSessionProvider] Refresh failed:', error);
-      // Don't clear state on refresh failures - might be network issue
-      setBridgeReady(false);
-      setSessionMode('cached');
-      setUsingCachedSession(true);
+      // TRANSIENT failure (getUserLike/entitlements timeout, token-rotation race,
+      // network flake): do NOT demote a LIVE bridge. Demoting here bounced a healthy
+      // signed-in session to the reconnect screen and made "Try again" LOOP — each tap
+      // re-failed transiently and re-demoted. Genuine token loss is already handled by
+      // validateAuthIfNeeded's null-token path (degrades after retries). Only surface
+      // degraded if the bridge isn't actually up.
+      if (!configuredRef.current) {
+        setBridgeReady(false);
+        setSessionMode('cached');
+        setUsingCachedSession(true);
+      }
       setBootstrapError('Refresh failed. Cached account data is still available.');
     }
-  }, [bridgeReady, loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
+  }, [loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
 
   const value: SessionContextType = useMemo(() => ({ 
     ready: ready && !initializing, 

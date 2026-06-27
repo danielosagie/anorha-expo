@@ -210,6 +210,85 @@ export interface ChatJobCardMeta {
   status?: string;
 }
 
+// ── Activity model ─────────────────────────────────────────────────────
+// The structured payloads that drive the inline activity cards + the review
+// tray. All additive/optional: a message carrying only the legacy toolSteps +
+// resultSummary still renders exactly as before (deriveActivities synthesizes a
+// single {kind:'tool-run'} payload). Color in the UI encodes OLD-vs-NEW
+// (red = superseded, green = current), NEVER good-vs-bad.
+
+/**
+ * One value change — the diff atom. `label` is user-facing and pre-humanized
+ * server-side; `field` is an internal key and must NEVER be rendered.
+ */
+export interface ValueChange {
+  /** Internal key, never shown to the seller ('price', 'quantity', 'status'). */
+  field: string;
+  /** User-facing field name shown in the diff ('Price', 'In stock', 'Status'). */
+  label: string;
+  /** Old value. null/undefined => set for the first time (no strike, no arrow). */
+  from?: string | number | null;
+  /** New value. null => the field was cleared. */
+  to: string | number | null;
+  /** Unit appended once after the new value ('left', 'in stock'). */
+  unit?: string;
+  kind?: 'price' | 'inventory' | 'status' | 'text';
+  /** Drives the sheet-only delta-chip tint; NEVER the feed token color. */
+  direction?: 'up' | 'down' | 'neutral';
+  /** Identity for an "Open item" target, when the change is about one product. */
+  itemId?: string;
+  itemName?: string;
+  itemImageUrl?: string;
+  productId?: string;
+}
+
+/** One outcome-only justification row ("Found 6 similar sold nearby"). */
+export interface EvidenceItem {
+  label: string;
+  value?: string;
+  sub?: string;
+  imageUrl?: string;
+}
+
+/** A reversible action — presence of this on a change shows the Undo affordance. */
+export interface UndoRef {
+  actionType: string;
+  payload: Record<string, unknown>;
+  /** Confirm copy on the in-place undo ("Put the price back to $1,200?"). */
+  revertLabel?: string;
+}
+
+/** Identity of the product a change/publish refers to (for "Open item"). */
+export interface ActivityItemRef {
+  productId: string;
+  name?: string;
+  imageUrl?: string;
+  listingCount?: number;
+}
+
+/** A standing routine / watch — the Buoy-style recurring card + routine tray. */
+export interface Routine {
+  id: string;
+  /** Outcome language, never a tool/cron name ("Check Studio Display listings"). */
+  title: string;
+  cadence: {
+    type: 'daily' | 'weekly' | 'hourly' | 'interval';
+    /** Local time-of-day for daily/weekly ("9:00 AM"). */
+    atLocal?: string;
+    /** 0–6 (Sun–Sat) for weekly. */
+    weekday?: number;
+    /** Interval length for hourly/interval. */
+    everyHours?: number;
+  };
+  nextRunAt?: string;
+  lastRunAt?: string;
+  /** Plain outcome of the last run ("nothing needed doing"). */
+  lastRunOutcome?: string;
+  scopeLabel?: string;
+  watchLabel?: string;
+  paused?: boolean;
+}
+
 /**
  * Compact, arg-free record of one executed agent tool. Streamed only AFTER the
  * tool finishes (tool.completed) and persisted in the assistant message's
@@ -223,7 +302,46 @@ export interface ConversationToolStep {
   durationMs?: number;
   /** Short, user-safe outcome shown under the step label ("12 found", "$650 median"). */
   resultSummary?: string;
+  /** A richer, still-safe result for the step-detail page: scalar lines + sample rows. */
+  resultDetail?: { lines?: string[]; items?: Array<{ label: string; value?: string; sub?: string }> };
+  // ── Optional structured fields (light up the diff / review tray) ──
+  /** Value changes this step made — drives the diff row + reprice/restock cards. */
+  changes?: ValueChange[];
+  /** Plain-language "why" banner shown in the review tray. */
+  reason?: string;
+  /** What the step was based on — the "see what it's based on" sub-page. */
+  evidence?: { headline: string; items: EvidenceItem[] };
+  /** The product this step acted on, for the "Open item" affordance. */
+  itemRef?: ActivityItemRef;
+  /** Presence => an Undo pill is offered for this step's change. */
+  undo?: UndoRef;
 }
+
+/** Shared fields on every inline activity card payload. */
+export interface ActivityBase {
+  id: string;
+  /** Humanized outcome title shown on the card ("Lowered the price"). */
+  title: string;
+  status?: 'ok' | 'failed' | 'pending' | 'syncing';
+}
+
+/**
+ * The discriminated union ActivityCard switches on. Lives in
+ * message.metadata.activities[] (rendered in order under the assistant text).
+ */
+export type ActivityPayload =
+  | (ActivityBase & { kind: 'tool-run'; steps: ConversationToolStep[]; reasoning?: string })
+  | (ActivityBase & {
+      kind: 'value-change';
+      changes: ValueChange[];
+      reason?: string;
+      evidence?: { headline: string; items: EvidenceItem[] };
+      itemRef?: ActivityItemRef;
+      undo?: UndoRef;
+    })
+  | (ActivityBase & { kind: 'publish'; changes: ValueChange[]; channels?: string[]; itemRef?: ActivityItemRef })
+  | (ActivityBase & { kind: 'routine'; routine: Routine })
+  | (ActivityBase & { kind: 'reminder'; whenAtLabel: string; what: string; nextRunAt?: string });
 
 export interface StreamTurnObserver {
   onThreadCreated?: (threadId: string) => void;

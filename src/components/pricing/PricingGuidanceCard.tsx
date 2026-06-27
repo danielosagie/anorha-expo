@@ -11,6 +11,7 @@ import React from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PriceHistorySlider, HistoryPoint } from './PriceHistorySlider';
+import { CompsPriceChart } from './CompsPriceChart';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -277,13 +278,29 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
           </View>
         ) : null}
 
-        {/* Sold-comp median history (up to ~1 year, as data accrues) */}
-        {p.history?.dataPoints && p.history.dataPoints.length >= 2 ? (
-          <>
-            <View style={styles.divider} />
-            <PriceHistorySlider dataPoints={p.history.dataPoints} />
-          </>
-        ) : null}
+        {/* Sold-comp distribution from the real comps (price × how many sold × how fast),
+            draggable for a per-band tooltip. Falls back to the median sparkline only when
+            there aren't enough priced comps to chart. */}
+        {(() => {
+          const pricedCount = samples.filter((s) => typeof s.price === 'number' && (s.price as number) > 0).length;
+          if (pricedCount >= 3) {
+            return (
+              <>
+                <View style={styles.divider} />
+                <CompsPriceChart samples={samples} />
+              </>
+            );
+          }
+          if (p.history?.dataPoints && p.history.dataPoints.length >= 2) {
+            return (
+              <>
+                <View style={styles.divider} />
+                <PriceHistorySlider dataPoints={p.history.dataPoints} />
+              </>
+            );
+          }
+          return null;
+        })()}
       </View>
 
       {/* Recent comps */}

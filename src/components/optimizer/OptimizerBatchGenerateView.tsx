@@ -120,12 +120,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
         // Simulate async generation process start
         setTimeout(() => {
             setIsGenerating(false);
-
-            Alert.alert(
-                '🔮 Magic Started!',
-                `AI is now generating optimized details for ${selectedIds.size} products. You'll be notified when they are ready for review.`,
-                [{ text: 'Awesome', onPress: () => onComplete(idsToMark) }]
-            );
+            onComplete(idsToMark);
         }, 1500);
     };
 

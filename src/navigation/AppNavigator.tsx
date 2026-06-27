@@ -37,7 +37,6 @@ import { supabase, stopClerkSupabaseBridge, ensureSupabaseJwt, getUserLike } fro
 import InitialScreen from '../screens/InitialScreen';
 import OnboardingSlides from '../screens/OnboardingSlides';
 import AuthScreen from '../screens/AuthScreen';
-import DashboardScreen from '../screens/DashboardScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import ImportProgressBanner from '../components/ImportProgressBanner';
@@ -112,7 +111,6 @@ export type AppStackParamList = {
   CreateAccountScreen: undefined;
   AccountSyncIssueScreen: undefined;
   TabNavigator: undefined;
-  Dashboard: undefined;
   GlobalSearch: undefined;
   AddListing?: { // The entire params object for AddListing is optional
     initialData?: {
@@ -367,6 +365,8 @@ export type AppStackParamList = {
   BackfillOptimizer: {
     newlyImportedIds?: string[];
     source?: string;
+    connectionId?: string;
+    platformName?: string;
   } | undefined;
   CSVColumnMapping: {
     csvHeaders: string[];
@@ -605,7 +605,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="Team" component={sb(TeamScreen)} />
     <AppStackNav.Screen name="Billing" component={sb(BillingScreen)} />
     <AppStackNav.Screen name="BillingSupport" component={sb(BillingSupportScreen)} />
-    <AppStackNav.Screen name="Dashboard" component={sb(DashboardScreen)} />
     <AppStackNav.Screen
       name="GlobalSearch"
       component={GlobalSearchScreen}

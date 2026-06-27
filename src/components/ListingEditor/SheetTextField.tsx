@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
-import { Sparkles, Globe } from 'lucide-react-native';
+import { Globe } from 'lucide-react-native';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 
 /**
@@ -20,8 +20,6 @@ export interface SheetTextFieldProps {
   helper?: string;
   maxLength?: number;
   showCount?: boolean;
-  /** AI rewrite — maps to the existing per-field regenerate. Renders the chip row when provided. */
-  onRewrite?: () => void;
   /** Scope line, e.g. "Changes everywhere" or "Only eBay". */
   scope?: string;
   externalUpdate?: boolean;
@@ -37,7 +35,6 @@ export default function SheetTextField({
   helper,
   maxLength,
   showCount = false,
-  onRewrite,
   scope,
   externalUpdate = false,
 }: SheetTextFieldProps) {
@@ -94,15 +91,6 @@ export default function SheetTextField({
               {local.length} / {maxLength}
             </Text>
           ) : null}
-        </View>
-      )}
-
-      {!!onRewrite && (
-        <View style={styles.chipRow}>
-          <TouchableOpacity style={[styles.chip, styles.chipFilled]} onPress={onRewrite} activeOpacity={0.85}>
-            <Sparkles size={13} color={CHAT_COLORS.brandDeep} />
-            <Text style={[styles.chipText, styles.chipTextFilled]}>Rewrite</Text>
-          </TouchableOpacity>
         </View>
       )}
 

@@ -8,17 +8,16 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { OptimizerBatchGenerateView } from '../components/optimizer/OptimizerBatchGenerateView';
 import { OptimizerPhotoModeView } from '../components/optimizer/OptimizerPhotoModeView';
+import OptimizerReviewView from '../components/optimizer/OptimizerReviewView';
 import { useOptimizerQueues, ClassifiedProduct } from '../hooks/useOptimizerQueues';
-import { RC, MiniProgress } from '../components/resolve/ResolveKit';
-import { OptimizeResolver, OptimizeCase, Decision } from '../components/resolve/optimizeResolvers';
+import { RC } from '../components/resolve/ResolveKit';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { getPlatform } from '../config/platforms';
 import {
   LobbyHeader,
-  HeaderPill,
-  IssueLane,
-  LaneIssue,
+  UpNextRow,
   IconName,
 } from '../components/quest/LobbyKit';
-import BottomActionBar from '../components/BottomActionBar';
 
 // Optimize v2 — one lobby of grouped gaps (photos · details · manual), each
 // routing to the fix it needs. Photo + details keep the real camera / AI views;
@@ -27,82 +26,14 @@ import BottomActionBar from '../components/BottomActionBar';
 type Bucket = 'photo' | 'data' | 'manual';
 type ScreenView =
   | { kind: 'lobby' }
+  | { kind: 'explainer' }
+  | { kind: 'review' }
   | { kind: 'lesson'; q: 'photo' | 'data' }
-  | { kind: 'datachoose' }
-  | { kind: 'dataselect' }
-  | { kind: 'manual'; i: number }
-  | { kind: 'datamanual'; i: number }
   | { kind: 'done'; n: number; label: string };
 
 const BUCKET_ORDER: Bucket[] = ['photo', 'data', 'manual'];
 
 const plural = (n: number) => (n === 1 ? '' : 's');
-
-// Lane presentation for the optimize lobby — mirrors the match lobby's
-// IssueLane so the Match/Optimize Lobby layout is shared.
-const OPT_META: Record<Bucket, { icon: IconName; title: string; action: string; sub: (n: number) => string }> = {
-  photo: {
-    icon: 'camera',
-    title: 'Need photos',
-    action: 'Shoot',
-    sub: (n) => `${n} listing${plural(n)}`,
-  },
-  data: {
-    icon: 'text-box-outline',
-    title: 'Need details',
-    action: 'Generate',
-    sub: (n) => `${n} item${plural(n)}`,
-  },
-  manual: {
-    icon: 'pencil-box-outline',
-    title: 'Need SKU · price · stock',
-    action: 'Fill',
-    sub: (n) => `${n} item${plural(n)}`,
-  },
-};
-
-function firstImage(p: ClassifiedProduct): string | null {
-  const imgs = (p.ProductImages as any[]) || [];
-  return imgs[0]?.ImageUrl || imgs[0]?.imageUrl || null;
-}
-
-function manualCaseFor(p: ClassifiedProduct): OptimizeCase {
-  const any = p as any;
-  const price = any.Price ?? any.price;
-  const stock = any.Quantity ?? any.InventoryQuantity ?? any.quantity;
-  const barcode = any.Barcode ?? any.barcode;
-  return {
-    id: p.Id,
-    kind: 'manual',
-    title: 'Fill the gaps',
-    note: 'Can’t auto-guess',
-    itemTitle: p.Title || 'Item',
-    itemImage: firstImage(p),
-    itemSub: p.reason,
-    fields: [
-      { label: 'SKU', value: p.Sku || '', placeholder: 'e.g. 1001-B', required: !p.Sku },
-      { label: 'Price', value: price ? `$${price}` : '', placeholder: '$0.00', required: !price, half: true },
-      { label: 'Stock', value: stock != null ? String(stock) : '', placeholder: '0', half: true },
-      { label: 'Barcode / UPC', value: barcode || '', placeholder: 'optional' },
-    ],
-  };
-}
-
-// "Fill by hand" for the details bucket — title + description, not SKU/price.
-function dataManualCase(p: ClassifiedProduct): OptimizeCase {
-  return {
-    id: p.Id,
-    kind: 'manual',
-    title: 'Write the details',
-    note: p.reason,
-    itemTitle: p.Title || 'Item',
-    itemImage: firstImage(p),
-    fields: [
-      { label: 'Title', value: p.Title || '', placeholder: 'Product title', required: (p.Title || '').trim().length < 5 },
-      { label: 'Description', value: p.Description || '', placeholder: 'Describe the item' },
-    ],
-  };
-}
 
 export function BackfillOptimizerScreen() {
   const navigation = useNavigation<StackNavigationProp<any>>();
@@ -114,222 +45,181 @@ export function BackfillOptimizerScreen() {
     : [];
   const newlyImportedSet = useMemo(() => new Set(newlyImportedIds), [newlyImportedIds]);
 
+  // When entered from the import hub, scope the queues to THIS import's connection
+  // so the counts here match the hub exactly (same hook, same scope). A standalone
+  // entry with no connectionId falls back to the whole catalog.
+  const connectionId: string | undefined = route.params?.connectionId || undefined;
+
   const [view, setView] = useState<ScreenView>({ kind: 'lobby' });
-  const [completedIds, setCompletedIds] = useState<Set<string>>(new Set());
-  const [manualDeck, setManualDeck] = useState<OptimizeCase[]>([]);
-  const [dataDeck, setDataDeck] = useState<OptimizeCase[]>([]); // details "fill by hand"
-  const [dataSubset, setDataSubset] = useState<ClassifiedProduct[] | null>(null); // chosen by "pick how many"
+  // Per-task completion so finishing photos never evicts an item that ALSO needs
+  // details from the details queue (and vice-versa).
+  const [completedPhotoIds, setCompletedPhotoIds] = useState<Set<string>>(new Set());
+  const [completedDetailIds, setCompletedDetailIds] = useState<Set<string>>(new Set());
 
   const { loading, products, counts, photoNeededItems, dataNeededItems, manualQueueItems, refresh } =
-    useOptimizerQueues({ limit: 100 });
+    useOptimizerQueues({ connectionId });
 
   const prioritize = useCallback(
-    (list: ClassifiedProduct[]) => {
-      const remaining = list.filter((i) => !completedIds.has(i.Id));
+    (list: ClassifiedProduct[], done: Set<string>) => {
+      const remaining = list.filter((i) => !done.has(i.Id));
       return [...remaining].sort((a, b) => {
         const an = newlyImportedSet.has(a.Id) ? 0 : 1;
         const bn = newlyImportedSet.has(b.Id) ? 0 : 1;
         return an - bn;
       });
     },
-    [completedIds, newlyImportedSet],
+    [newlyImportedSet],
   );
 
-  const photoQueue = useMemo(() => prioritize(photoNeededItems), [prioritize, photoNeededItems]);
-  const dataQueue = useMemo(() => prioritize(dataNeededItems), [prioritize, dataNeededItems]);
-  const manualQueue = useMemo(() => prioritize(manualQueueItems), [prioritize, manualQueueItems]);
+  const photoQueue = useMemo(() => prioritize(photoNeededItems, completedPhotoIds), [prioritize, photoNeededItems, completedPhotoIds]);
+  const dataQueue = useMemo(() => prioritize(dataNeededItems, completedDetailIds), [prioritize, dataNeededItems, completedDetailIds]);
+  const manualQueue = useMemo(() => prioritize(manualQueueItems, completedDetailIds), [prioritize, manualQueueItems, completedDetailIds]);
 
   const queueFor = (b: Bucket) => (b === 'photo' ? photoQueue : b === 'data' ? dataQueue : manualQueue);
   const remainingFor = (b: Bucket) => queueFor(b).length;
 
-  const polishedCount = Math.max(
-    counts.total - counts.photoNeeded - counts.dataNeeded - counts.manualQueue,
-    0,
-  );
-  const attention = photoQueue.length + dataQueue.length + manualQueue.length;
-  const readyPct = counts.total ? Math.round((polishedCount / counts.total) * 100) : 100;
+  const polishedCount = Math.max(counts.total - counts.attention, 0);
   const firstBucket = BUCKET_ORDER.find((b) => remainingFor(b) > 0) || null;
 
-  // One lobby "issue" row per non-empty bucket, first = active step.
-  const optimizeIssues: LaneIssue[] = BUCKET_ORDER.map((b) => ({ b, n: remainingFor(b) }))
-    .filter(({ n }) => n > 0)
-    .map(({ b, n }, i) => {
-      const meta = OPT_META[b];
-      return {
-        id: b,
-        icon: meta.icon,
-        title: meta.title,
-        sub: meta.sub(n),
-        count: n,
-        state: i === 0 ? 'active' : 'locked',
-        ctaLabel: `${meta.action} ${n}`,
-        onFix: () => enterBucket(b),
-      };
-    });
-
-  const dataChooseCase: OptimizeCase = useMemo(
-    () => ({
-      id: 'data-choose',
-      kind: 'datachoose',
-      title: `${dataQueue.length} need details`,
-      note: 'Weak titles & thin copy',
-      count: dataQueue.length,
-      chips: ['Title', 'Description', 'Tags', 'Category'],
-    }),
-    [dataQueue.length],
-  );
-  const dataSelectCase: OptimizeCase = useMemo(
-    () => ({
-      id: 'data-select',
-      kind: 'dataselect',
-      title: 'Pick how many',
-      note: 'Tap to include',
-      rows: dataQueue.map((it) => ({ id: it.Id, title: it.Title || 'Item', sub: it.Sku || undefined, miss: it.reason, on: true })),
-    }),
-    [dataQueue],
-  );
+  // The product-detail review walks a snapshot of ids but reads the LIVE rows so
+  // edits/generation show fresh. Channel pills come from the connected platforms.
+  const [reviewIds, setReviewIds] = useState<Set<string>>(new Set());
+  const { connections } = usePlatformConnections();
+  const platformKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of connections || []) {
+      if (c?.IsEnabled === false) continue;
+      const def = getPlatform(c?.PlatformType);
+      if (def) set.add(def.key);
+    }
+    return Array.from(set);
+  }, [connections]);
+  const reviewProducts = useMemo(() => products.filter((p) => reviewIds.has(p.Id)), [products, reviewIds]);
 
   const markDone = useCallback(
-    (ids: string[]) => {
-      setCompletedIds((prev) => new Set([...prev, ...ids]));
+    (ids: string[], task: 'photo' | 'details') => {
+      const setter = task === 'photo' ? setCompletedPhotoIds : setCompletedDetailIds;
+      setter((prev) => new Set([...prev, ...ids]));
       refresh();
     },
     [refresh],
   );
 
+  // End of the optimize stage → the shared completion screen (PublishConfirmation,
+  // import variant). Same screen the match stage lands on, so the two stages end
+  // the same way.
+  const finishOptimize = useCallback(() => {
+    navigation.navigate('PublishConfirmation' as any, {
+      origin: 'import',
+      importCount: polishedCount,
+      savedToInventory: false,
+    });
+  }, [navigation, polishedCount]);
+
   const enterBucket = (b: Bucket) => {
     if (remainingFor(b) === 0) return;
-    if (b === 'manual') {
-      setManualDeck(manualQueue.map(manualCaseFor));
-      setView({ kind: 'manual', i: 0 });
-    } else if (b === 'data') {
-      setView({ kind: 'datachoose' });
-    } else {
-      setView({ kind: 'lesson', q: b });
+    if (b === 'photo') {
+      setView({ kind: 'lesson', q: 'photo' });
+      return;
     }
+    // Details (data + manual) → the product-detail review editor.
+    setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
+    setView({ kind: 'review' });
   };
-
-  const handleLessonComplete = useCallback(
-    (label: string) => (ids: string[]) => {
-      markDone(ids);
-      setView({ kind: 'done', n: ids.length, label });
-    },
-    [markDone],
-  );
-
-  // If the active manual card's queue empties, fall back to the lobby.
-  useEffect(() => {
-    if (view.kind === 'manual' && manualDeck.length === 0) setView({ kind: 'lobby' });
-  }, [view, manualDeck.length]);
 
   // ── Photo / Details lessons keep the real camera + AI views ───────────────
   if (view.kind === 'lesson' && view.q === 'photo') {
     return (
       <OptimizerPhotoModeView
         onBack={() => setView({ kind: 'lobby' })}
-        onComplete={handleLessonComplete('photos added')}
+        onComplete={(ids: string[]) => {
+          markDone(ids, 'photo');
+          // Photos done → name the next task (the explainer) when details remain,
+          // otherwise fall through to the between-flows done beat.
+          if (dataQueue.length + manualQueue.length > 0) setView({ kind: 'explainer' });
+          else setView({ kind: 'done', n: ids.length, label: 'photos added' });
+        }}
         queueProducts={photoQueue}
       />
     );
   }
+
+  // ── Explainer — the task handoff between photos and details ───────────────
+  if (view.kind === 'explainer') {
+    const n = dataQueue.length + manualQueue.length;
+    return (
+      <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
+        <View style={styles.introBackRow}>
+          <TouchableOpacity onPress={() => setView({ kind: 'lobby' })} style={styles.introBackBtn} hitSlop={HIT}>
+            <MaterialCommunityIcons name="arrow-left" size={20} color={RC.ink} />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.introBody}>
+          <View style={styles.taskStrip}>
+            <View style={styles.taskStripDone}>
+              <MaterialCommunityIcons name="check-bold" size={14} color={RC.greenDark} />
+              <Text style={styles.taskStripDoneText}>Photos</Text>
+            </View>
+            <View style={styles.taskStripLine} />
+            <View style={styles.taskStripActive}>
+              <Text style={styles.taskStripActiveText}>Details</Text>
+            </View>
+          </View>
+          <Text style={styles.introTitle}>Now, the details</Text>
+          <Text style={styles.introSub}>
+            We&rsquo;ll write the title, description and category for {n} item{plural(n)} — for every channel.
+            You just review each one.
+          </Text>
+        </View>
+        <View style={[styles.introFooter, { paddingBottom: insets.bottom + 18 }]}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
+              if (dataQueue.length > 0) setView({ kind: 'lesson', q: 'data' });
+              else setView({ kind: 'review' });
+            }}
+            style={styles.introPrimary}
+          >
+            <MaterialCommunityIcons name="star-four-points" size={18} color="#fff" />
+            <Text style={styles.introPrimaryText}>Generate details for {n}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')} style={styles.introSkip}>
+            <Text style={styles.introSkipText}>I&rsquo;ll write them myself</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Review — product-detail editor with per-channel readiness pills ────────
+  if (view.kind === 'review') {
+    return (
+      <OptimizerReviewView
+        products={reviewProducts}
+        platforms={platformKeys}
+        onBack={() => setView({ kind: 'lobby' })}
+        onComplete={(ids) => {
+          const done = ids.length ? ids : reviewProducts.map((p) => p.Id);
+          markDone(done, 'details');
+          setView({ kind: 'done', n: done.length, label: 'details ready' });
+        }}
+      />
+    );
+  }
+
+  // AI bulk-generate (existing view), then drop into the review to confirm.
   if (view.kind === 'lesson' && view.q === 'data') {
     return (
       <OptimizerBatchGenerateView
-        onBack={() => setView({ kind: 'datachoose' })}
-        onComplete={handleLessonComplete('listings drafted')}
-        queueProducts={dataSubset && dataSubset.length ? dataSubset : dataQueue}
-      />
-    );
-  }
-
-  // ── Details flow: Choose how → (generate all · pick subset · by hand) ──────
-  if (view.kind === 'datachoose') {
-    return (
-      <OptimizeResolver
-        c={dataChooseCase}
-        idx={1}
-        total={1}
-        topInset={insets.top}
         onBack={() => setView({ kind: 'lobby' })}
-        onResolve={(d, meta) => {
-          if (d === 'alt') return setView({ kind: 'lobby' });
-          const r = meta?.route || 'all';
-          if (r === 'pick') return setView({ kind: 'dataselect' });
-          if (r === 'hand') {
-            setDataDeck(dataQueue.map(dataManualCase));
-            return setView({ kind: 'datamanual', i: 0 });
-          }
-          setDataSubset(null);
-          setView({ kind: 'lesson', q: 'data' });
+        onComplete={(ids: string[]) => {
+          markDone(ids, 'details');
+          setView({ kind: 'review' });
         }}
+        queueProducts={dataQueue}
       />
     );
-  }
-  if (view.kind === 'dataselect') {
-    return (
-      <OptimizeResolver
-        c={dataSelectCase}
-        idx={1}
-        total={1}
-        topInset={insets.top}
-        onBack={() => setView({ kind: 'datachoose' })}
-        onResolve={(d, meta) => {
-          if (d === 'alt') {
-            setDataSubset(null); // "select all" → generate for everyone
-          } else {
-            const ids = new Set(meta?.selectedIds || []);
-            setDataSubset(dataQueue.filter((it) => ids.has(it.Id)));
-          }
-          setView({ kind: 'lesson', q: 'data' });
-        }}
-      />
-    );
-  }
-  if (view.kind === 'datamanual') {
-    const total = dataDeck.length;
-    const di = Math.min(view.i, Math.max(total - 1, 0));
-    const cur = dataDeck[di];
-    if (cur) {
-      return (
-        <OptimizeResolver
-          key={cur.id}
-          c={cur}
-          idx={di + 1}
-          total={total}
-          topInset={insets.top}
-          onBack={() => (di > 0 ? setView({ kind: 'datamanual', i: di - 1 }) : setView({ kind: 'datachoose' }))}
-          onResolve={() => {
-            markDone([cur.id]);
-            if (di + 1 < total) setView({ kind: 'datamanual', i: di + 1 });
-            else setView({ kind: 'done', n: total, label: 'details written' });
-          }}
-        />
-      );
-    }
-  }
-
-  // ── Manual "Fill the gaps" resolver deck ──────────────────────────────────
-  if (view.kind === 'manual') {
-    const total = manualDeck.length;
-    const di = Math.min(view.i, Math.max(total - 1, 0));
-    const cur = manualDeck[di];
-    if (cur) {
-      return (
-        <OptimizeResolver
-          key={cur.id}
-          c={cur}
-          idx={di + 1}
-          total={total}
-          topInset={insets.top}
-          onBack={() => (di > 0 ? setView({ kind: 'manual', i: di - 1 }) : setView({ kind: 'lobby' }))}
-          onResolve={(_d: Decision) => {
-            markDone([cur.id]);
-            if (di + 1 < total) setView({ kind: 'manual', i: di + 1 });
-            else setView({ kind: 'done', n: total, label: 'gaps filled' });
-          }}
-        />
-      );
-    }
   }
 
   // ── Done — between flows ──────────────────────────────────────────────────
@@ -342,8 +232,12 @@ export function BackfillOptimizerScreen() {
           </View>
           <Text style={styles.doneCount}>{view.n}</Text>
           <Text style={styles.doneLabel}>{view.label}</Text>
-          <TouchableOpacity style={styles.doneBtn} activeOpacity={0.88} onPress={() => setView({ kind: 'lobby' })}>
-            <Text style={styles.doneBtnText}>{firstBucket ? 'Keep going' : 'Back to optimize'}</Text>
+          <TouchableOpacity
+            style={styles.doneBtn}
+            activeOpacity={0.88}
+            onPress={() => (firstBucket ? setView({ kind: 'lobby' }) : finishOptimize())}
+          >
+            <Text style={styles.doneBtnText}>{firstBucket ? 'Keep going' : 'All set · finish'}</Text>
             <MaterialCommunityIcons name="chevron-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -351,14 +245,18 @@ export function BackfillOptimizerScreen() {
     );
   }
 
-  // ── Lobby (shares the Match/Optimize Lobby layout) ────────────────────────
+  // ── Step 0 · the optimize intro — names the two tasks (Photos · Details) ──
+  const photosLeft = photoQueue.length;
+  const detailsLeft = dataQueue.length + manualQueue.length;
+  const startBucket: Bucket | null =
+    photosLeft > 0 ? 'photo' : dataQueue.length > 0 ? 'data' : manualQueue.length > 0 ? 'manual' : null;
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
       <LobbyHeader
         title="Optimize"
-        countSuffix={`${counts.total} Items`}
+        countSuffix={`${counts.total} items`}
         onBack={() => navigation.goBack()}
-        right={<HeaderPill label={`${readyPct}% ready`} icon="star-four-points" iconColor={RC.green} />}
       />
 
       {loading ? (
@@ -366,49 +264,39 @@ export function BackfillOptimizerScreen() {
           <ActivityIndicator size="large" color={RC.green} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.progressWrap}>
-            <MiniProgress
-              pct={readyPct}
-              left={`${polishedCount} of ${counts.total} ready`}
-              right={`${readyPct}%`}
-            />
-          </View>
-
-          {optimizeIssues.length === 0 ? (
-            <View style={styles.empty}>
-              <MaterialCommunityIcons name="check-decagram" size={40} color={RC.green} />
-              <Text style={styles.emptyTitle}>Inbox zero</Text>
-              <Text style={styles.emptySub}>Every listing has photos, details & data.</Text>
-            </View>
-          ) : (
-            <IssueLane issues={optimizeIssues} />
-          )}
-        </ScrollView>
+        <View style={styles.taskList}>
+          <UpNextRow
+            icon="camera"
+            title="Photos"
+            count={photosLeft}
+            state={photosLeft > 0 ? 'active' : 'done'}
+            onPress={photosLeft > 0 ? () => enterBucket('photo') : undefined}
+          />
+          <UpNextRow
+            icon="star-four-points"
+            title="Details"
+            count={detailsLeft}
+            state={detailsLeft > 0 ? (photosLeft > 0 ? 'locked' : 'active') : 'done'}
+            onPress={detailsLeft > 0 ? () => enterBucket(dataQueue.length > 0 ? 'data' : 'manual') : undefined}
+          />
+        </View>
       )}
 
-      <LinearGradient
-        colors={['rgba(255,255,255,0)', '#FFFFFF']}
-        style={styles.fade}
-        pointerEvents="none"
-      />
-      {attention === 0 ? (
-        <BottomActionBar
-          primaryLabel={`Publish ${polishedCount} ready`}
-          primaryIcon={<MaterialCommunityIcons name="check" size={20} color="#fff" />}
-          onPrimary={() => navigation.goBack()}
-        />
-      ) : (
-        <BottomActionBar
-          primaryLabel={optimizeIssues[0]?.ctaLabel || `${attention} need attention`}
-          primaryIcon={<MaterialCommunityIcons name="wrench" size={20} color="#fff" />}
-          primaryButtonStyle={{ backgroundColor: RC.orange }}
-          onPrimary={() => firstBucket && enterBucket(firstBucket)}
-          secondaryLabel={polishedCount > 0 ? `Publish ${polishedCount} ready now` : undefined}
-          secondaryIcon={<MaterialCommunityIcons name="cloud-upload-outline" size={20} color="#71717A" />}
-          onSecondary={polishedCount > 0 ? () => navigation.goBack() : undefined}
-        />
-      )}
+      <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
+      <View style={[styles.introFooter, { paddingBottom: insets.bottom + 18 }]}>
+        {startBucket ? (
+          <TouchableOpacity activeOpacity={0.9} onPress={() => enterBucket(startBucket)} style={styles.introPrimary}>
+            <Text style={styles.introPrimaryText}>Start</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity activeOpacity={0.9} onPress={finishOptimize} style={styles.introPrimary}>
+            <Text style={styles.introPrimaryText}>Finish</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.introSkip}>
+          <Text style={styles.introSkipText}>{startBucket ? 'Later' : 'Back'}</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -434,4 +322,25 @@ const styles = StyleSheet.create({
   doneLabel: { fontSize: 15, fontWeight: '600', color: RC.muted },
   doneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: RC.green, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 28, marginTop: 28 },
   doneBtnText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+
+  // ── Step 0 intro + explainer (task framing) ───────────────────────────────
+  introTitle: { fontSize: 27, fontWeight: '800', color: RC.ink, letterSpacing: -0.6, lineHeight: 32 },
+  introSub: { fontSize: 14.5, fontWeight: '500', color: RC.muted, marginTop: 8 },
+  taskList: { paddingHorizontal: 16, paddingTop: 14 },
+
+  introBackRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: 40 },
+  introBackBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center' },
+  introBody: { flex: 1, paddingHorizontal: 22, paddingTop: 12, gap: 8 },
+  taskStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  taskStripDone: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: RC.greenSoft, borderWidth: 1, borderColor: RC.greenLine, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  taskStripDoneText: { fontSize: 13, fontWeight: '700', color: RC.greenDark },
+  taskStripLine: { flex: 1, height: 2, backgroundColor: RC.line },
+  taskStripActive: { backgroundColor: RC.ink, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  taskStripActiveText: { fontSize: 13, fontWeight: '800', color: '#fff' },
+
+  introFooter: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 16, gap: 6 },
+  introPrimary: { height: 54, borderRadius: 14, backgroundColor: RC.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  introPrimaryText: { fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: -0.2 },
+  introSkip: { height: 40, alignItems: 'center', justifyContent: 'center' },
+  introSkipText: { fontSize: 14, fontWeight: '600', color: RC.faint },
 });

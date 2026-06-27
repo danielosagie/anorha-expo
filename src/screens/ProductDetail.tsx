@@ -35,6 +35,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { captureOrPickImageAssets } from '../utils/imageCapture';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useCollaboration } from '../hooks/useCollaboration';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
@@ -233,6 +234,7 @@ const ProductDetailScreen = observer(
     const passedItem = route.params?.item;
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
+    const fbDispatch = useFacebookJobStatus();
     const insets = useSafeAreaInsets();
     // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
     // Saved/Saving…/Unsaved/Retry chip is the only save model now, so the scroll
@@ -565,10 +567,9 @@ const ProductDetailScreen = observer(
       log.debug('[ProductDetail] Updated platforms, triggering auto-save...');
     };
 
-    // Collaboration state
+    // Collaboration state — advisory only. We never block editing on a lock
+    // (last-write-wins); a conflict surfaces as a quiet, dismissable banner.
     const collaboration = useCollaboration();
-    const [isLockedByOther, setIsLockedByOther] = useState(false);
-    const [lockOwner, setLockOwner] = useState<string | null>(null);
 
     // Phase 2: Draft state for auto-save and versioning
     const [draftData, setDraftData] = useState<Record<string, any> | null>(null);
@@ -1996,11 +1997,7 @@ const ProductDetailScreen = observer(
 
     // Publish product to a new platform
     const [isPublishing, setIsPublishing] = useState<string | null>(null);
-    const [facebookSyncMeta, setFacebookSyncMeta] = useState<{
-      status: 'idle' | 'pending' | 'syncing' | 'success' | 'error';
-      lastSyncAt: string | null;
-      lastError: string | null;
-    }>({ status: 'idle', lastSyncAt: null, lastError: null });
+    // FB dispatch status is now realtime (useFacebookJobStatus) — no local poll state.
 
     const handlePublishToPlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id || isPublishing) return;
@@ -2150,10 +2147,6 @@ const ProductDetailScreen = observer(
           },
         };
 
-        if (platformKey.toLowerCase() === 'facebook') {
-          setFacebookSyncMeta({ status: 'syncing', lastSyncAt: null, lastError: null });
-        }
-
         const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/publish`, {
           method: 'POST',
           headers: {
@@ -2169,44 +2162,10 @@ const ProductDetailScreen = observer(
           throw new Error(responseData.message || `Publish failed: ${response.status}`);
         }
 
-        if (platformKey.toLowerCase() === 'facebook') {
-          const deadline = Date.now() + 10_000;
-          let lastPending = 0;
-
-          while (Date.now() < deadline) {
-            const reconcileResponse = await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/reconcile`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ variantId: detailedItem.Id }),
-            });
-
-            if (reconcileResponse.ok) {
-              const reconcile = await reconcileResponse.json().catch(() => ({}));
-              const updated = Number(reconcile?.updated || 0);
-              const failed = Number(reconcile?.failed || 0);
-              lastPending = Number(reconcile?.pending || 0);
-
-              if (failed > 0) {
-                setFacebookSyncMeta({ status: 'error', lastSyncAt: null, lastError: 'Facebook Marketplace publish failed.' });
-                throw new Error('Facebook Marketplace publish failed. Please retry.');
-              }
-              if (updated > 0 || lastPending === 0) {
-                setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
-                break;
-              }
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 1200));
-          }
-
-          if (lastPending > 0) {
-            setFacebookSyncMeta({ status: 'pending', lastSyncAt: null, lastError: null });
-            showBanner('Facebook publish is still finishing. We will keep syncing in background.');
-          }
-        }
+        // Facebook posts asynchronously through the user's computer — no blocking
+        // reconcile poll here (it delayed the UI ~10s for an unrendered result).
+        // loadPlatformData() below refreshes the row, which shows the live dispatch
+        // status (useFacebookJobStatus).
 
         // Check if any platforms need reauth
         if (responseData.reauthRequired && responseData.reauthRequired.length > 0) {
@@ -2242,14 +2201,6 @@ const ProductDetailScreen = observer(
 
       } catch (error: any) {
         log.error('[ProductDetail] Publish failed:', error);
-        if (platformKey.toLowerCase() === 'facebook') {
-          setFacebookSyncMeta({
-            status: 'error',
-            lastSyncAt: facebookSyncMeta.lastSyncAt,
-            lastError: error?.message || 'Facebook publish failed',
-          });
-        }
-
         // Check for reauth error in exception message
         const errorMessage = error.message?.toLowerCase() || '';
         const isReauthError =
@@ -2282,7 +2233,6 @@ const ProductDetailScreen = observer(
                     try {
                       const token = await ensureSupabaseJwt();
                       if (!token) return;
-                      setFacebookSyncMeta({ status: 'syncing', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: null });
                       await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/sync-now`, {
                         method: 'POST',
                         headers: {
@@ -2291,18 +2241,9 @@ const ProductDetailScreen = observer(
                         },
                         body: JSON.stringify({ connectionId: targetConnection.Id, variantId: detailedItem.Id }),
                       });
-                      await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/reconcile`, {
-                        method: 'POST',
-                        headers: {
-                          'Authorization': `Bearer ${token}`,
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ variantId: detailedItem.Id }),
-                      });
-                      setFacebookSyncMeta({ status: 'success', lastSyncAt: new Date().toISOString(), lastError: null });
                       showBanner('Facebook sync requested.');
                     } catch (syncErr: any) {
-                      setFacebookSyncMeta({ status: 'error', lastSyncAt: facebookSyncMeta.lastSyncAt, lastError: syncErr?.message || 'Sync failed' });
+                      showBanner('Sync failed. Please try again.');
                     }
                   }
                 },
@@ -2320,7 +2261,7 @@ const ProductDetailScreen = observer(
       } finally {
         setIsPublishing(null);
       }
-    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation, facebookSyncMeta.lastSyncAt]);
+    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation]);
     // Handle Delist / Remove Mapping
     const handleDelist = useCallback(async (connectionId: string, mappingId: string, platformName: string) => {
       Alert.alert('Delist', `Remove listing from ${platformName}?`, [
@@ -3814,14 +3755,10 @@ const ProductDetailScreen = observer(
 
       // Request edit lock when opening product
       collaboration.startEditing(detailedItem.ProductId).then((response) => {
+        // Advisory presence only — editing is never blocked. If a teammate also
+        // has this open, give a quiet heads-up instead of the old blocking alert.
         if (!response.success && response.lockedBy) {
-          setIsLockedByOther(true);
-          setLockOwner(response.lockedBy);
-          Alert.alert(
-            'Product Locked',
-            `${response.lockedBy} is currently editing this product. You can view but not edit.`,
-            [{ text: 'OK' }]
-          );
+          showBanner(`${response.lockedBy} is also editing — your changes will still save.`);
         }
       });
 
@@ -3869,17 +3806,13 @@ const ProductDetailScreen = observer(
       // Listen for edit started events
       const unsubscribeEditStart = collaboration.onEditStarted((event) => {
         if (event.productId === detailedItem.ProductId) {
-          setIsLockedByOther(true);
-          setLockOwner(event.userName);
+          showBanner(`${event.userName} is also editing this product.`);
         }
       });
 
       // Listen for edit ended events
-      const unsubscribeEditEnd = collaboration.onEditEnded((event) => {
-        if (event.productId === detailedItem.ProductId) {
-          setIsLockedByOther(false);
-          setLockOwner(null);
-        }
+      const unsubscribeEditEnd = collaboration.onEditEnded(() => {
+        // No-op: presence is advisory, so there is no lock to release in the UI.
       });
 
       // Cleanup: Release lock when leaving
@@ -4205,7 +4138,6 @@ const ProductDetailScreen = observer(
                 });
               }}
               onChangeImages={(next) => { setOptimisticImages(next); reorderImages(next); }}
-              onOpenFieldPanel={undefined}
               pendingImages={pendingImages}
               onOpenBarcodeScanner={(onResult) => {
                 openBarcodeScanner(onResult);
@@ -4270,14 +4202,23 @@ const ProductDetailScreen = observer(
                     const statusText = isStale
                       ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
                       : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
+                    // Facebook posts through the user's computer (async). When a
+                    // dispatch job is in flight / waiting / paused / failed, show its
+                    // realtime status instead of the sync status \u2014 same dot+label idiom.
+                    const fbStatus = rawType.toLowerCase() === 'facebook'
+                      ? fbDispatch.statusForVariant(mapping.ProductVariantId)
+                      : null;
+                    const dotColor = fbStatus ? fbStatus.dotColor : statusColor;
+                    const textColor = fbStatus ? fbStatus.color : statusColor;
+                    const rowStatusText = fbStatus ? fbStatus.label : statusText;
                     return (
                       <View key={mapping.Id} style={styles.alRow}>
                         <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
                         <View style={styles.alInfo}>
                           <Text style={styles.alName} numberOfLines={1}>{platformName}</Text>
                           <View style={styles.alStatusLine}>
-                            <View style={[styles.alDot, { backgroundColor: statusColor }]} />
-                            <Text style={[styles.alStatusText, { color: statusColor }]} numberOfLines={1}>{statusText}</Text>
+                            <View style={[styles.alDot, { backgroundColor: dotColor }]} />
+                            <Text style={[styles.alStatusText, { color: textColor }]} numberOfLines={1}>{rowStatusText}</Text>
                           </View>
                         </View>
                         <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>

@@ -12,6 +12,7 @@ import {
 import { BlurView } from 'expo-blur';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PLATFORM_META } from '../utils/platformConstants';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationModal');
 
@@ -119,6 +120,13 @@ export default function PublishConfirmationModal({
     const totalAccounts = calculateTotalAccounts();
     const hasSelection = totalAccounts > 0;
 
+    // Facebook posts through the seller's own computer (Ponder). If FB is selected
+    // and no computer is currently online, give an honest, non-blocking heads-up —
+    // publishing still works (the job queues), it just won't go out until the
+    // computer is on. Never names the automation; says "your computer".
+    const { computerOnline } = useFacebookJobStatus();
+    const showComputerHeadsUp = selectedPlatforms.has('facebook') && !computerOnline;
+
     // Calculate how many platforms actually have connections
     const enabledConnections = allConnections.filter((c: any) => c.IsEnabled);
     const uniquePlatforms = new Set(enabledConnections.map((c: any) => c.PlatformType?.toLowerCase()).filter(Boolean));
@@ -146,32 +154,12 @@ export default function PublishConfirmationModal({
                     <View style={styles.grabber} />
                     <View style={styles.header}>
                         <View>
-                            <Text style={styles.title}>Review & Publish</Text>
-                            <Text style={styles.subtitle}>
-                                Publishing to {platformsWithConnections} platform{platformsWithConnections !== 1 ? 's' : ''}
-                            </Text>
+                            <Text style={styles.title}>Publish where?</Text>
                         </View>
                         <TouchableOpacity onPress={onClose} style={styles.closeButton}>
                             <Icon name="close" size={20} color="#666" />
                         </TouchableOpacity>
                     </View>
-
-                    <View style={styles.summaryCard}>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLabel}>Product:</Text>
-                            <Text style={styles.summaryValue} numberOfLines={1}>{productSummary?.title || 'Untitled'}</Text>
-                        </View>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLabel}>SKU:</Text>
-                            <Text style={styles.summaryValue}>{productSummary?.sku || 'N/A'}</Text>
-                        </View>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLabel}>Price:</Text>
-                            <Text style={styles.summaryValue}>${productSummary?.price || 0}</Text>
-                        </View>
-                    </View>
-
-                    <Text style={styles.sectionTitle}>Select Accounts</Text>
 
                     <ScrollView style={styles.scrollArea}>
                         {(() => {
@@ -202,25 +190,24 @@ export default function PublishConfirmationModal({
                             return Object.entries(platformGroups).map(([platform, connections]) => {
                                 const selectedConnId = selectedConnectionIds[platform];
                                 const allSelected = selectedConnId === 'ALL';
-                                const meta = PLATFORM_META[platform] || { label: platform.charAt(0).toUpperCase() + platform.slice(1), icon: 'application' };
+                                const meta = PLATFORM_META[platform as keyof typeof PLATFORM_META] || { label: platform.charAt(0).toUpperCase() + platform.slice(1), icon: 'application' };
                                 const isPlatformSelected = selectedPlatforms.has(platform);
 
                                 return (
                                     <View key={platform} style={styles.platformSection}>
                                         <TouchableOpacity
-                                            style={styles.platformHeader}
+                                            style={[styles.platformHeader, { flexDirection: 'row', alignItems: 'center' }]}
                                             onPress={() => togglePlatform(platform)}
+                                            activeOpacity={0.7}
                                         >
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                                                <Icon
-                                                    name={isPlatformSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                                                    size={22}
-                                                    color={isPlatformSelected ? BRAND_PRIMARY : '#9CA3AF'}
-                                                    style={{ marginRight: 8 }}
-                                                />
-                                                <Icon name={meta.icon} size={18} color="#374151" style={{ marginRight: 8 }} />
-                                                <Text style={styles.platformTitle}>{meta.label}</Text>
-                                            </View>
+                                            <Icon name={meta.icon} size={20} color="#374151" style={{ marginRight: 10 }} />
+                                            <Text style={styles.platformTitle}>{meta.label}</Text>
+                                            <View style={{ flex: 1 }} />
+                                            <Icon
+                                                name={isPlatformSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                                                size={24}
+                                                color={isPlatformSelected ? BRAND_PRIMARY : '#D1D5DB'}
+                                            />
                                         </TouchableOpacity>
 
                                         {isPlatformSelected && (
@@ -260,25 +247,26 @@ export default function PublishConfirmationModal({
                         })()}
                     </ScrollView>
 
+                    {showComputerHeadsUp && (
+                        <View style={styles.computerNotice}>
+                            <Icon name="monitor" size={16} color="#BA7517" style={{ marginTop: 1 }} />
+                            <Text style={styles.computerNoticeText}>
+                                Facebook posts via your computer.
+                            </Text>
+                        </View>
+                    )}
+
                     <View style={styles.footer}>
                         <TouchableOpacity
-                            onPress={onClose}
-                            style={styles.cancelButton}
-                            disabled={isPublishing}
-                        >
-                            <Text style={styles.cancelButtonText}>Cancel</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
                             onPress={onConfirm}
-                            style={[styles.publishButton, (!hasSelection || isPublishing) && styles.publishButtonDisabled]}
+                            style={[styles.publishButton, { flex: 1 }, (!hasSelection || isPublishing) && styles.publishButtonDisabled]}
                             disabled={!hasSelection || isPublishing}
                         >
                             {isPublishing ? (
                                 <ActivityIndicator color="#FFF" size="small" />
                             ) : (
                                 <Text style={styles.publishButtonText}>
-                                    Publish to {totalAccounts} Account{totalAccounts !== 1 ? 's' : ''}
+                                    Publish to {totalAccounts} channel{totalAccounts !== 1 ? 's' : ''}
                                 </Text>
                             )}
                         </TouchableOpacity>
@@ -360,6 +348,26 @@ const styles = StyleSheet.create({
         padding: 8,
         backgroundColor: '#F3F4F6',
         borderRadius: 20,
+    },
+    computerNotice: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+        marginHorizontal: 24,
+        marginBottom: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        backgroundColor: '#FBF5EA',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#F0E2C8',
+    },
+    computerNoticeText: {
+        flex: 1,
+        fontSize: 12.5,
+        lineHeight: 17,
+        color: '#8A5A12',
+        fontWeight: '500',
     },
     summaryCard: {
         backgroundColor: '#F9FAFB',

@@ -132,9 +132,9 @@ export interface MappingSuggestion {
 
 // ── The processed import draft (mirrors anorha-bknd import-draft.types.ts) ────
 // The backend does the processing — normalize, auto-resolve, cluster, derive,
-// order — and hands us a finished draft. The app renders it; presentation copy
-// (see DecisionQueue.copyFor) stays here. DraftItem is shape-compatible with
-// MappingSuggestion, so a unit's items feed straight into applyAnswer/commit.
+// order — and hands us a finished draft. The app renders it; DraftItem is
+// shape-compatible with MappingSuggestion, so a unit's items feed straight into
+// applyAnswer/commit.
 
 export type DraftVariant =
   | 'combine' | 'duplicate' | 'family' | 'split' | 'kit'

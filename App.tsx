@@ -30,6 +30,7 @@ import { SystemNotificationProvider } from './src/context/SystemNotificationCont
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import { ConvexProvider } from './src/providers/ConvexProvider';
+import { BrowserJobsConvexProvider } from './src/providers/BrowserJobsConvexProvider';
 import * as Sentry from '@sentry/react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
@@ -672,12 +673,19 @@ const App: React.FC = () => {
     // legacy custom "mobile" template lacks that claim, so Supabase 401s it.
     // Mint-bridge mode still uses the "mobile" template that /api/auth/exchange expects.
     const clerkNativeAuth = process.env.EXPO_PUBLIC_CLERK_NATIVE_AUTH === 'true';
+    // Keep getClerkToken's IDENTITY STABLE across renders. Clerk's getToken can be a
+    // fresh reference each render; if it leaks into this callback's deps, getClerkToken
+    // changes → EnhancedSessionProvider's validateAuthIfNeeded/init effect re-runs every
+    // render, which thrashed bridgeReady and bounced the app to the reconnect screen.
+    // Read getToken through a ref so the callback never changes (deps are stable values).
+    const getTokenRef = useRef(getToken);
+    getTokenRef.current = getToken;
     const getClerkToken = useCallback(
       () =>
         clerkNativeAuth
-          ? getToken()
-          : getToken({ template }).catch(async () => getToken()),
-      [getToken, template, clerkNativeAuth],
+          ? getTokenRef.current()
+          : getTokenRef.current({ template }).catch(async () => getTokenRef.current()),
+      [clerkNativeAuth, template],
     );
 
     return (
@@ -737,13 +745,20 @@ const App: React.FC = () => {
                   ThemeProvider, StatusBar and FlashMessage). */}
               <WithSessionProvider>
                 <OrgProvider>
-                  <AppDataProvider>
-                    <LiveActivityProvider>
-                      <JobsProvider>
-                        <AuthedAppContent navigationRef={navigationRef} />
-                      </JobsProvider>
-                    </LiveActivityProvider>
-                  </AppDataProvider>
+                  {/* 2nd Convex client (browserJobs deployment). Pure context
+                      carrier — does NOT wrap a ConvexProvider, so it never
+                      hijacks chat's useQuery (the top-level agent-chat
+                      ConvexProvider stays authoritative). Mounted here so it has
+                      SessionContext for the userId. */}
+                  <BrowserJobsConvexProvider>
+                    <AppDataProvider>
+                      <LiveActivityProvider>
+                        <JobsProvider>
+                          <AuthedAppContent navigationRef={navigationRef} />
+                        </JobsProvider>
+                      </LiveActivityProvider>
+                    </AppDataProvider>
+                  </BrowserJobsConvexProvider>
                 </OrgProvider>
               </WithSessionProvider>
             </>

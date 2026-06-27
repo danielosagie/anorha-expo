@@ -10,13 +10,14 @@ import DeliveryShippingSheet from './DeliveryShippingSheet';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, Plus } from 'lucide-react-native';
+import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, ChevronLeft, Plus, Check, ArrowRight, AlertTriangle } from 'lucide-react-native';
+import { getListingQuality } from '../utils/listingQuality';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
 import { AppMenuSelect } from './ui/AppMenuSelect';
-import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, Field, ChipsField, LocationDropdown } from './ListingEditor';
+import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, ChipsField, LocationDropdown } from './ListingEditor';
 import FieldSheet from './ListingEditor/FieldSheet';
 import FieldRow from './ListingEditor/FieldRow';
 import SheetTextField from './ListingEditor/SheetTextField';
@@ -59,6 +60,26 @@ const toPrice = (v: any): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// Full-screen Steps wizard (one field per screen, progress + Next).
+const wizStyles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
+  header: { width: "100%", flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, height: 44 },
+  headerBtn: { minWidth: 48, height: 44, justifyContent: 'center' },
+  stepCount: { fontSize: 13, fontWeight: '700', color: CHAT_COLORS.dim },
+  doneText: { fontSize: 15, fontWeight: '700', color: BRAND_PRIMARY, textAlign: 'right' },
+  progress: { flex: 1, flexDirection: 'row', gap: 4, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
+  seg: { flex: 1,  height: 4, borderRadius: 2 },
+  body: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
+  headline: { fontSize: 26, fontWeight: '800', color: CHAT_COLORS.ink, marginBottom: 18, letterSpacing: -0.3 },
+  footer: { paddingHorizontal: 20, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EEF0F2' },
+  nextBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 54, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
+  nextText: { fontSize: 17, fontWeight: '800', color: '#FFFFFF' },
+  qRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  qIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  qLabel: { fontSize: 15, fontWeight: '600', color: CHAT_COLORS.ink },
+  qHint: { fontSize: 13, fontWeight: '600', color: '#BA7517' },
+});
+
 // Styles for the row→sheet redesign (clickable detail rows + focused field sheets).
 const rowStyles = StyleSheet.create({
   detailsCard: {
@@ -90,6 +111,18 @@ const rowStyles = StyleSheet.create({
     fontFamily: CHAT_FONT.semibold,
     color: CHAT_COLORS.dim,
   },
+  gapCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(186,117,23,0.10)',
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  gapDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#BA7517' },
+  gapCtaText: { fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#BA7517' },
   priceInputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -201,16 +234,11 @@ type Props = {
   platformLocations?: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>>;
   onChangePlatforms: (next: PlatformsData) => void;
   onChangeImages?: (next: string[]) => void;
-  onOpenFieldPanel?: (fieldKey: string) => void;
   onOpenBarcodeScanner?: (onResult: (code: string) => void) => void;
   onOpenImageCapture?: (onResult: (uris: string[]) => void) => void;
-  onRegenerateField?: (platformKey: string, fieldKey: string) => void;
   onAddMissingField?: (platformKey: string) => void;
   getMissingFieldsCount?: (platformKey: string) => number;
   onGeneratePlatform?: (platformKey: string) => Promise<void>;
-  enableAIRefill?: boolean;
-  onSuggestVariants?: (platformKey: string) => void;
-  onBoostListing?: (platformKey: string, kind: 'boost' | 'advanced') => void;
   // Optional publish-ignore controls
   onToggleIgnorePlatform?: (platformKey: string, ignored: boolean) => void;
   isPlatformIgnored?: (platformKey: string) => boolean;
@@ -231,6 +259,12 @@ export type ListingEditorFormRef = {
   /** Open a specific field's edit sheet (optionally on a given platform tab). Used by the
    *  action-bar "needs you" pill and the missing-fields checklist to jump straight to the gap. */
   openFieldSheet: (field: string, platform?: string) => void;
+  /** Steps mode: walk the listing's key fields in the full-screen wizard. */
+  startStepsWalk: () => void;
+  /** Open the full-screen wizard over the empty required fields. Pass an explicit field
+   *  list (e.g. from the parent's cross-platform missing-field count) so the wizard walks
+   *  exactly those; omit to use the active tab's own computed gaps. */
+  startFixGaps: (fields?: string[]) => void;
 };
 
 type Variant = {
@@ -357,7 +391,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenFieldPanel, onOpenBarcodeScanner, onOpenImageCapture, onRegenerateField, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, enableAIRefill, onSuggestVariants, onBoostListing, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const isFocused = useIsFocused();
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
@@ -384,6 +418,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
   // Which field's edit sheet is open (row → sheet redesign). null = none.
   const [openField, setOpenField] = useState<string | null>(null);
+  // Declared early (used by the imperative handle below); body assigned later where
+  // supportsTaxonomy + the gap-queue refs are in scope.
+  const startStepsWalkRef = useRef<() => void>(() => {});
+  const startFixGapsRef = useRef<(fields?: string[]) => void>(() => {});
+  // Full-screen Steps wizard (replaces the old open-sheets-one-by-one walk).
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardSteps, setWizardSteps] = useState<string[]>([]);
+  const [wizardIdx, setWizardIdx] = useState(0);
   // Which variant ("size") tab is selected inside the Photos sheet. null → manage the
   // shared set. Set when the seller taps a specific variant's photo in the inventory row.
   const [photoSizeTab, setPhotoSizeTab] = useState<string | null>(null);
@@ -424,7 +466,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
   const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
   // Suggested-price pills only appear once the price field is focused (not always-on).
-  const [priceFocused, setPriceFocused] = useState<boolean>(false);
   const [pricingResearchResult, setPricingResearchResult] = useState<{
     low?: number; median?: number; high?: number; recommended?: number;
     samples?: Array<{ title: string; price: number; url?: string; quantitySold?: number; watchers?: number; estimatedDaysToSell?: number }>;
@@ -520,6 +561,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       };
       setOpenField(map[field] || field);
     },
+    startStepsWalk: () => startStepsWalkRef.current(),
+    startFixGaps: (fields?: string[]) => startFixGapsRef.current(fields),
   }), [platformPickerOverlay, platforms]);
 
   const lastPlatformRef = useRef<string>('');
@@ -615,12 +658,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, []);
 
   // NEW: Suggest taxonomy based on product data (Title + Description)
-  const suggestTaxonomy = useCallback(async (autoApply: boolean = false) => {
+  const suggestTaxonomy = useCallback(async (autoApply: boolean = false, force: boolean = false) => {
     if (!supportsTaxonomy || !activePlatformKeyLower) return;
     if (activeTab === 'all') return; // Only work on specific platform tabs
 
-    // Prevent redundant auto-fetches
-    if (autoApply && preventTaxonomyAutoFetchRef.current.has(activePlatformKeyLower)) {
+    // Prevent redundant auto-fetches — but a manual "Auto-find" tap (force) ALWAYS re-runs,
+    // even after the silent auto-suggest already marked this platform as fetched.
+    if (autoApply && !force && preventTaxonomyAutoFetchRef.current.has(activePlatformKeyLower)) {
       return;
     }
 
@@ -699,16 +743,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       // Mark as fetched so we don't loop
       if (autoApply) preventTaxonomyAutoFetchRef.current.add(activePlatformKeyLower);
 
-      // Auto-Save the best match if confidence is high (e.g. first result from search usually best)
-      if (autoApply && data?.suggested) {
-        const best = data.suggested;
+      // Auto-pick the best match so the seller never has to hunt for a category. The silent
+      // auto-run is conservative (only fills a blank, decent confidence); a manual "Auto-find"
+      // tap (force) applies the top result even at lower confidence and overwrites what's there.
+      const best = data?.suggested || candidates[0];
+      if ((autoApply || force) && best) {
         log.debug(`[Taxonomy] Auto-applying best match: ${best.path || best.name}`);
 
-        // Only apply if we don't have one yet
         const currentId = activePlatformKeyLower === 'shopify' ? activeData.productCategoryId : activeData.categoryId;
         const bestScore = typeof data?.confidence === 'number' ? data.confidence : (typeof best.score === 'number' ? best.score : 0);
-        const minAutoScore = 0.7;
-        if (!currentId && bestScore >= minAutoScore) {
+        const minAutoScore = force ? 0.3 : 0.55;
+        if ((force || !currentId) && bestScore >= minAutoScore) {
           const updates: any = {};
           if (activePlatformKeyLower === 'shopify') {
             updates.productCategoryId = best.platformCategoryId || best.value;
@@ -939,20 +984,44 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
   }, [pricingResearchInput]);
 
-  // Auto-load sold-comps pricing research the moment the Price sheet opens, so the
-  // going-rate bar + recent comps are there waiting (matches the Paper Price sheet),
-  // instead of hiding behind a "See what it sells for" tap.
+  // Auto-load sold-comps pricing research the moment the Price step appears — in the
+  // bottom sheet (openField) AND the full-screen wizard — so the going-rate bar + recent
+  // comps are there waiting, instead of hiding behind a "See what it sells for" tap.
   useEffect(() => {
-    if (openField === 'price' && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
+    const onPriceStep = openField === 'price' || (wizardOpen && wizardSteps[wizardIdx] === 'price');
+    if (onPriceStep && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
       fetchPricingResearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField, titleForPricingResearch]);
+  }, [openField, wizardOpen, wizardIdx, wizardSteps, titleForPricingResearch]);
+
+  // The Category editor only renders on a taxonomy platform tab (Shopify/eBay), never on
+  // 'all'. When the wizard reaches the Category step from the 'all' tab, switch to the
+  // taxonomy platform that's actually missing a category — otherwise it shows the dead
+  // "No category needed." fallback.
+  useEffect(() => {
+    if (!(wizardOpen && wizardSteps[wizardIdx] === 'category')) return;
+    if (activeTab !== 'all') return;
+    const needsCat = (k: string) => {
+      const pd: any = (platforms as any)[k];
+      if (!pd) return false;
+      return k === 'shopify' ? !pd.productCategoryId : !pd.categoryId;
+    };
+    const target = ['shopify', 'ebay'].find(needsCat) || ['shopify', 'ebay'].find((k) => (platforms as any)[k]);
+    if (target) setActiveTab(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wizardOpen, wizardIdx, wizardSteps, activeTab]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
-      const weightVal = override ? parseFloat(override.weight) : (typeof activeData.weight === 'number' ? activeData.weight : parseFloat(String(activeData.weight ?? '')));
-      const num = weightVal;
+      // Fall back to the AI's estimated weight (shipping vision) when the seller hasn't
+      // set one yet — so a freshly generated item shows a shipping estimate without a tap.
+      const ew = (activeData as any).estimatedWeight;
+      const ownWeight = typeof activeData.weight === 'number' ? activeData.weight : parseFloat(String(activeData.weight ?? ''));
+      const fallbackWeight = (Number.isFinite(ownWeight) && ownWeight > 0)
+        ? ownWeight
+        : (ew && Number(ew.value) > 0 ? Number(ew.value) : NaN);
+      const num = override ? parseFloat(override.weight) : fallbackWeight;
       if (!Number.isFinite(num) || num <= 0) {
         setShippingEstimateResult(null);
         return;
@@ -962,7 +1031,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       try {
         const token = await ensureSupabaseJwt();
         const dims = override?.estimatedDimensions ?? (activeData as any).estimatedDimensions;
-        const weightUnit = override?.weightUnit ?? (activeData.weightUnit || 'lb');
+        const weightUnit = override?.weightUnit ?? (activeData.weightUnit || ew?.unit || 'lb');
         const params = new URLSearchParams({
           weight: override ? override.weight : String(num),
           weightUnit,
@@ -996,13 +1065,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         setShippingEstimateLoading(false);
       }
     },
-    [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions],
+    [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, (activeData as any).estimatedWeight],
   );
 
   useEffect(() => {
     if (shippingEstimateDebounceRef.current) clearTimeout(shippingEstimateDebounceRef.current);
-    const w = activeData.weight;
-    const num = typeof w === 'number' ? w : parseFloat(String(w ?? ''));
+    const ew = (activeData as any).estimatedWeight;
+    const ownW = typeof activeData.weight === 'number' ? activeData.weight : parseFloat(String(activeData.weight ?? ''));
+    const num = (Number.isFinite(ownW) && ownW > 0) ? ownW : (ew && Number(ew.value) > 0 ? Number(ew.value) : NaN);
     if (!Number.isFinite(num) || num <= 0) {
       setShippingEstimateResult(null);
       return;
@@ -1013,7 +1083,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return () => {
       if (shippingEstimateDebounceRef.current) clearTimeout(shippingEstimateDebounceRef.current);
     };
-  }, [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, fetchShippingEstimate]);
+  }, [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, (activeData as any).estimatedWeight, fetchShippingEstimate]);
 
   // When in 'all' tab, aggregate locations and quantities from all platforms
   const aggregatedLocations = useMemo(() => {
@@ -1095,6 +1165,35 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     : taxonomyOptions;
   const categoryRequired = requiredFields?.includes?.('category');
   const categoryMissing = categoryRequired && !selectedCategoryId;
+
+  // ── Fix-the-gaps + Steps wizard ─────────────────────────────────────────
+  // Both open a real full-screen wizard (renderStepsWizard) — Steps walks the key
+  // fields, Fix-gaps walks only the empty required ones. One field per full step.
+  const computeGaps = (): string[] => {
+    const d: any = activeData;
+    const gaps: string[] = [];
+    if (requiredFields?.includes?.('title') && !d.title) gaps.push('title');
+    const hasVariantsPriced = ((d.options || []).length > 0 && (d.variants || []).length > 0)
+      && (d.variants || []).every((v: any) => v.price != null && v.price !== '' && Number(v.price) > 0);
+    const priceEmpty = d.price == null || String(d.price) === '' || Number(d.price) === 0;
+    if (requiredFields?.includes?.('price') && !hasVariantsPriced && priceEmpty) gaps.push('price');
+    if (requiredFields?.includes?.('sku') && !d.sku) gaps.push('sku');
+    if (categoryRequired && !selectedCategoryId) gaps.push('category');
+    return gaps;
+  };
+  const openWizard = (steps: string[]) => {
+    if (!steps.length) return;
+    setWizardSteps(steps);
+    setWizardIdx(0);
+    setWizardOpen(true);
+  };
+  const startFixGaps = (fields?: string[]) => openWizard(fields && fields.length ? fields : computeGaps());
+  startFixGapsRef.current = startFixGaps;
+  startStepsWalkRef.current = () => openWizard([
+    '__quality__', 'title', 'price',
+    ...(supportsTaxonomy ? ['category'] : []),
+    'condition', 'sku', 'tags',
+  ]);
 
   const patchField = (key: string, value: any) => {
     if (activeTab === 'all') {
@@ -1847,6 +1946,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
     return (
       <View style={{ paddingTop: 18 }}>
+        {/* The "N fields need you" signal lives only in the header now (single source of
+            truth for the count); the in-form banner was removed to avoid a mismatch. */}
         <View style={rowStyles.detailsCard}>
           <View onLayout={recordFieldLayout('title')}>
             <FieldRow label="Title" layout="stacked" required value={(activeData as any).title} placeholder="Add a title" error={!!titleError} externalUpdate={hasExternalUpdate('title')} refilled={refilledIncludes('title')} onPress={() => setOpenField('title')} />
@@ -1885,15 +1986,244 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           <FieldRow label="Tags" value={tagsArr.length ? `${tagsArr.length} tag${tagsArr.length > 1 ? 's' : ''}` : null} placeholder="Add tags" refilled={refilledIncludes('tags')} onPress={() => setOpenField('tags')} last />
         </View>
 
-        {/* More details — always visible (no tap-to-expand), rendered as rows. */}
-        <Text style={rowStyles.groupLabel}>MORE DETAILS</Text>
-        <View style={rowStyles.detailsCard}>
-          <FieldRow label="Brand" value={(activeData as any).brand || (activeData as any).vendor} placeholder="Add brand" onPress={() => setOpenField('brand')} />
-          <FieldRow label="Weight" value={(activeData as any).weight ? `${(activeData as any).weight} ${(activeData as any).weightUnit || 'oz'}` : null} placeholder="Add weight" onPress={() => setOpenField('weight')} />
-          {renderExtraDetailRows()}
-          {renderAdditionalRows()}
-        </View>
+        {/* More details — collapsed by default behind a Show all / Show less toggle so the
+            form opens short. Every optional, non-money-mover field lives here; the seller
+            reveals the long-tail only when they actually want it. */}
+        <TouchableOpacity style={rowStyles.moreToggle} activeOpacity={0.6} onPress={() => setMoreOpen((v) => !v)}>
+          <Text style={[rowStyles.groupLabel, { marginTop: 0, marginBottom: 0, marginLeft: 0 }]}>MORE DETAILS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={rowStyles.moreToggleText}>{moreOpen ? 'Show less' : 'Show all'}</Text>
+            <Icon name={moreOpen ? 'chevron-up' : 'chevron-down'} size={18} color={CHAT_COLORS.dim} />
+          </View>
+        </TouchableOpacity>
+        {moreOpen && (
+          <View style={rowStyles.detailsCard}>
+            <FieldRow label="Brand" value={(activeData as any).brand || (activeData as any).vendor} placeholder="Add brand" onPress={() => setOpenField('brand')} />
+            <FieldRow label="Weight" value={(activeData as any).weight ? `${(activeData as any).weight} ${(activeData as any).weightUnit || 'oz'}` : null} placeholder="Add weight" onPress={() => setOpenField('weight')} />
+            {renderExtraDetailRows()}
+          </View>
+        )}
       </View>
+    );
+  };
+
+  // ── Steps wizard: one field per full screen (NOT a bottom sheet) ─────────
+  const STEP_META: Record<string, string> = {
+    __quality__: 'Quick check',
+    title: 'Name it',
+    description: 'Describe it',
+    price: "What's it worth?",
+    category: 'Category',
+    condition: 'Condition',
+    sku: 'SKU',
+    barcode: 'Barcode',
+    tags: 'Tags',
+    weight: 'Weight',
+  };
+
+  // The focused editor for a single wizard step. Reuses the same field
+  // components as the sheets; price/category/condition are focused variants.
+  const renderStepEditor = (field: string): React.ReactNode => {
+    const d: any = activeData;
+    switch (field) {
+      case '__quality__': {
+        const q = getListingQuality({ canonical: d, photoCount: (images || []).filter(Boolean).length });
+        return (
+          <View style={{ gap: 10 }}>
+            {q.rows.map((r) => (
+              <View key={r.key} style={wizStyles.qRow}>
+                <View style={[wizStyles.qIcon, { backgroundColor: r.ok ? CHAT_COLORS.brandSoft : '#FBF1DF' }]}>
+                  {r.ok ? <Check size={15} color={BRAND_PRIMARY} /> : <AlertTriangle size={14} color="#BA7517" />}
+                </View>
+                <Text style={wizStyles.qLabel}>{r.label}</Text>
+                <View style={{ flex: 1 }} />
+                {!r.ok ? <Text style={wizStyles.qHint}>{r.hint}</Text> : null}
+              </View>
+            ))}
+          </View>
+        );
+      }
+      case 'title':
+        return <SheetTextField value={d.title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" maxLength={80} showCount />;
+      case 'description':
+        return <SheetTextField value={d.description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe it…" />;
+      case 'sku':
+        return <SheetTextField value={d.sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" />;
+      case 'barcode':
+        return (
+          <View>
+            <SheetTextField value={d.barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN" />
+            <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
+              <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
+              <Text style={rowStyles.researchBtnText}>Scan barcode</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      case 'tags':
+        return <ChipsField label="Tags" hideLabel valueArray={d.tags} onChangeArray={(arr) => patchField('tags', arr)} />;
+      case 'price': {
+        const currentPrice = Number(d.price) || 0;
+        return (
+          <View>
+            <View style={rowStyles.priceInputWrap}>
+              <Text style={rowStyles.priceCurrency}>$</Text>
+              <TextInput style={rowStyles.priceInput} value={String(d.price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
+            </View>
+            {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
+              <View style={{ marginTop: 16 }}>
+                <PricingGuidanceCard
+                  headers="none"
+                  pricing={pricingResearchResult}
+                  currentPrice={currentPrice}
+                  onApplyPrice={(price) => {
+                    const low = pricingResearchResult.low ?? 0;
+                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
+                    const high = pricingResearchResult.high ?? 0;
+                    patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
+                  }}
+                />
+              </View>
+            ) : titleForPricingResearch ? (
+              <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={rowStyles.researchBtn}>
+                {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={15} color={BRAND_PRIMARY} />}
+                <Text style={rowStyles.researchBtnText}>{pricingResearchLoading ? 'Researching…' : 'See what it sells for'}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        );
+      }
+      case 'condition':
+        return (
+          <View style={{ gap: 8 }}>
+            {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
+              ebayConditionsLoading ? (
+                <ActivityIndicator color={BRAND_PRIMARY} style={{ marginVertical: 16 }} />
+              ) : (
+                ebayConditions.map((c: any) => {
+                  const sel = String(d.conditionID || ebayConditions[0]?.conditionId) === String(c.conditionId);
+                  return (
+                    <TouchableOpacity
+                      key={c.conditionId}
+                      style={[rowStyles.radioRow, sel && rowStyles.radioRowSel]}
+                      onPress={() => {
+                        const condId = parseInt(String(c.conditionId), 10);
+                        const generic = mapEbayConditionIdToGeneric(String(c.conditionId)) as PlatformState['condition'];
+                        patchPlatform((prev) => ({ ...prev, conditionID: Number.isFinite(condId) ? condId : undefined, condition: generic }));
+                      }}
+                    >
+                      <View style={[rowStyles.radioOuter, sel && rowStyles.radioOuterSel]}>{sel && <View style={rowStyles.radioInner} />}</View>
+                      <Text style={rowStyles.radioLabel}>{c.conditionName}</Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )
+            ) : (
+              ([{ label: 'New', value: 'new' }, { label: 'Like New', value: 'like_new' }, { label: 'Good', value: 'good' }, { label: 'Fair', value: 'fair' }, { label: 'Used', value: 'used' }, { label: 'Refurbished', value: 'refurbished' }, { label: 'For Parts', value: 'for_parts' }] as any[]).map((opt) => {
+                const sel = (d.condition || 'good') === opt.value;
+                return (
+                  <TouchableOpacity key={opt.value} style={[rowStyles.radioRow, sel && rowStyles.radioRowSel]} onPress={() => patchField('condition', opt.value)}>
+                    <View style={[rowStyles.radioOuter, sel && rowStyles.radioOuterSel]}>{sel && <View style={rowStyles.radioInner} />}</View>
+                    <Text style={rowStyles.radioLabel}>{opt.label}</Text>
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        );
+      case 'category': {
+        if (!supportsTaxonomy) {
+          // On the 'all' tab the category editor can't render; an effect switches to the
+          // taxonomy platform that needs a category. Show a spinner during that beat instead
+          // of a misleading "No category needed" when a Shopify/eBay platform is present.
+          const hasTaxPlat = ['shopify', 'ebay'].some((k) => (platforms as any)[k]);
+          if (hasTaxPlat) return <ActivityIndicator size="small" color={BRAND_PRIMARY} style={{ marginTop: 8 }} />;
+          return <Text style={{ color: CHAT_COLORS.dim, fontSize: 14 }}>No category needed.</Text>;
+        }
+        const catDisplay: string | null = d.categoryPath || d.category || d.productCategory || null;
+        return (
+          <View>
+            <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
+              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
+              <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding…' : (catDisplay ? 'Re-detect' : 'Auto-find')}</Text>
+            </TouchableOpacity>
+            {!!catDisplay && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: CHAT_COLORS.brandSoft, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 14 }}>
+                <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}><Check size={14} color="#FFFFFF" /></View>
+                <Text style={{ flex: 1, color: CHAT_COLORS.ink, fontSize: 14, fontWeight: '600' }}>{String(catDisplay).replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
+              </View>
+            )}
+            <Text style={rowStyles.sectionLabel}>{catDisplay ? 'Change' : 'Or search'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12 }}>
+              <Icon name="magnify" size={18} color="#9CA3AF" />
+              <TextInput style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }} value={activeTaxonomyQuery} onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text }))} placeholder="Search categories" placeholderTextColor="#9CA3AF" />
+              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
+            </View>
+            {!!activeTaxonomyQuery && taxonomyDropdownData.length > 0 && (
+              <View style={{ marginTop: 8, borderWidth: 1, borderColor: '#EEF0F2', borderRadius: 12, overflow: 'hidden' }}>
+                {taxonomyDropdownData.slice(0, 8).map((item: any, idx: number) => (
+                  <TouchableOpacity
+                    key={`${item.value}-${idx}`}
+                    style={{ paddingVertical: 11, paddingHorizontal: 14, borderBottomWidth: idx < Math.min(taxonomyDropdownData.length, 8) - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: '#F1F2F4' }}
+                    onPress={() => {
+                      const path = item.path || item.label || item.value;
+                      if (activePlatformKeyLower === 'shopify') {
+                        patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                      } else {
+                        patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                      }
+                      setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: '' }));
+                    }}
+                  >
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }} numberOfLines={2}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+      }
+      default:
+        return <SheetTextField value={String(d[field] ?? '')} onChangeText={(t) => patchField(field, t)} autoFocus />;
+    }
+  };
+
+  const renderStepsWizard = () => {
+    if (!wizardOpen || wizardSteps.length === 0) return null;
+    const total = wizardSteps.length;
+    const idx = Math.min(wizardIdx, total - 1);
+    const field = wizardSteps[idx];
+    const isLast = idx === total - 1;
+    const headline = STEP_META[field] || field;
+    const close = () => { setWizardOpen(false); setPricingResearchModalVisible(false); };
+    const goBack = () => setWizardIdx((i) => Math.max(0, i - 1));
+    const goNext = () => { if (isLast) close(); else setWizardIdx((i) => Math.min(total - 1, i + 1)); };
+    return (
+      <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
+        <View style={[wizStyles.screen, { paddingTop: insets.top + 4 }]}>
+          <View style={wizStyles.header}>
+            <Text style={wizStyles.stepCount}>{idx + 1} / {total}</Text>
+            <View style={wizStyles.progress}>
+              {wizardSteps.map((s, i) => (
+                <View key={`${s}-${i}`} style={[wizStyles.seg, { backgroundColor: i <= idx ? BRAND_PRIMARY : '#E9EBEF' }]} />
+              ))}
+            </View>
+            <TouchableOpacity onPress={close} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={wizStyles.doneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={wizStyles.body} keyboardShouldPersistTaps="handled">
+            <Text style={wizStyles.headline}>{headline}</Text>
+            {renderStepEditor(field)}
+          </ScrollView>
+          <View style={[wizStyles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <TouchableOpacity onPress={goNext} style={wizStyles.nextBtn} activeOpacity={0.9}>
+              <Text style={wizStyles.nextText}>{isLast ? 'Done' : 'Next'}</Text>
+              {!isLast && <ArrowRight size={18} color="#FFFFFF" />}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     );
   };
 
@@ -1905,22 +2235,22 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return (
       <>
         {/* Title */}
-        <FieldSheet visible={openField === 'title'} title="Title" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('title') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" helper="A clear, specific name sells best" maxLength={80} showCount onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'title') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('title')} />
+        <FieldSheet visible={openField === 'title'} title="Title" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" helper="A clear, specific name sells best" maxLength={80} showCount scope={scopeText} externalUpdate={hasExternalUpdate('title')} />
         </FieldSheet>
 
         {/* Description */}
-        <FieldSheet visible={openField === 'description'} title="Description" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('description') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe the item, its condition, and what's included…" onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('description')} />
+        <FieldSheet visible={openField === 'description'} title="Description" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).description} onChangeText={(t) => patchField('description', t)} multiline autoFocus placeholder="Describe the item, its condition, and what's included…" scope={scopeText} externalUpdate={hasExternalUpdate('description')} />
         </FieldSheet>
 
         {/* SKU */}
-        <FieldSheet visible={openField === 'sku'} title="SKU" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('sku') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <SheetTextField value={(activeData as any).sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" helper="Your internal code to track this item" onRewrite={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined} scope={scopeText} externalUpdate={hasExternalUpdate('sku')} />
+        <FieldSheet visible={openField === 'sku'} title="SKU" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+          <SheetTextField value={(activeData as any).sku} onChangeText={(t) => patchField('sku', t)} autoFocus placeholder="e.g. LAV-04" helper="Your internal code to track this item" scope={scopeText} externalUpdate={hasExternalUpdate('sku')} />
         </FieldSheet>
 
         {/* Barcode */}
-        <FieldSheet visible={openField === 'barcode'} title="Barcode" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('barcode') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+        <FieldSheet visible={openField === 'barcode'} title="Barcode" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
           <SheetTextField value={(activeData as any).barcode} onChangeText={(t) => patchField('barcode', t)} autoFocus placeholder="UPC / EAN / code128" scope={scopeText} externalUpdate={hasExternalUpdate('barcode')} />
           <TouchableOpacity style={rowStyles.researchBtn} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
             <Icon name="qrcode-scan" size={16} color={BRAND_PRIMARY} />
@@ -1928,24 +2258,18 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           </TouchableOpacity>
         </FieldSheet>
 
-        {/* Tags */}
-        <FieldSheet visible={openField === 'tags'} title="Tags" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('tags') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
-          <ChipsField label="Tags" valueArray={(activeData as any).tags} onChangeArray={(arr) => patchField('tags', arr)} onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined} refilled={refilledIncludes('tags')} />
+        {/* Tags — sheet title is the only heading (ChipsField label hidden), taller sheet. */}
+        <FieldSheet visible={openField === 'tags'} title="Tags" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done" minHeightPct={66}>
+          <ChipsField label="Tags" hideLabel valueArray={(activeData as any).tags} onChangeArray={(arr) => patchField('tags', arr)} refilled={refilledIncludes('tags')} />
         </FieldSheet>
 
         {/* Price — number + sold-comps research (never a bare number to defend) */}
-        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('price') : undefined} onClose={() => { setOpenField(null); setPricingResearchModalVisible(false); }} onSave={() => { setOpenField(null); setPricingResearchModalVisible(false); }}>
+        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onClose={() => { setOpenField(null); setPricingResearchModalVisible(false); }} onSave={() => { setOpenField(null); setPricingResearchModalVisible(false); }}>
           <View style={rowStyles.priceInputWrap}>
             <Text style={rowStyles.priceCurrency}>$</Text>
             <TextInput style={rowStyles.priceInput} value={String((activeData as any).price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
           </View>
 
-          {enableAIRefill && activeTab !== 'all' && (
-            <TouchableOpacity style={[rowStyles.researchBtn, { marginTop: 12 }]} onPress={() => onRegenerateField?.(activePlatformKey, 'price')}>
-              <Sparkles size={15} color={BRAND_PRIMARY} />
-              <Text style={rowStyles.researchBtnText}>Re-suggest with AI</Text>
-            </TouchableOpacity>
-          )}
 
           {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
             <View style={{ marginTop: 16 }}>
@@ -1970,55 +2294,79 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           ) : null}
         </FieldSheet>
 
-        {/* Category — per-platform taxonomy search + suggested */}
-        {supportsTaxonomy && (
+        {/* Category — auto-detected on open; one search field as the fallback. */}
+        {supportsTaxonomy && (() => {
+          const catDisplay: string | null = (activeData as any).categoryPath || (activeData as any).category || (activeData as any).productCategory || null;
+          return (
           <FieldSheet visible={openField === 'category'} title="Category" badge={activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} badgeTone="neutral" onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
-            {!(activeData as any).category && (
-              <TouchableOpacity onPress={() => suggestTaxonomy(true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
-                {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
-                <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding…' : 'Auto-find from title'}</Text>
-              </TouchableOpacity>
-            )}
-            {typeof (activeData as any).taxonomyConfidence === 'number' && (activeData as any).taxonomyConfidence >= 0.5 && (
-              <View style={{ alignSelf: 'flex-start', backgroundColor: (activeData as any).taxonomyConfidence > 0.8 ? CHAT_COLORS.brandSoft : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 12 }}>
-                <Text style={{ color: (activeData as any).taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 11, fontWeight: '600' }}>
-                  {(activeData as any).taxonomySource && (activeData as any).taxonomySource !== 'suggested' && (activeData as any).taxonomySource !== 'manual' ? 'AI Match' : 'Suggested'} {Math.round((activeData as any).taxonomyConfidence * 100)}%
-                </Text>
+            {/* Auto-find runs on open; tapping forces a fresh detect (works even after the silent run). */}
+            <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
+              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
+              <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding the best category…' : (catDisplay ? 'Re-detect from title' : 'Auto-find from title')}</Text>
+            </TouchableOpacity>
+
+            {/* Detected category — the primary surface; searching is the fallback. */}
+            {!!catDisplay && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: CHAT_COLORS.brandSoft, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 14 }}>
+                <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name="check" size={14} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: CHAT_COLORS.ink, fontSize: 14, fontWeight: '600' }}>{String(catDisplay).replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
+                  {typeof (activeData as any).taxonomyConfidence === 'number' && (activeData as any).taxonomyConfidence >= 0.5 ? (
+                    <Text style={{ color: CHAT_COLORS.brandDeep, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                      {(activeData as any).taxonomySource && (activeData as any).taxonomySource !== 'suggested' && (activeData as any).taxonomySource !== 'manual' ? 'AI match' : 'Suggested'} · {Math.round((activeData as any).taxonomyConfidence * 100)}%
+                    </Text>
+                  ) : null}
+                </View>
               </View>
             )}
-            <AppDropdown
-              style={[styles.input, { height: 54, paddingHorizontal: 14, borderColor: (categoryMissing && !((activeData as any).categoryPath || (activeData as any).category || (activeData as any).productCategory)) ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
-              data={taxonomyDropdownData.slice(0, 12)}
-              maxHeight={280}
-              value={selectedCategoryId}
-              placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
-              search
-              searchPlaceholder="Type to search..."
-              onChangeText={(text: string) => { setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text })); }}
-              renderItem={(item: TaxonomyOption) => (
-                <View style={{ paddingVertical: 10, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
-                    {item.score && item.score > 0.8 && (
-                      <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                        <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST MATCH</Text>
-                      </View>
-                    )}
-                  </View>
-                  {item.path && item.path !== item.label && (
-                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
-                  )}
-                </View>
-              )}
-              onChange={(item: any) => {
-                const path = item.path || item.label || item.value;
-                if (activePlatformKeyLower === 'shopify') {
-                  patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
-                } else {
-                  patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
-                }
-              }}
-            />
+
+            {/* One search field — the fallback for when the auto-pick is wrong. */}
+            <Text style={rowStyles.sectionLabel}>{catDisplay ? 'Change category' : 'Or search'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: (categoryMissing && !catDisplay) ? '#ef4444' : '#E5E7EB', borderRadius: 12 }}>
+              <Icon name="magnify" size={18} color="#9CA3AF" />
+              <TextInput
+                style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }}
+                value={activeTaxonomyQuery}
+                onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text }))}
+                placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
+                placeholderTextColor="#9CA3AF"
+              />
+              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
+            </View>
+
+            {!!activeTaxonomyQuery && taxonomyDropdownData.length > 0 && (
+              <View style={{ marginTop: 8, borderWidth: 1, borderColor: '#EEF0F2', borderRadius: 12, overflow: 'hidden' }}>
+                {taxonomyDropdownData.slice(0, 8).map((item: any, idx: number) => (
+                  <TouchableOpacity
+                    key={`${item.value}-${idx}`}
+                    style={{ paddingVertical: 11, paddingHorizontal: 14, borderBottomWidth: idx < Math.min(taxonomyDropdownData.length, 8) - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: '#F1F2F4' }}
+                    onPress={() => {
+                      const path = item.path || item.label || item.value;
+                      if (activePlatformKeyLower === 'shopify') {
+                        patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                      } else {
+                        patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+                      }
+                      setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: '' }));
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937', flex: 1 }} numberOfLines={2}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
+                      {item.score && item.score > 0.8 ? (
+                        <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                          <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    {item.path && item.path !== item.label ? (
+                      <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }} numberOfLines={1}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
             {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
               <View style={{ marginTop: 16 }}>
                 <Text style={rowStyles.sectionLabel}>Item Specifics</Text>
@@ -2055,7 +2403,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               </View>
             )}
           </FieldSheet>
-        )}
+          );
+        })()}
 
         {/* Condition — radio picker */}
         <FieldSheet visible={openField === 'condition'} title="Condition" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
@@ -2104,7 +2453,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </FieldSheet>
 
         {/* Weight */}
-        <FieldSheet visible={openField === 'weight'} title="Weight" badge={platformBadge} onInfo={onOpenFieldPanel ? () => onOpenFieldPanel('weight') : undefined} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+        <FieldSheet visible={openField === 'weight'} title="Weight" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
           <SheetTextField value={String((activeData as any).weight ?? '')} onChangeText={(t) => patchField('weight', t)} keyboardType="decimal-pad" autoFocus placeholder="0" helper="Used for shipping estimates" />
           <View style={{ marginTop: 16 }}>
             <Text style={rowStyles.sectionLabel}>Unit</Text>
@@ -2458,367 +2807,26 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Details — clickable rows; each opens its focused field sheet */}
       {renderDetailsCard()}
       {renderFieldSheets()}
-
-        <Field
-          label="Description"
-          value={activeData.description}
-          multiline
-          onChangeText={(t) => patchField('description', t)}
-          onInfo={() => onOpenFieldPanel?.('description')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'description') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('description')}
-          externalUpdate={hasExternalUpdate('description')}
-        />
-
-        <ChipsField
-          label="Tags"
-          valueArray={activeData.tags}
-          onChangeArray={(arr) => patchField('tags', arr)}
-          onInfo={() => onOpenFieldPanel?.('tags')}
-          onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'tags') : undefined}
-          refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('tags')}
-        />
-
-        {supportsTaxonomy && (
-          <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('category')}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={styles.fieldLabel}>Category{categoryRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-                {typeof activeData.taxonomyConfidence === 'number' && activeData.taxonomyConfidence >= 0.5 && (
-                  <View style={{ backgroundColor: activeData.taxonomyConfidence > 0.8 ? 'rgba(147, 200, 34, 0.12)' : 'rgba(234, 179, 8, 0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                    <Text style={{ color: activeData.taxonomyConfidence > 0.8 ? BRAND_PRIMARY : '#ca8a04', fontSize: 10, fontWeight: '600' }}>
-                      {activeData.taxonomySource && activeData.taxonomySource !== 'suggested' && activeData.taxonomySource !== 'manual' ? '✨ AI Match' : 'Suggested'} {Math.round(activeData.taxonomyConfidence * 100)}%
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              {!activeData.category && (
-                <TouchableOpacity
-                  onPress={() => suggestTaxonomy(true)}
-                  disabled={taxonomyLoading[activePlatformKeyLower]}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-                >
-                  {taxonomyLoading[activePlatformKeyLower] ? (
-                    <ActivityIndicator size="small" color={BRAND_PRIMARY} />
-                  ) : (
-                    <Sparkles size={14} color={BRAND_PRIMARY} />
-                  )}
-                  <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>
-                    {taxonomyLoading[activePlatformKeyLower] ? 'Finding...' : 'Auto-Find'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <AppDropdown
-              style={[styles.input, { height: 54, paddingHorizontal: 14, borderColor: categoryMissing ? '#ef4444' : '#E5E7EB', borderWidth: 1 }]}
-              data={taxonomyDropdownData.slice(0, 12)}
-              maxHeight={280}
-              value={selectedCategoryId}
-              placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
-              search
-              searchPlaceholder="Type to search..."
-              onChangeText={(text: string) => {
-                setTaxonomyQueries(prev => ({ ...prev, [activePlatformKeyLower]: text }));
-              }}
-              renderItem={(item: TaxonomyOption) => (
-                <View style={{ paddingVertical: 10, paddingHorizontal: 0, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
-                    {item.score && item.score > 0.8 && (
-                      <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                        <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST MATCH</Text>
-                      </View>
-                    )}
-                  </View>
-                  {item.path && item.path !== item.label && (
-                    <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
-                  )}
-                </View>
-              )}
-              onChange={(item: any) => {
-                const path = item.path || item.label || item.value;
-                if (activePlatformKeyLower === 'shopify') {
-                  patchPlatform(prev => ({
-                    ...prev,
-                    productCategoryId: item.value,
-                    productCategory: path,
-                    categoryPath: path,
-                    taxonomyConfidence: item.score || 1.0, // Manual selection = 100% or source score
-                    taxonomySource: 'manual'
-                  }));
-                } else {
-                  patchPlatform(prev => ({
-                    ...prev,
-                    categoryId: item.value,
-                    category: path,
-                    categoryPath: path,
-                    taxonomyConfidence: item.score || 1.0,
-                    taxonomySource: 'manual'
-                  }));
-                }
-              }}
-            />
-
-            {taxonomyLoading[activePlatformKeyLower] && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                <ActivityIndicator size="small" color="#9CA3AF" />
-                <Text style={{ fontSize: 12, color: '#6B7280' }}>Analyzing product to find best category...</Text>
-              </View>
-            )}
-
-            {!taxonomyLoading[activePlatformKeyLower] && !selectedCategoryId && taxonomyDropdownData.length > 0 && (
-              <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Icon name="information-outline" size={14} color="#6B7280" />
-                <Text style={{ fontSize: 12, color: '#6B7280' }}>
-                  Use the search or tap "Auto-Find" to detect category.
-                </Text>
-              </View>
-            )}
-
-            {/* Selected category indicator removed - the dropdown already shows the current selection */}
-
-            {/* eBay Item Specifics - when category selected */}
-            {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
-              <View style={{ marginTop: 16 }}>
-                <Text style={styles.fieldLabel}>Item Specifics</Text>
-                {aspectsLoading ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 }}>
-                    <ActivityIndicator size="small" color="#9CA3AF" />
-                    <Text style={{ fontSize: 12, color: '#6B7280' }}>Loading required fields...</Text>
-                  </View>
-                ) : aspects.length > 0 ? (
-                  <View style={{ gap: 12 }}>
-                    {aspects.filter(a => a.isRequired).map((asp) => (
-                      <View key={asp.aspectName}>
-                        <Text style={{ fontSize: 12, color: '#374151', marginBottom: 4 }}>{asp.aspectName} *</Text>
-                        {asp.allowedValues?.length > 0 ? (
-                          <AppDropdown
-                            style={[styles.input, { height: 44, paddingHorizontal: 10 }]}
-                            data={asp.allowedValues.map(v => ({ label: v, value: v }))}
-                            placeholder={`Select ${asp.aspectName}...`}
-                            value={(activeData.itemSpecifics || {})[asp.aspectName]}
-                            onChange={(item) => patchPlatform(prev => ({
-                              ...prev,
-                              itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: item.value },
-                            }))}
-                          />
-                        ) : (
-                          <TextInput
-                            style={[styles.input, { height: 44 }]}
-                            placeholder={`Enter ${asp.aspectName}...`}
-                            value={(activeData.itemSpecifics || {})[asp.aspectName] || ''}
-                            onChangeText={(t) => patchPlatform(prev => ({
-                              ...prev,
-                              itemSpecifics: { ...(prev.itemSpecifics || {}), [asp.aspectName]: t },
-                            }))}
-                          />
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Suggested-price pills moved BELOW the price field and gated on focus — see below. */}
-
-        {/* Price field - custom row so Research Pricing sits on same line as label + (i) */}
-        {(() => {
-          const hasVariantsWithOptions = (activeData.options || []).length > 0 && (activeData.variants || []).length > 0;
-          const allVariantsHavePrice = hasVariantsWithOptions && (activeData.variants || []).every((v: any) =>
-            v.price != null && v.price !== '' && Number(v.price) > 0
-          );
-          const priceRequired = requiredFields?.includes?.('price') && !allVariantsHavePrice;
-          const priceError = priceRequired && ((activeData as any).price == null || String((activeData as any).price) === '' || Number((activeData as any).price) === 0);
-          const priceLabel = hasVariantsWithOptions ? 'Base Price (optional with variants)' : 'Price';
-          const showResearchPricing = !!titleForPricingResearch;
-
-          return (
-            <View style={{ marginBottom: 12 }} onLayout={recordFieldLayout('price (either flat or all variants)')}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 0 }}>
-                  <Text style={styles.fieldLabel}>{priceLabel}{priceRequired ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
-                  {hasExternalUpdate('price') ? (
-                    <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                      <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
-                    </View>
-                  ) : Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('price') ? (
-                    <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-                      <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
-                    </View>
-                  ) : null}
-                  {enableAIRefill && activeTab !== 'all' && (
-                    <TouchableOpacity onPress={() => onRegenerateField?.(activePlatformKey, 'price')} style={{ borderWidth: 1, borderColor: '#E5E5E5', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: '#fff' }}>
-                      <Sparkles size={14} color={'#000'} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {showResearchPricing && (
-                    <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={14} color={BRAND_PRIMARY} />}
-                      <Text style={{ color: BRAND_PRIMARY, fontSize: 13, fontWeight: '600' }}>{pricingResearchLoading ? 'Researching...' : 'Research Pricing'}</Text>
-                    </TouchableOpacity>
-                  )}
-                  {onOpenFieldPanel && (
-                    <TouchableOpacity onPress={() => onOpenFieldPanel('price')}><Icon name="information-outline" size={18} color="#999999" /></TouchableOpacity>
-                  )}
-                </View>
-              </View>
-              <TextInput
-                style={[
-                  styles.input,
-                  priceError ? { borderColor: '#ef4444' } : null,
-                  hasExternalUpdate('price') ? { borderColor: BRAND_PRIMARY, borderWidth: 2 } : null,
-                  highlightedField === 'price (either flat or all variants)' ? { borderColor: '#ef4444', borderWidth: 2, backgroundColor: '#FEF2F2' } : null
-                ]}
-                value={String((activeData as any).price ?? '')}
-                onChangeText={(t) => patchField('price', t)}
-                onFocus={() => setPriceFocused(true)}
-                onBlur={() => setTimeout(() => setPriceFocused(false), 200)}
-                placeholder=""
-                placeholderTextColor="#999999"
-                keyboardType="decimal-pad"
-              />
-
-              {/* Suggested-price pills — only while the price field is focused. */}
-              {priceFocused && (() => {
-                const apr = (activeData as any).aiPriceRecommendation;
-                const legacy = (activeData as any).aiRecommendedPrice;
-                const band = apr && typeof apr.low === 'number' && typeof apr.recommended === 'number' && typeof apr.high === 'number'
-                  ? { low: apr.low, recommended: apr.recommended, high: apr.high }
-                  : (typeof legacy === 'number' && legacy > 0
-                    ? { low: Math.round(legacy * 0.85 * 100) / 100, recommended: legacy, high: Math.round(legacy * 1.15 * 100) / 100 }
-                    : null);
-                const currentPrice = Number((activeData as any).price) || 0;
-                if (!band || band.recommended <= 0) {
-                  return showResearchPricing ? (
-                    <Text style={styles.priceHint}>Tap “Research Pricing” above for sold comps & a suggested range.</Text>
-                  ) : null;
-                }
-                const applyPrice = (p: number) => patchField('price', String(p.toFixed(2)));
-                const opts = [
-                  { label: 'Fast sale', price: band.low },
-                  { label: 'Recommended', price: band.recommended, hi: true },
-                  { label: 'Max profit', price: band.high },
-                ];
-                return (
-                  <View style={styles.suggestRow}>
-                    {opts.map((o) => {
-                      const sel = Math.abs(currentPrice - o.price) < 0.02;
-                      return (
-                        <TouchableOpacity
-                          key={o.label}
-                          style={[styles.suggestChip, (sel || o.hi) && styles.suggestChipHi]}
-                          activeOpacity={0.8}
-                          onPress={() => applyPrice(o.price)}
-                        >
-                          <Text style={styles.suggestChipLabel}>{o.label}</Text>
-                          <Text style={styles.suggestChipPrice}>${o.price.toFixed(2)}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                );
-              })()}
-            </View>
-          );
-        })()}
-
-        <View style={{ flexDirection: 'row', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-end', }}>
-          <View style={{ flex: 1 }}>
-            <Field label="Shipping Weight" value={String(activeData.weight ?? '')} onChangeText={(t) => patchField('weight', t)} onInfo={() => onOpenFieldPanel?.('weight')} />
-          </View>
-          <View style={{ width: 140, marginBottom: 12 }}>
-            <AppMenuSelect
-              options={["oz", "lb", "g", "kg"].map(u => ({ label: u, value: u }))}
-              placeholder="oz"
-              value={activeData.weightUnit || 'oz'}
-              onChange={(value) => patchField('weightUnit', value)}
-              menuWidth={160}
-            />
-          </View>
-        </View>
-
-        <View onLayout={recordFieldLayout('sku')} style={highlightedField === 'sku' ? { borderRadius: 8, borderWidth: 2, borderColor: '#ef4444', backgroundColor: '#FEF2F2', padding: 2 } : undefined}>
-          <Field
-            label="SKU"
-            required
-            value={activeData.sku}
-            onChangeText={(t) => patchField('sku', t)}
-            onInfo={() => onOpenFieldPanel?.('sku')}
-            onRegenerate={enableAIRefill && activeTab !== 'all' ? () => onRegenerateField?.(activePlatformKey, 'sku') : undefined}
-            refilled={Array.isArray((platforms as any)[activePlatformKey]?.__refilled) && (platforms as any)[activePlatformKey].__refilled.includes('sku')}
-            error={requiredFields?.includes?.('sku') && !activeData.sku}
-            externalUpdate={hasExternalUpdate('sku')}
-          />
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={{ flex: 1 }}>
-            <Field label="Barcode" value={activeData.barcode} onChangeText={(t) => patchField('barcode', t)} onInfo={() => onOpenFieldPanel?.('barcode')} externalUpdate={hasExternalUpdate('barcode')} />
-          </View>
-          <TouchableOpacity style={[styles.scanBtn, {}]} onPress={() => { (onOpenBarcodeScanner || (() => { }))((code: string) => patchField('barcode', code)); }}>
-            <Icon name="qrcode-scan" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Condition - eBay uses category-specific conditions; others use generic */}
-        <View style={{ marginBottom: 16 }}>
-          <Text style={styles.fieldLabel}>Condition</Text>
-          {activePlatformKeyLower === 'ebay' && ebayConditions.length > 0 ? (
-            <AppMenuSelect
-              options={ebayConditionsLoading ? [] : ebayConditions.map(c => ({ label: c.conditionName, value: c.conditionId }))}
-              placeholder={ebayConditionsLoading ? "Loading conditions..." : "Select condition..."}
-              value={activeData.conditionID ? String(activeData.conditionID) : (ebayConditions[0]?.conditionId ?? '')}
-              onChange={(value) => {
-                const condId = parseInt(value, 10);
-                const generic = mapEbayConditionIdToGeneric(value) as PlatformState['condition'];
-                patchPlatform(prev => ({
-                  ...prev,
-                  conditionID: Number.isFinite(condId) ? condId : undefined,
-                  condition: generic,
-                }));
-              }}
-            />
-          ) : (
-            <AppMenuSelect
-              options={[
-                { label: 'New', value: 'new' },
-                { label: 'Like New', value: 'like_new' },
-                { label: 'Good', value: 'good' },
-                { label: 'Fair', value: 'fair' },
-                { label: 'Used', value: 'used' },
-                { label: 'Refurbished', value: 'refurbished' },
-                { label: 'For Parts', value: 'for_parts' },
-              ]}
-              placeholder="Select condition..."
-              value={activeData.condition || 'good'}
-              onChange={(value) => patchField('condition', value)}
-            />
-          )}
-        </View>
+      {renderStepsWizard()}
 
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
           Suppressed while the Price sheet is open — that sheet inlines the same card. */}
-      <Modal visible={pricingResearchModalVisible && openField !== 'price'} transparent animationType="slide">
+      <Modal visible={pricingResearchModalVisible && openField !== 'price' && !wizardOpen} transparent animationType="slide">
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#F2F2F7', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '90%' }} onPress={e => e.stopPropagation()}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingTop: 20, paddingBottom: 12 }}>
+          <Pressable style={{ backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%', paddingHorizontal: 16, paddingBottom: 8 }} onPress={e => e.stopPropagation()}>
+            <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 999, backgroundColor: '#E5E7EB', marginTop: 8, marginBottom: 4 }} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, paddingBottom: 12 }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
               <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
                 <Icon name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
             </View>
             {pricingResearchResult?.error ? (
-              <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
+              <View style={{ paddingBottom: 20 }}>
                 <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
               </View>
             ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 28 }}>
+              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 0, paddingBottom: 28 }}>
                 {/* The one shared pricing overview (same card as the add-product preview). */}
                 <PricingGuidanceCard
                   headers="none"
@@ -2834,7 +2842,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 />
               </ScrollView>
             ) : (
-              <View style={{ paddingHorizontal: 12, paddingBottom: 20 }}>
+              <View style={{ paddingBottom: 20 }}>
                 <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
               </View>
             )}
@@ -3074,7 +3082,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             style={{
               marginTop: 8,
               padding: 14,
-              backgroundColor: '#F7F8FA',
+              backgroundColor: '#FFFFFF',
+              borderWidth: 1,
+              borderColor: '#F1F2F4',
               borderRadius: 14,
               flexDirection: 'row',
               alignItems: 'center',
@@ -3087,8 +3097,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 width: dims?.width != null ? String(dims.width) : '',
                 height: dims?.height != null ? String(dims.height) : '',
               });
-              setEditableWeight(String(activeData.weight ?? ''));
-              setEditableWeightUnit(activeData.weightUnit || 'lb');
+              const ewInit = (activeData as any).estimatedWeight;
+              const wInit = (activeData.weight != null && String(activeData.weight) !== '' && Number(activeData.weight) > 0) ? activeData.weight : (ewInit?.value ?? '');
+              setEditableWeight(String(wInit ?? ''));
+              setEditableWeightUnit(activeData.weightUnit || ewInit?.unit || 'lb');
               setDeliverySheetVisible(true);
             }}
           >
@@ -3300,12 +3312,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   </Text>
                 </TouchableOpacity>
               ))} */}
-              {/* Pricing capability indicator moved here */}
-              <View style={{ marginLeft: 'auto', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 4, backgroundColor: activePlatformKey === 'shopify' ? '#E3F2FD' : '' }}>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: activePlatformKey === 'shopify' ? '#1976D2' : '' }}>
-                  {activePlatformKey === 'shopify' ? 'Global Price' : ''}
-                </Text>
-              </View>
+              {/* Global Price badge removed — no special "global card" for Shopify;
+                  inventory is structured the same on every platform tab. */}
             </View>
           )}
         </View>
@@ -3863,7 +3871,7 @@ const styles = StyleSheet.create({
   pillDashed: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', marginRight: 8 },
   // Flattened: sections are borderless now (stripped-down look).
   card: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 14 },
-  darkerCard: { marginTop: 16, backgroundColor: '#F3F4F6', borderRadius: 14, borderWidth: 1, borderColor: '#F1F2F4', padding: 12 },
+  darkerCard: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#F1F2F4', padding: 12 },
   priceAllChannels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   priceAllChannelsLabel: { fontSize: 10.5, fontWeight: '700', color: '#71717A', letterSpacing: 0.5 },
   priceAllChannelsValue: { fontSize: 18, fontWeight: '700', color: '#18181B', marginTop: 2 },

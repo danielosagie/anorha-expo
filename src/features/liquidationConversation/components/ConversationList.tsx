@@ -7,7 +7,9 @@ import { useSharedValue, withTiming } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StreamingMessageBubble } from './StreamingMessageBubble';
 import { TimestampRevealContext } from './timestampReveal';
-import type { ConversationMessage, DecisionPrompt } from '../types';
+import ActivityTraySheet from './activity/ActivityTraySheet';
+import { useActivityTray } from './activity/useActivityTray';
+import type { ActivityPayload, ConversationMessage, DecisionPrompt, ValueChange } from '../types';
 
 type MessageWithTime = ConversationMessage & { time: string };
 
@@ -18,6 +20,12 @@ type Props = {
   onRetry: (clientMessageId: string) => void;
   onOpenCart?: (sessionId: string) => void;
   onCancelQueued?: (clientMessageId: string) => void;
+  /** Jump from an activity card / tray to the product it touched. */
+  onOpenItem?: (productId: string) => void;
+  /** Revert a value change from the review tray (optimistic). */
+  onUndo?: (payload: ActivityPayload, change?: ValueChange) => Promise<void> | void;
+  /** Pause / resume / edit / delete a routine or reminder from its tray. */
+  onRoutineAction?: (id: string, action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
   ListHeaderComponent?: React.ReactElement | null;
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
@@ -31,10 +39,16 @@ export const ConversationList = ({
   onRetry,
   onOpenCart,
   onCancelQueued,
+  onOpenItem,
+  onUndo,
+  onRoutineAction,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
 }: Props) => {
+  // One review-tray instance for the whole feed (hoisted here so FlashList
+  // recycling can never unmount an open tray as its row scrolls off).
+  const { openTray, trayProps } = useActivityTray();
   const listRef = useRef<any>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canJump = useMemo(() => messages.length > 2, [messages.length]);
@@ -154,7 +168,15 @@ export const ConversationList = ({
           if (messages.length && !showJumpToLatest) scrollToBottom(false);
         }}
         renderItem={({ item }) => (
-          <StreamingMessageBubble message={item} onDecision={onDecision} onRetry={onRetry} onOpenCart={onOpenCart} onCancelQueued={onCancelQueued} />
+          <StreamingMessageBubble
+            message={item}
+            onDecision={onDecision}
+            onRetry={onRetry}
+            onOpenCart={onOpenCart}
+            onCancelQueued={onCancelQueued}
+            onOpenTray={openTray}
+            onOpenItem={onOpenItem}
+          />
         )}
         ListEmptyComponent={(
           <View style={styles.emptyState}>
@@ -184,6 +206,14 @@ export const ConversationList = ({
           <Icon name="chevron-down" size={22} color="#18181B" />
         </TouchableOpacity>
       ) : null}
+
+      {/* The single review tray for the whole feed — opened by any activity card. */}
+      <ActivityTraySheet
+        {...trayProps}
+        onOpenItem={onOpenItem}
+        onUndo={onUndo}
+        onRoutineAction={onRoutineAction}
+      />
     </View>
   );
 };

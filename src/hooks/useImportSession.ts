@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import { IMPORT_DEMO } from '../config/features';
 
 // Shared key so the in-progress import survives leaving the flow and can be
 // picked back up (status polling / progress banner) when the user returns.
@@ -344,24 +345,76 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       return;
     }
     if (isCSVImport && importedProducts) {
-      const mapped: MappingSuggestion[] = importedProducts.map((p: any, index: number) => ({
-        action: 'CREATE_NEW',
-        platformProduct: {
+      // Run the SAME match system on CSV rows as a platform scan: match each row
+      // against the existing catalog by SKU then title. Brand-new rows settle as
+      // CREATE_NEW (no needless card); likely-duplicates carry a suggested match
+      // (unresolved) so the deck/classifier auto-links the identical ones and
+      // only asks the seller about the genuinely ambiguous ones.
+      let catalog: any[] = [];
+      try {
+        await ensureSupabaseJwt();
+        const { data } = await supabase
+          .from('ProductVariants')
+          .select('Id, ProductId, Sku, Title, Price, PrimaryImageUrl')
+          .limit(2000);
+        catalog = data || [];
+      } catch (err: any) {
+        log.error('[useImportSession] CSV catalog fetch failed:', err?.message);
+      }
+      const norm = (v?: string | null) => (v || '').trim().toLowerCase();
+      const bySku = new Map<string, any>();
+      const byTitle = new Map<string, any>();
+      for (const v of catalog) {
+        if (v.Sku) bySku.set(norm(v.Sku), v);
+        if (v.Title && !byTitle.has(norm(v.Title))) byTitle.set(norm(v.Title), v);
+      }
+
+      const mapped: MappingSuggestion[] = importedProducts.map((p: any, index: number) => {
+        const sku = p.sku ? String(p.sku) : '';
+        const title = p.title ? String(p.title) : '';
+        const platformProduct = {
           id: `csv-${index}`,
-          sku: p.sku || `CSV-${index}`,
-          title: p.title || 'Untitled',
+          sku: sku || `CSV-${index}`,
+          title: title || 'Untitled',
           // CSV prices are user-formatted ("$1,299.00", "1.299,00"): strip
           // currency symbols and thousands separators before Number() so a
           // real price never coerces to 0.
           price: parseCsvPrice(p.price),
           imageUrl: p.imageUrl || null,
-        },
-        suggestedCanonicalProduct: null,
-        isSelected: true,
-        matchType: 'NONE',
-        confidence: 1.0,
-        originalData: p,
-      }));
+        };
+        const skuMatch = sku ? bySku.get(norm(sku)) : null;
+        const match = skuMatch || (title ? byTitle.get(norm(title)) : null);
+        if (match) {
+          // Unresolved → the deck classifies it (auto-link if every field agrees,
+          // else a single "same item?" decision). This is how duplicates surface.
+          return {
+            action: 'LINK_EXISTING' as const,
+            platformProduct,
+            suggestedCanonicalProduct: {
+              id: match.Id,
+              sku: match.Sku || '',
+              title: match.Title || 'Item',
+              price: typeof match.Price === 'number' ? match.Price : undefined,
+              imageUrl: match.PrimaryImageUrl || null,
+            },
+            isSelected: true,
+            matchType: skuMatch ? ('SKU' as const) : ('TITLE' as const),
+            confidence: skuMatch ? 0.97 : 0.85,
+            originalData: p,
+          };
+        }
+        // Brand-new product → settle as CREATE_NEW so it never becomes a card.
+        return {
+          action: 'CREATE_NEW' as const,
+          platformProduct,
+          suggestedCanonicalProduct: null,
+          isSelected: true,
+          resolved: true,
+          matchType: 'NONE' as const,
+          confidence: 1.0,
+          originalData: p,
+        };
+      });
       setSuggestions(mapped);
       setLoading(false);
       setError(null);
@@ -380,7 +433,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
       // ═══════════════════════════════════════════════════════════════
       let suggestions: MappingSuggestion[] = [];
 
-      // 1️⃣ Existing mappings from PlatformProductMappings → MATCHED items
+      // 1. Existing mappings from PlatformProductMappings → MATCHED items
       try {
         const { data: mappings, error: mappingsError } = await supabase
           .from('PlatformProductMappings')
@@ -392,7 +445,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         }
 
         if (mappings && mappings.length > 0) {
-          log.debug(`[useImportSession] ✅ ${mappings.length} existing mappings from DB`);
+          log.debug(`[useImportSession] ${mappings.length} existing mappings from DB`);
           const mapped: MappingSuggestion[] = mappings.map((m: any) => {
             const pv = m.ProductVariants;
             return {
@@ -427,7 +480,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         log.error('[useImportSession] Error loading mappings:', err?.message);
       }
 
-      // 2️⃣ Unmapped org variants from /missing-mappings → UNMATCHED items to push
+      // 2. Unmapped org variants from /missing-mappings → UNMATCHED items to push
       try {
         const missingResp = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/missing-mappings`, {
           method: 'GET',
@@ -436,7 +489,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         if (missingResp.ok) {
           const missing = await missingResp.json();
           if (Array.isArray(missing) && missing.length > 0) {
-            log.debug(`[useImportSession] ✅ ${missing.length} unmapped items from /missing-mappings`);
+            log.debug(`[useImportSession] ${missing.length} unmapped items from /missing-mappings`);
             const missingAsSuggestions: MappingSuggestion[] = missing.map((m: any) => ({
               action: 'UNMATCHED' as const,
               direction: 'anorha_to_platform' as const,
@@ -474,7 +527,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         if (response.ok) {
           const data = await response.json();
           if (Array.isArray(data) && data.length > 0) {
-            log.debug(`[useImportSession] 🔄 ${data.length} scan suggestions available, merging...`);
+            log.debug(`[useImportSession] ${data.length} scan suggestions available, merging...`);
 
             // Build a lookup of existing suggestions by platform product ID
             const existingIds = new Set(suggestions.map(s => s.platformProduct?.id).filter(Boolean));
@@ -647,7 +700,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
   // edit, no round-trip. The app never derives; it just records taps.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveDraftLog = useCallback((log: DraftDecision[]) => {
-    if (!connectionId) return;
+    if (!connectionId || IMPORT_DEMO) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
@@ -793,7 +846,7 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
         // Don't PUT an empty confirmedMatches: suggestions is set to [] on a
         // fetch error, and saving that empty draft would clobber a real
         // server-side draft. Only autosave when there is something to save.
-        if (!connectionId || !Array.isArray(suggestions) || suggestions.length === 0 || isCSVImport) return;
+        if (!connectionId || IMPORT_DEMO || !Array.isArray(suggestions) || suggestions.length === 0 || isCSVImport) return;
         const confirmedMatches = suggestions.map((s) => ({
           platformProductId: s.platformProduct.id,
           sssyncVariantId: s.action === 'LINK_EXISTING' ? s.suggestedCanonicalProduct?.id : null,
@@ -954,6 +1007,17 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
 
   const handleCreatePool = useCallback(async () => {
     if (!poolNameInput.trim() || !connectionId) return;
+    // Demo mode — don't create a real pool; fake a local selection so the wizard
+    // still flows (the fake id never reaches the backend since submitImport is
+    // also short-circuited in demo).
+    if (IMPORT_DEMO) {
+      const demoPool = { id: `demo-pool-${poolNameInput.trim()}`, name: poolNameInput.trim() };
+      setPools((p) => [...p, demoPool as any]);
+      setSelectedPool(demoPool.id);
+      setPoolNameInput('');
+      setWizardStep(1);
+      return;
+    }
     try {
       setIsCreatingPool(true);
       const token = await ensureSupabaseJwt();
@@ -1012,6 +1076,25 @@ export function useImportSession(options: UseImportSessionOptions): UseImportSes
     // surface the failure instead of silently no-op'ing into a dead-end.
     if (connectionId === 'csv-import') {
       Alert.alert('Import unavailable', "We couldn't set up this import. Please go back and try again.");
+      return;
+    }
+    // Demo/test mode — skip the real commit entirely and route straight to the
+    // completion screen with the real count that WOULD be committed. Lets the
+    // whole match → completion flow be walked without going live anywhere.
+    if (IMPORT_DEMO) {
+      const demoCount = (suggestions || []).filter(
+        (s) => s.isSelected && s.action !== 'IGNORE' && s.action !== 'UNMATCHED',
+      ).length;
+      log.info(`[useImportSession] DEMO mode — skipping commit, ${demoCount} items would import`);
+      setWizardVisible(false);
+      if (onNavigate) {
+        onNavigate('PublishConfirmation', {
+          origin: 'import',
+          importCount: demoCount,
+          platforms: [],
+          savedToInventory: false,
+        });
+      }
       return;
     }
     // The server builds the commit items from its own decision log — the app

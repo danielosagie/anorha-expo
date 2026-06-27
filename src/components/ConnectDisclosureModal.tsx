@@ -55,8 +55,8 @@ export const DISCLOSURES: Record<string, PlatformDisclosure> = {
     title: 'Connect Facebook account',
     subtitle: 'List and sync your products on Facebook Marketplace and catalogs',
     bullets: [
-      'Publish products and sync availability to your Facebook catalogs and Marketplace listings',
-      'Anorha will read and update your Facebook commerce catalog items on your behalf',
+      'Reading keeps your Facebook listings and availability in sync with your other channels',
+      'Posting happens through your own computer and Facebook account, paced to keep your account safe — your computer needs to be on',
       'Disconnect at any time from your Anorha settings or your Facebook account',
     ],
   },

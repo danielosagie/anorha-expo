@@ -47,6 +47,16 @@ export interface ConnectedPlatformItemProps {
     onDisconnect: (id: string, name: string) => void;
     onFix: (id: string, name: string) => void;
     navigation: any;
+    /**
+     * FB-only computer-aware reality. ADDITIVE: the parent passes these ONLY for
+     * the facebook row (derived from the browserJobs subscription); every other
+     * platform passes nothing (undefined → byte-for-byte unchanged behavior).
+     */
+    computerOnline?: boolean;
+    /** True when any FB browser job is paused / dead-lettered. */
+    fbNeedsCheck?: boolean;
+    /** Opens the "Link your computer" sheet (FB "Open" / "Computer offline"). */
+    onOpenComputerSheet?: (id: string, name: string) => void;
 }
 
 // --- Constants ---
@@ -153,7 +163,10 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     onReconnect,
     onDisconnect,
     onFix,
-    navigation
+    navigation,
+    computerOnline,
+    fbNeedsCheck,
+    onOpenComputerSheet,
 }) => {
     const theme = useTheme();
     const { progressByConnectionId } = usePlatformConnections();
@@ -169,8 +182,22 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     const effectiveStatus = progressStatus && CONNECTION_STATUS[progressStatus.toUpperCase() as keyof typeof CONNECTION_STATUS]
         ? progressStatus
         : connection.Status;
-    const statusInfo = getStatusDisplay(effectiveStatus);
+    let statusInfo = getStatusDisplay(effectiveStatus);
     const actionConnection = { ...connection, Status: effectiveStatus };
+
+    // FB-only computer-aware override. Reuses the EXISTING status vocabulary
+    // (amber = attention); only fires when the parent passed the FB props on an
+    // ACTIVE facebook row, so all other platforms are untouched. ONE color
+    // moment: when green ('Connected'), no amber anywhere.
+    const isFacebookRow = connection.PlatformType?.toLowerCase() === 'facebook';
+    if (isFacebookRow && effectiveStatus === CONNECTION_STATUS.ACTIVE) {
+        if (fbNeedsCheck) {
+            statusInfo = { label: 'Needs a check', color: '#BA7517', icon: 'alert-circle-outline' };
+        } else if (computerOnline === false) {
+            statusInfo = { label: 'Computer offline', color: '#FF9500', icon: 'monitor-off' };
+        }
+        // else leave the existing green 'Connected'.
+    }
 
     const isProgressActive = progressStatus === 'scanning' ||
         progressStatus === 'syncing' ||
@@ -374,7 +401,12 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
                                 onPress={() => {
-                                    if (connection.PlatformType === 'csv') {
+                                    // FB rows needing attention (needs-a-check / computer offline)
+                                    // open the computer-link sheet; everything else keeps the
+                                    // existing generic flow.
+                                    if (isFacebookRow && onOpenComputerSheet && (fbNeedsCheck || computerOnline === false)) {
+                                        onOpenComputerSheet(connection.Id, platformConfig.name);
+                                    } else if (connection.PlatformType === 'csv') {
                                         openManageMenu();
                                     } else {
                                         navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name });

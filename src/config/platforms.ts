@@ -58,6 +58,17 @@ export interface PlatformConnectDef {
 export interface PlatformCapabilities {
   /** Can anorha publish/create listings on this platform today. */
   canPublish: boolean;
+  /**
+   * HOW writes are delivered (two-axis with canPublish — canPublish is the
+   * "can sell" OAuth axis; this is the delivery axis):
+   *   'api'      → posts directly via the platform API (default; omit).
+   *   'computer' → posts through the user's own computer + their own platform
+   *                login, paced for account safety. Gating must allow publishing
+   *                but, when the computer is offline, the job sits PENDING
+   *                ("waiting for your computer") — it NEVER blocks.
+   * Default (undefined) === 'api', so every other platform is unchanged.
+   */
+  writeVia?: 'api' | 'computer';
   /** Surfaces shipping/delivery options (DeliveryShippingSheet gate). */
   shipping: boolean;
   /** Has a browsable category taxonomy the editor should collect. */
@@ -193,6 +204,9 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     },
     capabilities: {
       canPublish: true,
+      // Facebook writes go through the user's own computer + Facebook login,
+      // paced for account safety — keep OAuth (canPublish) for the sell axis.
+      writeVia: 'computer',
       shipping: true,
       supportsTaxonomy: false,
       requiredFields: ['title', 'price', 'description', 'images'],
@@ -315,6 +329,18 @@ export const getPlatformIcon = (raw?: string | null, fallback = 'store-outline')
   getPlatform(raw)?.mdiIcon ?? fallback;
 
 /**
+ * How a platform delivers writes: 'api' (default) or 'computer'. A 'computer'
+ * platform (Facebook) still allows publishing, but the job waits for the user's
+ * computer to be on instead of posting via API. Undefined platforms → 'api'.
+ */
+export const getPlatformWriteVia = (raw?: string | null): 'api' | 'computer' =>
+  getPlatform(raw)?.capabilities.writeVia ?? 'api';
+
+/** True when a platform posts through the user's own computer (e.g. Facebook). */
+export const platformRequiresComputer = (raw?: string | null): boolean =>
+  getPlatformWriteVia(raw) === 'computer';
+
+/**
  * Human-friendly display name for a raw platform value. Strips Shopify's
  * `.myshopify.com` store-domain suffix, resolves known platforms to their
  * correctly-cased label, and otherwise title-cases the input.
@@ -375,3 +401,30 @@ export const ENABLED_PLATFORM_OPTIONS = ENABLED_PLATFORMS.map((key) => ({
   key,
   ...PLATFORM_CONFIG[key],
 }));
+
+// ── Availability — the ONE on/off + "why not" gate ───────────────────────────
+// Turn a platform on/off by editing EXPO_PUBLIC_ENABLED_PLATFORMS (a comma list,
+// e.g. `shopify,ebay,square,facebook`). A platform also needs status !== 'planned'
+// and a `connect` def to be connectable. Computer-write platforms (Facebook) need
+// the desktop helper linked — pass `computerOnline` to surface that cleanly
+// instead of letting the user hit a wall.
+export type PlatformAvailability = 'available' | 'needs-computer' | 'coming-soon';
+
+export const getPlatformAvailability = (
+  raw?: string | null,
+  opts?: { computerOnline?: boolean },
+): PlatformAvailability => {
+  const def = getPlatform(raw);
+  if (!def || !def.connect || def.status === 'planned') return 'coming-soon';
+  if (!ENABLED_PLATFORMS.includes(def.key)) return 'coming-soon';
+  if (def.capabilities.writeVia === 'computer' && opts?.computerOnline === false) return 'needs-computer';
+  return 'available';
+};
+
+/** Short, user-facing reason a platform can't be used right now ('' = available). */
+export const platformUnavailableReason = (a: PlatformAvailability): string =>
+  a === 'needs-computer'
+    ? 'Connect your computer to use this'
+    : a === 'coming-soon'
+      ? 'Coming soon'
+      : '';

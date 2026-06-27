@@ -74,8 +74,18 @@ export const ResolveBadge = React.createContext<{ label: string; color: string }
 export const ResolveActions = React.createContext<{ onEdit?: () => void; onExplain?: () => void } | null>(null);
 
 // Deck-level chrome (the ⋯ menu and the always-present ignore), provided by the
-// match deck so TinderShell's header/footer can reach them.
-export const DeckChrome = React.createContext<{ onMenu?: () => void; onIgnore?: () => void; onUndo?: () => void; canUndo?: boolean; onRedo?: () => void; canRedo?: boolean } | null>(null);
+// match deck so TinderShell's header/footer can reach them. `intro` is the
+// one-time "what we found" confidence beat — shown on the first card only, it
+// dismisses itself the moment the deck reports the first decision is made.
+export const DeckChrome = React.createContext<{
+  onMenu?: () => void;
+  onIgnore?: () => void;
+  onUndo?: () => void;
+  canUndo?: boolean;
+  onRedo?: () => void;
+  canRedo?: boolean;
+  intro?: { cameIn: number; needYou: number } | null;
+} | null>(null);
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'muted';
 export function toneColor(t?: Tone): string {
@@ -511,6 +521,19 @@ export function TinderShell({
         ) : null}
       </View>
 
+      {/* INTRO BEAT — "what we found" on the first card; tells the seller most of
+          their import was handled and exactly how few need them. Disappears once
+          they make the first decision. */}
+      {chrome?.intro ? (
+        <View style={ts.introStrip}>
+          <Text style={ts.introStripText}>
+            <Text style={ts.introStripStrong}>{chrome.intro.cameIn}</Text> came in
+            {'   ·   '}
+            <Text style={ts.introStripAccent}>{chrome.intro.needYou} need you</Text>
+          </Text>
+        </View>
+      ) : null}
+
       {/* CARD — the only thing that swipes */}
       <View style={ts.cardArea}>
         <View style={ts.peek2} pointerEvents="none" />
@@ -616,6 +639,11 @@ const ts = StyleSheet.create({
   progFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: RC.green, borderRadius: 3 },
   leftPill: { backgroundColor: '#fff', borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, flexShrink: 0 },
   leftPillText: { fontSize: 13, fontWeight: '700', color: RC.muted, fontVariant: ['tabular-nums'] },
+
+  introStrip: { alignSelf: 'center', marginTop: 12, marginBottom: -4, backgroundColor: RC.surface2, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 },
+  introStripText: { fontSize: 13.5, fontWeight: '600', color: RC.muted, fontVariant: ['tabular-nums'] },
+  introStripStrong: { color: RC.ink, fontWeight: '800' },
+  introStripAccent: { color: RC.greenDark, fontWeight: '800' },
 
   cardArea: { flex: 1, position: 'relative', paddingTop: 16, marginTop: 12 },
   peek2: { position: 'absolute', top: 0, left: 34, right: 34, height: 40, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#E9EBEF' },
