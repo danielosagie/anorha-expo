@@ -129,154 +129,41 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     );
   }
 
+  // Single-product publish — the same printer-receipt → result-card animation as import:
+  // the receipt prints out of the printer, tears off, and morphs into the result card.
   return (
-    <View style={{ flex: 1, backgroundColor: "white", flexDirection: "column", gap: 2, }}>
-
-      {/* Back */}
-      <View style={{ marginTop: 30, marginBottom: 10 }}>
-        <TouchableOpacity onPress={() => {
-          if (backRoute && backRoute.name) {
-            navigation.navigate(backRoute.name as any, backRoute.params as any);
-          } else {
-            navigation.goBack();
-          }
-        }} style={styles.backBtn}>
+    <View style={{ flex: 1, backgroundColor: '#fff' }}>
+      <View style={{ marginTop: 30 }}>
+        <TouchableOpacity
+          onPress={() => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); }}
+          style={styles.backBtn}
+        >
           <Icon name="arrow-left" size={18} color={'#000'} />
           <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
         </TouchableOpacity>
       </View>
-
-      <View style={{ flex: 1, flexDirection: "column", justifyContent: "center", paddingHorizontal: 30, paddingTop: 40, gap: 8 }}>
-
-
-        {/* Image */}
-        <View style={styles.imageWrap}>
-          {imageUrl ? (
-            <Image source={{ uri: imageUrl }} style={styles.image} />
-          ) : (
-            renderLogoSquare()
-          )}
-        </View>
-
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16, justifyContent: "center" }}>
-          <Icon name="check-circle" size={22} color={BRAND_PRIMARY} />
-          <Text style={{ color: '#000', fontWeight: '600', fontSize: 20 }}>
-            {savedToInventory ? 'Saved to Inventory' : (origin === 'import' ? 'Import Complete!' : 'Product Published!')}
-          </Text>
-        </View>
-
+      <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
+        <PrintingComplete
+          title={savedToInventory ? 'Saved to inventory' : 'Published!'}
+          subtitle={savedToInventory ? 'In your inventory' : (platforms.length > 0 ? `Live on ${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : 'Live')}
+          platforms={platforms}
+          stamp={savedToInventory ? '· SAVED' : '· LIVE'}
+          syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
+          primaryLabel="View listing"
+          onPrimary={handleReviewInInventory}
+          secondaryLabel="List another"
+          onSecondary={handleCreateAnother}
+        />
         {fbStatus && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 2 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
             <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: fbStatus.dotColor }} />
             <Text style={{ color: fbStatus.color, fontSize: 13, fontWeight: '600' }}>Facebook · {fbStatus.label}</Text>
           </View>
         )}
-
-        {/* Details Card */}
-        <View style={{}}>
-          <ScrollView style={styles.card}>
-            {origin === 'import' ? (
-              <View>
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={styles.label}>SUMMARY</Text>
-                  <Text style={styles.value}>Imported {typeof importCount === 'number' ? importCount : (platforms?.length || 0)} item{(importCount || 0) === 1 ? '' : 's'}</Text>
-                </View>
-                {platforms.length > 0 && (
-                  <View style={{ marginBottom: 12 }}>
-                    <Text style={styles.label}>PLATFORMS</Text>
-                    <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-                      {platforms.map((p: string) => (
-                        <View key={`pf-${p}`} style={styles.platformPill}>
-                          {renderPlatformSvg(p)}
-                          <Text style={{ color: '#111', fontWeight: '600', marginLeft: 6 }}>{platformLabel(p)}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-                {!!syncRules && (
-                  <View style={{ marginBottom: 12 }}>
-                    <Text style={styles.label}>SYNC SETTINGS</Text>
-                    <View style={{ gap: 4 }}>
-                      {'syncDirection' in (syncRules || {}) && (
-                        <Text style={styles.value}>Direction: {String(syncRules.syncDirection)}</Text>
-                      )}
-                      {'sourceOfTruth' in (syncRules || {}) && (
-                        <Text style={styles.value}>Source of Truth: {String(syncRules.sourceOfTruth)}</Text>
-                      )}
-                      {'autoCreate' in (syncRules || {}) && (
-                        <Text style={styles.value}>Auto-create: {syncRules.autoCreate ? 'On' : 'Off'}</Text>
-                      )}
-                      {'autoUpdate' in (syncRules || {}) && (
-                        <Text style={styles.value}>Auto-update: {syncRules.autoUpdate ? 'On' : 'Off'}</Text>
-                      )}
-                      {'syncInventory' in (syncRules || {}) && (
-                        <Text style={styles.value}>Sync Inventory: {syncRules.syncInventory ? 'On' : 'Off'}</Text>
-                      )}
-                      {'syncPricing' in (syncRules || {}) && (
-                        <Text style={styles.value}>Sync Pricing: {syncRules.syncPricing ? 'On' : 'Off'}</Text>
-                      )}
-                    </View>
-                  </View>
-                )}
-              </View>
-            ) : (
-              <View>
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={styles.label}>TITLE</Text>
-                  <Text style={styles.value}>{title || 'Untitled'}</Text>
-                </View>
-                {!!description && (
-                  <View style={{ marginBottom: 12 }}>
-                    <Text style={styles.label}>DESCRIPTION</Text>
-                    <Text style={[styles.value, { color: '#111' }]} numberOfLines={2}>{description}</Text>
-                  </View>
-                )}
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={styles.label}>PRICE</Text>
-                  <Text style={styles.value}>{typeof price === 'number' ? `$${price.toFixed(2)}` : '-'}</Text>
-                </View>
-                {accountNames.length > 0 && (
-                  <View style={{ marginBottom: 12 }}>
-                    <Text style={styles.label}>PUBLISHED TO</Text>
-                    <Text style={styles.value}>{accountNames.join(', ')}</Text>
-                  </View>
-                )}
-              </View>
-            )}
-          </ScrollView>
-        </View>
-
-      </View>
-
-      {/* Actions */}
-      <View style={{ backgroundColor: 'white', paddingBottom: 24, paddingHorizontal: 16 }}>
-        {origin === 'import' ? (
-          <>
-            <TouchableOpacity onPress={handleExitImport} style={styles.primaryBtn}>
-              <PackagePlus size={18} color={'#FFF'} />
-              <Text style={styles.primaryText}>Exit Import</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleReviewInInventory} style={styles.secondaryBtn}>
-              <Boxes size={18} color={'#71717A'} />
-              <Text style={styles.secondaryText}>Go To Inventory</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <>
-            <TouchableOpacity onPress={handleCreateAnother} style={styles.primaryBtn}>
-              <PackagePlus size={18} color={'#FFF'} />
-              <Text style={styles.primaryText}>Create Another Listing</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleReviewInInventory} style={styles.secondaryBtn}>
-              <Boxes size={18} color={'#71717A'} />
-              <Text style={styles.secondaryText}>View In Inventory</Text>
-            </TouchableOpacity>
-          </>
-        )}
       </View>
     </View>
   );
+
 };
 
 function platformLabel(key: string): string {
