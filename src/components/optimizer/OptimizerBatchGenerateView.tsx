@@ -14,7 +14,7 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
 import { createLogger } from '../../utils/logger';
 const log = createLogger('OptimizerBatchGenerateView');

@@ -10,7 +10,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 // import { Camera } from 'lucide-react-native';
 import { AppState, AppStateStatus } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
-import { useAuth, useClerk } from '@clerk/clerk-expo';
+import { useAuth, useClerk } from '@clerk/expo';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
 import { ActivityIndicator, View, Text, StyleSheet } from 'react-native';
 import { Asset } from 'expo-asset';

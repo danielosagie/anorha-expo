@@ -19,7 +19,7 @@ import {
 import * as WebBrowser from 'expo-web-browser';
 import { useNavigation } from '@react-navigation/native';
 import { ChevronRight } from 'lucide-react-native';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import PageHeader from '../components/ui/PageHeader';
 import TierSelectorModal from '../components/TierSelectorModal';
 import { API_BASE_URL } from '../config/env';

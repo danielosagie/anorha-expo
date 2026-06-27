@@ -32,7 +32,7 @@ import SortByDropdown from '../components/SortByDropdown';
 import CampaignCard from '../components/CampaignCard';
 import { PlatformConnection, PlatformLocation } from '../utils/SupaLegend';
 import { useProductVariantRealtime } from '../hooks/useProductVariantRealtime';
-import { useUser } from '@clerk/clerk-expo';
+import { useUser } from '@clerk/expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SessionContext } from '../context/SessionContext';
 import { createLogger } from '../utils/logger';

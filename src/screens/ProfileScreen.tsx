@@ -16,7 +16,7 @@ import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { useAuth, useUser } from '@clerk/clerk-expo';
+import { useAuth, useUser } from '@clerk/expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';

@@ -5,7 +5,7 @@ import React, { useContext, useEffect, useState } from 'react';
 import { Alert, Image, Linking, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useUser } from '@clerk/clerk-expo';
+import { useUser } from '@clerk/expo';
 import * as Clipboard from 'expo-clipboard';
 import {
   User, Users, Bell, Handshake, ShieldCheck, CreditCard, LogOut, ChevronRight, Plus, Code2,

@@ -1,7 +1,10 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated } from 'react-native';
-import { useSignUp, useSignIn, useAuth } from '@clerk/clerk-expo';
+import { useClerk } from '@clerk/expo';
+// Core 3 split: classic resource API (attemptFirstFactor / attemptEmailAddressVerification)
+// lives under /legacy; the main hooks are the new Future/signals API.
+import { useSignUp, useSignIn } from '@clerk/expo/legacy';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 
@@ -25,7 +28,9 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
   const isResetMode = mode === 'reset';
   const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
   const { signIn, isLoaded: isSignInLoaded } = useSignIn();
-  const auth = useAuth() as any;
+  // Core 3: useAuth no longer exposes setActive; the active session is set via
+  // the Clerk instance (useClerk().setActive).
+  const clerk = useClerk();
   const theme = useTheme();
 
   const [digits, setDigits] = useState<string[]>(Array(CELL_COUNT).fill(''));
@@ -133,7 +138,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           password: newPassword,
         });
         if (res.status === 'complete' && res.createdSessionId) {
-          try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
+          try { await clerk.setActive({ session: res.createdSessionId }); } catch { }
           // App will react to isSignedIn and show main app; no navigation needed
         } else if (res.status === 'needs_second_factor') {
           setErrorMessage('Additional verification is required. Please contact support.');
@@ -146,7 +151,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
         const res = await signUp!.attemptEmailAddressVerification({ code });
 
         if (res.status === 'complete' && res.createdSessionId) {
-          try { await auth.setActive?.({ session: res.createdSessionId }); } catch { }
+          try { await clerk.setActive({ session: res.createdSessionId }); } catch { }
           navigation.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'CreateAccountScreen' } }] });
         } else {
           setErrorMessage('Unable to complete verification. Please try again.');
@@ -163,7 +168,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
     } finally {
       setSubmitting(false);
     }
-  }, [code, newPassword, isResetMode, isSignInLoaded, signIn, isSignUpLoaded, signUp, auth, navigation, submitting, triggerErrorShake]);
+  }, [code, newPassword, isResetMode, isSignInLoaded, signIn, isSignUpLoaded, signUp, clerk, navigation, submitting, triggerErrorShake]);
 
   // Auto-submit when all 6 digits are filled (signup only; reset mode requires password)
   useEffect(() => {

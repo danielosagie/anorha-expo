@@ -9,7 +9,7 @@ import {
     Dimensions,
     ScrollView,
 } from 'react-native';
-import { useOrganizationList } from '@clerk/clerk-expo';
+import { useOrganizationList } from '@clerk/expo';
 import { showMessage } from 'react-native-flash-message';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { createLogger } from '../utils/logger';

@@ -17,7 +17,7 @@ import { AuthPersistence } from './AuthPersistence';
  * sign-out worse. Single source of truth for "tear down persisted auth" — shared by
  * AppNavigator.signOut and the session reconnect "sign out" escape.
  *
- * Clerk key names per @clerk/clerk-expo: token cache "__clerk_client_jwt" +
+ * Clerk key names per @clerk/expo: token cache "__clerk_client_jwt" +
  * ResourceCache "__clerk_cache_{client,session_jwt}_<pk last 5>"; the backing store
  * varies by version, so we clear both SecureStore and AsyncStorage.
  */

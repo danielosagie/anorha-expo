@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useUser } from '@clerk/clerk-expo';
+import { useUser } from '@clerk/expo';
 import { ChevronRight, Cloud, ScanFace, Zap } from 'lucide-react-native';
 import { PageHeader } from '../components/ui/PageHeader';
 import { AuthContext } from '../context/AuthContext';

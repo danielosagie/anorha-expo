@@ -20,7 +20,7 @@ import PageHeader from '../components/ui/PageHeader';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { showMessage } from 'react-native-flash-message';
 import InviteMemberModal from '../components/team/InviteMemberModal';
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 const log = createLogger('TeamScreen');
