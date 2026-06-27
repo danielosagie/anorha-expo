@@ -2067,6 +2067,96 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   // The focused editor for a single wizard step. Reuses the same field
   // components as the sheets; price/category/condition are focused variants.
+  // ── Smart (AI) category editor — shared by the wizard step + the field sheet ──
+  // Surfaces the taxonomy engine's RANKED candidates with their confidence scores (a real
+  // best-match + a couple of alternates), instead of a flat keyword list where everything
+  // looked like a "perfect match". Typing refines via the same ranked search.
+  const renderCategoryEditor = (): React.ReactNode => {
+    if (!supportsTaxonomy) {
+      const hasTaxPlat = ['shopify', 'ebay'].some((k) => (platforms as any)[k]);
+      if (hasTaxPlat) return <ActivityIndicator size="small" color={BRAND_PRIMARY} style={{ marginTop: 8 }} />;
+      return <Text style={{ color: CHAT_COLORS.dim, fontSize: 14 }}>No category needed.</Text>;
+    }
+    const d: any = activeData;
+    const catLower = activePlatformKeyLower;
+    const isShopify = catLower === 'shopify';
+    const currentId = isShopify ? d.productCategoryId : d.categoryId;
+    const detected: string | null = d.categoryPath || d.category || d.productCategory || null;
+    const loading = !!taxonomyLoading[catLower];
+    const cleanPath = (p: any) => String(p || '').replace(/^Root\s*[>›]\s*/i, '').replace(/\s*[>›]\s*/g, ' › ').trim();
+    const leafOf = (item: any) => {
+      const parts = cleanPath(item?.path || item?.label || item?.value).split(' › ');
+      return parts[parts.length - 1] || item?.label || 'Category';
+    };
+    const apply = (item: any) => {
+      const path = item.path || item.label || item.value;
+      if (isShopify) patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+      else patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
+      setTaxonomyQueries((prev) => ({ ...prev, [catLower]: '' }));
+    };
+    const conf = (s: any) => (typeof s === 'number' ? `${Math.round(s * 100)}%` : '');
+    // Searching → the ranked search hits; otherwise the auto-suggested candidates.
+    const searching = !!activeTaxonomyQuery && taxonomyDropdownData.length > 0;
+    const ranked: any[] = (searching ? taxonomyDropdownData : (taxonomyResults[catLower] || [])).slice().sort((a: any, b: any) => (b?.score || 0) - (a?.score || 0));
+    const best = ranked[0];
+    const alts = ranked.slice(1, 3);
+    return (
+      <View>
+        {/* Describe-it search */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 13, backgroundColor: '#FFFFFF' }}>
+          <Icon name="magnify" size={18} color="#9CA3AF" />
+          <TextInput
+            style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }}
+            value={activeTaxonomyQuery}
+            onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [catLower]: text }))}
+            placeholder="Describe it — a few words"
+            placeholderTextColor="#9CA3AF"
+          />
+          {loading ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
+        </View>
+        <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={loading} style={[rowStyles.researchBtn, { marginTop: 12, marginBottom: 4 }]}>
+          {loading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
+          <Text style={rowStyles.researchBtnText}>{loading ? 'Finding the best match…' : (detected ? 'Re-detect from photo + title' : 'Auto-find')}</Text>
+        </TouchableOpacity>
+
+        {/* Best match (AI, ranked by confidence) */}
+        {best ? (
+          <TouchableOpacity activeOpacity={0.85} onPress={() => apply(best)} style={{ marginTop: 10, gap: 8, backgroundColor: '#F2F8E3', borderWidth: 1.5, borderColor: BRAND_PRIMARY, borderRadius: 16, padding: 16 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ backgroundColor: BRAND_PRIMARY, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}><Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '800', letterSpacing: 0.4 }}>BEST</Text></View>
+              <View style={{ flex: 1 }} />
+              {conf(best.score) ? <Text style={{ color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.bold, fontSize: 15, fontWeight: '800' }}>{conf(best.score)}</Text> : null}
+              {!searching && (cleanPath(detected) === cleanPath(best.path || best.label)) ? <Icon name="check-circle" size={18} color={BRAND_PRIMARY} /> : null}
+            </View>
+            <Text style={{ color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold, fontSize: 18, fontWeight: '800' }}>{leafOf(best)}</Text>
+            <Text style={{ color: CHAT_COLORS.dim, fontSize: 12 }} numberOfLines={2}>{cleanPath(best.path || best.label)}</Text>
+          </TouchableOpacity>
+        ) : detected ? (
+          <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: CHAT_COLORS.brandSoft, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14 }}>
+            <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}><Check size={14} color="#FFFFFF" /></View>
+            <Text style={{ flex: 1, color: CHAT_COLORS.ink, fontSize: 14, fontWeight: '600' }}>{cleanPath(detected)}</Text>
+          </View>
+        ) : null}
+
+        {/* Ranked alternates — a couple, not a billion */}
+        {alts.length > 0 ? (
+          <View style={{ marginTop: 10, gap: 8 }}>
+            {alts.map((item: any, i: number) => (
+              <TouchableOpacity key={`${item.value}-${i}`} activeOpacity={0.85} onPress={() => apply(item)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 13, padding: 13 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: CHAT_COLORS.ink, fontSize: 15, fontWeight: '600' }} numberOfLines={1}>{leafOf(item)}</Text>
+                  <Text style={{ color: CHAT_COLORS.dim, fontSize: 12 }} numberOfLines={1}>{cleanPath(item.path || item.label)}</Text>
+                </View>
+                {conf(item.score) ? <Text style={{ color: '#9CA3AF', fontFamily: CHAT_FONT.bold, fontSize: 13, fontWeight: '700' }}>{conf(item.score)}</Text> : null}
+                <ChevronRight size={17} color="#C4C4BD" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
   const renderStepEditor = (field: string): React.ReactNode => {
     const d: any = activeData;
     switch (field) {
@@ -2186,58 +2276,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             )}
           </View>
         );
-      case 'category': {
-        if (!supportsTaxonomy) {
-          // On the 'all' tab the category editor can't render; an effect switches to the
-          // taxonomy platform that needs a category. Show a spinner during that beat instead
-          // of a misleading "No category needed" when a Shopify/eBay platform is present.
-          const hasTaxPlat = ['shopify', 'ebay'].some((k) => (platforms as any)[k]);
-          if (hasTaxPlat) return <ActivityIndicator size="small" color={BRAND_PRIMARY} style={{ marginTop: 8 }} />;
-          return <Text style={{ color: CHAT_COLORS.dim, fontSize: 14 }}>No category needed.</Text>;
-        }
-        const catDisplay: string | null = d.categoryPath || d.category || d.productCategory || null;
-        return (
-          <View>
-            <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
-              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
-              <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding…' : (catDisplay ? 'Re-detect' : 'Auto-find')}</Text>
-            </TouchableOpacity>
-            {!!catDisplay && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: CHAT_COLORS.brandSoft, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 14 }}>
-                <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}><Check size={14} color="#FFFFFF" /></View>
-                <Text style={{ flex: 1, color: CHAT_COLORS.ink, fontSize: 14, fontWeight: '600' }}>{String(catDisplay).replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
-              </View>
-            )}
-            <Text style={rowStyles.sectionLabel}>{catDisplay ? 'Change' : 'Or search'}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12 }}>
-              <Icon name="magnify" size={18} color="#9CA3AF" />
-              <TextInput style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }} value={activeTaxonomyQuery} onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text }))} placeholder="Search categories" placeholderTextColor="#9CA3AF" />
-              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
-            </View>
-            {!!activeTaxonomyQuery && taxonomyDropdownData.length > 0 && (
-              <View style={{ marginTop: 8, borderWidth: 1, borderColor: '#EEF0F2', borderRadius: 12, overflow: 'hidden' }}>
-                {taxonomyDropdownData.slice(0, 8).map((item: any, idx: number) => (
-                  <TouchableOpacity
-                    key={`${item.value}-${idx}`}
-                    style={{ paddingVertical: 11, paddingHorizontal: 14, borderBottomWidth: idx < Math.min(taxonomyDropdownData.length, 8) - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: '#F1F2F4' }}
-                    onPress={() => {
-                      const path = item.path || item.label || item.value;
-                      if (activePlatformKeyLower === 'shopify') {
-                        patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
-                      } else {
-                        patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
-                      }
-                      setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: '' }));
-                    }}
-                  >
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937' }} numberOfLines={2}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-        );
-      }
+      case 'category':
+        return renderCategoryEditor();
       default:
         return <SheetTextField value={String(d[field] ?? '')} onChangeText={(t) => patchField(field, t)} autoFocus />;
     }
@@ -2357,79 +2397,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           ) : null}
         </FieldSheet>
 
-        {/* Category — auto-detected on open; one search field as the fallback. */}
-        {supportsTaxonomy && (() => {
-          const catDisplay: string | null = (activeData as any).categoryPath || (activeData as any).category || (activeData as any).productCategory || null;
-          return (
+        {/* Category — AI ranked best-match + alternates (shared with the wizard). */}
+        {supportsTaxonomy && (
           <FieldSheet visible={openField === 'category'} title="Category" badge={activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} badgeTone="neutral" onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
-            {/* Auto-find runs on open; tapping forces a fresh detect (works even after the silent run). */}
-            <TouchableOpacity onPress={() => suggestTaxonomy(true, true)} disabled={taxonomyLoading[activePlatformKeyLower]} style={[rowStyles.researchBtn, { marginTop: 0, marginBottom: 14 }]}>
-              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Sparkles size={15} color={BRAND_PRIMARY} />}
-              <Text style={rowStyles.researchBtnText}>{taxonomyLoading[activePlatformKeyLower] ? 'Finding the best category…' : (catDisplay ? 'Re-detect from title' : 'Auto-find from title')}</Text>
-            </TouchableOpacity>
-
-            {/* Detected category — the primary surface; searching is the fallback. */}
-            {!!catDisplay && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: CHAT_COLORS.brandSoft, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, marginBottom: 14 }}>
-                <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' }}>
-                  <Icon name="check" size={14} color="#FFFFFF" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: CHAT_COLORS.ink, fontSize: 14, fontWeight: '600' }}>{String(catDisplay).replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
-                  {typeof (activeData as any).taxonomyConfidence === 'number' && (activeData as any).taxonomyConfidence >= 0.5 ? (
-                    <Text style={{ color: CHAT_COLORS.brandDeep, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
-                      {(activeData as any).taxonomySource && (activeData as any).taxonomySource !== 'suggested' && (activeData as any).taxonomySource !== 'manual' ? 'AI match' : 'Suggested'} · {Math.round((activeData as any).taxonomyConfidence * 100)}%
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-            )}
-
-            {/* One search field — the fallback for when the auto-pick is wrong. */}
-            <Text style={rowStyles.sectionLabel}>{catDisplay ? 'Change category' : 'Or search'}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 50, paddingHorizontal: 14, borderWidth: 1, borderColor: (categoryMissing && !catDisplay) ? '#ef4444' : '#E5E7EB', borderRadius: 12 }}>
-              <Icon name="magnify" size={18} color="#9CA3AF" />
-              <TextInput
-                style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }}
-                value={activeTaxonomyQuery}
-                onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: text }))}
-                placeholder={`Search ${activePlatformKeyLower === 'shopify' ? 'Shopify' : 'eBay'} categories`}
-                placeholderTextColor="#9CA3AF"
-              />
-              {taxonomyLoading[activePlatformKeyLower] ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
-            </View>
-
-            {!!activeTaxonomyQuery && taxonomyDropdownData.length > 0 && (
-              <View style={{ marginTop: 8, borderWidth: 1, borderColor: '#EEF0F2', borderRadius: 12, overflow: 'hidden' }}>
-                {taxonomyDropdownData.slice(0, 8).map((item: any, idx: number) => (
-                  <TouchableOpacity
-                    key={`${item.value}-${idx}`}
-                    style={{ paddingVertical: 11, paddingHorizontal: 14, borderBottomWidth: idx < Math.min(taxonomyDropdownData.length, 8) - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: '#F1F2F4' }}
-                    onPress={() => {
-                      const path = item.path || item.label || item.value;
-                      if (activePlatformKeyLower === 'shopify') {
-                        patchPlatform((prev) => ({ ...prev, productCategoryId: item.value, productCategory: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
-                      } else {
-                        patchPlatform((prev) => ({ ...prev, categoryId: item.value, category: path, categoryPath: path, taxonomyConfidence: item.score || 1.0, taxonomySource: 'manual' }));
-                      }
-                      setTaxonomyQueries((prev) => ({ ...prev, [activePlatformKeyLower]: '' }));
-                    }}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2937', flex: 1 }} numberOfLines={2}>{(item.label || '').replace(/^Root\s*[>›]\s*/i, '')}</Text>
-                      {item.score && item.score > 0.8 ? (
-                        <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                          <Text style={{ color: '#166534', fontSize: 10, fontWeight: '700' }}>BEST</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    {item.path && item.path !== item.label ? (
-                      <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }} numberOfLines={1}>{item.path.replace(/^Root\s*[>›]\s*/i, '').replace(/ > /g, ' › ')}</Text>
-                    ) : null}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
+            {renderCategoryEditor()}
             {activePlatformKeyLower === 'ebay' && selectedCategoryId && (
               <View style={{ marginTop: 16 }}>
                 <Text style={rowStyles.sectionLabel}>Item Specifics</Text>
@@ -2466,8 +2437,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               </View>
             )}
           </FieldSheet>
-          );
-        })()}
+        )}
 
         {/* Condition — radio picker */}
         <FieldSheet visible={openField === 'condition'} title="Condition" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)} saveLabel="Done">
