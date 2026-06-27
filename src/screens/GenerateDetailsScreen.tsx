@@ -1254,6 +1254,47 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return Array.from(new Set(mapped.filter((f) => allowed.includes(f))));
   }, [allMissingRequiredFields]);
 
+  // Per-platform "how well set up to rank" status for the publish sheet. Required fields
+  // gate publishing; these are the OPTIONAL boosts (SEO, specifics, condition…) that lift a
+  // listing's ranking. All present → "Ready to rank"; otherwise "N boosts" + what's missing.
+  const channelOptimization = useMemo(() => {
+    const has = {
+      seo: (d: any) => !!(d.seoTitle || d.seo?.title || d.seoDescription || d.metaDescription),
+      category: (d: any) => !!(d.category || d.categoryName || d.productCategory || d.categorySuggestion || d.categoryId || d.googleProductCategory),
+      specifics: (d: any) => {
+        const s = d.itemSpecifics || d.aspects || d.attributes;
+        return !!s && typeof s === 'object' && Object.keys(s).length >= 2;
+      },
+      condition: (d: any) => !!(d.condition || d.conditionId || d.conditionDisplayName),
+      tags: (d: any) => Array.isArray(d.tags) && d.tags.length > 0,
+      brand: (d: any) => !!(d.brand || d.vendor || d.manufacturer),
+    };
+    const BOOSTS: Record<string, Array<{ label: string; ok: (d: any) => boolean }>> = {
+      shopify: [{ label: 'SEO', ok: has.seo }, { label: 'Collection', ok: has.category }, { label: 'Tags', ok: has.tags }],
+      ebay: [{ label: 'Item specifics', ok: has.specifics }, { label: 'Condition', ok: has.condition }, { label: 'Category', ok: has.category }],
+      facebook: [{ label: 'Category', ok: has.category }, { label: 'Condition', ok: has.condition }, { label: 'Brand', ok: has.brand }],
+      amazon: [{ label: 'Item specifics', ok: has.specifics }, { label: 'Brand', ok: has.brand }, { label: 'Category', ok: has.category }],
+      square: [{ label: 'Category', ok: has.category }, { label: 'Tags', ok: has.tags }],
+      clover: [{ label: 'Category', ok: has.category }, { label: 'Tags', ok: has.tags }],
+    };
+    const out: Record<string, { tone: 'good' | 'warn'; label: string; detail: string }> = {};
+    for (const pk of platformKeys) {
+      const data = (displayedPlatforms as any)?.[pk] || {};
+      const list = BOOSTS[pk] || [{ label: 'Category', ok: has.category }, { label: 'Condition', ok: has.condition }];
+      const missing = list.filter((b) => !b.ok(data));
+      if (missing.length === 0) {
+        out[pk] = { tone: 'good', label: 'Ready to rank', detail: list.slice(0, 2).map((b) => b.label).join(' · ') };
+      } else {
+        out[pk] = {
+          tone: 'warn',
+          label: `${missing.length} boost${missing.length !== 1 ? 's' : ''}`,
+          detail: missing.slice(0, 2).map((b) => b.label).join(' · '),
+        };
+      }
+    }
+    return out;
+  }, [displayedPlatforms, platformKeys]);
+
   // Helper: get missing fields for a platform
   const getMissingFields = (platformKey: string) => {
     const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
@@ -2739,6 +2780,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         isPublishing={isPublishing}
         onSaveToInventory={() => { setPublishModalOpen(false); doSaveToInventory(); }}
         onAddChannel={() => { setPublishModalOpen(false); navigation.navigate('Connections'); }}
+        channelOptimization={channelOptimization}
+        onOptimize={() => setPublishModalOpen(false)}
       />
 
       {/* In-app error/notice modal — replaces native alert() so publish/save messages match the app */}

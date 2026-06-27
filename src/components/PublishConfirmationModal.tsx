@@ -32,6 +32,12 @@ const BRAND: Record<string, { bg: string; label: string }> = {
 const brandFor = (p: string) => BRAND[p] || { bg: '#6B7280', label: (p[0] || '?').toUpperCase() };
 const labelFor = (p: string) => (PLATFORM_META as any)[p]?.label || (p.charAt(0).toUpperCase() + p.slice(1));
 
+// One-word context under each channel name: your own store vs. an open marketplace.
+const STORE_PLATFORMS = new Set(['shopify', 'square', 'clover', 'woocommerce']);
+const subtitleFor = (p: string) => (STORE_PLATFORMS.has(p) ? 'Your store' : 'Marketplace');
+
+export type ChannelOptimization = { tone: 'good' | 'warn'; label: string; detail: string };
+
 interface PublishConfirmationModalProps {
     visible: boolean;
     onClose: () => void;
@@ -50,6 +56,10 @@ interface PublishConfirmationModalProps {
     onSaveToInventory?: () => void;
     /** Tap "Add a channel" — typically navigates to the connections screen. */
     onAddChannel?: () => void;
+    /** Per-platform "how well set up to sell" status (Ready to rank / N boosts). */
+    channelOptimization?: Record<string, ChannelOptimization>;
+    /** Tap a channel's "Add" boost link — typically returns to the editor to fill specifics. */
+    onOptimize?: (platform: string) => void;
 }
 
 export default function PublishConfirmationModal({
@@ -62,6 +72,8 @@ export default function PublishConfirmationModal({
     isPublishing = false,
     onSaveToInventory,
     onAddChannel,
+    channelOptimization,
+    onOptimize,
 }: PublishConfirmationModalProps) {
     const insets = useSafeAreaInsets();
 
@@ -126,20 +138,22 @@ export default function PublishConfirmationModal({
     return (
         <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
             <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-                {/* Header: back · "Ready to publish" · spacer */}
+                {/* Header: back · progress · Done */}
                 <View style={styles.header}>
                     <TouchableOpacity style={styles.backCircle} onPress={onClose} activeOpacity={0.8} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                         <Icon name="chevron-left" size={22} color="#18181B" />
                     </TouchableOpacity>
-                    <View style={styles.statusPill}>
-                        <Text style={styles.statusPillText}>Ready to publish</Text>
+                    <View style={styles.progress}>
+                        <View style={[styles.progSeg, styles.progSegOn]} />
+                        <View style={[styles.progSeg, styles.progSegOn]} />
                     </View>
-                    {/* invisible spacer to keep the pill centered (not a button) */}
-                    <View style={{ width: 38 }} />
+                    <TouchableOpacity onPress={onClose} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Text style={styles.doneText}>Done</Text>
+                    </TouchableOpacity>
                 </View>
 
                 <View style={styles.titleBlock}>
-                    <Text style={styles.title}>Publish where?</Text>
+                    <Text style={styles.title}>Where should we publish?</Text>
                 </View>
 
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
@@ -152,33 +166,55 @@ export default function PublishConfirmationModal({
                         platforms.map((platform) => {
                             const b = brandFor(platform);
                             const selected = selectedPlatforms.has(platform);
-                            const status = platform === 'facebook' ? 'optional' : 'Connected';
+                            const opt = channelOptimization?.[platform];
+                            const warn = opt?.tone === 'warn';
                             return (
-                                <TouchableOpacity key={platform} style={styles.platformCard} activeOpacity={0.8} onPress={() => togglePlatform(platform)}>
-                                    <View style={[styles.logoChip, { backgroundColor: b.bg }]}>
-                                        <PlatformLogo type={platform} size={18} color="#FFFFFF" />
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.platformName}>{labelFor(platform)}</Text>
-                                        <Text style={[styles.platformStatus, platform === 'facebook' && { color: '#9CA3AF' }]}>{status}</Text>
-                                    </View>
-                                    {selected ? (
-                                        <View style={styles.checkOn}>
-                                            <Icon name="check" size={15} color="#FFFFFF" />
+                                <View key={platform} style={[styles.platformCard, selected && styles.platformCardOn]}>
+                                    {/* Top row — selection */}
+                                    <TouchableOpacity style={styles.cardRow} activeOpacity={0.8} onPress={() => togglePlatform(platform)}>
+                                        <View style={[styles.logoChip, { backgroundColor: b.bg }]}>
+                                            <PlatformLogo type={platform} size={18} color="#FFFFFF" />
                                         </View>
-                                    ) : (
-                                        <View style={styles.checkOff} />
-                                    )}
-                                </TouchableOpacity>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.platformName}>{labelFor(platform)}</Text>
+                                            <Text style={styles.platformStatus}>{subtitleFor(platform)}</Text>
+                                        </View>
+                                        {selected ? (
+                                            <View style={styles.checkOn}>
+                                                <Icon name="check" size={15} color="#FFFFFF" />
+                                            </View>
+                                        ) : (
+                                            <View style={styles.checkOff} />
+                                        )}
+                                    </TouchableOpacity>
+
+                                    {/* Bottom row — optimization */}
+                                    {opt ? (
+                                        <View style={styles.optRow}>
+                                            <View style={[styles.optPill, warn ? styles.optPillWarn : styles.optPillGood]}>
+                                                <Icon
+                                                    name={warn ? 'lightning-bolt' : 'check-decagram'}
+                                                    size={12}
+                                                    color={warn ? '#B45309' : '#3B6300'}
+                                                />
+                                                <Text style={[styles.optPillText, warn ? styles.optPillTextWarn : styles.optPillTextGood]}>{opt.label}</Text>
+                                            </View>
+                                            <Text style={styles.optDetail} numberOfLines={1}>{opt.detail}</Text>
+                                            {warn && onOptimize ? (
+                                                <TouchableOpacity onPress={() => onOptimize(platform)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                                    <Text style={styles.optAdd}>Add</Text>
+                                                </TouchableOpacity>
+                                            ) : null}
+                                        </View>
+                                    ) : null}
+                                </View>
                             );
                         })
                     )}
 
                     {onAddChannel ? (
-                        <TouchableOpacity style={styles.addCard} activeOpacity={0.8} onPress={onAddChannel}>
-                            <View style={styles.addChip}>
-                                <Icon name="plus" size={16} color="#9CA3AF" />
-                            </View>
+                        <TouchableOpacity style={styles.addLink} activeOpacity={0.7} onPress={onAddChannel}>
+                            <Icon name="plus" size={16} color="#6B7280" />
                             <Text style={styles.addText}>Add a channel</Text>
                         </TouchableOpacity>
                     ) : null}
@@ -223,21 +259,33 @@ const styles = StyleSheet.create({
     screen: { flex: 1, backgroundColor: '#F4F4F1' },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 6, paddingBottom: 10 },
     backCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
-    statusPill: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 18 },
-    statusPillText: { color: '#3F3F46', fontSize: 13, fontWeight: '600' },
+    progress: { flexDirection: 'row', gap: 6, flex: 1, justifyContent: 'center', paddingHorizontal: 16 },
+    progSeg: { width: 30, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB' },
+    progSegOn: { backgroundColor: BRAND_PRIMARY },
+    doneText: { color: BRAND_PRIMARY, fontSize: 15, fontWeight: '700' },
     titleBlock: { paddingHorizontal: 22, paddingTop: 14, gap: 7 },
     title: { color: '#18181B', fontSize: 26, fontWeight: '800', letterSpacing: -0.3, lineHeight: 32 },
     list: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 8, gap: 10 },
-    platformCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 14 },
+    platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 14, gap: 12 },
+    platformCardOn: { borderColor: '#CFE7A4' },
+    cardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     logoChip: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
     logoGlyph: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
     platformName: { color: '#18181B', fontSize: 15, fontWeight: '700', lineHeight: 18 },
     platformStatus: { color: '#6B7280', fontSize: 12, lineHeight: 16, marginTop: 2 },
     checkOn: { width: 24, height: 24, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
     checkOff: { width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: '#D1D5DB', backgroundColor: '#FFFFFF' },
-    addCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderStyle: 'dashed', borderRadius: 14, padding: 14 },
-    addChip: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-    addText: { color: '#9CA3AF', fontSize: 14, fontWeight: '500' },
+    optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EEEEEA' },
+    optPill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingVertical: 4, paddingLeft: 7, paddingRight: 9 },
+    optPillGood: { backgroundColor: '#EEFCE0' },
+    optPillWarn: { backgroundColor: '#FEF3C7' },
+    optPillText: { fontSize: 11.5, fontWeight: '700' },
+    optPillTextGood: { color: '#3B6300' },
+    optPillTextWarn: { color: '#B45309' },
+    optDetail: { flex: 1, color: '#71717A', fontSize: 12, fontWeight: '500' },
+    optAdd: { color: BRAND_PRIMARY, fontSize: 13, fontWeight: '700' },
+    addLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14 },
+    addText: { color: '#6B7280', fontSize: 14, fontWeight: '600' },
     emptyCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 16, gap: 4 },
     emptyTitle: { color: '#18181B', fontSize: 15, fontWeight: '700' },
     emptySub: { color: '#6B7280', fontSize: 13, lineHeight: 18 },
