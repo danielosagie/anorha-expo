@@ -2775,6 +2775,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }}
         isPublishing={isPublishing}
         onSaveToInventory={() => { setPublishModalOpen(false); doSaveToInventory(); }}
+        onAddChannel={() => { setPublishModalOpen(false); navigation.navigate('Connections'); }}
       />
 
       {/* In-app error/notice modal — replaces native alert() so publish/save messages match the app */}
