@@ -6,12 +6,14 @@ import {
     StyleSheet,
     Modal,
     TouchableOpacity,
+    Pressable,
     ScrollView,
     ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import PlatformLogo from './PlatformLogo';
+import PlatformBrandChip from './PlatformBrandChip';
+import { normalizeDisplayName } from '../config/platforms';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { createLogger } from '../utils/logger';
@@ -135,6 +137,17 @@ export default function PublishConfirmationModal({
     const platforms = Object.keys(platformGroups);
     const hasNoConnections = platforms.length === 0;
 
+    // The seller wants to know WHICH store/account this is — show the connection's own
+    // name (cleaned of the .myshopify.com suffix etc.), with a "+N" when there are several.
+    // Falls back to a generic store/marketplace label when a connection has no name.
+    const storeNameFor = (platform: string) => {
+        const conns = platformGroups[platform] || [];
+        const first = conns[0]?.DisplayName || conns[0]?.Nickname || conns[0]?.ShopName;
+        const name = first ? normalizeDisplayName(String(first)) : '';
+        if (!name) return subtitleFor(platform);
+        return conns.length > 1 ? `${name} +${conns.length - 1}` : name;
+    };
+
     return (
         <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
             <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
@@ -164,24 +177,21 @@ export default function PublishConfirmationModal({
                         </View>
                     ) : (
                         platforms.map((platform) => {
-                            const b = brandFor(platform);
                             const selected = selectedPlatforms.has(platform);
                             const opt = channelOptimization?.[platform];
                             const warn = opt?.tone === 'warn';
                             return (
-                                <View key={platform} style={[styles.platformCard, selected && styles.platformCardOn]}>
+                                <View key={platform} style={styles.platformCard}>
                                     {/* Top row — selection */}
                                     <TouchableOpacity style={styles.cardRow} activeOpacity={0.8} onPress={() => togglePlatform(platform)}>
-                                        <View style={[styles.logoChip, { backgroundColor: b.bg }]}>
-                                            <PlatformLogo type={platform} size={18} color="#FFFFFF" />
-                                        </View>
+                                        <PlatformBrandChip platform={platform} size={34} />
                                         <View style={{ flex: 1 }}>
                                             <Text style={styles.platformName}>{labelFor(platform)}</Text>
-                                            <Text style={styles.platformStatus}>{subtitleFor(platform)}</Text>
+                                            <Text style={styles.platformStatus} numberOfLines={1}>{storeNameFor(platform)}</Text>
                                         </View>
                                         {selected ? (
                                             <View style={styles.checkOn}>
-                                                <Icon name="check" size={15} color="#FFFFFF" />
+                                                <Icon name="check" size={14} color="#FFFFFF" />
                                             </View>
                                         ) : (
                                             <View style={styles.checkOff} />
@@ -192,11 +202,6 @@ export default function PublishConfirmationModal({
                                     {opt ? (
                                         <View style={styles.optRow}>
                                             <View style={[styles.optPill, warn ? styles.optPillWarn : styles.optPillGood]}>
-                                                <Icon
-                                                    name={warn ? 'lightning-bolt' : 'check-decagram'}
-                                                    size={12}
-                                                    color={warn ? '#B45309' : '#3B6300'}
-                                                />
                                                 <Text style={[styles.optPillText, warn ? styles.optPillTextWarn : styles.optPillTextGood]}>{opt.label}</Text>
                                             </View>
                                             <Text style={styles.optDetail} numberOfLines={1}>{opt.detail}</Text>
@@ -214,7 +219,7 @@ export default function PublishConfirmationModal({
 
                     {onAddChannel ? (
                         <TouchableOpacity style={styles.addLink} activeOpacity={0.7} onPress={onAddChannel}>
-                            <Icon name="plus" size={16} color="#6B7280" />
+                            <Icon name="plus" size={16} color="#9CA3AF" />
                             <Text style={styles.addText}>Add a channel</Text>
                         </TouchableOpacity>
                     ) : null}
@@ -228,26 +233,21 @@ export default function PublishConfirmationModal({
                 </ScrollView>
 
                 <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 18) }]}>
-                    <TouchableOpacity
-                        style={[styles.publishBtn, (!hasSelection || isPublishing) && styles.publishBtnDisabled]}
+                    <Pressable
+                        style={({ pressed }) => [styles.publishBtn, (!hasSelection || isPublishing) && styles.publishBtnDisabled, pressed && hasSelection && !isPublishing && styles.pressed]}
                         onPress={onConfirm}
                         disabled={!hasSelection || isPublishing}
-                        activeOpacity={0.9}
                     >
                         {isPublishing ? (
                             <ActivityIndicator color="#FFFFFF" size="small" />
                         ) : (
-                            <>
-                                <Text style={styles.publishText}>Publish to {totalAccounts} channel{totalAccounts !== 1 ? 's' : ''}</Text>
-                                <Icon name="arrow-right" size={18} color="#FFFFFF" />
-                            </>
+                            <Text style={styles.publishText}>Publish to {totalAccounts} channel{totalAccounts !== 1 ? 's' : ''}</Text>
                         )}
-                    </TouchableOpacity>
+                    </Pressable>
                     {onSaveToInventory ? (
-                        <TouchableOpacity onPress={onSaveToInventory} disabled={isPublishing} activeOpacity={0.85} style={styles.saveBtn}>
-                            <Icon name="content-save-outline" size={18} color="#52525B" />
+                        <Pressable onPress={onSaveToInventory} disabled={isPublishing} style={({ pressed }) => [styles.saveBtn, pressed && styles.pressed]}>
                             <Text style={styles.saveBtnText}>Just save to inventory</Text>
-                        </TouchableOpacity>
+                        </Pressable>
                     ) : null}
                 </View>
             </View>
@@ -256,45 +256,43 @@ export default function PublishConfirmationModal({
 }
 
 const styles = StyleSheet.create({
-    screen: { flex: 1, backgroundColor: '#F4F4F1' },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 6, paddingBottom: 10 },
-    backCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
-    progress: { flexDirection: 'row', gap: 6, flex: 1, justifyContent: 'center', paddingHorizontal: 16 },
-    progSeg: { width: 30, height: 4, borderRadius: 2, backgroundColor: '#E5E7EB' },
+    screen: { flex: 1, backgroundColor: '#FFFFFF' },
+    header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 6, paddingBottom: 12 },
+    backCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+    progress: { flexDirection: 'row', gap: 6, flex: 1, alignItems: 'center', paddingHorizontal: 18 },
+    progSeg: { flex: 1, height: 4, borderRadius: 999, backgroundColor: '#E5E7EB' },
     progSegOn: { backgroundColor: BRAND_PRIMARY },
-    doneText: { color: BRAND_PRIMARY, fontSize: 15, fontWeight: '700' },
-    titleBlock: { paddingHorizontal: 22, paddingTop: 14, gap: 7 },
-    title: { color: '#18181B', fontSize: 26, fontWeight: '800', letterSpacing: -0.3, lineHeight: 32 },
-    list: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 8, gap: 10 },
-    platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 14, gap: 12 },
-    platformCardOn: { borderColor: '#CFE7A4' },
-    cardRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    logoChip: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-    logoGlyph: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+    doneText: { color: '#18181B', fontSize: 13, fontWeight: '600' },
+    titleBlock: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 6 },
+    title: { color: '#18181B', fontSize: 22, fontWeight: '800', letterSpacing: -0.22, lineHeight: 28 },
+    list: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 10 },
+    platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 12 },
+    cardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 11 },
     platformName: { color: '#18181B', fontSize: 15, fontWeight: '700', lineHeight: 18 },
-    platformStatus: { color: '#6B7280', fontSize: 12, lineHeight: 16, marginTop: 2 },
+    platformStatus: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', lineHeight: 16, marginTop: 1 },
     checkOn: { width: 24, height: 24, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
-    checkOff: { width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: '#D1D5DB', backgroundColor: '#FFFFFF' },
-    optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EEEEEA' },
-    optPill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingVertical: 4, paddingLeft: 7, paddingRight: 9 },
-    optPillGood: { backgroundColor: '#EEFCE0' },
-    optPillWarn: { backgroundColor: '#FEF3C7' },
-    optPillText: { fontSize: 11.5, fontWeight: '700' },
-    optPillTextGood: { color: '#3B6300' },
-    optPillTextWarn: { color: '#B45309' },
-    optDetail: { flex: 1, color: '#71717A', fontSize: 12, fontWeight: '500' },
-    optAdd: { color: BRAND_PRIMARY, fontSize: 13, fontWeight: '700' },
-    addLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14 },
-    addText: { color: '#6B7280', fontSize: 14, fontWeight: '600' },
+    checkOff: { width: 24, height: 24, borderRadius: 7, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
+    optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#F1F2F4' },
+    optPill: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+    optPillGood: { backgroundColor: 'rgba(147,200,34,0.12)' },
+    optPillWarn: { backgroundColor: 'rgba(186,117,23,0.10)' },
+    optPillText: { fontSize: 11, fontWeight: '700' },
+    optPillTextGood: { color: '#4A7C00' },
+    optPillTextWarn: { color: '#BA7517' },
+    optDetail: { flex: 1, color: '#9CA3AF', fontSize: 12, fontWeight: '500' },
+    optAdd: { color: '#BA7518', fontSize: 12, fontWeight: '700' },
+    addLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11 },
+    addText: { color: '#9CA3AF', fontSize: 13, fontWeight: '600' },
     emptyCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 16, gap: 4 },
     emptyTitle: { color: '#18181B', fontSize: 15, fontWeight: '700' },
     emptySub: { color: '#6B7280', fontSize: 13, lineHeight: 18 },
     computerNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 2, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#FBF5EA', borderRadius: 12, borderWidth: 1, borderColor: '#F0E2C8' },
     computerNoticeText: { flex: 1, fontSize: 12.5, lineHeight: 17, color: '#8A5A12', fontWeight: '500' },
-    footer: { alignItems: 'center', gap: 14, paddingHorizontal: 22, paddingTop: 18, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E7E7E2' },
-    publishBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', height: 54, borderRadius: 999, backgroundColor: BRAND_PRIMARY },
+    footer: { alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 12 },
+    publishBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: BRAND_PRIMARY },
     publishBtnDisabled: { backgroundColor: '#D6D6D1' },
-    publishText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-    saveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', height: 52, borderRadius: 999, backgroundColor: '#ECECE8' },
-    saveBtnText: { color: '#52525B', fontSize: 15, fontWeight: '700' },
+    publishText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+    saveBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: '#E5E7EB' },
+    saveBtnText: { color: '#3F3F46', fontSize: 15, fontWeight: '600' },
+    pressed: { transform: [{ scale: 0.96 }], opacity: 0.96 },
 });

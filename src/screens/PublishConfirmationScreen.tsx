@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, Linking } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, ScrollView, Linking } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, PackagePlus } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PlatformLogo from '../components/PlatformLogo';
+import PlatformBrandChip from '../components/PlatformBrandChip';
 import PrintingComplete from '../components/import/PrintingComplete';
-import { normalizeDisplayName, getPlatform } from '../config/platforms';
+import { normalizeDisplayName } from '../config/platforms';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -18,6 +19,7 @@ const log = createLogger('PublishConfirmationScreen');
 type Props = StackScreenProps<AppStackParamList, 'PublishConfirmation'>;
 
 const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
+  const insets = useSafeAreaInsets();
   const params: any = route.params || {};
   const {
     productId,
@@ -151,17 +153,18 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         ? `${n} item${n === 1 ? '' : 's'} · live on ${platforms.length} channel${platforms.length === 1 ? '' : 's'}`
         : `${n} item${n === 1 ? '' : 's'} ready`;
     return (
-      <View style={{ flex: 1, backgroundColor: '#fff' }}>
-        <View style={{ marginTop: 30 }}>
+      <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top + 6 }}>
+        <View style={styles.headerRow}>
           <TouchableOpacity
             onPress={() => {
               if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any);
               else navigation.goBack();
             }}
-            style={styles.backBtn}
+            style={styles.backCircle}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Icon name="arrow-left" size={18} color={'#000'} />
-            <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+            <Icon name="chevron-left" size={22} color="#18181B" />
           </TouchableOpacity>
         </View>
         <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
@@ -181,21 +184,20 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     );
   }
 
-  // Single-product publish — the same printer-receipt → result-card animation as import:
-  // the receipt prints out of the printer, tears off, and morphs into the result card.
+  // Single-product publish — the receipt prints while the POST runs, then morphs into the
+  // rich "Published!" card (1ABT-0): cover, status, per-channel live rows, actions.
+  const goBack = () => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); };
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#fff' }}>
-      <View style={{ marginTop: 30 }}>
-        <TouchableOpacity
-          onPress={() => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); }}
-          style={styles.backBtn}
-        >
-          <Icon name="arrow-left" size={18} color={'#000'} />
-          <Text style={{ color: '#000', fontWeight: '600', marginLeft: 6 }}>Back</Text>
+    <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: insets.top + 6 }}>
+      <View style={styles.headerRow}>
+        <TouchableOpacity onPress={goBack} style={styles.backCircle} activeOpacity={0.8} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Icon name="chevron-left" size={22} color="#18181B" />
         </TouchableOpacity>
       </View>
-      <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
-        {phase === 'error' ? (
+
+      {phase === 'error' ? (
+        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
           <View style={{ alignItems: 'center', gap: 14 }}>
             <View style={{ width: 70, height: 70, borderRadius: 35, backgroundColor: '#FDECEC', alignItems: 'center', justifyContent: 'center' }}>
               <Icon name="alert-circle-outline" size={38} color="#D9534F" />
@@ -206,17 +208,15 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
               <TouchableOpacity onPress={runPublish} style={[styles.primaryBtn, { marginTop: 0 }]}>
                 <Text style={styles.primaryText}>Try again</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); }}
-                style={[styles.secondaryBtn, { marginTop: 0 }]}
-              >
+              <TouchableOpacity onPress={goBack} style={[styles.secondaryBtn, { marginTop: 0 }]}>
                 <Text style={styles.secondaryText}>Back to editor</Text>
               </TouchableOpacity>
             </View>
           </View>
-        ) : phase === 'publishing' ? (
-          // Prints the receipt and HOLDS (ready=false) until the POST returns; then we swap
-          // in the rich card below.
+        </View>
+      ) : phase === 'publishing' ? (
+        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
+          {/* Prints the receipt and HOLDS (ready=false) until the POST returns. */}
           <PrintingComplete
             title={savedToInventory ? 'Saving…' : 'Going live'}
             subtitle={platforms.length > 0 ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : ''}
@@ -229,47 +229,45 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             onSecondary={handleCreateAnother}
             ready={false}
           />
-        ) : (
-          // phase 'done' — the rich result: cover, status, per-channel live rows, actions.
-          <View style={{ flex: 1, alignSelf: 'stretch', paddingTop: 8 }}>
-            <View style={{ alignItems: 'center', gap: 14 }}>
-              {imageUrl ? (
-                <Image source={{ uri: imageUrl }} style={{ width: 132, height: 132, borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB' }} />
-              ) : (
-                <View style={{ width: 132, height: 132, borderRadius: 16, backgroundColor: '#E7E1D6', borderWidth: 1, borderColor: '#E5E7EB' }} />
-              )}
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center' }}>
-                  <Icon name="check" size={15} color="#FFFFFF" />
-                </View>
-                <Text style={{ color: '#18181B', fontSize: 22, fontWeight: '800', letterSpacing: -0.3 }}>{savedToInventory ? 'Saved!' : 'Published!'}</Text>
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+          <View style={styles.heroBlock}>
+            {imageUrl ? (
+              <Image source={{ uri: imageUrl }} style={styles.cover} />
+            ) : (
+              <View style={[styles.cover, styles.coverPlaceholder]} />
+            )}
+            <View style={styles.publishedRow}>
+              <View style={styles.checkCircle}>
+                <Icon name="check" size={15} color="#FFFFFF" />
               </View>
+              <Text style={styles.publishedTitle}>{savedToInventory ? 'Saved!' : 'Published!'}</Text>
             </View>
+          </View>
 
-            <Text style={{ color: '#9CA3AF', fontSize: 10, fontWeight: '700', letterSpacing: 0.6, marginTop: 22, marginBottom: 8 }}>{savedToInventory ? 'IN INVENTORY' : 'LIVE ON'}</Text>
+          <Text style={styles.liveOn}>{savedToInventory ? 'IN INVENTORY' : 'LIVE ON'}</Text>
 
-            <View style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, overflow: 'hidden' }}>
+          <View style={{ paddingHorizontal: 16 }}>
+            <View style={styles.channelsCard}>
               {(platforms.length ? platforms : ['shopify']).map((p: string, i: number) => {
                 const lower = String(p).toLowerCase();
                 const isFb = lower === 'facebook';
                 const st = isFb
                   ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
-                  : { dotColor: '#93C822', color: '#93C822', label: 'Live' };
-                const brand = getPlatform(lower)?.brandColor || '#6B7280';
+                  : { dotColor: '#93C822', color: '#93C822', label: lower === 'shopify' ? 'Live · view in store' : 'Live · view' };
                 const url = (params.liveUrls || {})[lower];
                 const tappable = !isFb;
                 return (
                   <View key={`${p}-${i}`}>
-                    {i > 0 && <View style={{ height: 1, backgroundColor: '#F1F2F4' }} />}
-                    <TouchableOpacity disabled={!tappable} activeOpacity={0.7} onPress={() => { if (url) Linking.openURL(url).catch(() => undefined); else handleReviewInInventory(); }} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 13 }}>
-                      <View style={{ width: 32, height: 32, borderRadius: 9, backgroundColor: brand, alignItems: 'center', justifyContent: 'center' }}>
-                        <PlatformLogo type={lower} size={17} color="#FFFFFF" />
-                      </View>
+                    {i > 0 && <View style={styles.rowDivider} />}
+                    <TouchableOpacity disabled={!tappable} activeOpacity={0.7} onPress={() => { if (url) Linking.openURL(url).catch(() => undefined); else handleReviewInInventory(); }} style={styles.channelRow}>
+                      <PlatformBrandChip platform={lower} size={32} />
                       <View style={{ flex: 1, gap: 2 }}>
-                        <Text style={{ color: '#18181B', fontSize: 15, fontWeight: '700' }}>{platformLabel(lower)}</Text>
+                        <Text style={styles.channelName}>{platformLabel(lower)}</Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: st.dotColor }} />
-                          <Text style={{ color: st.color, fontSize: 12, fontWeight: '600' }}>{st.label}{tappable ? ' · view' : ''}</Text>
+                          <View style={[styles.statusDot, { backgroundColor: st.dotColor }]} />
+                          <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
                         </View>
                       </View>
                       {tappable ? <Icon name="open-in-new" size={16} color="#6B7280" /> : null}
@@ -279,22 +277,22 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 );
               })}
             </View>
-
-            <Text style={{ color: '#9CA3AF', fontSize: 12, fontWeight: '500', marginTop: 9 }}>Tap a channel to open the live listing.</Text>
-
-            <View style={{ flex: 1 }} />
-
-            <View style={{ gap: 10, paddingBottom: 10 }}>
-              <TouchableOpacity onPress={handleCreateAnother} activeOpacity={0.9} style={{ backgroundColor: '#93C822', borderRadius: 14, paddingVertical: 15, alignItems: 'center' }}>
-                <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '800' }}>Create another listing</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleReviewInInventory} activeOpacity={0.85} style={{ backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, paddingVertical: 15, alignItems: 'center' }}>
-                <Text style={{ color: '#3F3F46', fontSize: 15, fontWeight: '600' }}>View in inventory</Text>
-              </TouchableOpacity>
-            </View>
           </View>
-        )}
-      </View>
+
+          <Text style={styles.hint}>Tap a channel to open the live listing.</Text>
+
+          <View style={{ flex: 1 }} />
+
+          <View style={{ gap: 10, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 16 }}>
+            <Pressable onPress={handleCreateAnother} style={({ pressed }) => [styles.createBtn, pressed && styles.pressed]}>
+              <Text style={styles.createText}>Create another listing</Text>
+            </Pressable>
+            <Pressable onPress={handleReviewInInventory} style={({ pressed }) => [styles.viewBtn, pressed && styles.pressed]}>
+              <Text style={styles.viewText}>View in inventory</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 
@@ -322,7 +320,7 @@ function renderPlatformSvg(key: string, size: number = 16) {
 
 const styles = StyleSheet.create({
   container: { padding: 16, paddingTop: 60, paddingBottom: 40 },
-  backBtn: { position: 'absolute', top: 16, left: 16, zIndex: 10, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: 8, borderWidth: 1, borderColor: '#E5E5E5', flexDirection: 'row', alignItems: 'center' },
+  pressed: { transform: [{ scale: 0.96 }], opacity: 0.96 },
   imageWrap: { alignSelf: 'center', width: 200, height: 200, borderRadius: 14, overflow: 'hidden', borderWidth: 2, borderColor: '#E5E5E5', backgroundColor: '#F3F4F6' },
   image: { width: '100%', height: '100%' },
   card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 16 },
@@ -334,6 +332,28 @@ const styles = StyleSheet.create({
   primaryText: { color: '#FFF', fontWeight: '800' },
   secondaryBtn: { marginTop: 12, backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
   secondaryText: { color: '#71717A', fontWeight: '700' },
+
+  // ── 1ABT-0 "Published!" card ──────────────────────────────────────────────
+  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 6 },
+  backCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  heroBlock: { alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 6, paddingBottom: 18 },
+  cover: { width: 140, height: 140, borderRadius: 16, borderWidth: 2, borderColor: '#E5E7EB' },
+  coverPlaceholder: { backgroundColor: '#E7E1D6' },
+  publishedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkCircle: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center' },
+  publishedTitle: { color: '#18181B', fontSize: 20, fontWeight: '800', letterSpacing: -0.2 },
+  liveOn: { color: '#9CA3AF', fontSize: 10, fontWeight: '700', letterSpacing: 0.6, paddingHorizontal: 20, paddingBottom: 9 },
+  channelsCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, overflow: 'hidden' },
+  rowDivider: { height: 1, backgroundColor: '#F1F2F4' },
+  channelRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 13 },
+  channelName: { color: '#18181B', fontSize: 15, fontWeight: '700' },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusText: { fontSize: 12, fontWeight: '600' },
+  hint: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', paddingHorizontal: 20, paddingTop: 9 },
+  createBtn: { backgroundColor: '#93C822', borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
+  createText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  viewBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
+  viewText: { color: '#3F3F46', fontSize: 15, fontWeight: '600' },
 });
 
 export default PublishConfirmationScreen;
