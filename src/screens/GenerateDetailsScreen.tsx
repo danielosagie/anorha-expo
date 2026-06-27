@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
@@ -1190,12 +1190,25 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   // Helper: compute overall readiness with flexible pricing
   // Compute which platforms are ready to publish
+  // Photos live in userImagesByIndex (the photo-strip source the publish payload uses), not
+  // always mirrored into each platform's `.images`. Treat those shared photos as the
+  // platform's images for readiness, else a listing WITH a cover photo is judged "not ready"
+  // and Publish is disabled even though it's complete.
+  const currentItemImages = useMemo(
+    () => userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || [],
+    [userImagesByIndex, effectiveResult],
+  );
+  const withSharedImages = useCallback(
+    (pd: any) => (Array.isArray(pd?.images) && pd.images.length > 0 ? pd : { ...(pd || {}), images: currentItemImages }),
+    [currentItemImages],
+  );
+
   const readyPlatforms = useMemo(() => {
     return platformKeys.filter(platformKey => {
-      const platformData = (displayedPlatforms as any)?.[platformKey] || {};
+      const platformData = withSharedImages((displayedPlatforms as any)?.[platformKey] || {});
       return isPlatformReady(platformData, platformKey, ignoredPlatforms);
     });
-  }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
+  }, [displayedPlatforms, platformKeys, ignoredPlatforms, withSharedImages]);
 
   const canPublish = useMemo(() => readyPlatforms.length > 0, [readyPlatforms]);
 
@@ -1206,7 +1219,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const seenLabels = new Set<string>();
     for (const pk of platformKeys) {
       if (ignoredPlatforms.includes(pk)) continue;
-      const platformData = (displayedPlatforms as any)?.[pk] || {};
+      const platformData = withSharedImages((displayedPlatforms as any)?.[pk] || {});
       const fields = getMissingPlatformFields(platformData, pk);
       for (const f of fields) {
         // Clean up field names for display
@@ -1219,14 +1232,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
     }
     return missing;
-  }, [displayedPlatforms, platformKeys, ignoredPlatforms]);
+  }, [displayedPlatforms, platformKeys, ignoredPlatforms, withSharedImages]);
 
   // Distinct missing required fields mapped to the wizard's step keys — the SINGLE source
-  // for the header's "N fields need you" count AND the wizard it opens, so the number and
-  // the walked steps always agree. ('images' has no wizard step, so it's dropped.)
+  // for the header's "N fields need you" count AND the wizard it opens, so the number, the
+  // walked steps, and publish-readiness all agree ('images' → the wizard's 'photos' step).
   const gapFields = useMemo(() => {
-    const allowed = ['title', 'description', 'price', 'sku', 'barcode', 'category', 'condition', 'tags', 'weight'];
-    const mapped = allMissingRequiredFields.map((m) => (m.field === 'price (either flat or all variants)' ? 'price' : m.field));
+    const allowed = ['title', 'description', 'price', 'sku', 'barcode', 'category', 'condition', 'tags', 'weight', 'photos'];
+    const mapped = allMissingRequiredFields.map((m) =>
+      m.field === 'price (either flat or all variants)' ? 'price' : m.field === 'images' ? 'photos' : m.field,
+    );
     return Array.from(new Set(mapped.filter((f) => allowed.includes(f))));
   }, [allMissingRequiredFields]);
 

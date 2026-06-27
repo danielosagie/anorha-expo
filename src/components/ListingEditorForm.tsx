@@ -2031,6 +2031,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     barcode: 'Barcode',
     tags: 'Tags',
     weight: 'Weight',
+    photos: 'Photos',
     __review__: 'Ready to publish',
   };
 
@@ -2080,6 +2081,18 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         );
       case 'tags':
         return <ChipsField label="Tags" hideLabel valueArray={d.tags} onChangeArray={(arr) => patchField('tags', arr)} />;
+      case 'photos': {
+        const count = (images || []).filter(Boolean).length;
+        return (
+          <View>
+            <Text style={{ fontSize: 14, color: CHAT_COLORS.dim, marginBottom: 14 }}>{count > 0 ? `${count} photo${count > 1 ? 's' : ''} added` : 'No photos yet — buyers need to see it.'}</Text>
+            <TouchableOpacity style={rowStyles.researchBtn} onPress={() => (onOpenImageCapture || (() => { }))((uris: string[]) => onChangeImages?.([...(images || []).filter(Boolean), ...uris]))}>
+              <Icon name="camera-plus-outline" size={16} color={BRAND_PRIMARY} />
+              <Text style={rowStyles.researchBtnText}>Add photos</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
       case 'price': {
         const currentPrice = Number(d.price) || 0;
         return (
