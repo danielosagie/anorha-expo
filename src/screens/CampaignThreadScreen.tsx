@@ -386,11 +386,15 @@ const CampaignThreadScreen = () => {
         onCancelQueued={controller.cancelQueuedMessage}
         onOpenCart={(sessionId: string) => {
           // AddProduct is a hidden TAB screen, so go through the nested navigator
-          // (the pattern PastScans uses), with a flat fallback.
+          // (the pattern PastScans uses), with a flat fallback. Navigating to the
+          // already-mounted TabNavigator pops THIS chat off the stack, so its back
+          // history is gone — hand the cart an explicit `origin` so its back button
+          // (and swipe-back ring) can return here, restoring the thread by campaignId.
+          const origin = { screen: 'CampaignThreadScreen', params: { campaignId, title: passedTitle } };
           try {
-            navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId } });
+            navigation.navigate('TabNavigator', { screen: 'AddProduct', params: { sessionId, origin } });
           } catch {
-            navigation.navigate('AddProduct', { sessionId });
+            navigation.navigate('AddProduct', { sessionId, origin });
           }
         }}
         // Activity cards: open the product, undo a change, or control a routine —

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { CardStyleInterpolators, createStackNavigator, StackScreenProps } from '@react-navigation/stack';
 import { withSwipeBack } from '../components/withSwipeBack';
+import { backWithOrigin } from './backWithOrigin';
 import { SwipeBackProvider } from '../components/SwipeBackContext';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -522,20 +523,15 @@ const TabNavigator = () => {
         // The ring anchors to the back button's MEASURED window rect (publishBackButtonRect
         // in AddProductScreen), so it tracks the real 44×44 button on any device. pinTop/
         // pinLeft are only a pre-measure fallback, never seen (the ring is invisible at rest).
-        // onBack mirrors the real back button exactly (goBack, else Inventory) so the swipe
+        // onBack mirrors the real back button exactly (backWithOrigin) so the swipe
         // works on every revisit, not just the first.
         component={sb(AddProductScreen, {
           mode: 'pin', size: 44, pinLeft: 16, accent: '#FFFFFF',
-          // Deterministic back: pop the current navigator if it can, else pop the parent
-          // stack (returns to the camera/chat that pushed us), else land on Home. Always
-          // navigates somewhere — previously a tab-level goBack could no-op (swipe ring
-          // filled but the screen never moved).
-          onBack: (nav: any) => {
-            if (nav.canGoBack?.()) { nav.goBack(); return; }
-            const parent = nav.getParent?.();
-            if (parent?.canGoBack?.()) { parent.goBack(); return; }
-            nav.navigate('Clearouts');
-          },
+          // Deterministic back: honor an explicit `origin` param (e.g. the chat that
+          // opened the cart, whose stack entry got popped when we navigated to the
+          // already-mounted TabNavigator), else pop the current navigator, else the
+          // parent stack, else land on Home. Always navigates somewhere.
+          onBack: (nav: any) => backWithOrigin(nav),
         })}
         options={{
           tabBarButton: () => null,

@@ -99,6 +99,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { SvgXml } from 'react-native-svg';
 import { useSuppressSwipeBackWhen, publishBackButtonRect } from '../components/SwipeBackContext';
+import { backWithOrigin } from '../navigation/backWithOrigin';
 import { CapturedPhoto } from '../components/camera/PhotoStack';
 import ViewPhotosModal from '../components/camera/ViewPhotosModal';
 import CameraControls from '../components/camera/CameraControls';
@@ -4355,11 +4356,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           onPress={() => {
             // Mirror the swipe-back ring's onBack exactly so tap + swipe behave the same.
-            const nav = navigation as any;
-            if (nav.canGoBack?.()) { nav.goBack(); return; }
-            const parent = nav.getParent?.();
-            if (parent?.canGoBack?.()) { parent.goBack(); return; }
-            nav.navigate('Clearouts');
+            // backWithOrigin honors an `origin` param (e.g. the chat that opened the cart)
+            // before falling back to goBack → parent.goBack → Home.
+            backWithOrigin(navigation);
           }}
         >
           <MaterialIcons name="arrow-back" size={24} color="#FFF" />
