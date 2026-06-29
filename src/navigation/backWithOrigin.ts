@@ -25,17 +25,35 @@ export function backWithOrigin(navigation: any): void {
   // Read the origin off the currently focused route (AddProduct). useNavigation()
   // inside the screen / the swipe-back HOC both resolve to the tab navigator, whose
   // focused route is AddProduct.
+  //
+  // The payload arrives in one of two shapes depending on how AddProduct was opened:
+  //   • flat — navigate('AddProduct', { ...payload })            → params.origin
+  //   • nested — navigate('TabNavigator', { screen: 'AddProduct', params }) → params.params.origin
+  // The chat-open path this helper services is the nested one. AddProductScreen
+  // unwraps the same `params.params` envelope before reading sessionId, so mirror it
+  // here and clear origin from whichever envelope actually held it.
   let origin: { screen?: string; params?: Record<string, unknown> } | undefined;
+  let nested: Record<string, unknown> | undefined;
   try {
     const state = nav.getState?.();
-    origin = state?.routes?.[state.index]?.params?.origin;
+    const rawParams = state?.routes?.[state.index]?.params;
+    nested = (rawParams?.params && typeof rawParams.params === 'object') ? rawParams.params : undefined;
+    const effective = nested ?? rawParams;
+    origin = effective?.origin;
   } catch {
     origin = undefined;
   }
 
   if (origin?.screen) {
-    // Consume it so the next plain open of this persistent tab route doesn't reuse it.
-    try { nav.setParams?.({ origin: undefined }); } catch { /* noop */ }
+    // Consume it so the next plain open of this persistent tab route doesn't reuse it,
+    // clearing from the nested envelope when that's where it lived.
+    try {
+      if (nested && 'origin' in nested) {
+        nav.setParams?.({ params: { ...nested, origin: undefined } });
+      } else {
+        nav.setParams?.({ origin: undefined });
+      }
+    } catch { /* noop */ }
     nav.navigate(origin.screen, origin.params);
     return;
   }
