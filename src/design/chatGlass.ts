@@ -109,6 +109,7 @@ export const GLASS_HEADER_STYLES = {
     alignItems: 'center' as const,
     backgroundColor: CHAT_COLORS.white,
     borderRadius: 22,
+    alignSelf: "auto",
     paddingHorizontal: 18,
     paddingVertical: 8,
     ...CHAT_SHADOWS.glass,

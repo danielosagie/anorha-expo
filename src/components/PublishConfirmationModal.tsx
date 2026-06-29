@@ -43,7 +43,8 @@ export type ChannelOptimization = { tone: 'good' | 'warn'; label: string; detail
 interface PublishConfirmationModalProps {
     visible: boolean;
     onClose: () => void;
-    onConfirm: () => void;
+    /** opts.targetWorkerId = the linked computer the seller pinned (optional pin). */
+    onConfirm: (opts?: { targetWorkerId?: string }) => void;
     readyPlatforms: string[];
     allConnections: any[];
     selectedConnectionIds: Record<string, string>;
@@ -123,8 +124,16 @@ export default function PublishConfirmationModal({
 
     // Facebook posts through the seller's own computer — give an honest, non-blocking
     // heads-up if FB is on and no computer is currently online (publishing still queues).
-    const { computerOnline } = useFacebookJobStatus();
+    const { computerOnline, computers } = useFacebookJobStatus();
     const showComputerHeadsUp = selectedPlatforms.has('facebook') && !computerOnline;
+
+    // Optional pin: with 2+ linked computers, let the seller choose WHICH one posts
+    // to Facebook (default = any available). Only pinnable computers (those with a
+    // workerId) are offered; the choice rides the publish body as targetWorkerId.
+    const pinnable = React.useMemo(() => computers.filter((c) => !!c.workerId), [computers]);
+    const showComputerPicker = selectedPlatforms.has('facebook') && pinnable.length >= 2;
+    const [targetWorker, setTargetWorker] = React.useState<string | null>(null);
+    useEffect(() => { if (visible) setTargetWorker(null); }, [visible]);
 
     const togglePlatform = (platform: string) => {
         setSelectedPlatforms((prev) => {
@@ -219,7 +228,7 @@ export default function PublishConfirmationModal({
 
                     {onAddChannel ? (
                         <TouchableOpacity style={styles.addLink} activeOpacity={0.7} onPress={onAddChannel}>
-                            <Icon name="plus" size={16} color="#9CA3AF" />
+                            <Icon name="plus" size={22} color="#9CA3AF" />
                             <Text style={styles.addText}>Add a channel</Text>
                         </TouchableOpacity>
                     ) : null}
@@ -230,12 +239,41 @@ export default function PublishConfirmationModal({
                             <Text style={styles.computerNoticeText}>Facebook posts via your computer.</Text>
                         </View>
                     ) : null}
+
+                    {showComputerPicker ? (
+                        <View style={styles.pickerBlock}>
+                            <Text style={styles.pickerLabel}>Post from</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pickerRow}>
+                                <TouchableOpacity
+                                    style={[styles.pickerChip, targetWorker === null && styles.pickerChipOn]}
+                                    activeOpacity={0.8}
+                                    onPress={() => setTargetWorker(null)}
+                                >
+                                    <Text style={[styles.pickerChipText, targetWorker === null && styles.pickerChipTextOn]}>Any computer</Text>
+                                </TouchableOpacity>
+                                {pinnable.map((c, i) => {
+                                    const on = targetWorker === c.workerId;
+                                    return (
+                                        <TouchableOpacity
+                                            key={c.id}
+                                            style={[styles.pickerChip, on && styles.pickerChipOn]}
+                                            activeOpacity={0.8}
+                                            onPress={() => setTargetWorker(c.workerId || null)}
+                                        >
+                                            <View style={[styles.pickerDot, { backgroundColor: c.online ? '#43631A' : '#BA7517' }]} />
+                                            <Text style={[styles.pickerChipText, on && styles.pickerChipTextOn]}>Computer {i + 1}</Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </ScrollView>
+                        </View>
+                    ) : null}
                 </ScrollView>
 
                 <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 18) }]}>
                     <Pressable
                         style={({ pressed }) => [styles.publishBtn, (!hasSelection || isPublishing) && styles.publishBtnDisabled, pressed && hasSelection && !isPublishing && styles.pressed]}
-                        onPress={onConfirm}
+                        onPress={() => onConfirm(targetWorker ? { targetWorkerId: targetWorker } : undefined)}
                         disabled={!hasSelection || isPublishing}
                     >
                         {isPublishing ? (
@@ -273,21 +311,29 @@ const styles = StyleSheet.create({
     checkOn: { width: 32, height: 32, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
     checkOff: { width: 32, height: 32, borderRadius: 7, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
     optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#F1F2F4' },
-    optPill: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
+    optPill: { borderRadius: 999, paddingVertical: 9, paddingHorizontal: 10 },
     optPillGood: { backgroundColor: 'rgba(147,200,34,0.12)' },
     optPillWarn: { backgroundColor: 'rgba(186,117,23,0.10)' },
-    optPillText: { fontSize: 11, fontWeight: '700' },
+    optPillText: { fontSize: 16, fontWeight: '700' },
     optPillTextGood: { color: '#4A7C00' },
     optPillTextWarn: { color: '#BA7517' },
-    optDetail: { flex: 1, color: '#9CA3AF', fontSize: 12, fontWeight: '500' },
+    optDetail: { flex: 1, color: '#9CA3AF', fontSize: 16, fontWeight: '500' },
     optAdd: { color: '#BA7518', fontSize: 12, fontWeight: '700' },
     addLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11 },
-    addText: { color: '#9CA3AF', fontSize: 13, fontWeight: '600' },
+    addText: { color: '#9CA3AF', fontSize: 16, fontWeight: '600' },
     emptyCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 16, gap: 4 },
     emptyTitle: { color: '#18181B', fontSize: 15, fontWeight: '700' },
     emptySub: { color: '#6B7280', fontSize: 13, lineHeight: 18 },
     computerNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 2, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#FBF5EA', borderRadius: 12, borderWidth: 1, borderColor: '#F0E2C8' },
     computerNoticeText: { flex: 1, fontSize: 12.5, lineHeight: 17, color: '#8A5A12', fontWeight: '500' },
+    pickerBlock: { marginTop: 2, gap: 8 },
+    pickerLabel: { color: '#9CA3AF', fontSize: 13, fontWeight: '600', paddingLeft: 2 },
+    pickerRow: { flexDirection: 'row', gap: 8, paddingRight: 4 },
+    pickerChip: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+    pickerChipOn: { borderColor: BRAND_PRIMARY, backgroundColor: BRAND_PRIMARY },
+    pickerChipText: { color: '#18181B', fontSize: 14, fontWeight: '600' },
+    pickerChipTextOn: { color: '#FFFFFF' },
+    pickerDot: { width: 8, height: 8, borderRadius: 4 },
     footer: { alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 12 },
     publishBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 18, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
     publishBtnDisabled: { backgroundColor: '#D6D6D1' },

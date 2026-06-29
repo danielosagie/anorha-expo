@@ -1856,7 +1856,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return publicUrls;
   };
 
-  const confirmAndPublish = async () => {
+  const confirmAndPublish = async (opts?: { targetWorkerId?: string }) => {
     let facebookRequested = false;
     try {
       log.debug('[confirmAndPublish] Starting publish...');
@@ -1931,6 +1931,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         media: payload.media,
         selectedPlatformsToPublish: platformsToPublish,
         connectionIds: actualConnectionIds,
+        // Optional pin from the publish sheet — routes the Facebook job to one
+        // chosen computer. Omitted = any available device (the default).
+        ...(opts?.targetWorkerId ? { targetWorkerId: opts.targetWorkerId } : {}),
       };
 
       log.debug('[confirmAndPublish] Publishing to:', platformsToPublish);
