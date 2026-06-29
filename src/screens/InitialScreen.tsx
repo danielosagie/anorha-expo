@@ -8,12 +8,13 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Mail } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useSSO } from '@clerk/expo';
+import { useSSO, useClerk } from '@clerk/expo';
 import * as LocalAuthentication from 'expo-local-authentication';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
@@ -30,6 +31,7 @@ type Props = {
 const InitialScreen = ({ navigation }: Props) => {
   const insets = useSafeAreaInsets();
   const { startSSOFlow } = useSSO();
+  const clerk = useClerk();
   const [googleLoading, setGoogleLoading] = useState(false);
   const [faceReady, setFaceReady] = useState(false);
 
@@ -53,11 +55,27 @@ const InitialScreen = ({ navigation }: Props) => {
   const handleGoogle = useCallback(async () => {
     if (googleLoading) return;
     setGoogleLoading(true);
+    const runFlow = () => startSSOFlow({
+      strategy: 'oauth_google',
+      redirectUrl: 'anorhaapp://redirect',
+    });
     try {
-      const { createdSessionId, setActive } = await startSSOFlow({
-        strategy: 'oauth_google',
-        redirectUrl: 'anorhaapp://redirect',
-      });
+      let result;
+      try {
+        result = await runFlow();
+      } catch (err: any) {
+        // A leftover session on this device (e.g. a previous tester in TestFlight) makes Clerk
+        // reject a fresh SSO sign-in with `session_exists`. Clear the stale session and retry once.
+        const code = err?.errors?.[0]?.code ?? err?.code;
+        const msg = err?.errors?.[0]?.message ?? err?.message ?? '';
+        if (code === 'session_exists' || /already (signed in|exists)|session already exists/i.test(msg)) {
+          await clerk.signOut();
+          result = await runFlow();
+        } else {
+          throw err;
+        }
+      }
+      const { createdSessionId, setActive } = result;
       if (createdSessionId && setActive) {
         await setActive({ session: createdSessionId });
       }
@@ -69,7 +87,7 @@ const InitialScreen = ({ navigation }: Props) => {
     } finally {
       setGoogleLoading(false);
     }
-  }, [googleLoading, startSSOFlow]);
+  }, [googleLoading, startSSOFlow, clerk]);
 
   if (!fontsLoaded) {
     return <AnimatedGradientBackground />;
@@ -151,7 +169,9 @@ const InitialScreen = ({ navigation }: Props) => {
 
           <Text style={styles.terms}>
             By continuing, you agree to our{' '}
-            <Text style={styles.termsLink}>terms of service</Text>
+            <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/terms')}>
+              terms of service
+            </Text>
           </Text>
         </View>
       </View>
