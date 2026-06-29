@@ -10,6 +10,7 @@ import {
   Animated as RNAnimated,
   Alert,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -235,11 +236,25 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
     label: string,
   ) => {
     setBusy(true);
+    const runFlow = () => startSSOFlow({ strategy, redirectUrl: 'anorhaapp://redirect' });
     try {
-      const { createdSessionId, setActive } = await startSSOFlow({
-        strategy,
-        redirectUrl: 'anorhaapp://redirect',
-      });
+      let result;
+      try {
+        result = await runFlow();
+      } catch (err: any) {
+        // A leftover session on this device (e.g. a previous tester in TestFlight) makes Clerk
+        // reject a fresh SSO sign-in with `session_exists`. The user is trying to sign in as
+        // themselves, so clear the stale session and retry the flow once.
+        const code = err?.errors?.[0]?.code ?? err?.code;
+        const msg = err?.errors?.[0]?.message ?? err?.message ?? '';
+        if (code === 'session_exists' || /already (signed in|exists)|session already exists/i.test(msg)) {
+          await clerk.signOut();
+          result = await runFlow();
+        } else {
+          throw err;
+        }
+      }
+      const { createdSessionId, setActive } = result;
       if (createdSessionId && setActive) {
         await setActive({ session: createdSessionId });
       }
@@ -252,7 +267,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
     } finally {
       setBusy(false);
     }
-  }, [startSSOFlow, showErrorModal]);
+  }, [startSSOFlow, showErrorModal, clerk]);
 
   const handleGoogleSignIn = useCallback(() => handleSSO('oauth_google', setGoogleLoading, 'Google'), [handleSSO]);
 
@@ -313,23 +328,37 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
           setLoading(false);
           return;
         }
+        const createSignUp = () => signUp.create({ emailAddress: email, password });
+        let res;
         try {
-          const res = await signUp.create({ emailAddress: email, password });
-          if (res.status === 'complete' && res.createdSessionId) {
-            await signUpSetActive({ session: res.createdSessionId });
-            return;
-          }
-          await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
-          navigation.navigate('VerifyCode', { contactLabel: email, mode: 'signup' });
+          res = await createSignUp();
         } catch (err: any) {
-          const errorLongMessage = err.errors?.[0]?.longMessage || err.errors?.[0]?.message || 'Signup failed. Please check your details.';
-          showErrorModal('Sign Up Failed', errorLongMessage, 'error');
+          // A leftover session on this device (e.g. a previous tester in TestFlight) makes Clerk
+          // reject a brand-new sign-up with `session_exists` / "You're already signed in". The
+          // user explicitly wants a NEW account, so clear the stale session and retry — don't
+          // silently drop them into someone else's account.
+          const code = err?.errors?.[0]?.code ?? err?.code;
+          const msg = err?.errors?.[0]?.message ?? err?.message ?? '';
+          if (code === 'session_exists' || /already (signed in|exists)|session already exists/i.test(msg)) {
+            await clerk.signOut();
+            res = await createSignUp();
+          } else {
+            throw err;
+          }
         }
+        if (res.status === 'complete' && res.createdSessionId) {
+          await signUpSetActive({ session: res.createdSessionId });
+          return;
+        }
+        await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+        navigation.navigate('VerifyCode', { contactLabel: email, mode: 'signup' });
       }
     } catch (error: any) {
       const clerkCode = error?.errors?.[0]?.code ?? error?.code;
       const clerkMsg = error?.errors?.[0]?.message ?? error?.message ?? '';
-      if (clerkCode === 'session_exists' || /already signed in/i.test(clerkMsg)) {
+      // On the LOGIN tab, an existing session means "this device is already you" — activate it.
+      // On sign-up this is handled above (sign out + retry), so we don't reach here for it.
+      if (isLogin && (clerkCode === 'session_exists' || /already signed in/i.test(clerkMsg))) {
         await activateExistingSession();
       } else if (error.errors && error.errors[0]?.message) {
         const msg = error.errors[0].message;
@@ -490,7 +519,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
           </TouchableOpacity>
 
           {!isLogin && (
-            <Text style={styles.terms}>By continuing you agree to our Terms & Privacy</Text>
+            <Text style={styles.terms}>
+              By continuing you agree to our{' '}
+              <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/terms')}>
+                Terms
+              </Text>
+              {' '}&{' '}
+              <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/privacy')}>
+                Privacy
+              </Text>
+            </Text>
           )}
 
           <View style={styles.divider}>
@@ -572,6 +610,7 @@ const styles = StyleSheet.create({
   primaryBtnBusy: { opacity: 0.85 },
   primaryBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
   terms: { marginTop: 14, textAlign: 'center', fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium', color: MUTED, paddingHorizontal: 6 },
+  termsLink: { fontFamily: 'Inter_600SemiBold', color: GREEN_DEEP, textDecorationLine: 'underline' },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 22 },
   dividerLine: { flex: 1, height: 1, backgroundColor: FIELD_BORDER },
   dividerText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: OR_GRAY },
