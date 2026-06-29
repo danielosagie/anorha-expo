@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
+import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
@@ -66,6 +67,7 @@ const ConnectionsScreen = () => {
   // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
   const { computers } = useFacebookJobStatus();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   // Wire the global platform-picker overlay so choosing a platform from the
   // "Connect a platform" sheet shows the consent page, then opens the OAuth
@@ -305,9 +307,12 @@ const ConnectionsScreen = () => {
           )}
         </View>
 
-        <TouchableOpacity style={styles.connectBtn} onPress={() => setLinkComputerOpen(true)} activeOpacity={0.85}>
+        <TouchableOpacity style={styles.connectBtn} onPress={() => setScanOpen(true)} activeOpacity={0.85}>
           <Plus size={18} color="#FFFFFF" />
           <Text style={styles.connectText}>Link a computer</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setLinkComputerOpen(true)} activeOpacity={0.7} style={{ alignSelf: 'center', paddingVertical: 8 }}>
+          <Text style={{ color: '#71717A', fontSize: 13, fontWeight: '500' }}>Don't have it on your computer yet?</Text>
         </TouchableOpacity>
 
         {/* Pools — the location groups that platforms sync and partners share through */}
@@ -420,6 +425,11 @@ const ConnectionsScreen = () => {
         visible={linkComputerOpen}
         orgId={currentOrg?.id}
         onClose={() => setLinkComputerOpen(false)}
+      />
+
+      <LinkComputerScanSheet
+        visible={scanOpen}
+        onClose={() => setScanOpen(false)}
       />
     </View>
   );
