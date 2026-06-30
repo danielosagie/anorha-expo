@@ -174,7 +174,7 @@ const SyncRulesScreen = () => {
   };
 
   const gotoReview = () => {
-    navigation.navigate('ImportOverview', { connectionId, platformName });
+    navigation.navigate('SyncInbox', { connectionId, platformName });
   };
 
   const disconnectPlatform = () => {
