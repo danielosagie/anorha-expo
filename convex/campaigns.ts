@@ -1,4 +1,4 @@
-import { mutation, query } from './_generated/server';
+import { internalMutation, mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 
 const ensureIdentity = async (ctx: any) => {
@@ -125,5 +125,34 @@ export const remove = mutation({
 
     await ctx.db.delete(existing._id);
     return { removed: true };
+  },
+});
+
+// One-time maintenance: re-claim campaign cache rows that predate the userId field
+// (or were inserted without one) so the owner-scoped listCampaigns shows them again
+// after the cross-account-leak fix. INTERNAL — only callable via the Convex CLI /
+// dashboard, never from a client. Ownership is resolved OFF Convex (each campaign's
+// session → AgentSessions.OrgId → owner) and passed in. Only fills rows whose userId
+// is currently empty; never reassigns an existing owner.
+export const backfillOwners = internalMutation({
+  args: {
+    assignments: v.array(v.object({ campaignId: v.string(), userId: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    let patched = 0;
+    const skipped: string[] = [];
+    for (const a of args.assignments) {
+      const row = await ctx.db
+        .query('campaigns')
+        .withIndex('by_campaign_id', q => q.eq('campaignId', a.campaignId))
+        .unique();
+      if (row && !row.userId) {
+        await ctx.db.patch(row._id, { userId: a.userId });
+        patched += 1;
+      } else {
+        skipped.push(a.campaignId);
+      }
+    }
+    return { patched, skipped };
   },
 });
