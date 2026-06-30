@@ -15,7 +15,8 @@ export default defineSchema({
   })
     .index('by_campaign_id', ['campaignId'])
     .index('by_session_id', ['sessionId'])
-    .index('by_updated_at', ['updatedAt']),
+    .index('by_updated_at', ['updatedAt'])
+    .index('by_user_id', ['userId']),
 
   threads: defineTable({
     threadId: v.string(),

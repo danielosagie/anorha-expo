@@ -25,11 +25,18 @@ const MESSAGE_FIELDS = v.object({
 export const listByThread = query({
   args: { threadId: v.string() },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
     const rows = await ctx.db
       .query('thread_messages_cache')
       .withIndex('by_thread', q => q.eq('threadId', args.threadId))
       .collect();
+    if (rows.length === 0) return [];
+    // Only the owner of the parent campaign may read its cached messages.
+    const campaign = await ctx.db
+      .query('campaigns')
+      .withIndex('by_campaign_id', q => q.eq('campaignId', rows[0].campaignId))
+      .unique();
+    if (!campaign || campaign.userId !== identity.subject) return [];
     rows.sort((a, b) => a.createdAt - b.createdAt);
     return rows.map(r => ({
       id: r.messageId,

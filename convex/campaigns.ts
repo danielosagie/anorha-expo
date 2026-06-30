@@ -30,6 +30,9 @@ export const upsertFromSession = mutation({
     if (existing) {
       await ctx.db.patch(existing._id, {
         sessionId: args.sessionId,
+        // Backfill ownership so older rows (inserted before userId existed) become
+        // visible to their owner — and only their owner — via the by_user_id index.
+        userId: existing.userId || identity.subject,
         title: args.title,
         status: args.status,
         primaryThreadId: args.primaryThreadId,
@@ -39,6 +42,7 @@ export const upsertFromSession = mutation({
       return {
         ...existing,
         sessionId: args.sessionId,
+        userId: existing.userId || identity.subject,
         title: args.title,
         status: args.status,
         primaryThreadId: args.primaryThreadId,
@@ -66,8 +70,15 @@ export const upsertFromSession = mutation({
 export const listCampaigns = query({
   args: {},
   handler: async (ctx) => {
-    await ensureIdentity(ctx);
-    const campaigns = await ctx.db.query('campaigns').collect();
+    const identity = await ensureIdentity(ctx);
+    // Scope to the signed-in user. Previously this returned EVERY user's cached
+    // campaigns to anyone logged in (it only checked that *some* identity existed),
+    // so a freshly signed-in account saw the previous account's campaigns — a
+    // cross-account data leak. The owner is recorded as userId on insert/upsert.
+    const campaigns = await ctx.db
+      .query('campaigns')
+      .withIndex('by_user_id', q => q.eq('userId', identity.subject))
+      .collect();
     return campaigns.sort((a, b) => b.updatedAt - a.updatedAt);
   },
 });
