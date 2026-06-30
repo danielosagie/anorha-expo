@@ -19,7 +19,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '@clerk/expo';
 import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import PillTabs from '../components/ui/PillTabs';
-import { supabase } from '../../lib/supabase';
+import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { useOrg } from '../context/OrgContext';
 import { createLogger } from '../utils/logger';
 const log = createLogger('CSVColumnMappingScreen');
@@ -185,27 +185,40 @@ export function CSVColumnMappingScreen() {
                 .select()
                 .single();
 
-            if (insertError) {
+            if (insertError || !newConnection) {
+                // No real connection => no server-side resolver target. The old
+                // 'csv-import' magic-string path drove the client matching deck,
+                // which is gone; surface the error instead of silently degrading.
                 log.error('[CSVColumnMapping] Failed to create CSV connection:', insertError);
-                // Fallback to passing just the 'csv-import' flag so we can still proceed
-                // The connection won't be saved for later, but the import will work.
-                navigation.navigate('MappingReview', {
-                    connectionId: 'csv-import', // Magic string for CSV Import mode
-                    platformName: 'CSV Import',
-                    importedProducts: transformedData, // Pass the data!
-                    isCSVImport: true, // Fix: Ensure this is passed
-                });
+                Alert.alert('Error', 'Could not start the import. Please try again.');
                 return;
             }
 
             log.debug('[CSVColumnMapping] Created CSV connection:', newConnection.Id);
 
-            navigation.navigate('MappingReview', {
+            // Stage the rows through the SAME resolver platform scans use: POST
+            // /imports/normalize persists mappingSuggestions on the connection, so
+            // the sync inbox (GET /resolution) shows the auto-linked / create /
+            // needs-attention buckets for this CSV exactly like a connected
+            // platform — no client matching brain, no MappingReview deck.
+            const token = await ensureSupabaseJwt();
+            const normRes = await fetch(`${API_BASE_URL}/api/sync/imports/normalize`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    connectionId: newConnection.Id,
+                    platformType: 'csv',
+                    items: transformedData,
+                }),
+            });
+            if (!normRes.ok) {
+                throw new Error(`Import normalize failed: ${normRes.status}`);
+            }
+
+            navigation.navigate('SyncInbox', {
                 connectionId: newConnection.Id,
                 platformName: connectionName,
-                importedProducts: transformedData,
-                isCSVImport: true,
-            } as any);
+            });
         } catch (error) {
             log.error('[CSVColumnMapping] Error processing data:', error);
             Alert.alert('Error', 'Failed to process CSV data.');
