@@ -75,6 +75,7 @@ type CreateAccountScreenNavigationProp = CompositeNavigationProp<
 
 type Step =
   | 'WELCOME'
+  | 'NAME'
   | 'BUSINESS_NAME'
   | 'STORE_ADDRESS'
   | 'BUSINESS_TYPE'
@@ -88,8 +89,10 @@ type Step =
   | 'CONNECT';
 
 interface FormData {
+  firstName: string;
+  lastName: string;
   businessName: string;
-  businessType: string;
+  businessType: string[];
   customBusinessType: string;
   role: string;
   customRole: string;
@@ -158,6 +161,7 @@ const HEARD_OPTIONS = [
 
 const STEPS_ORDER: Step[] = [
   'WELCOME',
+  'NAME',
   'BUSINESS_NAME',
   'STORE_ADDRESS',
   'BUSINESS_TYPE',
@@ -313,6 +317,41 @@ const WelcomeStep = memo(({ onNext, showBackButton, onSignOut, firstName }: { on
   );
 });
 
+const NameStep = memo(({ firstName, lastName, onFirstNameChange, onLastNameChange, onNext }: { firstName: string; lastName: string; onFirstNameChange: (t: string) => void; onLastNameChange: (t: string) => void; onNext: () => void }) => (
+  <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
+    <Text style={styles.stepTitle}>What's your name?</Text>
+    <View style={{ marginTop: 16, gap: 12 }}>
+      <TextInput
+        style={styles.input}
+        placeholder="First name"
+        placeholderTextColor={ONBOARDING.subtitle}
+        value={firstName}
+        onChangeText={onFirstNameChange}
+        autoFocus
+        autoCapitalize="words"
+        textContentType="givenName"
+        autoComplete="name-given"
+        returnKeyType="next"
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Last name (optional)"
+        placeholderTextColor={ONBOARDING.subtitle}
+        value={lastName}
+        onChangeText={onLastNameChange}
+        autoCapitalize="words"
+        textContentType="familyName"
+        autoComplete="name-family"
+        onSubmitEditing={onNext}
+      />
+    </View>
+    <View style={{ flex: 1 }} />
+    <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
+      <Text style={styles.primaryButtonText}>Next</Text>
+    </TouchableOpacity>
+  </Animated.View>
+));
+
 const BusinessNameStep = memo(({ value, onChange, onNext }: { value: string, onChange: (t: string) => void, onNext: () => void }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>What's the name of your business?</Text>
@@ -465,14 +504,14 @@ const StoreAddressStep = memo(({
 
 const BusinessTypeStep = memo(({
   businessName,
-  selectedType,
+  selectedTypes,
   customType,
   onSelect,
   onCustomChange,
   onNext
 }: {
   businessName: string,
-  selectedType: string,
+  selectedTypes: string[],
   customType: string,
   onSelect: (id: string) => void,
   onCustomChange: (t: string) => void,
@@ -480,19 +519,23 @@ const BusinessTypeStep = memo(({
 }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>What type of business is {businessName}?</Text>
+    <Text style={styles.subtitle}>Pick all that fit.</Text>
     <View style={styles.grid}>
-      {BUSINESS_TYPES.map((type) => (
-        <TouchableOpacity
-          key={type.id}
-          style={[styles.card, selectedType === type.id && styles.cardActive]}
-          onPress={() => onSelect(type.id)}
-        >
-          <Icon name={type.icon} size={28} color={selectedType === type.id ? '#FFFFFF' : ONBOARDING.title} />
-          <Text style={[styles.cardText, selectedType === type.id && styles.cardTextActive]}>{type.label}</Text>
-        </TouchableOpacity>
-      ))}
+      {BUSINESS_TYPES.map((type) => {
+        const selected = selectedTypes.includes(type.id);
+        return (
+          <TouchableOpacity
+            key={type.id}
+            style={[styles.card, selected && styles.cardActive]}
+            onPress={() => onSelect(type.id)}
+          >
+            <Icon name={type.icon} size={28} color={selected ? '#FFFFFF' : ONBOARDING.title} />
+            <Text style={[styles.cardText, selected && styles.cardTextActive]}>{type.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
-    {selectedType === 'other' && (
+    {selectedTypes.includes('other') && (
       <Animated.View entering={FadeInDown} style={{ marginTop: 24 }}>
         <Text style={styles.label}>Please specify</Text>
         <TextInput
@@ -919,8 +962,10 @@ export default function CreateAccountScreen() {
   const [isRequestingCamera, setIsRequestingCamera] = useState(false);
 
   const [formData, setFormData] = useState<FormData>({
+    firstName: '',
+    lastName: '',
     businessName: '',
-    businessType: '',
+    businessType: [],
     customBusinessType: '',
     role: '',
     customRole: '',
@@ -967,13 +1012,33 @@ export default function CreateAccountScreen() {
 
   // Stable handlers
   const setBusinessName = useCallback((t: string) => setFormData(p => ({ ...p, businessName: t })), []);
+  const setFirstName = useCallback((t: string) => setFormData(p => ({ ...p, firstName: t })), []);
+  const setLastName = useCallback((t: string) => setFormData(p => ({ ...p, lastName: t })), []);
+
+  // Prefill the name from Clerk when it's already known (e.g. a social sign-up that
+  // carried a name) so the seller doesn't retype it. Only fills empty fields, so it
+  // never clobbers what they've typed.
+  useEffect(() => {
+    if (clerkUser && (clerkUser.firstName || clerkUser.lastName)) {
+      setFormData(p =>
+        p.firstName || p.lastName
+          ? p
+          : { ...p, firstName: clerkUser.firstName || '', lastName: clerkUser.lastName || '' },
+      );
+    }
+  }, [clerkUser]);
   const setStreet1 = useCallback((t: string) => setFormData(p => ({ ...p, street1: t })), []);
   const setStreet2 = useCallback((t: string) => setFormData(p => ({ ...p, street2: t })), []);
   const setCity = useCallback((t: string) => setFormData(p => ({ ...p, city: t })), []);
   const setState = useCallback((t: string) => setFormData(p => ({ ...p, state: t })), []);
   const setPostalCode = useCallback((t: string) => setFormData(p => ({ ...p, postalCode: t })), []);
   const setCountry = useCallback((t: string) => setFormData(p => ({ ...p, country: t })), []);
-  const setBusinessType = useCallback((id: string) => setFormData(p => ({ ...p, businessType: id })), []);
+  const setBusinessType = useCallback((id: string) => setFormData(p => ({
+    ...p,
+    businessType: p.businessType.includes(id)
+      ? p.businessType.filter(t => t !== id)
+      : [...p.businessType, id],
+  })), []);
   const setCustomBusinessType = useCallback((t: string) => setFormData(p => ({ ...p, customBusinessType: t })), []);
   const setRole = useCallback((id: string) => setFormData(p => ({ ...p, role: id })), []);
   const setCustomRole = useCallback((t: string) => setFormData(p => ({ ...p, customRole: t })), []);
@@ -1034,7 +1099,13 @@ export default function CreateAccountScreen() {
   const handleNext = useCallback(async () => {
     const currentFormData = formDataRef.current;
 
-    if (currentStep === 'BUSINESS_NAME') {
+    if (currentStep === 'NAME') {
+      if (!currentFormData.firstName.trim()) {
+        showModal('Missing Info', 'Please enter your first name.', 'warning');
+        return;
+      }
+      goToStep('BUSINESS_NAME');
+    } else if (currentStep === 'BUSINESS_NAME') {
       if (!currentFormData.businessName.trim()) {
         showModal('Missing Info', 'Please enter your business name.', 'warning');
         return;
@@ -1052,11 +1123,11 @@ export default function CreateAccountScreen() {
       }
       goToStep('BUSINESS_TYPE');
     } else if (currentStep === 'BUSINESS_TYPE') {
-      if (!currentFormData.businessType) {
+      if (currentFormData.businessType.length === 0) {
         showModal('Missing Info', 'Please select a business type.', 'warning');
         return;
       }
-      if (currentFormData.businessType === 'other' && !currentFormData.customBusinessType.trim()) {
+      if (currentFormData.businessType.includes('other') && !currentFormData.customBusinessType.trim()) {
         showModal('Missing Info', 'Please specify your business type.', 'warning');
         return;
       }
@@ -1289,12 +1360,16 @@ export default function CreateAccountScreen() {
 
       const dbUserId = supabaseUser.id; // Correct UUID
       const email = clerkUser.primaryEmailAddress?.emailAddress || '';
-      const finalBusinessType = formData.businessType === 'other' ? formData.customBusinessType : formData.businessType;
+      const finalBusinessType = formData.businessType
+        .map(t => (t === 'other' ? formData.customBusinessType.trim() : t))
+        .filter(Boolean)
+        .join(', ');
       const finalRole = formData.role === 'other' ? formData.customRole : formData.role;
 
       // 2. Update the existing user record (created by backend sync)
       // We use UPDATE because the user MUST exist for the token exchange to work.
       const { error: userError } = await supabase.from('Users').update({
+        FirstName: formData.firstName.trim(),
         PhoneNumber: formData.phone,
         Region: formData.region || 'US',
         Currency: formData.currency || 'USD',
@@ -1311,7 +1386,10 @@ export default function CreateAccountScreen() {
         DisplayName: formData.businessName,
       }, { onConflict: 'UserId' });
 
-      // 4. Sync Clerk Phone
+      // 4. Sync Clerk name (this is what the home greeting reads) + phone
+      try {
+        await clerkUser.update({ firstName: formData.firstName.trim(), lastName: formData.lastName.trim() });
+      } catch (e) { /* ignore */ }
       if (formData.phone) {
         try { await clerkUser.createPhoneNumber({ phoneNumber: formData.phone }); } catch (e) { /* ignore */ }
       }
@@ -1386,6 +1464,7 @@ export default function CreateAccountScreen() {
 
       capture(AnalyticsEvents.ONBOARDING_COMPLETED, {
         create_organization: !!createOrganization,
+        business_types: formData.businessType,
         sell_categories: formData.sellCategories,
         goal: formData.goal === 'other' ? (formData.goalOther || 'other') : formData.goal,
         heard_from: formData.heardFrom,
@@ -1425,7 +1504,8 @@ export default function CreateAccountScreen() {
       {currentStep !== 'WELCOME' && currentStep !== 'CONNECT' && (
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => {
-            if (currentStep === 'BUSINESS_NAME') goToStep('WELCOME');
+            if (currentStep === 'NAME') goToStep('WELCOME');
+            if (currentStep === 'BUSINESS_NAME') goToStep('NAME');
             if (currentStep === 'STORE_ADDRESS') goToStep('BUSINESS_NAME');
             if (currentStep === 'BUSINESS_TYPE') goToStep('STORE_ADDRESS');
             if (currentStep === 'ROLE') goToStep('BUSINESS_TYPE');
@@ -1459,11 +1539,21 @@ export default function CreateAccountScreen() {
         >
           {currentStep === 'WELCOME' && (
             <WelcomeStep
-              onNext={() => goToStep('BUSINESS_NAME')}
+              onNext={() => goToStep('NAME')}
               onBack={() => { if (navigation.canGoBack()) navigation.goBack(); }}
               showBackButton={navigation.canGoBack()}
               onSignOut={() => authContext?.signOut()}
               firstName={clerkUser?.firstName ?? undefined}
+            />
+          )}
+
+          {currentStep === 'NAME' && (
+            <NameStep
+              firstName={formData.firstName}
+              lastName={formData.lastName}
+              onFirstNameChange={setFirstName}
+              onLastNameChange={setLastName}
+              onNext={handleNext}
             />
           )}
 
@@ -1499,7 +1589,7 @@ export default function CreateAccountScreen() {
           {currentStep === 'BUSINESS_TYPE' && (
             <BusinessTypeStep
               businessName={formData.businessName}
-              selectedType={formData.businessType}
+              selectedTypes={formData.businessType}
               customType={formData.customBusinessType}
               onSelect={setBusinessType}
               onCustomChange={setCustomBusinessType}

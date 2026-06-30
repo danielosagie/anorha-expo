@@ -850,11 +850,20 @@ const AppNavigator = () => {
         setIsLoading(false);
         return;
       }
-      // Default to TabNavigator to avoid blank UI, then refine after check
-      setInitialAppScreen('TabNavigator');
+      // Fresh boot (no live tree yet): run the real onboarding check BEFORE committing
+      // to a landing. Previously we preemptively set TabNavigator here and bailed if the
+      // session bridge wasn't ready — then navBooted locked a not-yet-onboarded user onto
+      // Home, so CreateAccountScreen was skipped and never re-checked. Instead, hold the
+      // loading shell until the bridge is ready (this effect re-runs when
+      // session.bridgeReady flips). Safety net: if the bridge never readies, fall back to
+      // Home after a few seconds rather than spinning forever.
       if (!session?.bridgeReady) {
-        setIsLoading(false);
-        return;
+        setIsLoading(true);
+        const bridgeWaitFallback = setTimeout(() => {
+          setInitialAppScreen(prev => prev ?? 'TabNavigator');
+          setIsLoading(false);
+        }, 6000);
+        return () => clearTimeout(bridgeWaitFallback);
       }
       setIsLoading(true);
       checkOnboardingAndNavigate();
@@ -893,14 +902,17 @@ const AppNavigator = () => {
   const checkOnboardingAndNavigate = async () => {
     try {
       let token: string | null = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Fresh sign-in: the Clerk→Supabase bridge can take a moment to mint the JWT.
+      // Retry with a bit more headroom so we don't fall through to the TabNavigator
+      // fallback (which would skip onboarding) just because the token was a beat late.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
         token = await ensureSupabaseJwt();
         if (token) {
           break;
         }
 
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 300));
+        if (attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
         }
       }
 

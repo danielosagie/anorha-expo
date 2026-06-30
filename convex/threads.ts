@@ -71,7 +71,15 @@ export const listByCampaign = query({
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
+    // The threads table has no userId of its own; resolve ownership through the
+    // parent campaign so one account can't read another's cached threads.
+    const campaign = await ctx.db
+      .query('campaigns')
+      .withIndex('by_campaign_id', q => q.eq('campaignId', args.campaignId))
+      .unique();
+    if (!campaign || campaign.userId !== identity.subject) return [];
+
     const rows = await ctx.db
       .query('threads')
       .withIndex('by_campaign', q => q.eq('campaignId', args.campaignId))
