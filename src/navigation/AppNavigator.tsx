@@ -54,7 +54,6 @@ import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
 // NOTE: PhoneAuthScreen was removed — phone verification now goes through VerifyCodeScreen.
 import PastScansScreen from '../screens/PastScansScreen';
 import TeamScreen from '../screens/TeamScreen';
-import MappingReviewScreen from '../screens/MappingReviewScreen';
 import SyncInboxScreen from '../screens/SyncInboxScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
@@ -80,7 +79,6 @@ import PartnersScreen from '../screens/PartnersScreen';
 import PartnershipDetailScreen from '../screens/PartnershipDetailScreen';
 import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
 import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
-import ImportOverviewScreen from '../screens/ImportOverviewScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
 import CampaignSettingsScreen from '../screens/CampaignSettingsScreen';
@@ -172,9 +170,7 @@ export type AppStackParamList = {
   };
   ProductDetail: { productId: string };
   PastScans: undefined;
-  ImportOverview: { connectionId: string; platformName: string; jobId?: string; };
   SyncInbox: { connectionId: string; platformName: string };
-  MappingReview: { connectionId: string; platformName: string; jobId?: string; importedProducts?: any[]; isCSVImport?: boolean; isScanning?: boolean; scanStartTime?: number; };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number };
   AccountSettings: { refresh?: number } | undefined;
@@ -588,7 +584,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" component={sb(ProductDetailScreen)} />
     <AppStackNav.Screen name="PastScans" component={sb(PastScansScreen)} />
-    <AppStackNav.Screen name="MappingReview" component={sb(MappingReviewScreen)} />
     <AppStackNav.Screen name="SyncInbox" component={sb(SyncInboxScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
     {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
@@ -632,7 +627,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PartnerAccept" component={sb(PartnerAcceptScreen)} />
     <AppStackNav.Screen name="PartnershipDetail" component={sb(PartnershipDetailScreen)} />
     <AppStackNav.Screen name="BackfillOptimizer" component={sb(BackfillOptimizerScreen)} />
-    <AppStackNav.Screen name="ImportOverview" component={sb(ImportOverviewScreen)} />
     <AppStackNav.Screen name="CSVColumnMapping" component={sb(CSVColumnMappingScreen)} />
     <AppStackNav.Screen name="ActivityFeed" component={sb(ActivityFeedScreen)} />
     <AppStackNav.Screen name="Backups" component={sb(BackupsScreen)} />
