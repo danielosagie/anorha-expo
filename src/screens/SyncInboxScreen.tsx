@@ -49,7 +49,11 @@ const SyncInboxScreen: React.FC = () => {
   const renderItem = useCallback(
     ({ item }: { item: SyncItem }) => {
       const hasCandidates = (item.candidates?.length ?? 0) > 0;
-      const busy = resolving === item.platformId;
+      const name = item.title || item.sku || item.platformId;
+      // The hook tracks a single in-flight resolve and rolls failures back with a
+      // full refresh, so disable every row's actions (not just this one) while any
+      // resolve is pending — overlapping taps would race the optimistic state.
+      const busy = resolving !== null;
       return (
         <View style={styles.card}>
           {item.imageUrl ? (
@@ -72,6 +76,8 @@ const SyncInboxScreen: React.FC = () => {
               <TouchableOpacity
                 style={[styles.actionBtn, styles.linkBtn]}
                 disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={`Link ${name}`}
                 onPress={() => onResolve(item, 'link')}
               >
                 <Icon name="link-variant" size={16} color="#fff" />
@@ -80,6 +86,8 @@ const SyncInboxScreen: React.FC = () => {
             <TouchableOpacity
               style={[styles.actionBtn, styles.newBtn]}
               disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel={`Create new item for ${name}`}
               onPress={() => onResolve(item, 'create')}
             >
               <Icon name="plus" size={16} color="#2563eb" />
@@ -87,6 +95,8 @@ const SyncInboxScreen: React.FC = () => {
             <TouchableOpacity
               style={[styles.actionBtn, styles.ignoreBtn]}
               disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel={`Ignore ${name}`}
               onPress={() => onResolve(item, 'ignore')}
             >
               <Icon name="close" size={16} color="#6b7280" />
@@ -104,7 +114,12 @@ const SyncInboxScreen: React.FC = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Icon name="chevron-left" size={26} color="#111827" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>

@@ -196,13 +196,38 @@ export function CSVColumnMappingScreen() {
 
             log.debug('[CSVColumnMapping] Created CSV connection:', newConnection.Id);
 
+            // Best-effort rollback: a CSV pseudo-connection with no staged
+            // mappingSuggestions is an unusable orphan, and a retry would pile up
+            // duplicate active connections. Delete it before surfacing any
+            // post-create failure.
+            const rollbackConnection = async () => {
+                const { error: delErr } = await supabase
+                    .from('PlatformConnections')
+                    .delete()
+                    .eq('Id', newConnection.Id);
+                if (delErr) log.warn('[CSVColumnMapping] Failed to roll back CSV connection:', delErr.message);
+            };
+
+            const token = await ensureSupabaseJwt();
+            if (!token) {
+                // No JWT => the normalize call would send `Bearer null`. Treat as an
+                // auth-state problem, roll back the orphan, and ask for re-auth.
+                await rollbackConnection();
+                log.warn('[CSVColumnMapping] Missing Supabase JWT for import normalize');
+                Alert.alert('Session expired', 'Please sign in again and retry the import.');
+                return;
+            }
+
             // Stage the rows through the SAME resolver platform scans use: POST
             // /imports/normalize persists mappingSuggestions on the connection, so
             // the sync inbox (GET /resolution) shows the auto-linked / create /
             // needs-attention buckets for this CSV exactly like a connected
             // platform — no client matching brain, no MappingReview deck.
-            const token = await ensureSupabaseJwt();
-            const normRes = await fetch(`${API_BASE_URL}/api/sync/imports/normalize`, {
+            // Normalize the base so a deployment whose API_BASE_URL already ends in
+            // /api doesn't compose /api/api/… (matches ConnectedPlatformItem et al).
+            const trimmedBase = API_BASE_URL.replace(/\/$/, '');
+            const apiBase = trimmedBase.endsWith('/api') ? trimmedBase : `${trimmedBase}/api`;
+            const normRes = await fetch(`${apiBase}/sync/imports/normalize`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -212,6 +237,7 @@ export function CSVColumnMappingScreen() {
                 }),
             });
             if (!normRes.ok) {
+                await rollbackConnection();
                 throw new Error(`Import normalize failed: ${normRes.status}`);
             }
 
