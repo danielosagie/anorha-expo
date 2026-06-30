@@ -249,7 +249,16 @@ const SproutHomeScreen: React.FC = () => {
   const { getToken } = useAuth();
   const { user } = useUser();
 
-  const firstName = user?.firstName || user?.username || 'there';
+  // Name shown in the greeting. Fall through Clerk first/full name → username →
+  // the email handle before the generic 'there', so accounts that never set a
+  // first name (e.g. email/password sign-ups that skipped the old onboarding)
+  // still read as a person instead of a bare "Good morning, there".
+  const firstName =
+    user?.firstName ||
+    user?.fullName?.trim()?.split(/\s+/)[0] ||
+    user?.username ||
+    user?.primaryEmailAddress?.emailAddress?.split('@')[0] ||
+    'there';
   const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
 
   const getTokenRef = useRef(getToken);
