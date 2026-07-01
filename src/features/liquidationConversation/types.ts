@@ -198,6 +198,8 @@ export interface StreamTurnInput {
   actionPayload?: Record<string, unknown>;
   /** Public urls of photos attached to this turn (already uploaded). */
   imageUrls?: string[];
+  /** Sprout opens the thread itself — no user message is sent. Guarded server-side. */
+  kickoff?: boolean;
 }
 
 /** Payload the agent attaches (message.metadata.jobCard) for a tappable cart card. */

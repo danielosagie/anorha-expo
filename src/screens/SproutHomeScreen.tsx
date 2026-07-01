@@ -649,7 +649,7 @@ const SproutHomeScreen: React.FC = () => {
                     text={latestDigest.text}
                     shouldStream={shouldStreamHero}
                     onComplete={markHeroSeen}
-                    speed={16}
+                    speed={42}
                     style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
                   />
                 ) : null
@@ -686,7 +686,7 @@ const SproutHomeScreen: React.FC = () => {
                   text={heroMessage.text}
                   shouldStream={shouldStreamHero}
                   onComplete={markHeroSeen}
-                  speed={16}
+                  speed={42}
                   style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
                 />
               ) : null}
@@ -780,6 +780,9 @@ const SproutHomeScreen: React.FC = () => {
       >
         {/* ── BODY ─────────────────────────────────────────────────── */}
         <View style={styles.body}>
+          {/* No point filtering when there's nothing made yet — during onboarding the
+              setup feed is the whole focus. Bar appears once the first clearout exists. */}
+          {controller.campaigns.length > 0 && (
           <View style={styles.filterRow}>
             {FILTERS.map(f => {
               const active = f === activeFilter;
@@ -804,6 +807,7 @@ const SproutHomeScreen: React.FC = () => {
               );
             })}
           </View>
+          )}
 
           {controller.error ? (
             <View style={styles.errorBanner}>
@@ -870,13 +874,15 @@ const SproutHomeScreen: React.FC = () => {
                         ? 'active'
                         : 'locked';
                     return (
-                      <Animated.View key={step.key} entering={FadeInDown.delay(i * 70).springify().damping(18)}>
+                      <Animated.View key={step.key} entering={FadeInDown.delay(i * 60).duration(360)}>
                         <UpNextRow
                           icon={step.icon}
                           title={step.label}
                           sub={step.sub}
                           state={state}
                           onPress={step.onPress}
+                          night={isNight}
+                          whiteActive
                         />
                       </Animated.View>
                     );
@@ -1416,15 +1422,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#22271C',
     borderColor: '#333333',
   },
-  setupRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
-  setupCheck: {
-    width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(147,200,34,0.16)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  setupCheckDone: { backgroundColor: BRAND },
-  setupCheckNum: { fontSize: 13, color: '#43631A', fontFamily: FONT.bold },
-  setupLabel: { fontSize: 15, color: '#18181B', fontFamily: FONT.semibold },
-  setupSub: { fontSize: 12, color: '#9CA3AF', fontFamily: FONT.regular, marginTop: 1 },
   emptyIconWrap: {
     width: 56,
     height: 56,

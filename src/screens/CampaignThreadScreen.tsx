@@ -348,9 +348,13 @@ const CampaignThreadScreen = () => {
     navigation.navigate('CampaignSettings', { campaignId, title: passedTitle });
   };
 
+  // Stage-aware nudge: before the first sale, invite a first move; once it's selling,
+  // it's about steering. Keeps the composer from reading like a generic blank box.
   const composerPlaceholder = controller.isStreaming
-    ? 'Type while agent responds...'
-    : 'Steer this campaign...';
+    ? 'Type while Sprout responds…'
+    : (controller.activeCampaign?.stats?.soldCount || 0) > 0
+      ? 'Steer this clearout…'
+      : 'What should we try first?';
     
   // Using passed title instantly, fallback to loaded activeCampaign title
   const campaignTitle = passedTitle || controller.activeCampaign?.title || 'Campaign Thread';
