@@ -491,6 +491,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
             actionType: input.actionType,
             actionPayload: input.actionPayload,
             imageUrls: input.imageUrls,
+            kickoff: input.kickoff || undefined,
           }),
         } as any);
         source.addEventListener('message', handleMessage);

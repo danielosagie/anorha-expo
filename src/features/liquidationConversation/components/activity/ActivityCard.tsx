@@ -38,9 +38,49 @@ export default function ActivityCard({ payload, streaming, onOpenTray }: Activit
     case 'value-change':
     case 'publish':
       return <RichActivityCard payload={payload} onOpenTray={onOpenTray} />;
+    case 'document':
+      return <DocumentCard payload={payload} onOpenTray={onOpenTray} />;
     default:
       return null;
   }
+}
+
+// ── Document card: a tappable report summary. Tap opens the tray to the full,
+// editable, shareable business sheet — never a wall of text in the chat feed. ──
+
+function DocumentCard({
+  payload,
+  onOpenTray,
+}: {
+  payload: Extract<ActivityPayload, { kind: 'document' }>;
+  onOpenTray?: (payload: ActivityPayload) => void;
+}) {
+  const doc = payload.document;
+  const sectionCount = doc.sections?.length ?? 0;
+  const press = () => {
+    Haptics.selectionAsync().catch(() => undefined);
+    onOpenTray?.(payload);
+  };
+  return (
+    <TouchableOpacity style={styles.richCard} activeOpacity={0.85} onPress={press}>
+      <View style={styles.richHeader}>
+        <View style={styles.tile}>
+          <Icon name="file-document-outline" size={18} color={CHAT_COLORS.brandDeep} />
+        </View>
+        <View style={styles.richTextCol}>
+          <Text style={styles.richTitle} numberOfLines={1}>{doc.title || payload.title}</Text>
+          {doc.summary ? <Text style={styles.richSub} numberOfLines={2}>{doc.summary}</Text> : null}
+        </View>
+        <Icon name="chevron-right" size={18} color="#C4C4CC" />
+      </View>
+      <View style={styles.docFooter}>
+        <Icon name="text-box-outline" size={13} color={CHAT_COLORS.dim} />
+        <Text style={styles.docFooterText}>
+          View report{sectionCount ? ` · ${sectionCount} section${sectionCount === 1 ? '' : 's'}` : ''}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
 }
 
 // ── Rich card: value-change / publish (the diff-at-a-glance, tap-for-tray card) ──
@@ -220,6 +260,18 @@ const styles = StyleSheet.create({
   previewLabel: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim, flexShrink: 1 },
   previewDiff: { marginLeft: 'auto' },
   moreLine: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.faint },
+
+  // ── Document card footer ──
+  docFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 11,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: CHAT_COLORS.divider,
+  },
+  docFooterText: { fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
 
   // ── Tool-run receipt (live pill + tappable done summary) ──
   activityCard: {

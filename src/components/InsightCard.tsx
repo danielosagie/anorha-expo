@@ -4,6 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import spinners from 'unicode-animations';
+import { StreamingText } from './StreamingText';
 
 // Define Prop Interfaces locally to avoid dependency loops, or import if shared properly
 export interface InsightMetric {
@@ -135,79 +136,7 @@ const UnicodeSpinner: React.FC<{
 // -------------------------------------------------------------------------
 // STREAMING TEXT COMPONENT (defined outside InsightCard for stable identity)
 // -------------------------------------------------------------------------
-interface StreamingTextProps {
-    text: string;
-    style?: any;
-    speed?: number;
-    startDelay?: number;
-    onComplete?: () => void;
-    shouldStream?: boolean;
-}
-
-const StreamingText: React.FC<StreamingTextProps> = React.memo(({
-    text,
-    style,
-    speed = 20,
-    startDelay = 0,
-    onComplete,
-    shouldStream = true
-}) => {
-    const [displayedText, setDisplayedText] = useState('');
-    const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    const intervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
-    const completedRef = React.useRef(false);
-    const lastTextRef = React.useRef<string>('');
-
-    useEffect(() => {
-        // Only restart animation if text actually changed
-        if (lastTextRef.current === text && displayedText.length > 0) {
-            return;
-        }
-        lastTextRef.current = text;
-
-        // Clear any existing timers on mount/update
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        completedRef.current = false;
-
-        if (!shouldStream) {
-            setDisplayedText(text);
-            if (!completedRef.current) {
-                completedRef.current = true;
-                onComplete?.();
-            }
-            return;
-        }
-
-        // Reset for new text
-        setDisplayedText('');
-        let charIndex = 0;
-
-        timeoutRef.current = setTimeout(() => {
-            intervalRef.current = setInterval(() => {
-                if (charIndex < text.length) {
-                    // Use slice to build string - prevents undefined issues
-                    setDisplayedText(text.slice(0, charIndex + 1));
-                    charIndex++;
-                } else {
-                    if (intervalRef.current) clearInterval(intervalRef.current);
-                    if (!completedRef.current) {
-                        completedRef.current = true;
-                        onComplete?.();
-                    }
-                }
-            }, speed);
-        }, startDelay);
-
-        // Cleanup function
-        return () => {
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
-    }, [text, shouldStream, speed, startDelay]); // onComplete intentionally excluded to prevent loops
-
-    return <Text style={style}>{displayedText}</Text>;
-});
+// StreamingText moved to ./StreamingText.tsx so the home greeting can reuse it.
 
 const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAction, onRefresh, onFeedback, cacheExpiresAt }) => {
     const [sourcesVisible, setSourcesVisible] = useState(false);

@@ -65,7 +65,16 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
     const out: ActivityPayload[] = [];
     const plain: ConversationToolStep[] = [];
     steps.forEach((step, i) => {
-      if (Array.isArray(step.changes) && step.changes.length) {
+      if (step.document && Array.isArray(step.document.sections)) {
+        // A report the agent authored — its own tappable card (opens the editable sheet).
+        out.push({
+          kind: 'document',
+          id: `${message.id}-doc-${i}`,
+          title: step.document.title || 'Report',
+          status: step.status === 'failed' ? 'failed' : 'ok',
+          document: step.document,
+        });
+      } else if (Array.isArray(step.changes) && step.changes.length) {
         out.push({
           kind: 'value-change',
           id: `${message.id}-step-${i}`,

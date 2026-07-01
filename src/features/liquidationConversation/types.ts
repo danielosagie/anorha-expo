@@ -198,6 +198,8 @@ export interface StreamTurnInput {
   actionPayload?: Record<string, unknown>;
   /** Public urls of photos attached to this turn (already uploaded). */
   imageUrls?: string[];
+  /** Sprout opens the thread itself — no user message is sent. Guarded server-side. */
+  kickoff?: boolean;
 }
 
 /** Payload the agent attaches (message.metadata.jobCard) for a tappable cart card. */
@@ -315,6 +317,8 @@ export interface ConversationToolStep {
   itemRef?: ActivityItemRef;
   /** Presence => an Undo pill is offered for this step's change. */
   undo?: UndoRef;
+  /** A report the agent authored in this step — promoted to a {kind:'document'} card. */
+  document?: ReportDocument;
 }
 
 /** Shared fields on every inline activity card payload. */
@@ -323,6 +327,23 @@ export interface ActivityBase {
   /** Humanized outcome title shown on the card ("Lowered the price"). */
   title: string;
   status?: 'ok' | 'failed' | 'pending' | 'syncing';
+}
+
+/** One section of an agent-authored report. Whitelisted to three safe shapes,
+ *  matching the backend AgentReportSection. */
+export type DocumentSection =
+  | { kind: 'prose'; heading?: string; text: string }
+  | { kind: 'table'; heading?: string; columns: string[]; rows: string[][] }
+  | { kind: 'metrics'; heading?: string; metrics: Array<{ label: string; value: string; sub?: string }> };
+
+/** A report the agent authored — rendered as a tappable card that opens a full,
+ *  editable, shareable business sheet. documentId is stable across revisions. */
+export interface ReportDocument {
+  documentId: string;
+  title: string;
+  summary: string;
+  format?: 'report';
+  sections: DocumentSection[];
 }
 
 /**
@@ -341,7 +362,8 @@ export type ActivityPayload =
     })
   | (ActivityBase & { kind: 'publish'; changes: ValueChange[]; channels?: string[]; itemRef?: ActivityItemRef })
   | (ActivityBase & { kind: 'routine'; routine: Routine })
-  | (ActivityBase & { kind: 'reminder'; whenAtLabel: string; what: string; nextRunAt?: string });
+  | (ActivityBase & { kind: 'reminder'; whenAtLabel: string; what: string; nextRunAt?: string })
+  | (ActivityBase & { kind: 'document'; document: ReportDocument });
 
 export interface StreamTurnObserver {
   onThreadCreated?: (threadId: string) => void;

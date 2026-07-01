@@ -13,11 +13,15 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   Extrapolation,
@@ -37,9 +41,10 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
-import type { ActivityPayload, ConversationToolStep, ValueChange } from '../../types';
+import type { ActivityPayload, ConversationToolStep, ReportDocument, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import { activityGlyph, humanizeCadence, humanizeChannel, toolDoneLabel, toolStepIcon } from './humanizers';
+import { documentToMarkdown } from './documentExport';
 
 const SCREEN_H = Dimensions.get('window').height;
 const DEFAULT_H = Math.round(SCREEN_H * 0.62);
@@ -58,6 +63,8 @@ export interface ActivityTraySheetProps {
   onOpenItem?: (productId: string) => void;
   onUndo?: (payload: ActivityPayload, change?: ValueChange) => Promise<void> | void;
   onRoutineAction?: (id: string, action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
+  /** Send the seller's revision request for a report back to Sprout (revise_report). */
+  onReviseDocument?: (documentId: string, title: string, note: string) => void;
 }
 
 export default function ActivityTraySheet({
@@ -67,6 +74,7 @@ export default function ActivityTraySheet({
   onOpenItem,
   onUndo,
   onRoutineAction,
+  onReviseDocument,
 }: ActivityTraySheetProps) {
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
@@ -216,6 +224,8 @@ export default function ActivityTraySheet({
                   onPushStep={(step) => push({ kind: 'step-detail', title: toolDoneLabel(step.tool, step.label), step })}
                   onPushEvidence={() => push({ kind: 'evidence', title: "What it's based on" })}
                   onOpenItem={openItem}
+                  onRevise={onReviseDocument}
+                  onRequestClose={onClose}
                 />
               </ScrollView>
             </Animated.View>
@@ -256,6 +266,8 @@ function PageBody({
   onPushStep,
   onPushEvidence,
   onOpenItem,
+  onRevise,
+  onRequestClose,
 }: {
   page: TrayPage;
   payload: ActivityPayload;
@@ -263,6 +275,8 @@ function PageBody({
   onPushStep: (step: ConversationToolStep) => void;
   onPushEvidence: () => void;
   onOpenItem: (productId?: string | null) => void;
+  onRevise?: (documentId: string, title: string, note: string) => void;
+  onRequestClose?: () => void;
 }) {
   if (page.kind === 'evidence') {
     const evidence = 'evidence' in payload ? payload.evidence : undefined;
@@ -375,6 +389,9 @@ function PageBody({
   }
 
   // root
+  if (payload.kind === 'document') {
+    return <DocumentPage document={payload.document} onRevise={onRevise} onRequestClose={onRequestClose} />;
+  }
   if (payload.kind === 'value-change') {
     const changes = payload.changes ?? [];
     if (changes.length <= 1) {
@@ -555,6 +572,164 @@ function ChangeDetailBody({
   );
 }
 
+// ── Document page: the full report as a business sheet. Renders prose (markdown),
+// tables, and metric tiles; an edit toggle swaps to a raw-markdown editor you can
+// copy or share; "Ask Sprout to revise" sends your note back to Sprout. ──
+
+function DocumentPage({
+  document,
+  onRevise,
+  onRequestClose,
+}: {
+  document: ReportDocument;
+  onRevise?: (documentId: string, title: string, note: string) => void;
+  onRequestClose?: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => documentToMarkdown(document));
+  const [reviseOpen, setReviseOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const doCopy = async () => {
+    try {
+      await Clipboard.setStringAsync(draft);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+      Haptics.selectionAsync().catch(() => undefined);
+    } catch {
+      /* clipboard can fail silently */
+    }
+  };
+  const doShare = () => {
+    Share.share({ title: document.title, message: draft }).catch(() => undefined);
+  };
+  const submitRevise = () => {
+    const n = note.trim();
+    if (!n) return;
+    onRevise?.(document.documentId, document.title, n);
+    setReviseOpen(false);
+    setNote('');
+    onRequestClose?.();
+  };
+
+  const sections = document.sections || [];
+
+  return (
+    <View style={{ gap: 14 }}>
+      {document.summary ? <Text style={styles.docSummary}>{document.summary}</Text> : null}
+
+      {editing ? (
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          multiline
+          style={styles.docEditor}
+          textAlignVertical="top"
+          placeholder="Report markdown"
+          placeholderTextColor={CHAT_COLORS.faint}
+        />
+      ) : (
+        <View style={{ gap: 16 }}>
+          {sections.map((s, i) => (
+            <DocumentSectionView key={i} section={s} />
+          ))}
+          {!sections.length ? <EmptyNote text="This report has no sections yet." /> : null}
+        </View>
+      )}
+
+      <View style={styles.docActions}>
+        <TouchableOpacity style={styles.docActionBtn} onPress={() => setEditing((e) => !e)} activeOpacity={0.8}>
+          <Icon name={editing ? 'check' : 'pencil-outline'} size={16} color={CHAT_COLORS.brandDeep} />
+          <Text style={styles.docActionText}>{editing ? 'Done' : 'Edit'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.docActionBtn} onPress={doCopy} activeOpacity={0.8}>
+          <Icon name={copied ? 'check' : 'content-copy'} size={16} color={CHAT_COLORS.brandDeep} />
+          <Text style={styles.docActionText}>{copied ? 'Copied' : 'Copy'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.docActionBtn} onPress={doShare} activeOpacity={0.8}>
+          <Icon name="share-variant" size={16} color={CHAT_COLORS.brandDeep} />
+          <Text style={styles.docActionText}>Share</Text>
+        </TouchableOpacity>
+      </View>
+
+      {onRevise ? (
+        reviseOpen ? (
+          <View style={styles.docRevise}>
+            <TextInput
+              value={note}
+              onChangeText={setNote}
+              placeholder="What should Sprout change?"
+              placeholderTextColor={CHAT_COLORS.faint}
+              style={styles.docReviseInput}
+              multiline
+              autoFocus
+            />
+            <View style={styles.docReviseRow}>
+              <TouchableOpacity onPress={() => { setReviseOpen(false); setNote(''); }} activeOpacity={0.8}>
+                <Text style={styles.docReviseCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.docReviseSend, !note.trim() && { opacity: 0.5 }]}
+                disabled={!note.trim()}
+                onPress={submitRevise}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.docReviseSendText}>Ask Sprout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.docReviseCta} onPress={() => setReviseOpen(true)} activeOpacity={0.85}>
+            <Icon name="creation" size={16} color={CHAT_COLORS.white} />
+            <Text style={styles.docReviseCtaText}>Ask Sprout to revise</Text>
+          </TouchableOpacity>
+        )
+      ) : null}
+    </View>
+  );
+}
+
+function DocumentSectionView({ section }: { section: ReportDocument['sections'][number] }) {
+  return (
+    <View style={{ gap: 8 }}>
+      {section.heading ? <Text style={styles.docHeading}>{section.heading}</Text> : null}
+      {section.kind === 'prose' ? (
+        <Markdown style={{ body: styles.docProse as any }}>{section.text || ''}</Markdown>
+      ) : null}
+      {section.kind === 'metrics' ? (
+        <View style={styles.docMetrics}>
+          {section.metrics.map((m, i) => (
+            <View key={i} style={styles.docMetricTile}>
+              <Text style={styles.docMetricValue} numberOfLines={1}>{m.value}</Text>
+              <Text style={styles.docMetricLabel} numberOfLines={2}>{m.label}</Text>
+              {m.sub ? <Text style={styles.docMetricSub} numberOfLines={1}>{m.sub}</Text> : null}
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {section.kind === 'table' ? (
+        <View style={styles.docTable}>
+          {section.columns.length ? (
+            <View style={[styles.docTableRow, styles.docTableHead]}>
+              {section.columns.map((c, i) => (
+                <Text key={i} style={[styles.docTableCell, styles.docTableHeadCell]} numberOfLines={2}>{c}</Text>
+              ))}
+            </View>
+          ) : null}
+          {section.rows.map((row, ri) => (
+            <View key={ri} style={[styles.docTableRow, ri % 2 === 1 && styles.docTableRowAlt]}>
+              {row.map((cell, ci) => (
+                <Text key={ci} style={styles.docTableCell} numberOfLines={3}>{cell}</Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 // ── Footer (per page) ────────────────────────────────────────────────────
 
 function Footer({
@@ -578,6 +753,8 @@ function Footer({
   onOpenItem: (productId?: string | null) => void;
   onRoutineAction: (action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
 }) {
+  // The document page carries its own inline actions (Copy / Share / Revise).
+  if (payload.kind === 'document') return null;
   const pad = { paddingBottom: insetBottom };
 
   // Routine controls
@@ -898,6 +1075,88 @@ const styles = StyleSheet.create({
     backgroundColor: CHAT_COLORS.white,
   },
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+
+  // ── Document page ──
+  docSummary: { fontSize: 14.5, lineHeight: 21, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular },
+  docEditor: {
+    minHeight: 240,
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: CHAT_COLORS.ink,
+    fontFamily: CHAT_FONT.regular,
+    backgroundColor: CHAT_COLORS.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    padding: 12,
+  },
+  docHeading: { fontSize: 15, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+  docProse: { fontSize: 14.5, lineHeight: 22, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.regular },
+  docActions: { flexDirection: 'row', gap: 8, marginTop: 2 },
+  docActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: CHAT_COLORS.brandSoft,
+  },
+  docActionText: { fontSize: 12.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.brandDeep },
+  docRevise: {
+    gap: 10,
+    backgroundColor: CHAT_COLORS.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    padding: 12,
+  },
+  docReviseInput: { minHeight: 60, fontSize: 14, lineHeight: 20, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.regular },
+  docReviseRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 16 },
+  docReviseCancel: { fontSize: 13.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
+  docReviseSend: { backgroundColor: CHAT_COLORS.brandDeep, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 16 },
+  docReviseSendText: { fontSize: 13.5, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.white },
+  docReviseCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: CHAT_COLORS.brandDeep,
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginTop: 2,
+  },
+  docReviseCtaText: { fontSize: 14, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.white },
+  docMetrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  docMetricTile: {
+    flexGrow: 1,
+    minWidth: '30%',
+    backgroundColor: CHAT_COLORS.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    padding: 10,
+    gap: 2,
+  },
+  docMetricValue: { fontSize: 18, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+  docMetricLabel: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
+  docMetricSub: { fontSize: 10.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.faint },
+  docTable: { borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 10, overflow: 'hidden' },
+  docTableRow: { flexDirection: 'row' },
+  docTableHead: { backgroundColor: CHAT_COLORS.surface },
+  docTableRowAlt: { backgroundColor: CHAT_COLORS.surfaceAlt },
+  docTableCell: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: CHAT_COLORS.ink,
+    fontFamily: CHAT_FONT.regular,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: '#ECEBE6',
+  },
+  docTableHeadCell: { fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
   primaryBtn: {
     flex: 1,
     height: 52,
