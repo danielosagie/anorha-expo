@@ -26,6 +26,8 @@ type Props = {
   onUndo?: (payload: ActivityPayload, change?: ValueChange) => Promise<void> | void;
   /** Pause / resume / edit / delete a routine or reminder from its tray. */
   onRoutineAction?: (id: string, action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
+  /** Send the seller's revision request for a report back to Sprout. */
+  onReviseDocument?: (documentId: string, title: string, note: string) => void;
   ListHeaderComponent?: React.ReactElement | null;
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
@@ -42,6 +44,7 @@ export const ConversationList = ({
   onOpenItem,
   onUndo,
   onRoutineAction,
+  onReviseDocument,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
@@ -213,6 +216,7 @@ export const ConversationList = ({
         onOpenItem={onOpenItem}
         onUndo={onUndo}
         onRoutineAction={onRoutineAction}
+        onReviseDocument={onReviseDocument}
       />
     </View>
   );

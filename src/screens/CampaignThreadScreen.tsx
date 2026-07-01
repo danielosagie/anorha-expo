@@ -407,6 +407,11 @@ const CampaignThreadScreen = () => {
           }
         }}
         onRoutineAction={(id, action) => sendAction(`routine_${action}`, `Routine ${action}`, { routineId: id })}
+        // Report revision: pre-fill the composer with the seller's request so they can
+        // review + send. Sprout has revise_report and updates the doc in place.
+        onReviseDocument={(_documentId, title, note) => {
+          controller.setComposerText(`Revise the "${title}" report: ${note}`);
+        }}
         contentTopInset={headerH + 8}
         contentBottomInset={footerH + 8 + feedKeyboardInset}
       />
