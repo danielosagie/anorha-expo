@@ -20,6 +20,10 @@ import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Moon, Sun } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { StreamingText } from '../components/StreamingText';
+import { UpNextRow, type IconName } from '../components/quest/LobbyKit';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignSummary } from '../features/liquidationConversation/types';
@@ -344,6 +348,26 @@ const SproutHomeScreen: React.FC = () => {
     return hours > 0 && hours <= 12 ? hours : null;
   }, [latestDigest?.nextReportAt]);
 
+  // ── Stream Sprout's digest in ONLY when it's genuinely new: first open, or a fresh
+  //    digest since we last saw one. On remount / navigation back it renders instantly
+  //    (shouldStream=false), never replaying — exactly like a normal chat app.
+  const digestId = latestDigest ? latestDigest.createdAt : null;
+  const [seenLoaded, setSeenLoaded] = useState(false);
+  const [lastSeenDigestId, setLastSeenDigestId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem('sprout:lastSeenDigestId')
+      .then((v) => { if (alive) { setLastSeenDigestId(v); setSeenLoaded(true); } })
+      .catch(() => { if (alive) setSeenLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+  const shouldStreamDigest = seenLoaded && !!digestId && digestId !== lastSeenDigestId;
+  const markDigestSeen = useCallback(() => {
+    if (!digestId) return;
+    setLastSeenDigestId(digestId);
+    AsyncStorage.setItem('sprout:lastSeenDigestId', digestId).catch(() => {});
+  }, [digestId]);
+
   // ── "While you slept" briefing rows, derived from the active campaign overview
   const briefingRows = useMemo<BriefingRowData[]>(() => {
     const o = controller.campaignOverview;
@@ -606,21 +630,33 @@ const SproutHomeScreen: React.FC = () => {
             // Sprout's proactive message — morning/evening recap or check-in.
             <View style={styles.sproutMsg}>
               <Text style={[styles.sproutLead, { color: THEME.strong }]}>{sproutMsg.lead}</Text>
-              <View style={styles.briefingWrap}>
-                {briefingDisplay(
-                  DEMO ? sproutMsg.body : latestDigest ? [seg(latestDigest.text)] : briefingSegments,
-                ).map((it, i) =>
-                  it.kind === 'chip' ? (
-                    <View key={i} style={[styles.briefingChip, { borderColor: THEME.faint }]}>
-                      <Text style={[styles.briefingChipText, { color: THEME.strong }]}>{it.text}</Text>
-                    </View>
-                  ) : (
-                    <Text key={i} style={[styles.briefingWord, { color: THEME.strong }]}>
-                      {it.text}
-                    </Text>
-                  ),
-                )}
-              </View>
+              {latestDigest && !DEMO ? (
+                // The scheduled digest IS Sprout's message — type it in only when new
+                // (first open / fresh digest); instant on remount so it never replays.
+                seenLoaded ? (
+                  <StreamingText
+                    text={latestDigest.text}
+                    shouldStream={shouldStreamDigest}
+                    onComplete={markDigestSeen}
+                    speed={16}
+                    style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                  />
+                ) : null
+              ) : (
+                <View style={styles.briefingWrap}>
+                  {briefingDisplay(DEMO ? sproutMsg.body : briefingSegments).map((it, i) =>
+                    it.kind === 'chip' ? (
+                      <View key={i} style={[styles.briefingChip, { borderColor: THEME.faint }]}>
+                        <Text style={[styles.briefingChipText, { color: THEME.strong }]}>{it.text}</Text>
+                      </View>
+                    ) : (
+                      <Text key={i} style={[styles.briefingWord, { color: THEME.strong }]}>
+                        {it.text}
+                      </Text>
+                    ),
+                  )}
+                </View>
+              )}
               {!DEMO && nextReportHours != null && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>
                   Next report in {nextReportHours}h
@@ -785,57 +821,56 @@ const SproutHomeScreen: React.FC = () => {
                 <Text style={[styles.emptyBody, isNight && { color: 'rgba(244,244,238,0.6)' }, { textAlign: 'left', marginBottom: 12 }]}>
                   Three steps and Sprout takes it from there.
                 </Text>
-                {[
-                  {
-                    key: 'platform',
-                    label: 'Connect a platform',
-                    sub: 'Shopify, Square, eBay and more',
-                    done: (liveConnections?.length || 0) > 0,
-                    onPress: () => navigation.navigate('Connections'),
-                  },
-                  {
-                    key: 'items',
-                    label: 'Add your first items',
-                    sub: 'Snap a photo, Sprout finds the match',
-                    done: (productCount || 0) > 0,
-                    onPress: () => navigation.navigate('AddProduct'),
-                  },
-                  {
-                    key: 'clearout',
-                    label: 'Start a clearout',
-                    sub: 'Set a goal, Sprout lists and negotiates',
-                    done: false,
-                    onPress: openCreate,
-                  },
-                ].map((step, i) => (
-                  <TouchableOpacity
-                    key={step.key}
-                    style={[styles.setupRow, i > 0 && { borderTopWidth: 1, borderTopColor: isNight ? 'rgba(255,255,255,0.08)' : '#F1F1EE' }]}
-                    activeOpacity={0.75}
-                    onPress={step.onPress}
-                  >
-                    <View style={[styles.setupCheck, step.done && styles.setupCheckDone]}>
-                      {step.done ? (
-                        <Icon name="check" size={14} color="#FFFFFF" />
-                      ) : (
-                        <Text style={[styles.setupCheckNum, isNight && { color: 'rgba(244,244,238,0.7)' }]}>{i + 1}</Text>
-                      )}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.setupLabel,
-                          isNight && { color: '#F4F4EE' },
-                          step.done && { textDecorationLine: 'line-through', opacity: 0.55 },
-                        ]}
-                      >
-                        {step.label}
-                      </Text>
-                      <Text style={[styles.setupSub, isNight && { color: 'rgba(244,244,238,0.5)' }]}>{step.sub}</Text>
-                    </View>
-                    <Icon name="chevron-right" size={20} color={isNight ? 'rgba(244,244,238,0.4)' : '#C7C7CC'} />
-                  </TouchableOpacity>
-                ))}
+                {(() => {
+                  // Staged progression: the first incomplete step is "up next" (green),
+                  // earlier steps read done, later ones sit quiet — suggested one by one,
+                  // fading in as a soft stack. Nothing is truly locked (tap any to jump).
+                  const steps: Array<{ key: string; icon: IconName; label: string; sub: string; done: boolean; onPress: () => void }> = [
+                    {
+                      key: 'platform',
+                      icon: 'storefront-outline',
+                      label: 'Connect a platform',
+                      sub: 'Shopify, Square, eBay and more',
+                      done: (liveConnections?.length || 0) > 0,
+                      onPress: () => navigation.navigate('Connections'),
+                    },
+                    {
+                      key: 'items',
+                      icon: 'camera-outline',
+                      label: 'Add your first items',
+                      sub: 'Snap a photo, Sprout finds the match',
+                      done: (productCount || 0) > 0,
+                      onPress: () => navigation.navigate('AddProduct'),
+                    },
+                    {
+                      key: 'clearout',
+                      icon: 'rocket-launch-outline',
+                      label: 'Start a clearout',
+                      sub: 'Set a goal, Sprout lists and negotiates',
+                      done: false,
+                      onPress: openCreate,
+                    },
+                  ];
+                  const activeIdx = steps.findIndex((s) => !s.done);
+                  return steps.map((step, i) => {
+                    const state: 'done' | 'active' | 'locked' = step.done
+                      ? 'done'
+                      : i === activeIdx
+                        ? 'active'
+                        : 'locked';
+                    return (
+                      <Animated.View key={step.key} entering={FadeInDown.delay(i * 70).springify().damping(18)}>
+                        <UpNextRow
+                          icon={step.icon}
+                          title={step.label}
+                          sub={step.sub}
+                          state={state}
+                          onPress={step.onPress}
+                        />
+                      </Animated.View>
+                    );
+                  });
+                })()}
               </View>
             ) : (
               <View style={[styles.emptyCard, isNight && styles.emptyCardNight]}>
