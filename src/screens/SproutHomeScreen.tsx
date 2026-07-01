@@ -348,25 +348,37 @@ const SproutHomeScreen: React.FC = () => {
     return hours > 0 && hours <= 12 ? hours : null;
   }, [latestDigest?.nextReportAt]);
 
-  // ── Stream Sprout's digest in ONLY when it's genuinely new: first open, or a fresh
-  //    digest since we last saw one. On remount / navigation back it renders instantly
-  //    (shouldStream=false), never replaying — exactly like a normal chat app.
-  const digestId = latestDigest ? latestDigest.createdAt : null;
+  const isNight = useIsNight();
+  // ── The hero "message" from Sprout — whatever's in the green box: the scheduled
+  //    digest, else the current insight, else the honest "watching" line. It types in
+  //    ONLY when genuinely new (first open, or a fresh message); on remount / navigation
+  //    back it renders instantly and never replays — exactly like a normal chat app.
+  const heroMessage = useMemo<{ id: string; text: string } | null>(() => {
+    if (DEMO) return null; // demo has its own scripted body
+    if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: latestDigest.text };
+    if (controller.loading) return null; // don't stream the transient "Catching you up…"
+    if (insightHeadline) return { id: `insight:${insightHeadline}`, text: insightHeadline };
+    return {
+      id: isNight ? 'quiet:night' : 'quiet:day',
+      text: isNight ? 'All quiet while you slept. Sprout is watching.' : 'All quiet so far. Sprout is watching.',
+    };
+  }, [DEMO, latestDigest, controller.loading, insightHeadline, isNight]);
+
   const [seenLoaded, setSeenLoaded] = useState(false);
-  const [lastSeenDigestId, setLastSeenDigestId] = useState<string | null>(null);
+  const [lastSeenMsgId, setLastSeenMsgId] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    AsyncStorage.getItem('sprout:lastSeenDigestId')
-      .then((v) => { if (alive) { setLastSeenDigestId(v); setSeenLoaded(true); } })
+    AsyncStorage.getItem('sprout:lastSeenHeroMsgId')
+      .then((v) => { if (alive) { setLastSeenMsgId(v); setSeenLoaded(true); } })
       .catch(() => { if (alive) setSeenLoaded(true); });
     return () => { alive = false; };
   }, []);
-  const shouldStreamDigest = seenLoaded && !!digestId && digestId !== lastSeenDigestId;
-  const markDigestSeen = useCallback(() => {
-    if (!digestId) return;
-    setLastSeenDigestId(digestId);
-    AsyncStorage.setItem('sprout:lastSeenDigestId', digestId).catch(() => {});
-  }, [digestId]);
+  const shouldStreamHero = seenLoaded && !!heroMessage && heroMessage.id !== lastSeenMsgId;
+  const markHeroSeen = useCallback(() => {
+    if (!heroMessage) return;
+    setLastSeenMsgId(heroMessage.id);
+    AsyncStorage.setItem('sprout:lastSeenHeroMsgId', heroMessage.id).catch(() => {});
+  }, [heroMessage?.id]);
 
   // ── "While you slept" briefing rows, derived from the active campaign overview
   const briefingRows = useMemo<BriefingRowData[]>(() => {
@@ -571,7 +583,6 @@ const SproutHomeScreen: React.FC = () => {
   }, [adapter, controller, navigation]);
 
   const chartWidth = Dimensions.get('window').width;
-  const isNight = useIsNight();
   const THEME = isNight ? NIGHT_THEME : DAY_THEME;
   const briefingSegments = useMemo(() => briefingToSegments(briefingRows), [briefingRows]);
 
@@ -636,8 +647,8 @@ const SproutHomeScreen: React.FC = () => {
                 seenLoaded ? (
                   <StreamingText
                     text={latestDigest.text}
-                    shouldStream={shouldStreamDigest}
-                    onComplete={markDigestSeen}
+                    shouldStream={shouldStreamHero}
+                    onComplete={markHeroSeen}
                     speed={16}
                     style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
                   />
@@ -665,19 +676,19 @@ const SproutHomeScreen: React.FC = () => {
             </View>
           ) : (
             <>
-              <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>
-                {controller.loading
-                  ? 'Catching you up…'
-                  : isNight
-                    ? 'All quiet while you slept. Sprout is watching.'
-                    : 'All quiet so far. Sprout is watching.'}
-              </Text>
-              {/* The periodic insight fills the quiet — a real recommendation,
-                  not filler. Falls back to the latest concrete action. */}
-              {!controller.loading && insightHeadline ? (
-                <Text style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}>
-                  {insightHeadline}
-                </Text>
+              {/* The quiet-state message (the periodic insight when there is one, else
+                  the honest "watching" line) types in on first open / when it's new,
+                  just like the digest and the chat. Instant on remount, never replays. */}
+              {controller.loading ? (
+                <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>Catching you up…</Text>
+              ) : seenLoaded && heroMessage ? (
+                <StreamingText
+                  text={heroMessage.text}
+                  shouldStream={shouldStreamHero}
+                  onComplete={markHeroSeen}
+                  speed={16}
+                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                />
               ) : null}
               {!controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
