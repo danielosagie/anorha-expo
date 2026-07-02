@@ -5,6 +5,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useResolution } from '../hooks/useResolution';
+import ErrorModal from '../components/ErrorModal';
 import type { SyncItem, AttentionReason } from '../types/syncItem';
 
 type RouteType = RouteProp<AppStackParamList, 'SyncInbox'>;
@@ -34,11 +35,16 @@ const SyncInboxScreen: React.FC = () => {
   // Which card has its candidate picker open (multi-candidate items only).
   const [pickerFor, setPickerFor] = useState<string | null>(null);
 
+  // A failed resolve rolls the row back (the hook refreshes), but the user still
+  // needs to know their tap didn't stick — same ErrorModal pattern as the other
+  // save paths (GenerateDetails / ProductDetail), never a native Alert.
+  const [resolveErrorVisible, setResolveErrorVisible] = useState(false);
+
   const onResolve = useCallback(
     (item: SyncItem, choice: 'create' | 'ignore') => {
       setPickerFor(null);
-      // Best-effort; the hook handles removal + rollback on failure.
-      resolve(item.platformId, choice).catch(() => {});
+      // The hook handles removal + rollback on failure; we only surface it.
+      resolve(item.platformId, choice).catch(() => setResolveErrorVisible(true));
     },
     [resolve],
   );
@@ -48,7 +54,7 @@ const SyncInboxScreen: React.FC = () => {
   const onLink = useCallback(
     (item: SyncItem, canonicalId: string) => {
       setPickerFor(null);
-      resolve(item.platformId, 'link', canonicalId).catch(() => {});
+      resolve(item.platformId, 'link', canonicalId).catch(() => setResolveErrorVisible(true));
     },
     [resolve],
   );
@@ -232,6 +238,14 @@ const SyncInboxScreen: React.FC = () => {
           }
         />
       )}
+
+      <ErrorModal
+        visible={resolveErrorVisible}
+        type="error"
+        title="Couldn’t save"
+        message="Try again."
+        onClose={() => setResolveErrorVisible(false)}
+      />
     </View>
   );
 };
