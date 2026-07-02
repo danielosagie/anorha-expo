@@ -1119,13 +1119,13 @@ const ProfileScreen = () => {
     setIsEditMode(false); // Exit edit mode
 
     // ✅ NAVIGATE IMMEDIATELY - Don't wait for API response
-    // Land straight on the deck in its "reading" state; it receives scan
-    // progress via WebSocket and resolves into the first decision card the
-    // moment suggestions arrive — no passive lobby in between.
-    navigation.navigate('MappingReview', {
+    // Land straight on the async sync inbox; it polls the resolver a bounded
+    // number of times (see useResolution) so the buckets fill in on their own as
+    // the background scan below produces suggestions — no passive lobby, and no
+    // stranding on an empty list.
+    navigation.navigate('SyncInbox', {
       connectionId,
       platformName,
-      isScanning: true,
     });
 
     // Start the scan in the background (non-blocking)
@@ -1476,7 +1476,7 @@ const ProfileScreen = () => {
     log.debug(`[ProfileScreen] Initiating Review & Sync for Connection ID: ${connectionId}, Platform: ${platformName}`);
 
     // Go straight to the review deck — this is a "do the work now" action.
-    navigation.navigate('MappingReview', { connectionId, platformName });
+    navigation.navigate('SyncInbox', { connectionId, platformName });
   };
   // --- END Handler for Review & Sync ---
 

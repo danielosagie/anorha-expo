@@ -356,7 +356,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                     {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.READY_TO_SYNC && (
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                            onPress={() => navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name })}
+                            onPress={() => navigation.navigate('SyncInbox', { connectionId: connection.Id, platformName: platformConfig.name })}
                         >
                             <Icon name="check-circle" size={18} color={theme.colors.success} />
                             <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready</Text>
@@ -381,7 +381,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                 case 'rescan': onStartScan(connection.Id, platformConfig.name, true); break;
                                 case 'fix_resume': onFix(connection.Id, platformConfig.name); break;
                                 case 'manage':
-                                    navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name });
+                                    navigation.navigate('SyncInbox', { connectionId: connection.Id, platformName: platformConfig.name });
                                     break;
                             }
                         };
@@ -409,7 +409,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     } else if (connection.PlatformType === 'csv') {
                                         openManageMenu();
                                     } else {
-                                        navigation.navigate('ImportOverview', { connectionId: connection.Id, platformName: platformConfig.name });
+                                        navigation.navigate('SyncInbox', { connectionId: connection.Id, platformName: platformConfig.name });
                                     }
                                 }}
                             >
@@ -463,7 +463,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     }}
                                     onPress={() => {
                                         setManageMenuVisible(false);
-                                        navigation.navigate('ImportOverview' as any, {
+                                        navigation.navigate('SyncInbox', {
                                             connectionId: connection.Id,
                                             platformName: connection.DisplayName || 'CSV Connection',
                                         });
