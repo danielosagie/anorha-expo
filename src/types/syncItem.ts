@@ -51,6 +51,9 @@ export interface SyncItem {
 }
 
 export interface ResolveResult {
+  // The rows-backed backend returns the certain buckets as EMPTY arrays — the
+  // real numbers live in `summary` only. Never read these arrays for content;
+  // only `needsAttention` is fully populated.
   autoLink: SyncItem[];
   autoCreate: SyncItem[];
   needsAttention: SyncItem[];

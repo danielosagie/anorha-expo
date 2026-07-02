@@ -84,8 +84,19 @@ export function useResolution(connectionId: string | null | undefined) {
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ platformId, choice, canonicalId }),
         });
-        // 409 = already resolved → treat as success (drop it too).
-        if (!res.ok && res.status !== 409) throw new Error(`Resolve failed: ${res.status}`);
+        // 409 = the row's Version CAS was stale: another device/session resolved
+        // this item concurrently. Nothing has been removed locally yet, so there
+        // is nothing to roll back — quietly re-sync with the server instead. If
+        // the other resolution stuck, the item leaves needsAttention on its own;
+        // if the row merely changed, it re-renders with fresh data for a retry.
+        // (An identical re-send of the SAME decision is a 200 {alreadyResolved},
+        // not a 409 — that path falls through to the normal removal below.)
+        if (res.status === 409) {
+          log.debug('resolve conflicted (409) — refetching', platformId);
+          await refresh();
+          return null;
+        }
+        if (!res.ok) throw new Error(`Resolve failed: ${res.status}`);
         setResult((prev) =>
           prev ? { ...prev, needsAttention: prev.needsAttention.filter((i) => i.platformId !== platformId) } : prev,
         );

@@ -8,7 +8,6 @@ import {
     ScrollView,
     TouchableOpacity,
     ActivityIndicator,
-    Alert,
     Dimensions,
     Platform,
     Modal,
@@ -19,6 +18,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '@clerk/expo';
 import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import PillTabs from '../components/ui/PillTabs';
+import ErrorModal from '../components/ErrorModal';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { useOrg } from '../context/OrgContext';
 import { createLogger } from '../utils/logger';
@@ -26,6 +26,28 @@ const log = createLogger('CSVColumnMappingScreen');
 
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Some deployments set API_BASE_URL with a trailing `/api` — normalize once so
+// we never compose `/api/api/…` (matches useResolution / ConnectedPlatformItem).
+const API_BASE = (() => {
+    const trimmed = API_BASE_URL.replace(/\/$/, '');
+    return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+})();
+
+// The server column brain speaks ProductField names; the mapping UI speaks
+// canonical Anorha keys. Only fields both sides know are prefilled — the rest
+// (variantGroup/option server-side; condition/size/etc client-side) stay manual.
+const SERVER_FIELD_TO_CLIENT: Record<string, string> = {
+    name: 'title',
+    sku: 'sku',
+    barcode: 'barcode',
+    price: 'price',
+    quantity: 'quantity',
+    description: 'description',
+    imageUrl: 'imageUrl',
+    category: 'category',
+    brand: 'brand',
+};
 
 // Canonical Anorha fields that we map to
 const CANONICAL_FIELDS = [
@@ -73,12 +95,55 @@ export function CSVColumnMappingScreen() {
     const [selectionModalVisible, setSelectionModalVisible] = useState(false);
     const [currentFieldKey, setCurrentFieldKey] = useState<string | null>(null);
 
-    // Auto-detect mappings using backend AI on mount
+    // Errors surface through ErrorModal (never a native alert).
+    const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string; type: 'error' | 'warning' | 'info' | 'success' }>({
+        visible: false,
+        title: '',
+        message: '',
+        type: 'error',
+    });
+    const showError = (title: string, message: string, type: 'error' | 'warning' = 'error') =>
+        setErrorModal({ visible: true, title, message, type });
+
+    // Auto-detect mappings on mount. The server column brain first: POST a
+    // raw-row sample to /sync/imports/normalize (NO connectionId, so nothing is
+    // created or persisted) and prefill the columns it applied confidently —
+    // the same brain runs at import time, so the prefill matches what the
+    // server will do. Ambiguous columns stay unmapped for the user. Falls back
+    // to the legacy AI endpoint, then basic header matching.
     useEffect(() => {
         if (!csvHeaders.length) return;
 
+        const fetchServerMappings = async (): Promise<boolean> => {
+            const token = await ensureSupabaseJwt();
+            if (!token) return false;
+            const res = await fetch(`${API_BASE}/sync/imports/normalize`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ platformType: 'csv', rawRows: csvData.slice(0, 25) }),
+            });
+            if (!res.ok) return false;
+            const envelope = await res.json().catch(() => null);
+            const applied = envelope?.columns?.applied;
+            if (!applied || typeof applied !== 'object') return false;
+            const prefill: Record<string, string> = {};
+            for (const [field, header] of Object.entries(applied)) {
+                const clientKey = SERVER_FIELD_TO_CLIENT[field];
+                if (clientKey && typeof header === 'string' && header) prefill[clientKey] = header;
+            }
+            if (Object.keys(prefill).length === 0) return false;
+            setMappings(prefill);
+            log.debug('[CSVColumnMapping] server brain mapped', Object.keys(prefill).length, 'fields');
+            return true;
+        };
+
         const fetchAIMappings = async () => {
             setIsLoadingAI(true);
+            try {
+                if (await fetchServerMappings()) return;
+            } catch (error) {
+                log.warn('[CSVColumnMapping] server column brain failed, falling back:', error);
+            }
             try {
                 const token = await getToken();
                 if (!token) {
@@ -109,12 +174,10 @@ export function CSVColumnMappingScreen() {
             } catch (error) {
                 log.error('[CSVColumnMapping] AI mapping failed:', error);
                 fallbackToBasicMatching();
-            } finally {
-                setIsLoadingAI(false);
             }
         };
 
-        fetchAIMappings();
+        fetchAIMappings().finally(() => setIsLoadingAI(false));
     }, [csvHeaders]);
 
     const fallbackToBasicMatching = () => {
@@ -145,11 +208,7 @@ export function CSVColumnMappingScreen() {
             .map(f => f.label);
 
         if (missingRequired.length > 0) {
-            Alert.alert(
-                'Missing Required Fields',
-                `Please map the following required fields:\n\n• ${missingRequired.join('\n• ')}`,
-                [{ text: 'OK' }]
-            );
+            showError('Missing fields', `Map ${missingRequired.join(', ')} first.`, 'warning');
             return;
         }
 
@@ -190,7 +249,7 @@ export function CSVColumnMappingScreen() {
                 // 'csv-import' magic-string path drove the client matching deck,
                 // which is gone; surface the error instead of silently degrading.
                 log.error('[CSVColumnMapping] Failed to create CSV connection:', insertError);
-                Alert.alert('Error', 'Could not start the import. Please try again.');
+                showError('Import failed', 'Could not start the import. Try again.');
                 return;
             }
 
@@ -214,7 +273,7 @@ export function CSVColumnMappingScreen() {
                 // auth-state problem, roll back the orphan, and ask for re-auth.
                 await rollbackConnection();
                 log.warn('[CSVColumnMapping] Missing Supabase JWT for import normalize');
-                Alert.alert('Session expired', 'Please sign in again and retry the import.');
+                showError('Session expired', 'Sign in again to import.');
                 return;
             }
 
@@ -222,20 +281,28 @@ export function CSVColumnMappingScreen() {
             // /imports/normalize persists mappingSuggestions on the connection, so
             // the sync inbox (GET /resolution) shows the auto-linked / create /
             // needs-attention buckets for this CSV exactly like a connected
-            // platform — no client matching brain, no MappingReview deck.
-            // Normalize the base so a deployment whose API_BASE_URL already ends in
-            // /api doesn't compose /api/api/… (matches ConnectedPlatformItem et al).
-            const trimmedBase = API_BASE_URL.replace(/\/$/, '');
-            const apiBase = trimmedBase.endsWith('/api') ? trimmedBase : `${trimmedBase}/api`;
-            const normRes = await fetch(`${apiBase}/sync/imports/normalize`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    connectionId: newConnection.Id,
-                    platformType: 'csv',
-                    items: transformedData,
-                }),
-            });
+            // platform — no client matching brain, no MappingReview deck. The
+            // server also auto-commits the certain buckets for CSV; a failed
+            // persist is a 5xx now (no more silent-200 lost imports).
+            //
+            // A THROWN fetch (network drop, timeout) must clean up the orphan
+            // pseudo-connection exactly like a non-2xx response, so the call is
+            // wrapped — either failure path rolls back before surfacing.
+            let normRes: Response;
+            try {
+                normRes = await fetch(`${API_BASE}/sync/imports/normalize`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        connectionId: newConnection.Id,
+                        platformType: 'csv',
+                        items: transformedData,
+                    }),
+                });
+            } catch (fetchError) {
+                await rollbackConnection();
+                throw fetchError;
+            }
             if (!normRes.ok) {
                 await rollbackConnection();
                 throw new Error(`Import normalize failed: ${normRes.status}`);
@@ -247,7 +314,7 @@ export function CSVColumnMappingScreen() {
             });
         } catch (error) {
             log.error('[CSVColumnMapping] Error processing data:', error);
-            Alert.alert('Error', 'Failed to process CSV data.');
+            showError('Import failed', 'Could not import the file. Try again.');
         } finally {
             setIsProcessing(false);
         }
@@ -305,11 +372,11 @@ export function CSVColumnMappingScreen() {
                     </View>
                 </View>
 
-                {/* AI Loading Indicator */}
+                {/* Auto-mapping indicator */}
                 {isLoadingAI && (
                     <View style={styles.aiLoadingBar}>
                         <ActivityIndicator size="small" color={BRAND_PRIMARY} />
-                        <Text style={styles.aiLoadingText}>AI is auto-mapping columns...</Text>
+                        <Text style={styles.aiLoadingText}>Mapping columns…</Text>
                     </View>
                 )}
 
@@ -426,6 +493,14 @@ export function CSVColumnMappingScreen() {
                     </View>
                 </View>
             </Modal>
+
+            <ErrorModal
+                visible={errorModal.visible}
+                type={errorModal.type}
+                title={errorModal.title}
+                message={errorModal.message}
+                onClose={() => setErrorModal(prev => ({ ...prev, visible: false }))}
+            />
         </View>
     );
 }

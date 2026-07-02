@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, RefreshControl } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -31,24 +31,47 @@ const SyncInboxScreen: React.FC = () => {
   const { connectionId, platformName } = route.params;
   const { result, loading, error, resolving, refresh, resolve } = useResolution(connectionId);
 
+  // Which card has its candidate picker open (multi-candidate items only).
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
+
   const onResolve = useCallback(
-    (item: SyncItem, choice: 'link' | 'create' | 'ignore') => {
-      let canonicalId: string | undefined;
-      if (choice === 'link') {
-        const candidates = item.candidates ?? [];
-        if (candidates.length === 0) return; // no target to link to
-        // `recommended` is a which-candidate hint, not an id.
-        canonicalId = (item.recommended === 'secondary' ? candidates[1]?.id : candidates[0]?.id) ?? candidates[0]?.id;
-      }
-      // Best-effort; the hook handles optimistic removal + rollback on failure.
-      resolve(item.platformId, choice, canonicalId).catch(() => {});
+    (item: SyncItem, choice: 'create' | 'ignore') => {
+      setPickerFor(null);
+      // Best-effort; the hook handles removal + rollback on failure.
+      resolve(item.platformId, choice).catch(() => {});
     },
     [resolve],
   );
 
+  // The backend validates canonicalId against the item's candidates, so a link
+  // always sends a REAL picked candidate id — never a positional guess.
+  const onLink = useCallback(
+    (item: SyncItem, canonicalId: string) => {
+      setPickerFor(null);
+      resolve(item.platformId, 'link', canonicalId).catch(() => {});
+    },
+    [resolve],
+  );
+
+  const onLinkPress = useCallback(
+    (item: SyncItem) => {
+      const candidates = item.candidates ?? [];
+      if (candidates.length === 0) return; // no target to link to
+      if (candidates.length === 1) {
+        onLink(item, candidates[0].id);
+        return;
+      }
+      // Several possible matches: open the per-candidate picker on this card.
+      setPickerFor((prev) => (prev === item.platformId ? null : item.platformId));
+    },
+    [onLink],
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: SyncItem }) => {
-      const hasCandidates = (item.candidates?.length ?? 0) > 0;
+      const candidates = item.candidates ?? [];
+      const hasCandidates = candidates.length > 0;
+      const pickerOpen = pickerFor === item.platformId && candidates.length > 1;
       const name = item.title || item.sku || item.platformId;
       // The hook tracks a single in-flight resolve and rolls failures back with a
       // full refresh, so disable every row's actions (not just this one) while any
@@ -56,56 +79,91 @@ const SyncInboxScreen: React.FC = () => {
       const busy = resolving !== null;
       return (
         <View style={styles.card}>
-          {item.imageUrl ? (
-            <Image source={{ uri: item.imageUrl }} style={styles.thumb} />
-          ) : (
-            <View style={[styles.thumb, styles.thumbPlaceholder]}>
-              <Icon name="package-variant-closed" size={20} color="#9ca3af" />
+          <View style={styles.cardRow}>
+            {item.imageUrl ? (
+              <Image source={{ uri: item.imageUrl }} style={styles.thumb} />
+            ) : (
+              <View style={[styles.thumb, styles.thumbPlaceholder]}>
+                <Icon name="package-variant-closed" size={20} color="#9ca3af" />
+              </View>
+            )}
+            <View style={styles.cardBody}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {item.title || item.sku || item.platformId}
+              </Text>
+              <Text style={styles.cardReason} numberOfLines={1}>
+                {item.attention ? REASON_LABEL[item.attention] : 'Needs a look'}
+              </Text>
             </View>
-          )}
-          <View style={styles.cardBody}>
-            <Text style={styles.cardTitle} numberOfLines={1}>
-              {item.title || item.sku || item.platformId}
-            </Text>
-            <Text style={styles.cardReason} numberOfLines={1}>
-              {item.attention ? REASON_LABEL[item.attention] : 'Needs a look'}
-            </Text>
-          </View>
-          <View style={styles.actions}>
-            {hasCandidates && (
+            <View style={styles.actions}>
+              {hasCandidates && (
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.linkBtn]}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    candidates.length > 1 ? `Choose a match for ${name}` : `Link ${name}`
+                  }
+                  onPress={() => onLinkPress(item)}
+                >
+                  <Icon name="link-variant" size={16} color="#fff" />
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
-                style={[styles.actionBtn, styles.linkBtn]}
+                style={[styles.actionBtn, styles.newBtn]}
                 disabled={busy}
                 accessibilityRole="button"
-                accessibilityLabel={`Link ${name}`}
-                onPress={() => onResolve(item, 'link')}
+                accessibilityLabel={`Create new item for ${name}`}
+                onPress={() => onResolve(item, 'create')}
               >
-                <Icon name="link-variant" size={16} color="#fff" />
+                <Icon name="plus" size={16} color="#2563eb" />
               </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.newBtn]}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel={`Create new item for ${name}`}
-              onPress={() => onResolve(item, 'create')}
-            >
-              <Icon name="plus" size={16} color="#2563eb" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.ignoreBtn]}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel={`Ignore ${name}`}
-              onPress={() => onResolve(item, 'ignore')}
-            >
-              <Icon name="close" size={16} color="#6b7280" />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.ignoreBtn]}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={`Ignore ${name}`}
+                onPress={() => onResolve(item, 'ignore')}
+              >
+                <Icon name="close" size={16} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
           </View>
+          {pickerOpen &&
+            candidates.map((c) => (
+              <View key={c.id} style={styles.candidateRow}>
+                {c.imageUrl ? (
+                  <Image source={{ uri: c.imageUrl }} style={styles.candidateThumb} />
+                ) : (
+                  <View style={[styles.candidateThumb, styles.thumbPlaceholder]}>
+                    <Icon name="package-variant-closed" size={14} color="#9ca3af" />
+                  </View>
+                )}
+                <View style={styles.cardBody}>
+                  <Text style={styles.candidateTitle} numberOfLines={1}>
+                    {c.title || c.id}
+                  </Text>
+                  {c.sku ? (
+                    <Text style={styles.candidateSku} numberOfLines={1}>
+                      {c.sku}
+                    </Text>
+                  ) : null}
+                </View>
+                <TouchableOpacity
+                  style={styles.candidateLinkBtn}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Link ${name} to ${c.title || c.sku || 'this item'}`}
+                  onPress={() => onLink(item, c.id)}
+                >
+                  <Text style={styles.candidateLinkText}>Link</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
         </View>
       );
     },
-    [resolving, onResolve],
+    [resolving, pickerFor, onResolve, onLink, onLinkPress],
   );
 
   const needsAttention = result?.needsAttention ?? [];
@@ -125,8 +183,10 @@ const SyncInboxScreen: React.FC = () => {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{platformName || 'Sync'} inbox</Text>
           {summary && (
+            // Counts only — these are resolver decisions, not commit receipts.
+            // The rows-backed summary can't say what has finished importing yet.
             <Text style={styles.headerSub}>
-              {summary.autoLinked} linked · {summary.autoCreated} created automatically
+              {summary.autoLinked} linked · {summary.autoCreated} new
             </Text>
           )}
         </View>
@@ -144,9 +204,21 @@ const SyncInboxScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
       ) : needsAttention.length === 0 ? (
+        // total === 0 → the scan hasn't produced anything yet (the hook is still
+        // polling): claim nothing. Otherwise every item has a decision — but the
+        // summary doesn't report commit state, so say "All set", not "syncing".
         <View style={styles.center}>
-          <Icon name="check-circle-outline" size={40} color="#16a34a" />
-          <Text style={styles.emptyText}>All set — everything is syncing.</Text>
+          {(summary?.total ?? 0) === 0 ? (
+            <>
+              <ActivityIndicator />
+              <Text style={styles.emptyText}>Syncing…</Text>
+            </>
+          ) : (
+            <>
+              <Icon name="check-circle-outline" size={40} color="#16a34a" />
+              <Text style={styles.emptyText}>All set</Text>
+            </>
+          )}
         </View>
       ) : (
         <FlatList
@@ -177,7 +249,8 @@ const styles = StyleSheet.create({
   retryText: { color: '#111827', fontWeight: '500' },
   list: { padding: 12 },
   listHeader: { fontSize: 13, color: '#6b7280', marginBottom: 8 },
-  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fffbeb', borderColor: '#fde68a', borderWidth: 1, borderRadius: 12, padding: 10, marginBottom: 8 },
+  card: { backgroundColor: '#fffbeb', borderColor: '#fde68a', borderWidth: 1, borderRadius: 12, padding: 10, marginBottom: 8 },
+  cardRow: { flexDirection: 'row', alignItems: 'center' },
   thumb: { width: 44, height: 44, borderRadius: 8, marginRight: 10 },
   thumbPlaceholder: { backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
   cardBody: { flex: 1, minWidth: 0 },
@@ -188,6 +261,12 @@ const styles = StyleSheet.create({
   linkBtn: { backgroundColor: '#2563eb' },
   newBtn: { backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe' },
   ignoreBtn: { backgroundColor: '#f3f4f6' },
+  candidateRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#fde68a' },
+  candidateThumb: { width: 32, height: 32, borderRadius: 6, marginRight: 10 },
+  candidateTitle: { fontSize: 13, fontWeight: '500', color: '#111827' },
+  candidateSku: { fontSize: 11, color: '#6b7280', marginTop: 1 },
+  candidateLinkBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: '#2563eb', marginLeft: 8 },
+  candidateLinkText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 });
 
 export default SyncInboxScreen;
