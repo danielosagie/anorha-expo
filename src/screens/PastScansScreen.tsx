@@ -246,7 +246,13 @@ const PastScansScreen = () => {
           : Array.isArray(data?.data)
             ? data.data
             : [];
-      setDraftScans(raw.map((d: any) => ({ ...d, id: d.Id ?? d.id })));
+      // Hide empty drafts (no scanned items) so junk rows from abandoned/interrupted
+      // scans don't clutter the list.
+      const nonEmpty = raw.filter((d: any) => {
+        const items = d?.ScannedItems ?? d?.scannedItems ?? [];
+        return Array.isArray(items) && items.length > 0;
+      });
+      setDraftScans(nonEmpty.map((d: any) => ({ ...d, id: d.Id ?? d.id })));
     } catch (err: any) {
       setError(err.message);
     } finally {

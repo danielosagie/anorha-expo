@@ -1,7 +1,7 @@
 // AddDetailsSheet — "Wrong item / Add details" as a camera-area sheet (Cal-AI style).
 //
 // Reached from the preview's "Wrong item?" link or a cart row's "Add details" pill.
-// Dark overlay that reads as an extension of the capture screen: the item's photo
+// Light sheet that matches the match-preview / cart surfaces: the item's photo
 // strip up top (remove badges + add tile, like the live top photo bar), a headline
 // question, a borderless description input with the keyboard already up, plain
 // Capture/Import rows, and one Continue button that re-runs the search. Rendered
@@ -23,17 +23,19 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
+// Light palette — matches the match-preview / cart surfaces (bg #F2F2F7, white cards,
+// ink text #0A0A0B, muted #8E8E93, one green accent). Was a dark camera-extension sheet.
 const COLORS = {
-  black: '#000000',
-  panel: '#2C2C30',
-  tileBorder: 'rgba(255,255,255,0.18)',
-  text: '#FFFFFF',
-  placeholder: 'rgba(235,235,245,0.45)',
-  label: 'rgba(235,235,245,0.6)',
-  chipBg: 'rgba(118,118,128,0.32)',
-  removeBadge: '#FF5A3C',
-  continueIdle: '#6B6B72',
-  green: '#93C822',
+  black: '#F2F2F7',        // page ground behind the sheet
+  panel: '#FFFFFF',        // sheet card
+  tileBorder: '#D1D1D6',   // dashed add-tile border
+  text: '#0A0A0B',         // primary / headline text
+  placeholder: 'rgba(60,60,67,0.35)',  // input placeholder
+  label: '#8E8E93',        // muted rows, icons, reason
+  chipBg: 'rgba(118,118,128,0.14)',    // "Preview" chip fill
+  removeBadge: '#FF3B30',  // photo-remove badge (white minus on red)
+  continueIdle: '#E5E5EA', // inactive Continue button
+  green: '#93C822',        // active Continue ("Search again")
 };
 
 export interface AddDetailsSheetProps {
@@ -72,7 +74,7 @@ export const AddDetailsSheet: React.FC<AddDetailsSheetProps> = ({
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.black} />
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.black} />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {/* Photo strip — mirrors the capture screen's top bar so this reads as
             "the camera area opened up", not a separate page. */}
@@ -110,7 +112,7 @@ export const AddDetailsSheet: React.FC<AddDetailsSheetProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* Dark panel */}
+        {/* Card panel */}
         <View style={styles.panel}>
           <View style={styles.chipRow}>
             <View style={styles.previewChip}>
@@ -188,7 +190,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: COLORS.tileBorder,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(0,0,0,0.03)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -200,7 +202,7 @@ const styles = StyleSheet.create({
     width: TILE,
     height: TILE,
     borderRadius: 14,
-    backgroundColor: '#1C1C1E',
+    backgroundColor: '#E5E5EA',
   },
   removeBadge: {
     position: 'absolute',
@@ -217,7 +219,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(118,118,128,0.32)',
+    backgroundColor: 'rgba(118,118,128,0.14)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 16,
@@ -306,7 +308,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.green,
   },
   continueText: {
-    color: '#FFFFFF',
+    color: '#0A0A0B',
     fontSize: 17,
     fontWeight: '700',
   },

@@ -872,7 +872,7 @@ export const BulkItemsSheet: React.FC<{
                             {statusSubtitle ? (
                               <View style={styles.cartSubRow}>
                                 {loadingState?.isLoading ? (
-                                  <UnicodeSpinner spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition} color="#93C822" size={11} />
+                                  <UnicodeSpinner spinner={(spinners.helix || spinners.dots) as UnicodeSpinnerDefinition} color="#93C822" size={11} />
                                 ) : (
                                   <View style={[styles.cartStatusDot, { backgroundColor: loadingState?.error ? '#F87171' : isGenerated ? '#93C822' : isLocalInventoryMatch ? '#60A5FA' : confirmedMatch ? '#93C822' : '#94A3B8' }]} />
                                 )}
@@ -1061,7 +1061,7 @@ export const BulkItemsSheet: React.FC<{
             >
               {hasLoadingItems && (
                 <UnicodeSpinner
-                  spinner={(spinners.braillewave || spinners.dots) as UnicodeSpinnerDefinition}
+                  spinner={(spinners.helix || spinners.dots) as UnicodeSpinnerDefinition}
                   color="#FFFFFF"
                   size={13}
                   style={{ marginRight: 8 }}
