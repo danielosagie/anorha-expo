@@ -135,12 +135,6 @@ export const ROUTES: ExportRoute[] = [
     load: () => import('../DeleteAccountInfoScreen') },
 
   // ---------- Import ----------
-  { key: 'import-overview', title: 'Import overview', group: 'Import', routeName: 'ImportOverview',
-    params: { connectionId: 'conn_mock', platformName: 'Shopify' },
-    load: () => import('../ImportOverviewScreen') },
-  { key: 'mapping-review', title: 'Mapping review', group: 'Import', routeName: 'MappingReview',
-    params: { connectionId: 'conn_mock', platformName: 'Shopify' },
-    load: () => import('../MappingReviewScreen') },
   { key: 'csv-mapping', title: 'CSV column mapping', group: 'Import', routeName: 'CSVColumnMapping',
     params: { connectionName: 'My CSV Import', csvHeaders: ['Title', 'SKU', 'Price', 'Quantity'], sampleRow: { Title: 'Nike Shoe', SKU: 'NIKE001', Price: '99.99', Quantity: '10' }, csvData: [ { Title: 'Nike Shoe', SKU: 'NIKE001', Price: '99.99', Quantity: '10' }, { Title: 'Adidas Shoe', SKU: 'ADIDAS001', Price: '89.99', Quantity: '15' } ] },
     load: () => import('../CSVColumnMappingScreen').then((m: any) => ({ default: m.default || m.CSVColumnMappingScreen })) },

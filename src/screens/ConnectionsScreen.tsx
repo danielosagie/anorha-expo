@@ -228,7 +228,7 @@ const ConnectionsScreen = () => {
                   style={[styles.row, i > 0 && styles.rowBorder]}
                   activeOpacity={0.7}
                   onPress={() =>
-                    navigation.navigate('ImportOverview', { connectionId: c.Id, platformName: c.PlatformType })
+                    navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType })
                   }
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />

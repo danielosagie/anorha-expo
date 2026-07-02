@@ -182,7 +182,7 @@ const SettingsScreen = () => {
                   style={[styles.platformRow, i > 0 && styles.platformRowBorder]}
                   activeOpacity={0.7}
                   onPress={() =>
-                    navigation.navigate('ImportOverview', {
+                    navigation.navigate('SyncInbox', {
                       connectionId: c.Id,
                       platformName: c.PlatformType,
                     })
