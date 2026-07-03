@@ -44,6 +44,7 @@ import ImportProgressBanner from '../components/ImportProgressBanner';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
+import ConnectPlatformsScreen from '../screens/ConnectPlatformsScreen';
 import PrivacySecurityScreen from '../screens/PrivacySecurityScreen';
 import AccountLoginScreen from '../screens/AccountLoginScreen';
 import PoolDetailScreen from '../screens/PoolDetailScreen';
@@ -175,6 +176,7 @@ export type AppStackParamList = {
   Profile: { refresh?: number };
   AccountSettings: { refresh?: number } | undefined;
   Connections: undefined;
+  ConnectPlatforms: undefined;
   PrivacySecurity: undefined;
   AccountLogin: undefined;
   PoolDetail: { poolId: string; name?: string; isPartnerPool?: boolean };
@@ -591,6 +593,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
         navigate('Profile') push this legacy screen over the tabs. */}
     <AppStackNav.Screen name="AccountSettings" component={sb(ProfileScreen)} />
     <AppStackNav.Screen name="Connections" component={sb(ConnectionsScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="ConnectPlatforms" component={sb(ConnectPlatformsScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="PrivacySecurity" component={sb(PrivacySecurityScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="AccountLogin" component={sb(AccountLoginScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="PoolDetail" component={sb(PoolDetailScreen)} options={{ headerShown: false }} />
