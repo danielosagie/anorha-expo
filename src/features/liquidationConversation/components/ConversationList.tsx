@@ -6,6 +6,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, withTiming } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StreamingMessageBubble } from './StreamingMessageBubble';
+import { SproutDisclaimer } from './SproutDisclaimer';
 import { TimestampRevealContext } from './timestampReveal';
 import ActivityTraySheet from './activity/ActivityTraySheet';
 import { useActivityTray } from './activity/useActivityTray';
@@ -165,6 +166,7 @@ export const ConversationList = ({
           paddingBottom: contentBottomInset ?? 18,
         }}
         ListHeaderComponent={ListHeaderComponent}
+        ListFooterComponent={messages.length ? <SproutDisclaimer /> : null}
         onLoad={() => {
           // FlashList finished its first real layout — make sure we're pinned to the
           // newest message (this fires after content is measured, so scrollToEnd lands).

@@ -69,6 +69,12 @@ export interface DashboardInsight {
   confidence?: 'high' | 'medium' | 'low';
   confidenceReasons?: string[];
   caveats?: string[];
+  // Ready-to-send task for the chat agent — tap fires it into a Sprout thread.
+  handoff?: {
+    prompt: string;
+    campaignId?: string;
+    label?: string;
+  };
   dataQuality?: {
     queriesRun?: number;
     searchesRun?: number;
@@ -203,6 +209,13 @@ const normalizeSingleInsight = (raw: any): DashboardInsight | null => {
       ? raw.caveats.filter((item: unknown) => typeof item === 'string')
       : undefined,
     dataQuality: raw?.dataQuality,
+    handoff: coerceText(raw?.handoff?.prompt)
+      ? {
+          prompt: coerceText(raw.handoff.prompt),
+          campaignId: coerceText(raw?.handoff?.campaignId) || undefined,
+          label: coerceText(raw?.handoff?.label) || undefined,
+        }
+      : undefined,
   };
 };
 

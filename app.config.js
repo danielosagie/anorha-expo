@@ -23,7 +23,7 @@ export default {
   orientation: "portrait",
   android: {
     package: "anorha.alpha",
-    versionCode: 7,
+    versionCode: 8,
     orientation: "portrait",
     permissions: [
       "android.permission.CAMERA",

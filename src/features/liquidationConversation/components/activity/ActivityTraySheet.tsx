@@ -13,14 +13,12 @@ import {
   Modal,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -44,7 +42,8 @@ import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
 import type { ActivityPayload, ConversationToolStep, ReportDocument, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import { activityGlyph, humanizeCadence, humanizeChannel, toolDoneLabel, toolStepIcon } from './humanizers';
-import { documentToMarkdown } from './documentExport';
+import { copyMarkdown, documentToMarkdown, saveMarkdownFile, shareMarkdown } from './documentExport';
+import { HorizontalFadeScroll } from '../HorizontalFadeScroll';
 
 const SCREEN_H = Dimensions.get('window').height;
 const DEFAULT_H = Math.round(SCREEN_H * 0.62);
@@ -81,6 +80,11 @@ export default function ActivityTraySheet({
   const [stack, setStack] = useState<TrayPage[]>([]);
   const [navForward, setNavForward] = useState(true);
   const [confirmUndo, setConfirmUndo] = useState(false);
+  // Document-viewer state, lifted here so the header's "···" menu can drive the
+  // Preview/Edit toggle and the Copy / Save / Share actions on the live draft.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [docMode, setDocMode] = useState<'preview' | 'code'>('preview');
+  const [docDraft, setDocDraft] = useState('');
   const height = useSharedValue(0);
 
   const rootTitle = payload?.title || 'Details';
@@ -97,13 +101,18 @@ export default function ActivityTraySheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  // Grow up + reset the stack whenever a fresh payload opens the tray.
+  // Grow up + reset the stack whenever a fresh payload opens the tray. A document opens
+  // near-full-height and reads like a document viewer, not a small tray.
   useEffect(() => {
     if (mounted) {
       setStack([{ kind: 'root', title: rootTitle }]);
       setConfirmUndo(false);
       setNavForward(true);
-      height.value = withSpring(DEFAULT_H, { damping: 24, stiffness: 240, mass: 0.7 });
+      setMenuOpen(false);
+      const doc = payload && payload.kind === 'document' ? payload.document : null;
+      setDocMode('preview');
+      setDocDraft(doc ? documentToMarkdown(doc) : '');
+      height.value = withSpring(doc ? EXPANDED_H : DEFAULT_H, { damping: 24, stiffness: 240, mass: 0.7 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, payload?.id]);
@@ -180,30 +189,59 @@ export default function ActivityTraySheet({
               </View>
             </GestureDetector>
 
-            {/* Morphing header: depth 1 = icon tile + title; depth 2 = back chevron + sub-title. */}
-            <View style={styles.header}>
-              <View style={styles.headerLeft}>
-                {depth > 1 ? (
-                  <TouchableOpacity style={styles.circleBtn} onPress={pop} hitSlop={HIT}>
-                    <Icon name="chevron-left" size={20} color={CHAT_COLORS.dim} />
-                  </TouchableOpacity>
-                ) : (
-                  <View style={[styles.tile, payload.status === 'failed' && styles.tileFail, payload.status === 'syncing' && styles.tileSync]}>
-                    <Icon
-                      name={activityGlyph(payload)}
-                      size={17}
-                      color={payload.status === 'failed' ? CHAT_COLORS.error : payload.status === 'syncing' ? CHAT_COLORS.amber : CHAT_COLORS.brandDeep}
-                    />
-                  </View>
-                )}
-                <Animated.Text key={top?.title} entering={FadeIn.duration(160)} style={styles.headerTitle} numberOfLines={1}>
-                  {top?.title}
-                </Animated.Text>
+            {/* A document gets a document-viewer header — close · centered title · "···"
+                menu (Preview / Edit · Copy / Save / Share). Everything else keeps the
+                morphing tray header: depth 1 = icon tile + title; depth 2 = back chevron. */}
+            {payload.kind === 'document' && depth === 1 ? (
+              <View style={styles.docHeader}>
+                <TouchableOpacity style={styles.circleBtn} onPress={onClose} hitSlop={HIT} accessibilityLabel="Close">
+                  <Icon name="close" size={18} color={CHAT_COLORS.dim} />
+                </TouchableOpacity>
+                <Text style={styles.docHeaderTitle} numberOfLines={1}>{payload.document.title || payload.title}</Text>
+                <TouchableOpacity style={styles.circleBtn} onPress={() => { Haptics.selectionAsync().catch(() => undefined); setMenuOpen(o => !o); }} hitSlop={HIT} accessibilityLabel="Document options">
+                  <Icon name="dots-horizontal" size={20} color={CHAT_COLORS.dim} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity style={styles.circleBtn} onPress={onClose} hitSlop={HIT}>
-                <Icon name="close" size={18} color={CHAT_COLORS.dim} />
-              </TouchableOpacity>
-            </View>
+            ) : (
+              <View style={styles.header}>
+                <View style={styles.headerLeft}>
+                  {depth > 1 ? (
+                    <TouchableOpacity style={styles.circleBtn} onPress={pop} hitSlop={HIT}>
+                      <Icon name="chevron-left" size={20} color={CHAT_COLORS.dim} />
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={[styles.tile, payload.status === 'failed' && styles.tileFail, payload.status === 'syncing' && styles.tileSync]}>
+                      <Icon
+                        name={activityGlyph(payload)}
+                        size={17}
+                        color={payload.status === 'failed' ? CHAT_COLORS.error : payload.status === 'syncing' ? CHAT_COLORS.amber : CHAT_COLORS.brandDeep}
+                      />
+                    </View>
+                  )}
+                  <Animated.Text key={top?.title} entering={FadeIn.duration(160)} style={styles.headerTitle} numberOfLines={1}>
+                    {top?.title}
+                  </Animated.Text>
+                </View>
+                <TouchableOpacity style={styles.circleBtn} onPress={onClose} hitSlop={HIT}>
+                  <Icon name="close" size={18} color={CHAT_COLORS.dim} />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* The document "···" dropdown. Scrim closes it on outside tap. */}
+            {payload.kind === 'document' && menuOpen ? (
+              <>
+                <Pressable style={styles.menuScrim} onPress={() => setMenuOpen(false)} />
+                <View style={styles.menu}>
+                  <DocMenuItem icon="eye-outline" label="Preview" active={docMode === 'preview'} onPress={() => { setDocMode('preview'); setMenuOpen(false); }} />
+                  <DocMenuItem icon="text-box-edit-outline" label="Edit text" active={docMode === 'code'} onPress={() => { setDocMode('code'); setMenuOpen(false); }} />
+                  <View style={styles.menuDivider} />
+                  <DocMenuItem icon="content-copy" label="Copy" onPress={() => { setMenuOpen(false); Haptics.selectionAsync().catch(() => undefined); void copyMarkdown(docDraft); }} />
+                  <DocMenuItem icon="tray-arrow-down" label="Save as file" onPress={() => { setMenuOpen(false); void saveMarkdownFile(payload.document.title, docDraft); }} />
+                  <DocMenuItem icon="share-variant" label="Share" onPress={() => { setMenuOpen(false); void shareMarkdown(payload.document.title, docDraft); }} />
+                </View>
+              </>
+            ) : null}
 
             {/* Page body — slides horizontally on push/pop. */}
             <Animated.View
@@ -226,6 +264,9 @@ export default function ActivityTraySheet({
                   onOpenItem={openItem}
                   onRevise={onReviseDocument}
                   onRequestClose={onClose}
+                  docMode={docMode}
+                  docDraft={docDraft}
+                  onChangeDocDraft={setDocDraft}
                 />
               </ScrollView>
             </Animated.View>
@@ -268,6 +309,9 @@ function PageBody({
   onOpenItem,
   onRevise,
   onRequestClose,
+  docMode,
+  docDraft,
+  onChangeDocDraft,
 }: {
   page: TrayPage;
   payload: ActivityPayload;
@@ -277,6 +321,9 @@ function PageBody({
   onOpenItem: (productId?: string | null) => void;
   onRevise?: (documentId: string, title: string, note: string) => void;
   onRequestClose?: () => void;
+  docMode: 'preview' | 'code';
+  docDraft: string;
+  onChangeDocDraft: (v: string) => void;
 }) {
   if (page.kind === 'evidence') {
     const evidence = 'evidence' in payload ? payload.evidence : undefined;
@@ -390,7 +437,16 @@ function PageBody({
 
   // root
   if (payload.kind === 'document') {
-    return <DocumentPage document={payload.document} onRevise={onRevise} onRequestClose={onRequestClose} />;
+    return (
+      <DocumentPage
+        document={payload.document}
+        mode={docMode}
+        draft={docDraft}
+        onChangeDraft={onChangeDocDraft}
+        onRevise={onRevise}
+        onRequestClose={onRequestClose}
+      />
+    );
   }
   if (payload.kind === 'value-change') {
     const changes = payload.changes ?? [];
@@ -572,38 +628,29 @@ function ChangeDetailBody({
   );
 }
 
-// ── Document page: the full report as a business sheet. Renders prose (markdown),
-// tables, and metric tiles; an edit toggle swaps to a raw-markdown editor you can
-// copy or share; "Ask Sprout to revise" sends your note back to Sprout. ──
+// ── Document page: the full report as a business sheet. Preview renders prose
+// (markdown), tables, and metric tiles; "Edit text" (from the header menu) swaps to a
+// raw-markdown editor. Copy / Save / Share live in the header menu; "Ask Sprout to
+// revise" sends your note back to Sprout. ──
 
 function DocumentPage({
   document,
+  mode,
+  draft,
+  onChangeDraft,
   onRevise,
   onRequestClose,
 }: {
   document: ReportDocument;
+  mode: 'preview' | 'code';
+  draft: string;
+  onChangeDraft: (v: string) => void;
   onRevise?: (documentId: string, title: string, note: string) => void;
   onRequestClose?: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(() => documentToMarkdown(document));
   const [reviseOpen, setReviseOpen] = useState(false);
   const [note, setNote] = useState('');
-  const [copied, setCopied] = useState(false);
 
-  const doCopy = async () => {
-    try {
-      await Clipboard.setStringAsync(draft);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-      Haptics.selectionAsync().catch(() => undefined);
-    } catch {
-      /* clipboard can fail silently */
-    }
-  };
-  const doShare = () => {
-    Share.share({ title: document.title, message: draft }).catch(() => undefined);
-  };
   const submitRevise = () => {
     const n = note.trim();
     if (!n) return;
@@ -617,12 +664,12 @@ function DocumentPage({
 
   return (
     <View style={{ gap: 14 }}>
-      {document.summary ? <Text style={styles.docSummary}>{document.summary}</Text> : null}
+      {mode === 'preview' && document.summary ? <Text style={styles.docSummary}>{document.summary}</Text> : null}
 
-      {editing ? (
+      {mode === 'code' ? (
         <TextInput
           value={draft}
-          onChangeText={setDraft}
+          onChangeText={onChangeDraft}
           multiline
           style={styles.docEditor}
           textAlignVertical="top"
@@ -637,21 +684,6 @@ function DocumentPage({
           {!sections.length ? <EmptyNote text="This report has no sections yet." /> : null}
         </View>
       )}
-
-      <View style={styles.docActions}>
-        <TouchableOpacity style={styles.docActionBtn} onPress={() => setEditing((e) => !e)} activeOpacity={0.8}>
-          <Icon name={editing ? 'check' : 'pencil-outline'} size={16} color={CHAT_COLORS.brandDeep} />
-          <Text style={styles.docActionText}>{editing ? 'Done' : 'Edit'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.docActionBtn} onPress={doCopy} activeOpacity={0.8}>
-          <Icon name={copied ? 'check' : 'content-copy'} size={16} color={CHAT_COLORS.brandDeep} />
-          <Text style={styles.docActionText}>{copied ? 'Copied' : 'Copy'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.docActionBtn} onPress={doShare} activeOpacity={0.8}>
-          <Icon name="share-variant" size={16} color={CHAT_COLORS.brandDeep} />
-          <Text style={styles.docActionText}>Share</Text>
-        </TouchableOpacity>
-      </View>
 
       {onRevise ? (
         reviseOpen ? (
@@ -690,6 +722,17 @@ function DocumentPage({
   );
 }
 
+// One row in the document "···" dropdown. `active` marks the current view (Preview / Edit).
+function DocMenuItem({ icon, label, active, onPress }: { icon: string; label: string; active?: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.menuItem} activeOpacity={0.6} onPress={onPress}>
+      <Icon name={icon} size={18} color={active ? CHAT_COLORS.brandDeep : CHAT_COLORS.inkSoft} />
+      <Text style={[styles.menuItemText, active && styles.menuItemTextActive]}>{label}</Text>
+      {active ? <Icon name="check" size={16} color={CHAT_COLORS.brandDeep} style={{ marginLeft: 'auto' }} /> : null}
+    </TouchableOpacity>
+  );
+}
+
 function DocumentSectionView({ section }: { section: ReportDocument['sections'][number] }) {
   return (
     <View style={{ gap: 8 }}>
@@ -709,22 +752,26 @@ function DocumentSectionView({ section }: { section: ReportDocument['sections'][
         </View>
       ) : null}
       {section.kind === 'table' ? (
-        <View style={styles.docTable}>
-          {section.columns.length ? (
-            <View style={[styles.docTableRow, styles.docTableHead]}>
-              {section.columns.map((c, i) => (
-                <Text key={i} style={[styles.docTableCell, styles.docTableHeadCell]} numberOfLines={2}>{c}</Text>
-              ))}
-            </View>
-          ) : null}
-          {section.rows.map((row, ri) => (
-            <View key={ri} style={[styles.docTableRow, ri % 2 === 1 && styles.docTableRowAlt]}>
-              {row.map((cell, ci) => (
-                <Text key={ci} style={styles.docTableCell} numberOfLines={3}>{cell}</Text>
-              ))}
-            </View>
-          ))}
-        </View>
+        // Real column widths (first column wider for row labels) so a table with many
+        // columns extends past the screen and scrolls, with a fade marking there's more.
+        <HorizontalFadeScroll fadeColor={CHAT_COLORS.white} style={styles.docTableScroll}>
+          <View style={styles.docTable}>
+            {section.columns.length ? (
+              <View style={[styles.docTableRow, styles.docTableHead]}>
+                {section.columns.map((c, i) => (
+                  <Text key={i} style={[styles.docTableCell, i === 0 && styles.docTableCellFirst, styles.docTableHeadCell]} numberOfLines={2}>{c}</Text>
+                ))}
+              </View>
+            ) : null}
+            {section.rows.map((row, ri) => (
+              <View key={ri} style={[styles.docTableRow, ri % 2 === 1 && styles.docTableRowAlt]}>
+                {row.map((cell, ci) => (
+                  <Text key={ci} style={[styles.docTableCell, ci === 0 && styles.docTableCellFirst]} numberOfLines={3}>{cell}</Text>
+                ))}
+              </View>
+            ))}
+          </View>
+        </HorizontalFadeScroll>
       ) : null}
     </View>
   );
@@ -753,7 +800,7 @@ function Footer({
   onOpenItem: (productId?: string | null) => void;
   onRoutineAction: (action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
 }) {
-  // The document page carries its own inline actions (Copy / Share / Revise).
+  // The document's actions live in its header "···" menu + inline "Ask Sprout to revise".
   if (payload.kind === 'document') return null;
   const pad = { paddingBottom: insetBottom };
 
@@ -1092,17 +1139,39 @@ const styles = StyleSheet.create({
   },
   docHeading: { fontSize: 15, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
   docProse: { fontSize: 14.5, lineHeight: 22, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.regular },
-  docActions: { flexDirection: 'row', gap: 8, marginTop: 2 },
-  docActionBtn: {
+  // Document-viewer header (close · centered title · "···") + its dropdown menu.
+  docHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    backgroundColor: CHAT_COLORS.brandSoft,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 12,
+    gap: 10,
   },
-  docActionText: { fontSize: 12.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.brandDeep },
+  docHeaderTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink },
+  menuScrim: { ...StyleSheet.absoluteFillObject, zIndex: 40 },
+  menu: {
+    position: 'absolute',
+    top: 58,
+    right: 14,
+    minWidth: 190,
+    backgroundColor: CHAT_COLORS.white,
+    borderRadius: 16,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    zIndex: 50,
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 11 },
+  menuItemText: { fontSize: 14.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.ink },
+  menuItemTextActive: { color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.semibold },
+  menuDivider: { height: 1, backgroundColor: CHAT_COLORS.divider, marginVertical: 5, marginHorizontal: 10 },
   docRevise: {
     gap: 10,
     backgroundColor: CHAT_COLORS.surfaceAlt,
@@ -1141,12 +1210,13 @@ const styles = StyleSheet.create({
   docMetricValue: { fontSize: 18, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
   docMetricLabel: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
   docMetricSub: { fontSize: 10.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.faint },
-  docTable: { borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 10, overflow: 'hidden' },
+  docTableScroll: { marginHorizontal: -2 },
+  docTable: { borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 10, overflow: 'hidden', alignSelf: 'flex-start' },
   docTableRow: { flexDirection: 'row' },
   docTableHead: { backgroundColor: CHAT_COLORS.surface },
   docTableRowAlt: { backgroundColor: CHAT_COLORS.surfaceAlt },
   docTableCell: {
-    flex: 1,
+    width: 108,
     fontSize: 12,
     lineHeight: 17,
     color: CHAT_COLORS.ink,
@@ -1156,6 +1226,7 @@ const styles = StyleSheet.create({
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: '#ECEBE6',
   },
+  docTableCellFirst: { width: 148 },
   docTableHeadCell: { fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
   primaryBtn: {
     flex: 1,

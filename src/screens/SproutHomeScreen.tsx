@@ -69,7 +69,7 @@ const currency = (value: number): string => {
 };
 
 type BriefingChip = 'SOLD' | 'OFFER' | 'REPRICE' | 'ASK' | 'LISTED';
-type BriefingRowData = { id: string; label: string; chip: BriefingChip };
+type BriefingRowData = { id: string; label: string; chip: BriefingChip; status: string };
 
 const CHIP_STYLE: Record<BriefingChip, { bg: string; fg: string; text: string }> = {
   SOLD: { bg: '#EAF7CF', fg: '#4E6B12', text: 'SOLD' },
@@ -200,6 +200,45 @@ type SproutMessage = { time: string; lead: string; body: Seg[] };
 
 const seg = (text: string, strong = true): Seg => ({ text, strong });
 
+// ── Hero action card (Figma 4746:3753) — the one strong action under the ledger.
+//    Doc-chip tilted -7°, translucent black card, white Review-style pill on the right.
+const HeroActionCard = ({
+  title,
+  subtitle,
+  chip,
+  onPress,
+}: {
+  title: string;
+  subtitle?: string;
+  chip: string;
+  onPress: () => void;
+}) => (
+  <TouchableOpacity style={styles.reportCard} activeOpacity={0.85} onPress={onPress}>
+    <View style={styles.reportIconWrap}>
+      <LinearGradient
+        colors={['rgba(255,255,255,0.31)', 'rgba(153,153,153,0.31)']}
+        style={styles.reportIconChip}
+      >
+        <Icon name="file-document-outline" size={30} color="#FFFFFF" />
+      </LinearGradient>
+    </View>
+    <View style={styles.reportTextCol}>
+      <Text style={styles.reportTitle} numberOfLines={2}>{title}</Text>
+      {!!subtitle && <Text style={styles.reportSub} numberOfLines={1}>{subtitle}</Text>}
+    </View>
+    <View style={styles.reportChip}>
+      <Text style={styles.reportChipText}>{chip}</Text>
+    </View>
+  </TouchableOpacity>
+);
+
+// Demo ledger matching the mockup exactly.
+const DEMO_LEDGER: BriefingRowData[] = [
+  { id: 'd1', label: '1 Offer (+$124)', chip: 'SOLD', status: 'Sold' },
+  { id: 'd2', label: 'Repriced 40 items (-3%)', chip: 'REPRICE', status: 'Monitoring' },
+  { id: 'd3', label: 'Negotiation 2', chip: 'OFFER', status: 'Scheduled' },
+];
+
 const sproutMessageForHour = (hour: number, _name: string): SproutMessage => {
   // Evening recap (5pm–10pm)
   if (hour >= 17 && hour < 22) {
@@ -326,6 +365,18 @@ const SproutHomeScreen: React.FC = () => {
   const insightHeadline =
     rawHeadline && !/paused|unavailable|disabled|error/i.test(rawHeadline) ? rawHeadline : undefined;
 
+  // Insight handoff → chat. The backend scopes by StrategyId; mobile threads key on
+  // session ids, so match against the loaded campaigns and fall back to the newest —
+  // the prompt text itself carries the exact scope either way.
+  const handoffTarget = useMemo(() => {
+    const h = insight?.handoff;
+    if (!h?.prompt) return null;
+    const match = controller.campaigns.find((c) => c.id === h.campaignId);
+    const campaignId = match?.id || controller.campaigns[0]?.id;
+    if (!campaignId) return null;
+    return { campaignId, prompt: h.prompt, label: h.label || 'Dig in' };
+  }, [insight?.handoff, controller.campaigns]);
+
   // Live pulse: when the briefing is quiet, show Sprout's most recent real action
   // so "Sprout is watching" is backed by evidence instead of vibes.
   const lastAction = controller.campaignOverview?.recentActions?.[0];
@@ -386,12 +437,13 @@ const SproutHomeScreen: React.FC = () => {
     if (!o) return [];
     const rows: BriefingRowData[] = [];
     const s = o.summary24h;
-    if (s.sold > 0) rows.push({ id: 'sold', label: `${s.sold} ${s.sold === 1 ? 'Item' : 'Items'} Sold`, chip: 'SOLD' });
-    if (s.negotiating > 0) rows.push({ id: 'neg', label: `${s.negotiating} ${s.negotiating === 1 ? 'Offer' : 'Offers'} In`, chip: 'OFFER' });
-    if (s.repriced > 0) rows.push({ id: 'rep', label: `${s.repriced} Repriced`, chip: 'REPRICE' });
-    if (s.listed > 0) rows.push({ id: 'list', label: `${s.listed} ${s.listed === 1 ? 'Listing' : 'Listings'} Live`, chip: 'LISTED' });
+    const soldRevenue = Number(s.revenue || 0);
+    if (s.sold > 0) rows.push({ id: 'sold', label: `${s.sold} ${s.sold === 1 ? 'Sale' : 'Sales'}${soldRevenue > 0 ? ` (+$${Math.round(soldRevenue).toLocaleString()})` : ''}`, chip: 'SOLD', status: 'Sold' });
+    if (s.negotiating > 0) rows.push({ id: 'neg', label: `${s.negotiating} ${s.negotiating === 1 ? 'Offer' : 'Offers'} In`, chip: 'OFFER', status: 'Needs you' });
+    if (s.repriced > 0) rows.push({ id: 'rep', label: `Repriced ${s.repriced} ${s.repriced === 1 ? 'item' : 'items'}`, chip: 'REPRICE', status: 'Monitoring' });
+    if (s.listed > 0) rows.push({ id: 'list', label: `${s.listed} ${s.listed === 1 ? 'Listing' : 'Listings'} Live`, chip: 'LISTED', status: 'Live' });
     for (const item of o.needsInput.slice(0, 2)) {
-      rows.push({ id: `ask-${item.id}`, label: item.title, chip: 'ASK' });
+      rows.push({ id: `ask-${item.id}`, label: item.title, chip: 'ASK', status: 'Needs you' });
     }
     return rows.slice(0, 4);
   }, [controller.campaignOverview]);
@@ -596,6 +648,27 @@ const SproutHomeScreen: React.FC = () => {
   // Show Sprout's message when there's a real digest, when previewing, or when
   // there's overnight activity to recap. Otherwise the quiet line stands in.
   const showSproutMessage = DEMO || !!latestDigest || briefingRows.length > 0;
+  const ledgerRows = DEMO ? DEMO_LEDGER : briefingRows;
+
+  const reportTitle = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Morning Report';
+    if (h < 17) return 'Midday Report';
+    return 'Evening Report';
+  }, []);
+
+  // Review → hand the full report to Sprout: opens the thread and fires one
+  // create_report-shaped task; the document card comes back openable/shareable.
+  const openReport = useCallback(() => {
+    const campaignId = handoffTarget?.campaignId || controller.campaigns[0]?.id;
+    if (!campaignId) return;
+    tap();
+    navigation.navigate('CampaignThreadScreen', {
+      campaignId,
+      initialPrompt:
+        'Give me the full report: everything that happened since I last checked, what it means, and the next moves — as a report document.',
+    });
+  }, [handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
 
   return (
     <View style={[styles.screen, { backgroundColor: THEME.bodyBg }]}>
@@ -638,35 +711,45 @@ const SproutHomeScreen: React.FC = () => {
           </View>
 
           {showSproutMessage ? (
-            // Sprout's proactive message — morning/evening recap or check-in.
+            // Sprout's recap — the efficient ledger (Figma 4746:3113): count headline,
+            // event → status rows, then ONE strong action: the full report.
             <View style={styles.sproutMsg}>
-              <Text style={[styles.sproutLead, { color: THEME.strong }]}>{sproutMsg.lead}</Text>
-              {latestDigest && !DEMO ? (
-                // The scheduled digest IS Sprout's message — type it in only when new
-                // (first open / fresh digest); instant on remount so it never replays.
-                seenLoaded ? (
-                  <StreamingText
-                    text={latestDigest.text}
-                    shouldStream={shouldStreamHero}
-                    onComplete={markHeroSeen}
-                    speed={42}
-                    style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
-                  />
-                ) : null
-              ) : (
-                <View style={styles.briefingWrap}>
-                  {briefingDisplay(DEMO ? sproutMsg.body : briefingSegments).map((it, i) =>
-                    it.kind === 'chip' ? (
-                      <View key={i} style={[styles.briefingChip, { borderColor: THEME.faint }]}>
-                        <Text style={[styles.briefingChipText, { color: THEME.strong }]}>{it.text}</Text>
-                      </View>
-                    ) : (
-                      <Text key={i} style={[styles.briefingWord, { color: THEME.strong }]}>
-                        {it.text}
+              <View style={styles.leadRow}>
+                <Text style={[styles.sproutLead, { color: THEME.strong }]}>
+                  {ledgerRows.length > 0
+                    ? `${ledgerRows.length} ${ledgerRows.length === 1 ? 'thing' : 'things'} happened ${isNight ? 'while you slept' : 'while you were away'}`
+                    : sproutMsg.lead}
+                </Text>
+                <Icon name="bell-badge-outline" size={22} color={THEME.strong} />
+              </View>
+              {ledgerRows.length > 0 ? (
+                <View style={styles.ledger}>
+                  {ledgerRows.map((row) => (
+                    <View key={row.id} style={styles.ledgerRow}>
+                      <Text style={[styles.ledgerLabel, { color: THEME.strong }]} numberOfLines={1}>
+                        {row.label}
                       </Text>
-                    ),
-                  )}
+                      <Text style={[styles.ledgerStatus, { color: THEME.strong }]}>{row.status}</Text>
+                    </View>
+                  ))}
                 </View>
+              ) : latestDigest && !DEMO && seenLoaded ? (
+                // No ledger rows — the scheduled digest stands in, typed only when new.
+                <StreamingText
+                  text={latestDigest.text}
+                  shouldStream={shouldStreamHero}
+                  onComplete={markHeroSeen}
+                  speed={42}
+                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                />
+              ) : null}
+              {(DEMO || controller.campaigns.length > 0) && (
+                <HeroActionCard
+                  title={reportTitle}
+                  subtitle="Here's what you missed"
+                  chip="Review"
+                  onPress={openReport}
+                />
               )}
               {!DEMO && nextReportHours != null && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>
@@ -692,6 +775,21 @@ const SproutHomeScreen: React.FC = () => {
               ) : null}
               {!controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
+              )}
+              {/* Handoff: the insight ships a ready-to-send task for Sprout — one tap
+                  opens the campaign thread and fires it as a normal message. */}
+              {!controller.loading && handoffTarget && (
+                <HeroActionCard
+                  title={insightHeadline || 'Sprout has a move'}
+                  chip={handoffTarget.label}
+                  onPress={() => {
+                    tap();
+                    navigation.navigate('CampaignThreadScreen', {
+                      campaignId: handoffTarget.campaignId,
+                      initialPrompt: handoffTarget.prompt,
+                    });
+                  }}
+                />
               )}
             </>
           )}
@@ -1353,6 +1451,48 @@ const styles = StyleSheet.create({
   },
   briefingChipText: { fontSize: 16, fontFamily: FONT.semibold },
   nextReport: { fontSize: 13, marginTop: 8, fontFamily: FONT.semibold },
+
+  // ── Ledger + report card (Figma 4746:3113 hero) ──────────────────────────
+  leadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  ledger: { marginTop: 8, gap: 14 },
+  ledgerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  ledgerLabel: { fontSize: 18, lineHeight: 20, fontFamily: FONT.medium, flexShrink: 1, marginRight: 12 },
+  ledgerStatus: { fontSize: 18, lineHeight: 20, fontFamily: FONT.medium },
+  reportCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,0,0,0.25)',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingLeft: 14,
+    paddingRight: 12,
+    marginTop: 14,
+    gap: 12,
+  },
+  reportIconWrap: { transform: [{ rotate: '-7deg' }] },
+  reportIconChip: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 9,
+  },
+  reportTextCol: { flex: 1, gap: 3 },
+  reportTitle: { fontFamily: FONT.medium, fontSize: 16, lineHeight: 18, color: '#FFFFFF' },
+  reportSub: { fontFamily: FONT.medium, fontSize: 14, lineHeight: 16, color: '#F4F4F5' },
+  reportChip: {
+    backgroundColor: 'rgba(244,244,245,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.25)',
+    borderRadius: 20,
+    height: 32,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportChipText: { fontFamily: FONT.semibold, fontSize: 14, color: '#FFFFFF' },
   eventRows: { marginBottom: 14, gap: 10 },
   eventRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   eventLabel: { fontSize: 17, fontFamily: FONT.medium },

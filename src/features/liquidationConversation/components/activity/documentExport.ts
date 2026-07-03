@@ -1,6 +1,9 @@
-// documentExport — serialize an agent-authored report to Markdown, and copy/share it.
-// Markdown is the portable format; Share hands it to the OS sheet (Notes, Mail, etc.).
+// documentExport — serialize an agent-authored report to Markdown, and copy / share /
+// save it as a file. Markdown is the portable format; "Save as file" writes a .md and
+// hands it to the OS sheet (Files, Mail, Print → PDF, etc.); "Share" shares the text.
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { Share } from 'react-native';
 import type { DocumentSection, ReportDocument } from '../../types';
 
@@ -27,10 +30,38 @@ export function documentToMarkdown(doc: ReportDocument): string {
   return `${head}${body}\n`;
 }
 
-export async function copyDocument(doc: ReportDocument): Promise<void> {
-  await Clipboard.setStringAsync(documentToMarkdown(doc));
+// A filesystem-safe basename from the report title.
+function safeFileName(title: string): string {
+  const base = (title || 'report').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return base || 'report';
 }
 
-export async function shareDocument(doc: ReportDocument): Promise<void> {
-  await Share.share({ title: doc.title, message: documentToMarkdown(doc) });
+// These operate on the CURRENT markdown (which may include the seller's edits), so the
+// tray passes its live draft rather than re-deriving from the original document.
+export async function copyMarkdown(markdown: string): Promise<void> {
+  await Clipboard.setStringAsync(markdown);
+}
+
+export async function shareMarkdown(title: string, markdown: string): Promise<void> {
+  await Share.share({ title, message: markdown });
+}
+
+// Write the markdown to a .md file and present the OS sheet (Save to Files, Mail,
+// Print → Save as PDF, …). Falls back to a plain text share if file sharing is off.
+export async function saveMarkdownFile(title: string, markdown: string): Promise<void> {
+  try {
+    const uri = `${FileSystem.cacheDirectory}${safeFileName(title)}.md`;
+    await FileSystem.writeAsStringAsync(uri, markdown, { encoding: FileSystem.EncodingType.UTF8 });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, {
+        mimeType: 'text/markdown',
+        dialogTitle: title,
+        UTI: 'net.daringfireball.markdown',
+      });
+      return;
+    }
+  } catch {
+    /* fall through to a text share */
+  }
+  await Share.share({ title, message: markdown }).catch(() => undefined);
 }
