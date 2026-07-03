@@ -252,6 +252,17 @@ const BottomNav: React.FC<Props> = ({
               />
             ))}
           </View>
+          {/* See all platforms → full connect page (Shopify, Square, Clover,
+              eBay, Facebook + coming-soon). The sentinel is handled by the
+              picker overlay, which navigates instead of starting a connect. */}
+          <TouchableOpacity
+            style={styles.seeAllButton}
+            onPress={() => onStartConnect && onStartConnect('__see_all__')}
+          >
+            <Icon name="apps" size={20} color="#3F3F46" />
+            <Text style={styles.seeAllText}>See all platforms</Text>
+            <Icon name="chevron-right" size={20} color="#C4C8CE" style={{ marginLeft: 'auto' }} />
+          </TouchableOpacity>
           {/* Divider */}
           <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', marginVertical: 8 }}>
             <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
@@ -532,6 +543,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#374151',
+  },
+  seeAllButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 10,
+    marginTop: 4,
+  },
+  seeAllText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#18181B',
   },
   manualSafetyWrap: {
     width: '100%',
