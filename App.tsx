@@ -595,6 +595,12 @@ const App: React.FC = () => {
                 overlay.hide();
                 overlay.onStartConnect?.(platform);
               }}
+              // "See all platforms" → the full connect page. Wired here (root
+              // owns the nav ref); pickers without navigation skip the row.
+              onSeeAll={() => {
+                overlay.hide();
+                navigationRef.current?.navigate('AppStack', { screen: 'ConnectPlatforms' } as any);
+              }}
             />
           </View>
         </View>

@@ -34,6 +34,10 @@ type Props = {
   onBack?: () => void;
   onGeneratePress: () => void;
   onStartConnect?: (platform: string) => void;
+  /** "See all platforms" → the full connect page. The row only renders when a
+   *  host provides this — hosts without navigation simply don't get the row,
+   *  so the platform-key channel never carries sentinel values. */
+  onSeeAll?: () => void;
   style?: StyleProp<ViewStyle>;
   manualOverrideInput?: string;
   onManualOverrideChange?: (text: string) => void;
@@ -69,6 +73,7 @@ const BottomNav: React.FC<Props> = ({
   onBack,
   onGeneratePress,
   onStartConnect,
+  onSeeAll,
   style,
   totalItemsCount = 1,
   confirmedProduct = null,
@@ -252,6 +257,16 @@ const BottomNav: React.FC<Props> = ({
               />
             ))}
           </View>
+          {/* See all platforms → full connect page (Shopify, Square, Clover,
+              eBay, Facebook + coming-soon). Renders only when the host wires
+              onSeeAll — no sentinel through the platform-key channel. */}
+          {onSeeAll ? (
+            <TouchableOpacity style={styles.seeAllButton} onPress={onSeeAll}>
+              <Icon name="apps" size={20} color="#3F3F46" />
+              <Text style={styles.seeAllText}>See all platforms</Text>
+              <Icon name="chevron-right" size={20} color="#C4C8CE" style={{ marginLeft: 'auto' }} />
+            </TouchableOpacity>
+          ) : null}
           {/* Divider */}
           <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', marginVertical: 8 }}>
             <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
@@ -532,6 +547,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: '#374151',
+  },
+  seeAllButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 10,
+    marginTop: 4,
+  },
+  seeAllText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#18181B',
   },
   manualSafetyWrap: {
     width: '100%',
