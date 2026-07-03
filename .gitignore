@@ -1,5 +1,9 @@
 # ───────────────────────────── Dependencies ─────────────────────────────
 node_modules/
+# Also ignore a bare `node_modules` (no trailing slash) so a stray SYMLINK
+# named node_modules can't be tracked by `git add -A` (the dir-form pattern
+# above only matches a directory, not a symlink file).
+node_modules
 # package-lock.json is committed on purpose. EAS strips gitignored files from
 # its upload archive, so ignoring the lockfile made EAS fall back to yarn +
 # "latest" resolution — which silently pulled a Node-22-only transitive dep
