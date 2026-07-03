@@ -28,7 +28,7 @@ import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri } from '../features/cart/cartStore';
+import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import {
   View,
@@ -189,6 +189,22 @@ const labelScannedItems = (scannedItems: any[], matchContext: Record<string, any
     return title && title !== it?.title ? { ...it, title } : it;
   });
 
+// Only persist photos with a durable remote URL. A capture starts as a device-local
+// file:// path and is swapped to the uploaded Supabase URL asynchronously; the 800ms
+// draft autosave can fire BEFORE that swap lands. iOS purges Library/Caches and rotates
+// the app-container UUID, so a persisted file:// path is dead on reopen — that's the
+// "image is gone on the research page / in the scan draft" bug. Drop local-only photos
+// from the persisted payload; the autosave that re-fires when the upload swaps the URI
+// (bulkItems changes) then persists the real https URL. Live in-session state is untouched.
+const isDurableUrl = (uri: unknown): boolean => /^https?:\/\//i.test((uri ?? '').toString());
+
+const stripLocalOnlyPhotos = (scannedItems: any[]): any[] =>
+  (scannedItems || []).map((it) =>
+    it && Array.isArray(it.photos)
+      ? { ...it, photos: it.photos.filter((ph: any) => isDurableUrl(ph?.uri)) }
+      : it,
+  );
+
 const toQuickScanSessionBody = (p: {
   scannedItems: any[];
   matchContext: Record<string, any>;
@@ -197,7 +213,7 @@ const toQuickScanSessionBody = (p: {
   itemStageById?: Record<string, ItemStage>;
   processedItemIds?: string[];
 }) => ({
-  scannedItems: labelScannedItems(p.scannedItems, p.matchContext),
+  scannedItems: stripLocalOnlyPhotos(labelScannedItems(p.scannedItems, p.matchContext)),
   matchContext: writeQuickScanClientState(p.matchContext, {
     itemStageById: p.itemStageById,
     processedItemIds: p.processedItemIds,
@@ -658,6 +674,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setShowDeepSearchSheet(true);
           sheetTranslateY.value = withSpring(0, CART_SPRING);  // Fully visible, bottom aligned to screen
           sessionIdRef.current = session.Id ?? session.id ?? sessionIdParam;
+          if (sessionIdRef.current) void setActiveDraftSessionId(sessionIdRef.current);
           if (shelfUri) shelfPhotoUriForDraftRef.current = shelfUri;
         }
       } catch (e) {
@@ -668,6 +685,27 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     })();
     return () => { cancelled = true; };
   }, [sessionIdParam]);
+
+  // Reuse the cart's existing backend draft across remounts. The cart snapshot survives
+  // a remount but sessionIdRef doesn't, so without this each remount of a resumed cart
+  // POSTs a brand-new draft row for the same items (the sprawl). Seed the ref from the
+  // durable id before any save fires. An explicit resume (sessionIdParam) sets its own.
+  useEffect(() => {
+    if (sessionIdParam) return;
+    let cancelled = false;
+    (async () => {
+      const stored = await getActiveDraftSessionId();
+      if (!cancelled && stored && !sessionIdRef.current) sessionIdRef.current = stored;
+    })();
+    return () => { cancelled = true; };
+  }, [sessionIdParam]);
+
+  // Save a cart the moment it has ≥1 item — no matter what — so it's always resumable from
+  // any point; photos (once uploaded) and research fill in on later autosaves. The only
+  // thing we refuse to create is a row for a totally empty cart (0 items). Existing drafts
+  // always update (even down to 0 items), so removals persist too.
+  const draftHasItems = useCallback((payload: { scannedItems: any[] }): boolean =>
+    Array.isArray(payload.scannedItems) && payload.scannedItems.length > 0, []);
 
   // Save draft to backend (create or update)
   const ensureDraftSessionId = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[] }): Promise<string | null> => {
@@ -687,6 +725,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const newSessionId = data.Id ?? data.id ?? null;
       if (newSessionId) {
         sessionIdRef.current = newSessionId;
+        void setActiveDraftSessionId(newSessionId);
       }
       return newSessionId;
     })();
@@ -703,21 +742,37 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     try {
       const token = await ensureSupabaseJwt();
       const API_BASE = API_BASE_URL;
-      let sid = sessionIdRef.current;
-      if (!sid) {
-        sid = await ensureDraftSessionId(payload);
-      }
-      if (!sid) return;
-
-      await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sid}`, {
+      const putOnce = (sid: string) => fetch(`${API_BASE}/api/products/quick-scan-sessions/${sid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(toQuickScanSessionBody(payload)),
       });
+
+      let sid = sessionIdRef.current;
+      if (!sid) {
+        // Create the draft as soon as the cart has ≥1 item so nothing is ever lost; only a
+        // totally empty cart (0 items) is skipped.
+        if (!draftHasItems(payload)) return;
+        sid = await ensureDraftSessionId(payload);
+      }
+      if (!sid) return;
+
+      const res = await putOnce(sid);
+      // The row is gone (stale durable id, e.g. deleted in a cleanup) → drop it and recreate
+      // once, so a dead id never silently swallows saves. Only on 404 — a transient 5xx must
+      // NOT spawn a duplicate.
+      if (res.status === 404 && sessionIdRef.current === sid) {
+        sessionIdRef.current = null;
+        await clearActiveDraftSessionId();
+        if (draftHasItems(payload)) {
+          const fresh = await ensureDraftSessionId(payload);
+          if (fresh) await putOnce(fresh);
+        }
+      }
     } catch (e) {
       log.warn('[AddProduct] Save draft failed:', e);
     }
-  }, [ensureDraftSessionId]);
+  }, [ensureDraftSessionId, draftHasItems]);
 
   // UI state
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>(
@@ -1411,7 +1466,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       'Resume where you left off?',
       `You have ${n} item${n === 1 ? '' : 's'} in progress.`,
       [
-        { text: 'Start fresh', style: 'destructive', onPress: () => { resetCart(); void clearCartSnapshot(); setResumePrompt(null); setSnapshotArmed(true); } },
+        // "Start fresh" clears the current in-memory cart and its durable session id so the
+        // NEXT cart gets its own draft — the old draft is KEPT (resumable from Scan carts).
+        { text: 'Start fresh', style: 'destructive', onPress: () => { sessionIdRef.current = null; resetCart(); void clearCartSnapshot(); setResumePrompt(null); setSnapshotArmed(true); } },
         { text: 'Resume', onPress: () => { if (resumePrompt.source === 'snapshot') { void hydrateCartSnapshot(); } setResumePrompt(null); setSnapshotArmed(true); } },
       ],
       { cancelable: false },

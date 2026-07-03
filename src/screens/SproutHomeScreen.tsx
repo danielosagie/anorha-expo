@@ -20,6 +20,10 @@ import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Moon, Sun } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { StreamingText } from '../components/StreamingText';
+import { UpNextRow, type IconName } from '../components/quest/LobbyKit';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import type { CampaignSummary } from '../features/liquidationConversation/types';
@@ -344,6 +348,38 @@ const SproutHomeScreen: React.FC = () => {
     return hours > 0 && hours <= 12 ? hours : null;
   }, [latestDigest?.nextReportAt]);
 
+  const isNight = useIsNight();
+  // ── The hero "message" from Sprout — whatever's in the green box: the scheduled
+  //    digest, else the current insight, else the honest "watching" line. It types in
+  //    ONLY when genuinely new (first open, or a fresh message); on remount / navigation
+  //    back it renders instantly and never replays — exactly like a normal chat app.
+  const heroMessage = useMemo<{ id: string; text: string } | null>(() => {
+    if (DEMO) return null; // demo has its own scripted body
+    if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: latestDigest.text };
+    if (controller.loading) return null; // don't stream the transient "Catching you up…"
+    if (insightHeadline) return { id: `insight:${insightHeadline}`, text: insightHeadline };
+    return {
+      id: isNight ? 'quiet:night' : 'quiet:day',
+      text: isNight ? 'All quiet while you slept. Sprout is watching.' : 'All quiet so far. Sprout is watching.',
+    };
+  }, [DEMO, latestDigest, controller.loading, insightHeadline, isNight]);
+
+  const [seenLoaded, setSeenLoaded] = useState(false);
+  const [lastSeenMsgId, setLastSeenMsgId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem('sprout:lastSeenHeroMsgId')
+      .then((v) => { if (alive) { setLastSeenMsgId(v); setSeenLoaded(true); } })
+      .catch(() => { if (alive) setSeenLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+  const shouldStreamHero = seenLoaded && !!heroMessage && heroMessage.id !== lastSeenMsgId;
+  const markHeroSeen = useCallback(() => {
+    if (!heroMessage) return;
+    setLastSeenMsgId(heroMessage.id);
+    AsyncStorage.setItem('sprout:lastSeenHeroMsgId', heroMessage.id).catch(() => {});
+  }, [heroMessage?.id]);
+
   // ── "While you slept" briefing rows, derived from the active campaign overview
   const briefingRows = useMemo<BriefingRowData[]>(() => {
     const o = controller.campaignOverview;
@@ -547,7 +583,6 @@ const SproutHomeScreen: React.FC = () => {
   }, [adapter, controller, navigation]);
 
   const chartWidth = Dimensions.get('window').width;
-  const isNight = useIsNight();
   const THEME = isNight ? NIGHT_THEME : DAY_THEME;
   const briefingSegments = useMemo(() => briefingToSegments(briefingRows), [briefingRows]);
 
@@ -606,21 +641,33 @@ const SproutHomeScreen: React.FC = () => {
             // Sprout's proactive message — morning/evening recap or check-in.
             <View style={styles.sproutMsg}>
               <Text style={[styles.sproutLead, { color: THEME.strong }]}>{sproutMsg.lead}</Text>
-              <View style={styles.briefingWrap}>
-                {briefingDisplay(
-                  DEMO ? sproutMsg.body : latestDigest ? [seg(latestDigest.text)] : briefingSegments,
-                ).map((it, i) =>
-                  it.kind === 'chip' ? (
-                    <View key={i} style={[styles.briefingChip, { borderColor: THEME.faint }]}>
-                      <Text style={[styles.briefingChipText, { color: THEME.strong }]}>{it.text}</Text>
-                    </View>
-                  ) : (
-                    <Text key={i} style={[styles.briefingWord, { color: THEME.strong }]}>
-                      {it.text}
-                    </Text>
-                  ),
-                )}
-              </View>
+              {latestDigest && !DEMO ? (
+                // The scheduled digest IS Sprout's message — type it in only when new
+                // (first open / fresh digest); instant on remount so it never replays.
+                seenLoaded ? (
+                  <StreamingText
+                    text={latestDigest.text}
+                    shouldStream={shouldStreamHero}
+                    onComplete={markHeroSeen}
+                    speed={42}
+                    style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                  />
+                ) : null
+              ) : (
+                <View style={styles.briefingWrap}>
+                  {briefingDisplay(DEMO ? sproutMsg.body : briefingSegments).map((it, i) =>
+                    it.kind === 'chip' ? (
+                      <View key={i} style={[styles.briefingChip, { borderColor: THEME.faint }]}>
+                        <Text style={[styles.briefingChipText, { color: THEME.strong }]}>{it.text}</Text>
+                      </View>
+                    ) : (
+                      <Text key={i} style={[styles.briefingWord, { color: THEME.strong }]}>
+                        {it.text}
+                      </Text>
+                    ),
+                  )}
+                </View>
+              )}
               {!DEMO && nextReportHours != null && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>
                   Next report in {nextReportHours}h
@@ -629,19 +676,19 @@ const SproutHomeScreen: React.FC = () => {
             </View>
           ) : (
             <>
-              <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>
-                {controller.loading
-                  ? 'Catching you up…'
-                  : isNight
-                    ? 'All quiet while you slept. Sprout is watching.'
-                    : 'All quiet so far. Sprout is watching.'}
-              </Text>
-              {/* The periodic insight fills the quiet — a real recommendation,
-                  not filler. Falls back to the latest concrete action. */}
-              {!controller.loading && insightHeadline ? (
-                <Text style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}>
-                  {insightHeadline}
-                </Text>
+              {/* The quiet-state message (the periodic insight when there is one, else
+                  the honest "watching" line) types in on first open / when it's new,
+                  just like the digest and the chat. Instant on remount, never replays. */}
+              {controller.loading ? (
+                <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>Catching you up…</Text>
+              ) : seenLoaded && heroMessage ? (
+                <StreamingText
+                  text={heroMessage.text}
+                  shouldStream={shouldStreamHero}
+                  onComplete={markHeroSeen}
+                  speed={42}
+                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                />
               ) : null}
               {!controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
@@ -733,6 +780,9 @@ const SproutHomeScreen: React.FC = () => {
       >
         {/* ── BODY ─────────────────────────────────────────────────── */}
         <View style={styles.body}>
+          {/* No point filtering when there's nothing made yet — during onboarding the
+              setup feed is the whole focus. Bar appears once the first clearout exists. */}
+          {controller.campaigns.length > 0 && (
           <View style={styles.filterRow}>
             {FILTERS.map(f => {
               const active = f === activeFilter;
@@ -757,6 +807,7 @@ const SproutHomeScreen: React.FC = () => {
               );
             })}
           </View>
+          )}
 
           {controller.error ? (
             <View style={styles.errorBanner}>
@@ -785,57 +836,58 @@ const SproutHomeScreen: React.FC = () => {
                 <Text style={[styles.emptyBody, isNight && { color: 'rgba(244,244,238,0.6)' }, { textAlign: 'left', marginBottom: 12 }]}>
                   Three steps and Sprout takes it from there.
                 </Text>
-                {[
-                  {
-                    key: 'platform',
-                    label: 'Connect a platform',
-                    sub: 'Shopify, Square, eBay and more',
-                    done: (liveConnections?.length || 0) > 0,
-                    onPress: () => navigation.navigate('Connections'),
-                  },
-                  {
-                    key: 'items',
-                    label: 'Add your first items',
-                    sub: 'Snap a photo, Sprout finds the match',
-                    done: (productCount || 0) > 0,
-                    onPress: () => navigation.navigate('AddProduct'),
-                  },
-                  {
-                    key: 'clearout',
-                    label: 'Start a clearout',
-                    sub: 'Set a goal, Sprout lists and negotiates',
-                    done: false,
-                    onPress: openCreate,
-                  },
-                ].map((step, i) => (
-                  <TouchableOpacity
-                    key={step.key}
-                    style={[styles.setupRow, i > 0 && { borderTopWidth: 1, borderTopColor: isNight ? 'rgba(255,255,255,0.08)' : '#F1F1EE' }]}
-                    activeOpacity={0.75}
-                    onPress={step.onPress}
-                  >
-                    <View style={[styles.setupCheck, step.done && styles.setupCheckDone]}>
-                      {step.done ? (
-                        <Icon name="check" size={14} color="#FFFFFF" />
-                      ) : (
-                        <Text style={[styles.setupCheckNum, isNight && { color: 'rgba(244,244,238,0.7)' }]}>{i + 1}</Text>
-                      )}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.setupLabel,
-                          isNight && { color: '#F4F4EE' },
-                          step.done && { textDecorationLine: 'line-through', opacity: 0.55 },
-                        ]}
-                      >
-                        {step.label}
-                      </Text>
-                      <Text style={[styles.setupSub, isNight && { color: 'rgba(244,244,238,0.5)' }]}>{step.sub}</Text>
-                    </View>
-                    <Icon name="chevron-right" size={20} color={isNight ? 'rgba(244,244,238,0.4)' : '#C7C7CC'} />
-                  </TouchableOpacity>
-                ))}
+                {(() => {
+                  // Staged progression: the first incomplete step is "up next" (green),
+                  // earlier steps read done, later ones sit quiet — suggested one by one,
+                  // fading in as a soft stack. Nothing is truly locked (tap any to jump).
+                  const steps: Array<{ key: string; icon: IconName; label: string; sub: string; done: boolean; onPress: () => void }> = [
+                    {
+                      key: 'platform',
+                      icon: 'storefront-outline',
+                      label: 'Connect a platform',
+                      sub: 'Shopify, Square, eBay and more',
+                      done: (liveConnections?.length || 0) > 0,
+                      onPress: () => navigation.navigate('Connections'),
+                    },
+                    {
+                      key: 'items',
+                      icon: 'camera-outline',
+                      label: 'Add your first items',
+                      sub: 'Snap a photo, Sprout finds the match',
+                      done: (productCount || 0) > 0,
+                      onPress: () => navigation.navigate('AddProduct'),
+                    },
+                    {
+                      key: 'clearout',
+                      icon: 'rocket-launch-outline',
+                      label: 'Start a clearout',
+                      sub: 'Set a goal, Sprout lists and negotiates',
+                      done: false,
+                      onPress: openCreate,
+                    },
+                  ];
+                  const activeIdx = steps.findIndex((s) => !s.done);
+                  return steps.map((step, i) => {
+                    const state: 'done' | 'active' | 'locked' = step.done
+                      ? 'done'
+                      : i === activeIdx
+                        ? 'active'
+                        : 'locked';
+                    return (
+                      <Animated.View key={step.key} entering={FadeInDown.delay(i * 60).duration(360)}>
+                        <UpNextRow
+                          icon={step.icon}
+                          title={step.label}
+                          sub={step.sub}
+                          state={state}
+                          onPress={step.onPress}
+                          night={isNight}
+                          whiteActive
+                        />
+                      </Animated.View>
+                    );
+                  });
+                })()}
               </View>
             ) : (
               <View style={[styles.emptyCard, isNight && styles.emptyCardNight]}>
@@ -1370,15 +1422,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#22271C',
     borderColor: '#333333',
   },
-  setupRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
-  setupCheck: {
-    width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(147,200,34,0.16)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  setupCheckDone: { backgroundColor: BRAND },
-  setupCheckNum: { fontSize: 13, color: '#43631A', fontFamily: FONT.bold },
-  setupLabel: { fontSize: 15, color: '#18181B', fontFamily: FONT.semibold },
-  setupSub: { fontSize: 12, color: '#9CA3AF', fontFamily: FONT.regular, marginTop: 1 },
   emptyIconWrap: {
     width: 56,
     height: 56,

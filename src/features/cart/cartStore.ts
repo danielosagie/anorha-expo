@@ -34,6 +34,7 @@ const log = createLogger('cartStore');
 
 
 const STORAGE_KEY = 'cart:v1';
+const SESSION_KEY = 'cart:v1:sessionId'; // backend quick-scan-session id, tied to the snapshot's lifecycle
 const newId = () => uuidv4();
 const now = () => Date.now();
 
@@ -776,8 +777,25 @@ export async function peekCartSnapshot(): Promise<{ count: number } | null> {
   }
 }
 
-/** Drop the saved snapshot (used by "Start fresh"). */
+/** Drop the saved snapshot AND its backend draft-session id (used by "Start fresh"). */
 export async function clearCartSnapshot(): Promise<void> {
   if (snapshotTimer) { clearTimeout(snapshotTimer); snapshotTimer = null; }
-  try { await AsyncStorage.removeItem(STORAGE_KEY); } catch { /* best-effort */ }
+  try { await AsyncStorage.multiRemove([STORAGE_KEY, SESSION_KEY]); } catch { /* best-effort */ }
+}
+
+// --- durable backend draft-session id --------------------------------------
+// The cart snapshot survives remounts, but the backend quick-scan-session id used to
+// live only in a screen-local ref — so every remount of a resumed cart created a NEW
+// draft row for the same items (the "many drafts per cart" sprawl; 89 rows for one
+// user). Persist the id next to the snapshot so the whole cart lifecycle writes to ONE
+// draft. Created with the first meaningful save, cleared together with the snapshot on
+// "Start fresh".
+export async function getActiveDraftSessionId(): Promise<string | null> {
+  try { return (await AsyncStorage.getItem(SESSION_KEY)) || null; } catch { return null; }
+}
+export async function setActiveDraftSessionId(id: string): Promise<void> {
+  try { await AsyncStorage.setItem(SESSION_KEY, id); } catch { /* best-effort */ }
+}
+export async function clearActiveDraftSessionId(): Promise<void> {
+  try { await AsyncStorage.removeItem(SESSION_KEY); } catch { /* best-effort */ }
 }

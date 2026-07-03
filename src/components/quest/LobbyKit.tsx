@@ -327,6 +327,8 @@ export function UpNextRow({
   count,
   state = 'locked',
   onPress,
+  night = false,
+  whiteActive = false,
 }: {
   icon: IconName;
   title: string;
@@ -334,33 +336,61 @@ export function UpNextRow({
   count?: number | null;
   state?: LobbyState;
   onPress?: () => void;
+  night?: boolean;
+  /** Home setup feed: the active row becomes a WHITE card that pops in both themes
+   *  (dark content, green accent). Lobbies leave this off and keep the green tint. */
+  whiteActive?: boolean;
 }) {
   const done = state === 'done';
   const active = state === 'active';
+  const whiteCard = active && whiteActive;
+  // On a white active card, content is always dark; otherwise it follows the theme.
+  const contentDark = whiteCard || !night;
+
+  const rowBg = whiteCard
+    ? '#FFFFFF'
+    : active
+      ? (night ? 'rgba(147,200,34,0.14)' : RC.greenSoft)
+      : done
+        ? (night ? 'rgba(255,255,255,0.03)' : RC.surface)
+        : (night ? 'rgba(255,255,255,0.045)' : RC.bg);
+  const rowBorder = whiteCard
+    ? 'rgba(0,0,0,0.08)'
+    : active
+      ? (night ? 'rgba(147,200,34,0.42)' : RC.greenLine)
+      : (night ? 'rgba(255,255,255,0.09)' : RC.line);
+  const iconBg = (active || done)
+    ? (whiteCard || !night ? RC.greenSoft : 'rgba(147,200,34,0.16)')
+    : (night ? 'rgba(255,255,255,0.06)' : RC.surface2);
+  const iconColor = (active || done)
+    ? (contentDark ? RC.greenDark : '#B7E34F')
+    : (night ? 'rgba(244,244,238,0.45)' : RC.muted);
+  const titleColor = done
+    ? (contentDark ? RC.muted : 'rgba(244,244,238,0.5)')
+    : (contentDark ? RC.ink : '#F4F4EE');
+  const subColor = contentDark ? RC.muted : 'rgba(244,244,238,0.55)';
+  const arrowColor = contentDark ? RC.greenDark : '#B7E34F';
+
   return (
     <TouchableOpacity
       activeOpacity={onPress ? 0.85 : 1}
       disabled={!onPress}
       onPress={onPress}
-      style={[lk.upRow, active && lk.upRowActiveGreen, done && lk.upRowDone]}
+      style={[lk.upRow, { backgroundColor: rowBg, borderColor: rowBorder }, whiteCard && lk.upRowActiveShadow]}
     >
-      <View style={[lk.upIcon, active && lk.upIconActiveGreen, done && lk.upIconDone]}>
-        <MaterialCommunityIcons
-          name={done ? 'check-bold' : icon}
-          size={22}
-          color={done || active ? RC.greenDark : RC.muted}
-        />
+      <View style={[lk.upIcon, { backgroundColor: iconBg }]}>
+        <MaterialCommunityIcons name={done ? 'check-bold' : icon} size={22} color={iconColor} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[lk.upTitle, done && { color: RC.muted }]} numberOfLines={1}>{title}</Text>
-        {!!sub && <Text style={lk.upSub} numberOfLines={1}>{sub}</Text>}
+        <Text style={[lk.upTitle, { color: titleColor }]} numberOfLines={1}>{title}</Text>
+        {!!sub && <Text style={[lk.upSub, { color: subColor }]} numberOfLines={1}>{sub}</Text>}
       </View>
       {typeof count === 'number' && count > 0 && (
         <View style={[lk.upPill, active && lk.upPillGreen]}>
           <Text style={[lk.upPillText, active && lk.upPillGreenText]}>{count}</Text>
         </View>
       )}
-      {active && <MaterialCommunityIcons name="arrow-right" size={20} color={RC.greenDark} />}
+      {active && <MaterialCommunityIcons name="arrow-right" size={20} color={arrowColor} />}
     </TouchableOpacity>
   );
 }
@@ -711,8 +741,11 @@ const lk = StyleSheet.create({
   upIconActive: { backgroundColor: '#FDEBD2' },
   upIconActiveGreen: { backgroundColor: '#fff' },
   upIconDone: { backgroundColor: RC.greenSoft },
-  upTitle: { fontSize: 16, fontWeight: '600', color: RC.ink, letterSpacing: -0.2 },
-  upSub: { fontSize: 13.5, fontWeight: '500', color: RC.muted, marginTop: 2 },
+  upTitle: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: RC.ink, letterSpacing: -0.2 },
+  upSub: { fontSize: 14, fontFamily: 'Inter_400Regular', color: RC.muted, marginTop: 2, letterSpacing: -0.1 },
+  // White active card pop (home setup feed). Colors are computed inline in UpNextRow;
+  // this only carries the elevation so the "up next" step stands off its siblings.
+  upRowActiveShadow: { shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   upPill: { minWidth: 28, alignItems: 'center', backgroundColor: RC.surface2, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   upPillActive: { backgroundColor: '#FDEBD2' },
   upPillGreen: { backgroundColor: '#fff' },

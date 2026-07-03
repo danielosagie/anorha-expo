@@ -877,6 +877,51 @@ export const useLiquidationConversationController = ({
     void refreshPendingPlan(cid, activeThreadId);
   }, [activeThreadId, isStreaming, lastMessageId, refreshPendingQuestion, refreshPendingPlan]);
 
+  // ── Sprout opens a brand-new clearout thread itself: greeting first, a product
+  //    question if genuinely needed, and the opening plan draft — instead of a blank
+  //    box. Streams in via the same SSE path; guarded once per thread here (and again
+  //    server-side). The pending question/plan cards surface via the effect above once
+  //    the opener message lands, so this only has to stream the message.
+  const kickedOffRef = useRef<Record<string, boolean>>({});
+  const kickoffThread = useCallback(async (campaignId: string, threadId: string) => {
+    if (!campaignId || !threadId || kickedOffRef.current[threadId]) return;
+    kickedOffRef.current[threadId] = true;
+    const clientMessageId = createClientId('kickoff');
+    const assistantId = `assistant-${clientMessageId}`;
+    setStreamingByThread(prev => ({ ...prev, [threadId]: true }));
+    try {
+      await adapter.streamTurn(
+        { campaignId, threadId, clientMessageId, kind: 'message', kickoff: true },
+        {
+          onAssistantStarted: ({ messageId }) => setThreadStateFor(threadId, current =>
+            ensureAssistantPlaceholder(current, campaignId, threadId, messageId || assistantId).state),
+          onAssistantDelta: ({ delta, messageId }) => setThreadStateFor(threadId, current =>
+            appendAssistantDelta(current, campaignId, threadId, delta, messageId || assistantId)),
+          onReasoning: ({ reasoning, messageId }) => setThreadStateFor(threadId, current =>
+            appendAssistantReasoning(current, campaignId, threadId, reasoning, messageId || assistantId)),
+          onToolCompleted: ({ tool, label, status, durationMs, resultSummary, changes, reason, itemRef }) =>
+            setThreadStateFor(threadId, current => appendAssistantToolStep(current, campaignId, threadId,
+              { tool, label, status, durationMs, resultSummary, changes, reason, itemRef }, assistantId)),
+          onAssistantCompleted: ({ content, messageId }) => setThreadStateFor(threadId, current =>
+            completeAssistantMessage(current, content, messageId || assistantId), { immediate: true }),
+          onError: () => { kickedOffRef.current[threadId] = false; },
+        },
+      );
+    } catch {
+      kickedOffRef.current[threadId] = false;
+    } finally {
+      setStreamingByThread(prev => ({ ...prev, [threadId]: false }));
+    }
+  }, [adapter, setThreadStateFor]);
+
+  // Fire the kickoff once the active thread has finished loading and is genuinely empty.
+  useEffect(() => {
+    if (!activeCampaignId || !activeThreadId || isLoadingMessages) return;
+    if (surfaceState === 'home_overview') return;
+    if ((activeThreadState?.messages.length || 0) > 0) return;
+    void kickoffThread(activeCampaignId, activeThreadId);
+  }, [activeCampaignId, activeThreadId, isLoadingMessages, surfaceState, activeThreadState?.messages.length, kickoffThread]);
+
   const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {
     const campaignId = activeCampaignIdRef.current;
     if (!campaignId || answeringQuestion) return;
