@@ -9,6 +9,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -322,6 +323,10 @@ const SproutHomeScreen: React.FC = () => {
 
   const [activeRange, setActiveRange] = useState<Range>('1W');
   const [activeFilter, setActiveFilter] = useState<Filter>('All');
+  // Campaign search — the magnifier in the filter row toggles an inline field
+  // that narrows the list by title on top of the active status filter.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [campaignQuery, setCampaignQuery] = useState('');
 
   // Create-campaign modal state
   const [createOpen, setCreateOpen] = useState(false);
@@ -511,14 +516,16 @@ const SproutHomeScreen: React.FC = () => {
   // Demo mode swaps in mock campaigns so the full/active home is reviewable.
   const baseCampaigns: CardCampaign[] = DEMO ? DEMO_CAMPAIGNS : controller.campaigns;
   const filteredCampaigns = useMemo(() => {
+    let out = baseCampaigns;
     if (activeFilter === 'Running') {
-      return baseCampaigns.filter(c => c.status === 'active' || c.status === 'waiting_user');
+      out = out.filter(c => c.status === 'active' || c.status === 'waiting_user');
+    } else if (activeFilter === 'Completed') {
+      out = out.filter(c => c.status === 'completed');
     }
-    if (activeFilter === 'Completed') {
-      return baseCampaigns.filter(c => c.status === 'completed');
-    }
-    return baseCampaigns;
-  }, [baseCampaigns, activeFilter]);
+    const q = campaignQuery.trim().toLowerCase();
+    if (q) out = out.filter(c => (c.title || '').toLowerCase().includes(q));
+    return out;
+  }, [baseCampaigns, activeFilter, campaignQuery]);
 
   // Mockup groups the list: live clearouts first, then a dimmed COMPLETED section.
   const runningCampaigns = useMemo(
@@ -689,20 +696,15 @@ const SproutHomeScreen: React.FC = () => {
         {!isNight && (
           <LinearGradient colors={[THEME.bgTo, THEME.bgTo]} style={StyleSheet.absoluteFill} pointerEvents="none" />
         )}
-        {/* Top bar: date-range pill + New, no background of its own */}
+        {/* Top bar: greeting + New on ONE line (the date-range pill was removed —
+            it didn't do anything in this state). Content sits higher as a result. */}
         <View style={styles.topBarRow}>
-          <TouchableOpacity
-            style={[styles.overviewPill, { backgroundColor: THEME.pillBg, borderColor: THEME.pillBorder }]}
-            onPress={() => {
-              tap();
-              setRangeOpen(true);
-            }}
-            activeOpacity={0.85}
-          >
-            <Icon name="calendar-blank-outline" size={15} color={THEME.strong} />
-            <Text style={[styles.overviewText, { color: THEME.strong }]}>{dateRange.label}</Text>
-            <Icon name="chevron-down" size={15} color={THEME.faint} />
-          </TouchableOpacity>
+          <View style={[styles.greetingRow, { flex: 1, marginBottom: 0, marginRight: 12 }]}>
+            {isNight ? <Moon size={20} color={THEME.faint} /> : <Sun size={20} color={THEME.faint} />}
+            <Text style={[styles.greeting, { color: THEME.strong }]} numberOfLines={1}>
+              {greeting}, {firstName}
+            </Text>
+          </View>
           <TouchableOpacity
             style={[styles.newBtn, { backgroundColor: THEME.newBg, borderColor: THEME.pillBorder }]}
             onPress={openCreate}
@@ -713,13 +715,6 @@ const SproutHomeScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
         <View style={styles.hero}>
-          <View style={styles.greetingRow}>
-            <Text style={[styles.greeting, { color: THEME.strong }]} numberOfLines={1}>
-              {greeting}, {firstName}
-            </Text>
-            {isNight ? <Moon size={20} color={THEME.faint} /> : <Sun size={20} color={THEME.faint} />}
-          </View>
-
           {showSproutMessage ? (
             // Sprout's recap — the efficient ledger (Figma 4746:3113): count headline,
             // event → status rows, then ONE strong action: the full report.
@@ -891,30 +886,68 @@ const SproutHomeScreen: React.FC = () => {
           {/* No point filtering when there's nothing made yet — during onboarding the
               setup feed is the whole focus. Bar appears once the first clearout exists. */}
           {controller.campaigns.length > 0 && (
+          <>
           <View style={styles.filterRow}>
-            {FILTERS.map(f => {
-              const active = f === activeFilter;
-              return (
-                <TouchableOpacity
-                  key={f}
-                  style={[
-                    styles.filterChip,
-                    {
-                      backgroundColor: active ? THEME.chipActiveBg : THEME.chipIdleBg,
-                      borderColor: active ? THEME.chipBorder : 'transparent',
-                    },
-                  ]}
-                  onPress={() => {
-                    tap();
-                    setActiveFilter(f);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.filterChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{f}</Text>
-                </TouchableOpacity>
-              );
-            })}
+            <View style={styles.filterChips}>
+              {FILTERS.map(f => {
+                const active = f === activeFilter;
+                return (
+                  <TouchableOpacity
+                    key={f}
+                    style={[
+                      styles.filterChip,
+                      {
+                        backgroundColor: active ? THEME.chipActiveBg : THEME.chipIdleBg,
+                        borderColor: active ? THEME.chipBorder : 'transparent',
+                      },
+                    ]}
+                    onPress={() => {
+                      tap();
+                      setActiveFilter(f);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.filterChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{f}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <TouchableOpacity
+              style={[styles.searchBtn, { backgroundColor: searchOpen ? THEME.chipActiveBg : THEME.chipIdleBg }]}
+              onPress={() => {
+                tap();
+                setSearchOpen(o => {
+                  if (o) setCampaignQuery('');
+                  return !o;
+                });
+              }}
+              activeOpacity={0.8}
+              accessibilityLabel="Search clearouts"
+            >
+              <Icon name={searchOpen ? 'close' : 'magnify'} size={17} color={searchOpen ? THEME.chipActiveText : THEME.chipIdleText} />
+            </TouchableOpacity>
           </View>
+          {searchOpen ? (
+            <View style={[styles.searchRow, { backgroundColor: THEME.chipIdleBg }]}>
+              <Icon name="magnify" size={16} color={THEME.chipIdleText} />
+              <TextInput
+                value={campaignQuery}
+                onChangeText={setCampaignQuery}
+                placeholder="Search clearouts"
+                placeholderTextColor={THEME.chipIdleText}
+                style={[styles.searchInput, { color: THEME.strong }]}
+                autoFocus
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+              {campaignQuery.length > 0 ? (
+                <TouchableOpacity onPress={() => setCampaignQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Icon name="close-circle" size={16} color={THEME.chipIdleText} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+          </>
           )}
 
           {controller.error ? (
@@ -1546,7 +1579,14 @@ const styles = StyleSheet.create({
 
   // Body
   body: { paddingHorizontal: 16, paddingTop: 18 },
-  filterRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  filterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 },
+  filterChips: { flexDirection: 'row', gap: 8, flexShrink: 1 },
+  searchBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderRadius: 12, paddingHorizontal: 12, height: 40, marginBottom: 16,
+  },
+  searchInput: { flex: 1, fontFamily: FONT.regular, fontSize: 15, padding: 0 },
   filterChip: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: '#EBEDE7' },
   filterChipText: { fontFamily: FONT.medium, fontSize: 14, lineHeight: 18 },
 
