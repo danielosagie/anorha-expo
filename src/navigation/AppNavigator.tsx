@@ -380,7 +380,7 @@ export type AppStackParamList = {
   LiquidationCampaignScreen: { campaignId: string; entryPoint?: 'tab' | 'detail' } | undefined;
   CampaignSettings: { campaignId: string; title?: string } | undefined;
   CampaignInventorySelect: { campaignId: string; title?: string } | undefined;
-  CampaignThreadScreen: { campaignId: string; title?: string } | undefined;
+  CampaignThreadScreen: { campaignId: string; title?: string; initialPrompt?: string } | undefined;
   SproutHomeScreen: undefined;
   Partners: undefined;
 };

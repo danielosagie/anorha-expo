@@ -60,6 +60,12 @@ export interface DashboardInsight {
     confidence?: 'high' | 'medium' | 'low';
     confidenceReasons?: string[];
     caveats?: string[];
+    // Ready-to-send task for the chat agent — tap fires it into a Sprout thread.
+    handoff?: {
+        prompt: string;
+        campaignId?: string;
+        label?: string;
+    };
 }
 
 interface InsightCardProps {

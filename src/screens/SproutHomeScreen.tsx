@@ -326,6 +326,18 @@ const SproutHomeScreen: React.FC = () => {
   const insightHeadline =
     rawHeadline && !/paused|unavailable|disabled|error/i.test(rawHeadline) ? rawHeadline : undefined;
 
+  // Insight handoff → chat. The backend scopes by StrategyId; mobile threads key on
+  // session ids, so match against the loaded campaigns and fall back to the newest —
+  // the prompt text itself carries the exact scope either way.
+  const handoffTarget = useMemo(() => {
+    const h = insight?.handoff;
+    if (!h?.prompt) return null;
+    const match = controller.campaigns.find((c) => c.id === h.campaignId);
+    const campaignId = match?.id || controller.campaigns[0]?.id;
+    if (!campaignId) return null;
+    return { campaignId, prompt: h.prompt, label: h.label || 'Dig in' };
+  }, [insight?.handoff, controller.campaigns]);
+
   // Live pulse: when the briefing is quiet, show Sprout's most recent real action
   // so "Sprout is watching" is backed by evidence instead of vibes.
   const lastAction = controller.campaignOverview?.recentActions?.[0];
@@ -692,6 +704,23 @@ const SproutHomeScreen: React.FC = () => {
               ) : null}
               {!controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
+              )}
+              {/* Handoff: the insight ships a ready-to-send task for Sprout — one tap
+                  opens the campaign thread and fires it as a normal message. */}
+              {!controller.loading && handoffTarget && (
+                <TouchableOpacity
+                  style={styles.handoffPill}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    tap();
+                    navigation.navigate('CampaignThreadScreen', {
+                      campaignId: handoffTarget.campaignId,
+                      initialPrompt: handoffTarget.prompt,
+                    });
+                  }}
+                >
+                  <Text style={styles.handoffPillText}>{handoffTarget.label}</Text>
+                </TouchableOpacity>
               )}
             </>
           )}
@@ -1353,6 +1382,8 @@ const styles = StyleSheet.create({
   },
   briefingChipText: { fontSize: 16, fontFamily: FONT.semibold },
   nextReport: { fontSize: 13, marginTop: 8, fontFamily: FONT.semibold },
+  handoffPill: { alignSelf: 'flex-start', backgroundColor: '#FFFFFF', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, marginTop: 12 },
+  handoffPillText: { fontFamily: FONT.semibold, fontSize: 14, color: '#3D5C13' },
   eventRows: { marginBottom: 14, gap: 10 },
   eventRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   eventLabel: { fontSize: 17, fontFamily: FONT.medium },
