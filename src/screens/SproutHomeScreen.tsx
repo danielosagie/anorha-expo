@@ -359,7 +359,17 @@ const SproutHomeScreen: React.FC = () => {
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
   const { insight } = useOrgNudges(!isOrgLoading ? currentOrg?.id : undefined);
   const { liveConnections } = usePlatformConnections();
-  const { productCount } = useProfileProductCount();
+  const { productCount, loading: productCountLoading } = useProfileProductCount();
+  // Setup state drives the empty dashboard: an established seller (has a platform
+  // AND items) who simply hasn't started a clearout should NOT see first-run
+  // onboarding — only the "Start a clearout" CTA. `setupUnknown` suppresses the
+  // pre-bridge flash where productCount is still 0 (initial value) and the
+  // 3-step checklist would briefly paint "Add your first items" as incomplete.
+  const hasSetup = (liveConnections?.length || 0) > 0 && (productCount || 0) > 0;
+  // "Unknown" until the org is resolved AND the count has settled — the count
+  // gates on currentOrg (see AppDataContext.refreshProductCount), so before the
+  // org loads productCount is its 0 default and would flash the checklist.
+  const setupUnknown = isOrgLoading || productCountLoading || !currentOrg?.id;
   // Only surface ACTIONABLE headlines — status noise ("Insights paused") stays off the hero.
   const rawHeadline = insight?.topDIN?.headline?.trim();
   const insightHeadline =
@@ -925,8 +935,16 @@ const SproutHomeScreen: React.FC = () => {
               <Text style={[styles.loadingText, isNight && { color: 'rgba(244,244,238,0.6)' }]}>Loading your clearouts…</Text>
             </View>
           ) : filteredCampaigns.length === 0 ? (
-            activeFilter === 'All' ? (
-              // First-run onboarding checklist — real state, each step navigates.
+            setupUnknown ? (
+              // Org / item-count not resolved yet — hold on a quiet spinner
+              // instead of flashing the first-run checklist to an established seller.
+              <View style={styles.loadingBox}>
+                <ActivityIndicator color={BRAND} />
+              </View>
+            ) : (activeFilter === 'All' && !hasSetup) ? (
+              // First-run onboarding checklist — ONLY for a genuinely new seller
+              // (no platform connected or no items yet). An established seller who
+              // just hasn't started a clearout skips straight to the CTA below.
               <View style={[styles.emptyCard, isNight && styles.emptyCardNight, { alignItems: 'stretch' }]}>
                 <Text style={[styles.emptyTitle, isNight && { color: '#F4F4EE' }, { textAlign: 'left' }]}>
                   Get set up
@@ -993,7 +1011,7 @@ const SproutHomeScreen: React.FC = () => {
                   <Icon name="sprout-outline" size={26} color={BRAND} />
                 </View>
                 <Text style={[styles.emptyTitle, isNight && { color: '#F4F4EE' }]}>
-                  No {activeFilter.toLowerCase()} clearouts
+                  {activeFilter === 'All' ? 'Ready to clear out?' : `No ${activeFilter.toLowerCase()} clearouts`}
                 </Text>
                 <TouchableOpacity style={styles.emptyCta} onPress={openCreate} activeOpacity={0.9}>
                   <Text style={styles.emptyCtaText}>Start a clearout</Text>
