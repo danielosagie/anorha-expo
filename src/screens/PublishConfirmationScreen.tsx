@@ -56,7 +56,17 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // after-the-fact "problem" once the receipt has already printed.
   const { currentOrg } = useOrg();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
-  const showComputerPreflight = fbSelected && !fbDispatch.computerOnline && !fbDispatch.degraded;
+  // Only warn once presence has actually loaded (else it flashes on mount while
+  // the query is in flight), only when the FB job isn't already live/posting
+  // (a posted listing shouldn't say "posts when your computer's on"), and never
+  // in degraded mode where onlineness is unknown.
+  const fbAlreadyMoving = fbStatus?.tone === 'good' || fbStatus?.label === 'Live';
+  const showComputerPreflight =
+    fbSelected &&
+    fbDispatch.presenceLoaded &&
+    !fbDispatch.computerOnline &&
+    !fbDispatch.degraded &&
+    !fbAlreadyMoving;
 
   // Representative quantity for the receipt (the largest per-channel inventory, ≥1).
   const receiptQty = (() => {

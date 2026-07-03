@@ -13,7 +13,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PlatformLogo from '../components/PlatformLogo';
 import PlatformConnectSheet from '../components/PlatformConnectSheet';
-import { listPlatforms, resolvePlatformKey, PlatformDef, PlatformKey } from '../config/platforms';
+import { listPlatforms, resolvePlatformKey, getPlatformAvailability, PlatformDef, PlatformKey } from '../config/platforms';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOrg } from '../context/OrgContext';
@@ -30,9 +30,11 @@ const BLURB: Partial<Record<PlatformKey, string>> = {
   clover: 'Post and update items on your Clover register.',
   ebay: 'List and reprice on eBay, taxonomy and all.',
   facebook: 'Post to Marketplace through your own computer.',
-  amazon: 'Sell on Amazon — coming soon.',
-  whatnot: 'Go live and list on Whatnot — coming soon.',
-  depop: 'List your closet on Depop — coming soon.',
+  // Coming-soon rows already carry the section header + Soon pill — the blurb
+  // says what the platform does, not "soon" a third time.
+  amazon: 'Sell your inventory on Amazon.',
+  whatnot: 'Go live and sell on Whatnot.',
+  depop: 'List your closet on Depop.',
 };
 
 /**
@@ -54,15 +56,20 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const connectedKeys = useMemo(() => {
+    // A just-connected row cycles pending → scanning → syncing before landing
+    // on 'active' — all of those count as CONNECTED here: the row exists, and
+    // offering Connect again would start a duplicate OAuth flow. Only
+    // truly-dead rows fall back to the Connect button.
+    const NOT_CONNECTED = new Set(['disconnected', 'error', 'revoked', 'disabled', 'needs_reauth']);
     const set = new Set<PlatformKey>();
     for (const c of liveConnections || []) {
-      if ((c.Status || '').toLowerCase() === 'active') {
-        // PlatformType is free-text ("Shopify", "facebook_marketplace", a store
-        // domain…); resolve it to a canonical key through the registry's
-        // alias + fuzzy-contains resolver so every spelling maps correctly.
-        const key = resolvePlatformKey(c.PlatformType);
-        if (key) set.add(key);
-      }
+      const status = (c.Status || '').toLowerCase();
+      if (NOT_CONNECTED.has(status) || c.IsEnabled === false) continue;
+      // PlatformType is free-text ("Shopify", "facebook_marketplace", a store
+      // domain…); resolve it to a canonical key through the registry's
+      // alias + fuzzy-contains resolver so every spelling maps correctly.
+      const key = resolvePlatformKey(c.PlatformType);
+      if (key) set.add(key);
     }
     return set;
   }, [liveConnections]);
@@ -73,9 +80,12 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
     const q = query.trim().toLowerCase();
     const match = (d: PlatformDef) => !q || d.label.toLowerCase().includes(q);
     const all = listPlatforms().filter(match);
+    // The registry's ONE availability gate decides which rows get a live
+    // Connect button — including the EXPO_PUBLIC_ENABLED_PLATFORMS kill
+    // switch, so a platform hidden from the picker can't be connected here.
     return {
-      available: all.filter((d) => !!d.connect && d.status !== 'planned'),
-      comingSoon: all.filter((d) => !d.connect || d.status === 'planned'),
+      available: all.filter((d) => getPlatformAvailability(d.key) !== 'coming-soon'),
+      comingSoon: all.filter((d) => getPlatformAvailability(d.key) === 'coming-soon'),
     };
   }, [query]);
 
@@ -93,7 +103,11 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
       const res = await connect(consentPlatform as ConnectablePlatform);
       if (res.success) {
         setConsentPlatform(null);
+        // The backend commits the new connection row on the OAuth callback —
+        // one immediate refresh can race that write. Nudge once more shortly
+        // after so the row flips to Connected without a manual reload.
         refresh?.();
+        setTimeout(() => refresh?.(), 2500);
       } else if (!res.cancelled && res.errorMessage) {
         setConnectError(res.errorMessage);
       }
@@ -172,6 +186,9 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
         showsVerticalScrollIndicator={false}
+        // With the search keyboard up, the first tap on a Connect button must
+        // press the button — not just dismiss the keyboard.
+        keyboardShouldPersistTaps="handled"
       >
         {available.length > 0 ? (
           <>

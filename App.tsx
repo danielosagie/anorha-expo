@@ -593,13 +593,13 @@ const App: React.FC = () => {
               onGeneratePress={() => { }}
               onStartConnect={(platform) => {
                 overlay.hide();
-                // "See all platforms" → the full connect page. Handled here (root
-                // has the nav ref) so every screen's picker gets it for free.
-                if (platform === '__see_all__') {
-                  navigationRef.current?.navigate('AppStack', { screen: 'ConnectPlatforms' } as any);
-                  return;
-                }
                 overlay.onStartConnect?.(platform);
+              }}
+              // "See all platforms" → the full connect page. Wired here (root
+              // owns the nav ref); pickers without navigation skip the row.
+              onSeeAll={() => {
+                overlay.hide();
+                navigationRef.current?.navigate('AppStack', { screen: 'ConnectPlatforms' } as any);
               }}
             />
           </View>

@@ -207,6 +207,9 @@ export interface FacebookJobStatus {
   statusForVariant: (variantId?: string | null) => VariantDispatchStatus | null;
   /** True when the 2nd Convex client is unavailable (degraded / OAuth-only). */
   degraded: boolean;
+  /** False while the first presence result is still in flight — callers must
+   *  not read computerOnline=false as "offline" until this flips true. */
+  presenceLoaded: boolean;
 }
 
 export function useFacebookJobStatus(): FacebookJobStatus {
@@ -287,5 +290,9 @@ export function useFacebookJobStatus(): FacebookJobStatus {
     computers,
     statusForVariant,
     degraded: !client || !userId,
+    // useWatchedQuery yields undefined until the first result lands — that's
+    // "loading", not "no computers". (In degraded mode it never loads; treat
+    // as loaded so callers fall back to their degraded handling.)
+    presenceLoaded: presence !== undefined || !client || !userId,
   };
 }

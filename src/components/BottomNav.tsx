@@ -34,6 +34,10 @@ type Props = {
   onBack?: () => void;
   onGeneratePress: () => void;
   onStartConnect?: (platform: string) => void;
+  /** "See all platforms" → the full connect page. The row only renders when a
+   *  host provides this — hosts without navigation simply don't get the row,
+   *  so the platform-key channel never carries sentinel values. */
+  onSeeAll?: () => void;
   style?: StyleProp<ViewStyle>;
   manualOverrideInput?: string;
   onManualOverrideChange?: (text: string) => void;
@@ -69,6 +73,7 @@ const BottomNav: React.FC<Props> = ({
   onBack,
   onGeneratePress,
   onStartConnect,
+  onSeeAll,
   style,
   totalItemsCount = 1,
   confirmedProduct = null,
@@ -253,16 +258,15 @@ const BottomNav: React.FC<Props> = ({
             ))}
           </View>
           {/* See all platforms → full connect page (Shopify, Square, Clover,
-              eBay, Facebook + coming-soon). The sentinel is handled by the
-              picker overlay, which navigates instead of starting a connect. */}
-          <TouchableOpacity
-            style={styles.seeAllButton}
-            onPress={() => onStartConnect && onStartConnect('__see_all__')}
-          >
-            <Icon name="apps" size={20} color="#3F3F46" />
-            <Text style={styles.seeAllText}>See all platforms</Text>
-            <Icon name="chevron-right" size={20} color="#C4C8CE" style={{ marginLeft: 'auto' }} />
-          </TouchableOpacity>
+              eBay, Facebook + coming-soon). Renders only when the host wires
+              onSeeAll — no sentinel through the platform-key channel. */}
+          {onSeeAll ? (
+            <TouchableOpacity style={styles.seeAllButton} onPress={onSeeAll}>
+              <Icon name="apps" size={20} color="#3F3F46" />
+              <Text style={styles.seeAllText}>See all platforms</Text>
+              <Icon name="chevron-right" size={20} color="#C4C8CE" style={{ marginLeft: 'auto' }} />
+            </TouchableOpacity>
+          ) : null}
           {/* Divider */}
           <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', marginVertical: 8 }}>
             <View style={{ flex: 1, height: 1, backgroundColor: '#e5e7eb' }} />
