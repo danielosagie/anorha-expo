@@ -46,9 +46,17 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [billingGateUpdatedAt, setBillingGateUpdatedAt] = useState<number | null>(null);
 
   const refreshProductCount = useCallback(async () => {
-    const userId = session?.user?.id;
+    // Ownership in this app is ORG-scoped, not per-user: ProductVariants has no
+    // OrgId column, so it's reached via ProductVariants.ProductId → Products.OrgId
+    // (see sssync-bknd migration 20251222_rls_compatibility_fixes.sql). The old
+    // `.eq('UserId', userId)` counted ONLY variants the signed-in seat personally
+    // created — imported / published / forked items carry the import job's
+    // UserId, so an established org seller counted 0 and the dashboard kept
+    // nagging "Add your first items". Count what the ORG owns instead (mirrors
+    // products.service.findVariantsByOrgId), so every real item counts.
+    const orgId = currentOrg?.id;
 
-    if (!session?.bridgeReady || !userId) {
+    if (!session?.bridgeReady || !orgId) {
       setProductCountLoading(false);
       return;
     }
@@ -59,8 +67,8 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       const { count, error } = await supabase
         .from('ProductVariants')
-        .select('*', { count: 'exact', head: true })
-        .eq('UserId', userId)
+        .select('*, Products!inner(OrgId)', { count: 'exact', head: true })
+        .eq('Products.OrgId', orgId)
         .not('Sku', 'like', 'DRAFT-%');
 
       if (error) {
@@ -74,7 +82,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setProductCountLoading(false);
     }
-  }, [session?.bridgeReady, session?.user?.id]);
+  }, [session?.bridgeReady, currentOrg?.id]);
 
   const refreshFreemiumStatus = useCallback(async () => {
     try {
