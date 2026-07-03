@@ -193,6 +193,20 @@ const CampaignThreadScreen = () => {
     }, [campaignId, controller.activeThreadId]),
   );
   useEffect(() => { controllerRef.current = controller; });
+
+  // Handoff from the home insight: a ready-to-send task arrives as initialPrompt.
+  // Fire it as a normal message once the thread is ready — exactly once, then clear
+  // the param so remounts/back-nav never re-send it.
+  const initialPrompt = route.params?.initialPrompt as string | undefined;
+  const sentInitialPromptRef = useRef(false);
+  useEffect(() => {
+    if (!initialPrompt || sentInitialPromptRef.current) return;
+    if (controller.isLoadingMessages || !controller.activeThreadId) return;
+    sentInitialPromptRef.current = true;
+    navigation.setParams({ initialPrompt: undefined });
+    controller.queueTextMessage(initialPrompt).catch(() => undefined);
+  }, [initialPrompt, controller.isLoadingMessages, controller.activeThreadId]);
+
   const [menuOpen, setMenuOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
