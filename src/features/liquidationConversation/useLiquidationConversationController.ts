@@ -23,6 +23,7 @@ import {
   failTurn,
   markQueueItemSending,
   toQueueItem,
+  updateMessage,
 } from './conversationState';
 import type {
   CampaignConfig,
@@ -634,7 +635,43 @@ export const useLiquidationConversationController = ({
     void adapter.persistDraft(campaignId, threadId, value).catch(() => undefined);
   }, [adapter, setHomeDraft, setThreadStateFor, surfaceState]);
 
-  const queueTextMessage = useCallback(async (content: string, imageUrls?: string[]) => {
+  // Upload a photo turn's local photos to storage, then enqueue the real turn with the
+  // public urls (the backend can't read file:// uris). The optimistic bubble is already
+  // on screen showing the local photos — here we just swap in the uploaded urls and send.
+  // On upload failure we mark the bubble failed but KEEP metadata.pendingImageUris so the
+  // Retry button can re-run the upload instead of a server retry the turn never reached.
+  const uploadAndSendPhotos = useCallback(async (
+    campaignId: string,
+    threadId: string,
+    clientMessageId: string,
+    content: string,
+    pending: string[],
+  ) => {
+    const urls = (await Promise.all(
+      pending.map(uri => uploadProductImage(uri, createClientId('photo')).catch(() => null)),
+    )).filter((u): u is string => !!u);
+    if (!urls.length) {
+      setThreadStateFor(
+        threadId,
+        current => failTurn(current, clientMessageId, 'Photos didn’t upload. Tap Retry to try again.'),
+        { immediate: true },
+      );
+      return;
+    }
+    const queueItem = toQueueItem({ campaignId, threadId, clientMessageId, kind: 'message', content, imageUrls: urls });
+    setThreadStateFor(threadId, current => ({
+      ...updateMessage(current, clientMessageId, m => ({
+        ...m,
+        imageUrls: urls,
+        deliveryState: 'sending',
+        metadata: { ...(m.metadata || {}), pendingImageUris: undefined },
+      })),
+      pendingQueue: [...current.pendingQueue, queueItem],
+    }), { immediate: true });
+    void processQueue(threadId);
+  }, [processQueue, setThreadStateFor]);
+
+  const queueTextMessage = useCallback(async (content: string, imageUrls?: string[], pendingImageUris?: string[]) => {
     const campaignId = activeCampaignIdRef.current;
     if (!campaignId) {
       throw new Error('Select a campaign first');
@@ -643,15 +680,40 @@ export const useLiquidationConversationController = ({
     // Messaging from home lands in the primary feed, not a brand-new thread.
     const threadId = await ensureChatThread(false);
     const clientMessageId = createClientId('msg');
+    const pending = (pendingImageUris || []).filter(Boolean).slice(0, 8);
+    const hasPending = pending.length > 0;
     const message = createTextMessage({
       campaignId,
       threadId,
       clientMessageId,
       role: 'user',
       content,
-      deliveryState: isStreaming ? 'queued' : 'sending',
-      imageUrls,
+      deliveryState: hasPending ? 'sending' : (isStreaming ? 'queued' : 'sending'),
+      // Photos ride the bubble instantly from their local uris; uploadAndSendPhotos swaps
+      // in the public urls once uploaded, so the seller never watches an "uploading" box.
+      imageUrls: hasPending ? pending : imageUrls,
     });
+
+    const clearDraft = async () => {
+      if (fromHome) {
+        await setHomeDraft(campaignId, '');
+      } else {
+        setThreadStateFor(threadId, current => ({ ...current, draft: '' }), { immediate: true });
+      }
+    };
+
+    if (hasPending) {
+      // Show the message with its photos immediately, upload in the background, then send.
+      const optimistic = { ...message, metadata: { ...(message.metadata || {}), pendingImageUris: pending } };
+      setThreadStateFor(threadId, current => appendMessage(current, optimistic), { immediate: true });
+      await clearDraft();
+      setActiveThreadId(threadId);
+      setSurfaceState('chat_active');
+      setNotice(null);
+      void uploadAndSendPhotos(campaignId, threadId, clientMessageId, content, pending);
+      return;
+    }
+
     const queueItem = toQueueItem({
       campaignId,
       threadId,
@@ -660,21 +722,13 @@ export const useLiquidationConversationController = ({
       content,
       imageUrls,
     });
-
     setThreadStateFor(threadId, current => enqueueTurn(current, queueItem, message), { immediate: true });
-    if (fromHome) {
-      await setHomeDraft(campaignId, '');
-    } else {
-      setThreadStateFor(threadId, current => ({
-        ...current,
-        draft: '',
-      }), { immediate: true });
-    }
+    await clearDraft();
     setActiveThreadId(threadId);
     setSurfaceState('chat_active');
     setNotice(null);
     void processQueue(threadId);
-  }, [ensureChatThread, isStreaming, processQueue, setHomeDraft, setThreadStateFor, surfaceState]);
+  }, [ensureChatThread, isStreaming, processQueue, setHomeDraft, setThreadStateFor, surfaceState, uploadAndSendPhotos]);
 
   const dispatchAction = useCallback(async ({ actionType, title, payload }: DispatchActionInput) => {
     const campaignId = activeCampaignIdRef.current;
@@ -713,6 +767,21 @@ export const useLiquidationConversationController = ({
     const campaignId = activeCampaignIdRef.current;
     const threadId = activeThreadIdRef.current;
     if (!campaignId || !threadId) return;
+
+    // A photo turn that failed at UPLOAD never reached the server, so a server-side retry
+    // would 404. Re-run the upload instead (the local uris are stashed on the bubble).
+    const failed = threadStatesRef.current[threadId]?.messages.find(m => m.clientMessageId === clientMessageId);
+    const pending = ((failed?.metadata as any)?.pendingImageUris as string[] | undefined)?.filter(Boolean);
+    if (pending && pending.length && !failed?.serverMessageId) {
+      setThreadStateFor(
+        threadId,
+        current => updateMessage(current, clientMessageId, m => ({ ...m, deliveryState: 'sending', metadata: { ...(m.metadata || {}), errorMessage: undefined } })),
+        { immediate: true },
+      );
+      await uploadAndSendPhotos(campaignId, threadId, clientMessageId, failed?.content || '', pending);
+      return;
+    }
+
     await adapter.retryFailedMessage(campaignId, threadId, clientMessageId);
     const stored = await loadThreadState(campaignId, threadId);
     threadStatesRef.current = {
@@ -724,7 +793,7 @@ export const useLiquidationConversationController = ({
       [threadId]: stored,
     }));
     void processQueue(threadId);
-  }, [adapter, processQueue]);
+  }, [adapter, processQueue, setThreadStateFor, uploadAndSendPhotos]);
 
   // Cancel a message the seller queued while Sprout was still responding, before it's sent.
   // Only a still-'queued' message can be pulled — once it's 'sending'/'streaming' it's in
@@ -817,30 +886,18 @@ export const useLiquidationConversationController = ({
   const sendComposer = useCallback(async (photos?: string[]) => {
     const content = composerText.trim();
     if (photos && photos.length) {
-      // Hand the photos to the AGENT and let it decide what to do (identify + price,
-      // or build draft listings via analyze_photos / analyze_shelf). We just upload
-      // them and send a normal turn carrying the urls — no more fork to /analyze.
+      // The photos are already sitting in the composer as thumbnails — send the message
+      // right away with them ON the bubble (local uris), upload in the background, then let
+      // the AGENT decide what to do with the uploaded urls. No "uploading" banner, no wait.
       setComposerValue('');
-      setNotice(`Adding ${photos.length} photo${photos.length === 1 ? '' : 's'}…`);
-      try {
-        const urls = (await Promise.all(
-          photos.slice(0, 8).map(uri => uploadProductImage(uri, createClientId('photo')).catch(() => null)),
-        )).filter((u): u is string => !!u);
-        setNotice(null);
-        if (!urls.length) {
-          setNotice('Could not upload those photos. Try again.');
-          return;
-        }
-        const displayText = content || `added ${urls.length} photo${urls.length === 1 ? '' : 's'}`;
-        await queueTextMessage(displayText, urls);
-      } catch {
-        setNotice('Could not process photos. Please try again.');
-      }
+      const count = Math.min(photos.length, 8);
+      const displayText = content || `added ${count} photo${count === 1 ? '' : 's'}`;
+      await queueTextMessage(displayText, undefined, photos);
       return;
     }
     if (!content) return;
     await queueTextMessage(content);
-  }, [composerText, queueTextMessage, setComposerValue, setNotice]);
+  }, [composerText, queueTextMessage, setComposerValue]);
 
   // Pull the open ask_seller_question (if any) for the active thread. Sprout sets
   // one when it needs a choice; cleared once answered.

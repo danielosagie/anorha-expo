@@ -319,6 +319,12 @@ export const mergeRemoteMessages = (
         ...remoteMessages[index],
         clientMessageId: localMessage.clientMessageId || remoteMessages[index].clientMessageId,
         actionMeta: localMessage.actionMeta || remoteMessages[index].actionMeta,
+        // The seller's attached photos live on the local copy. If the server round-trip
+        // didn't echo them back, keep the local urls so the thumbnails survive a thread
+        // reload instead of vanishing (this merge result is persisted back to storage).
+        imageUrls: remoteMessages[index].imageUrls?.length
+          ? remoteMessages[index].imageUrls
+          : localMessage.imageUrls,
       };
       continue;
     }

@@ -264,7 +264,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   sellBtn: { backgroundColor: GREEN, borderRadius: 18, height: 56, alignItems: 'center', justifyContent: 'center' },
-  sellLabel: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', letterSpacing: -0.2 },
+  sellLabel: { color: '#FFFFFF', fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
   secondaryBtn: {
     marginTop: 10,
     height: 50,

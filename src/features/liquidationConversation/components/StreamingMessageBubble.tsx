@@ -1,9 +1,12 @@
 import React, { useContext, useMemo, useState } from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import { BRAND_PRIMARY } from '../../../design/tokens';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Markdown from 'react-native-markdown-display';
+import { HorizontalFadeScroll } from './HorizontalFadeScroll';
 import type { ActivityPayload, ChatJobCardMeta, ConversationMessage, DecisionPrompt } from '../types';
 import { TimestampRevealContext } from './timestampReveal';
 import ActivityCard from './activity/ActivityCard';
@@ -54,6 +57,68 @@ const AttachedImages = ({ urls }: { urls: string[] }) => {
       ))}
     </View>
   );
+};
+
+const ACTION_HITSLOP = { top: 7, bottom: 7, left: 7, right: 7 };
+
+// The quiet control bar under a finished assistant reply — copy, share, and a
+// thumbs up/down so the seller can react. Feedback is local-only for now (an honest
+// affordance, no dead network call); copy/share fully work.
+const MessageActions = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+  const [vote, setVote] = useState<null | 'up' | 'down'>(null);
+  const tap = () => Haptics.selectionAsync().catch(() => undefined);
+  const copy = async () => {
+    try {
+      await Clipboard.setStringAsync(text);
+      setCopied(true);
+      tap();
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* clipboard can fail silently */
+    }
+  };
+  const share = () => {
+    tap();
+    Share.share({ message: text }).catch(() => undefined);
+  };
+  return (
+    <View style={styles.actionsRow}>
+      <TouchableOpacity style={styles.actionIcon} onPress={copy} hitSlop={ACTION_HITSLOP} accessibilityLabel="Copy">
+        <Icon name={copied ? 'check' : 'content-copy'} size={15} color={copied ? '#5D7E16' : '#9CA3AF'} />
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.actionIcon} onPress={share} hitSlop={ACTION_HITSLOP} accessibilityLabel="Share">
+        <Icon name="tray-arrow-up" size={16} color="#9CA3AF" />
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.actionIcon}
+        onPress={() => { tap(); setVote(v => (v === 'up' ? null : 'up')); }}
+        hitSlop={ACTION_HITSLOP}
+        accessibilityLabel="Good response"
+      >
+        <Icon name={vote === 'up' ? 'thumb-up' : 'thumb-up-outline'} size={15} color={vote === 'up' ? '#52525B' : '#9CA3AF'} />
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.actionIcon}
+        onPress={() => { tap(); setVote(v => (v === 'down' ? null : 'down')); }}
+        hitSlop={ACTION_HITSLOP}
+        accessibilityLabel="Bad response"
+      >
+        <Icon name={vote === 'down' ? 'thumb-down' : 'thumb-down-outline'} size={15} color={vote === 'down' ? '#52525B' : '#9CA3AF'} />
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+// Markdown tables can be wider than the bubble (many columns). Wrap them in the same
+// horizontal fade-scroller the document viewer uses so they extend right and hint "more →"
+// instead of squishing every column to fit.
+const markdownRules = {
+  table: (node: any, children: React.ReactNode) => (
+    <HorizontalFadeScroll key={node.key} fadeColor="#FFFFFF" style={styles.mdTableScroll}>
+      <View style={styles.mdTable}>{children}</View>
+    </HorizontalFadeScroll>
+  ),
 };
 
 // Rendering partial markdown on every stream delta is normally safe, but a
@@ -206,7 +271,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           // shows BEFORE the first token, while the agent is still working or calling
           // tools (the activity card above shows those steps as they land).
           <MarkdownBoundary content={content}>
-            <Markdown style={styles.markdown}>{content}</Markdown>
+            <Markdown style={styles.markdown} rules={markdownRules}>{content}</Markdown>
           </MarkdownBoundary>
         ) : null}
 
@@ -280,6 +345,11 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
             <Icon name="refresh" size={13} color="#EF4444" />
             <Text style={styles.retryText}>Retry</Text>
           </TouchableOpacity>
+        ) : null}
+
+        {/* The after-message control bar — only under a finished assistant reply. */}
+        {!isUser && !isStreaming && !isFailed && renderMarkdown ? (
+          <MessageActions text={content} />
         ) : null}
       </View>
     </Animated.View>
@@ -534,13 +604,8 @@ const styles = StyleSheet.create({
     link: {
       color: '#2563EB',
     },
-    table: {
-      borderWidth: 1,
-      borderColor: '#E5E7EB',
-      borderRadius: 8,
-      overflow: 'hidden',
-      marginBottom: 8,
-    },
+    // The `table` rule is overridden (markdownRules) to wrap in a fade-scroller; these
+    // th/td get fixed widths so a wide table extends right instead of squishing to fit.
     thead: {
       backgroundColor: '#F9FAFB',
     },
@@ -548,7 +613,7 @@ const styles = StyleSheet.create({
       flexDirection: 'row',
     },
     th: {
-      flex: 1,
+      width: 108,
       padding: 6,
       borderRightWidth: 1,
       borderRightColor: '#E5E7EB',
@@ -556,7 +621,7 @@ const styles = StyleSheet.create({
       borderBottomColor: '#E5E7EB',
     },
     td: {
-      flex: 1,
+      width: 108,
       padding: 6,
       borderRightWidth: 1,
       borderRightColor: '#E5E7EB',
@@ -688,5 +753,31 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
+  },
+  // After-message control bar (copy / share / thumbs).
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginTop: 4,
+    marginLeft: -6,
+  },
+  actionIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Wide markdown tables — scroller wrapper + the bordered table container.
+  mdTableScroll: {
+    marginBottom: 8,
+  },
+  mdTable: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    overflow: 'hidden',
+    alignSelf: 'flex-start',
   },
 });
