@@ -13,7 +13,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PlatformLogo from '../components/PlatformLogo';
 import PlatformConnectSheet from '../components/PlatformConnectSheet';
-import { listPlatforms, PlatformDef, PlatformKey } from '../config/platforms';
+import { listPlatforms, resolvePlatformKey, PlatformDef, PlatformKey } from '../config/platforms';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOrg } from '../context/OrgContext';
@@ -54,23 +54,20 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const connectedKeys = useMemo(() => {
-    const set = new Set<string>();
+    const set = new Set<PlatformKey>();
     for (const c of liveConnections || []) {
       if ((c.Status || '').toLowerCase() === 'active') {
-        // PlatformType is free-text; normalize to a key via the logo resolver's registry.
-        const k = String(c.PlatformType || '').toLowerCase();
-        set.add(k);
+        // PlatformType is free-text ("Shopify", "facebook_marketplace", a store
+        // domain…); resolve it to a canonical key through the registry's
+        // alias + fuzzy-contains resolver so every spelling maps correctly.
+        const key = resolvePlatformKey(c.PlatformType);
+        if (key) set.add(key);
       }
     }
     return set;
   }, [liveConnections]);
 
-  const isConnected = useCallback(
-    (def: PlatformDef) =>
-      connectedKeys.has(def.key) ||
-      (def.aliases || []).some((a) => connectedKeys.has(a.toLowerCase())),
-    [connectedKeys],
-  );
+  const isConnected = useCallback((def: PlatformDef) => connectedKeys.has(def.key), [connectedKeys]);
 
   const { available, comingSoon } = useMemo(() => {
     const q = query.trim().toLowerCase();
