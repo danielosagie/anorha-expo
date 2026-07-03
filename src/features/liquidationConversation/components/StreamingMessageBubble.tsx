@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { BRAND_PRIMARY } from '../../../design/tokens';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { AnorhaFace } from '../../../components/brand/AnorhaFace';
 import Markdown from 'react-native-markdown-display';
 import { HorizontalFadeScroll } from './HorizontalFadeScroll';
 import type { ActivityPayload, ChatJobCardMeta, ConversationMessage, DecisionPrompt } from '../types';
@@ -215,7 +216,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
             activeOpacity={0.7}
             onPress={() => setDigestOpen(o => !o)}
           >
-            <Icon name="leaf" size={14} color="#3B6D11" />
+            <AnorhaFace size={15} />
             <Text style={{ flex: 1, fontSize: 13, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' }}>Sprout check-in</Text>
             <Icon name={digestOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#7A9B3C" />
           </TouchableOpacity>

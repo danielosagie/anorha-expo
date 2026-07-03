@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, Image, Alert, type DimensionValue } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { AnorhaFace } from './brand/AnorhaFace';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import spinners from 'unicode-animations';
 import { StreamingText } from './StreamingText';
@@ -266,7 +267,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             <View style={styles.cardContainer}>
                 <View style={styles.headerRow}>
                     <View style={styles.headerLeft}>
-                        <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                        <AnorhaFace size={19} />
                         <Text style={styles.headerTitle}>Sprout's Insight</Text>
                     </View>
                     <Text style={styles.headerTimestamp}>Thinking...</Text>
@@ -313,7 +314,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             <Animated.View entering={FadeInUp.duration(450)} style={styles.cardContainer}>
                 <View style={styles.headerRow}>
                     <View style={styles.headerLeft}>
-                        <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                        <AnorhaFace size={19} />
                         <Text style={styles.headerTitle}>Sprout's Insight</Text>
                     </View>
 
@@ -431,7 +432,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
             {/* 1. Header */}
             <View style={styles.headerRow}>
                 <View style={styles.headerLeft}>
-                    <Icon name="sprout-outline" size={20} color="rgba(72, 72, 72, 1)" />
+                    <AnorhaFace size={19} />
                     <Text style={styles.headerTitle}>
                         {insight.timeframe === 'short_term' ? 'This Week' :
                             insight.timeframe === 'medium_term' ? 'This Month' :
@@ -608,8 +609,8 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                     <View style={styles.avatarPile}>
                                         {/* Show Anorha logo for DB + Favicons for Web */}
                                         <View style={[styles.avatarCircle, { backgroundColor: '#fff', zIndex: 3, borderWidth: 1, borderColor: '#E5E7EB' }]}>
-                                            {/* Anorha Placeholder Icon */}
-                                            <Icon name="leaf" size={10} color="#84CC16" />
+                                            {/* Anorha brand mark */}
+                                            <AnorhaFace size={12} />
                                         </View>
 
                                         {insight.sources?.filter(s => s.type === 'web').slice(0, 2).map((src, idx) => (
@@ -685,8 +686,8 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                 {/* Render Internal Data Sources */}
                                 <View style={styles.sourceItem}>
                                     <View style={[styles.sourceIcon, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB', borderWidth: 1 }]}>
-                                        {/* Anorha Logo / Icon */}
-                                        <Icon name="leaf" size={16} color="#65A30D" />
+                                        {/* Anorha brand mark */}
+                                        <AnorhaFace size={16} />
                                     </View>
                                     <View>
                                         <Text style={styles.sourceName}>Anorha DB</Text>

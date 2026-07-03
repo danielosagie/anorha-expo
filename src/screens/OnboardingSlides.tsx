@@ -22,6 +22,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { ArrowRight } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { AnorhaFace } from '../components/brand/AnorhaFace';
 
 import ShopifySvg from '../assets/shopify.svg';
 import AmazonSvg from '../assets/amazon.svg';
@@ -309,7 +310,7 @@ const HeroPartner = memo(() => {
         </OrbitNode>
 
         <View style={styles.centerNode}>
-          <Icon name="leaf" size={30} color="#FFFFFF" />
+          <AnorhaFace size={30} />
         </View>
       </View>
     </View>

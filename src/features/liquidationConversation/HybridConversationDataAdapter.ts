@@ -173,8 +173,13 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     const combined = Array.from(merged.values()).sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
+    // Return the locally-decorated list (renames applied, hidden/deleted filtered
+    // out) — ALWAYS, even when it's empty. The old `: combined` fallback resurrected
+    // a just-deleted campaign whenever you removed your last one (an empty decorated
+    // list fell back to the unfiltered set). An empty list is the correct state when
+    // everything's been hidden/deleted.
     const decorated = await applyCampaignMetadata(combined);
-    return decorated.length > 0 ? decorated : combined;
+    return decorated;
   }
 
   async listThreads(campaignId: string): Promise<CampaignThreadSummary[]> {

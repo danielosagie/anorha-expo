@@ -20,7 +20,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Svg, { G, Path } from 'react-native-svg';
+import { AnorhaFace } from '../components/brand/AnorhaFace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { StreamingText } from '../components/StreamingText';
@@ -63,55 +63,6 @@ const greetingForHour = (hour: number): string => {
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
 };
-
-// The Anorha face mark — the brand mascot (two brows, nose, smile) on its white
-// chip, lifted from the dashboard mockup ("home blurb"). Sits right after the
-// greeting name in the header, in every time-of-day state.
-const AnorhaFace = ({ size = 20 }: { size?: number }) => (
-  <Svg width={(size * 23) / 19} height={size} viewBox="0 0 23 19">
-    <G transform="translate(1,1)">
-      <Path
-        d="M18.833 0C18.833 0 2.167 0 2.167 0C0.97 0 0 0.988 0 2.208L0 14.774C0 15.993 0.97 16.981 2.167 16.981L18.833 16.981C20.03 16.981 21 15.993 21 14.774L21 2.208C21 0.988 20.03 0 18.833 0Z"
-        fill="#FFFFFF"
-        stroke="#555555"
-        strokeWidth={2.5}
-      />
-      <G transform="translate(12.833,4.415)">
-        <Path
-          d="M0 2.038C0.087 1.7 0.484 0.737 0.935 0.272C1.222 -0.023 1.592 0.001 2.097 0C2.376 0.024 2.855 0.082 3.265 0.111C3.674 0.141 3.999 0.141 4.333 0.141"
-          fill="none"
-          stroke="#555555"
-          strokeWidth={1.5}
-          strokeLinecap="round"
-        />
-      </G>
-      <G transform="translate(9.75,4.491)">
-        <Path
-          d="M0 0.5C0 0.5 0 0 0 0C0 0 1.5 0 1.5 0C1.5 0 1.5 0.5 1.5 0.5C1.5 0.5 0.75 0.5 0.75 0.5C0.75 0.5 0 0.5 0 0.5ZM1.5 4.5C1.5 4.776 1.164 5 0.75 5C0.336 5 0 4.776 0 4.5C0 4.5 0.75 4.5 0.75 4.5C0.75 4.5 1.5 4.5 1.5 4.5ZM1.5 0.5C1.5 0.5 0.75 0.5 0.75 0.5C0.75 0.5 0 0.5 0 0.5C0 0.5 0 4.5 0 4.5C0 4.5 0.75 4.5 0.75 4.5C0.75 4.5 1.5 4.5 1.5 4.5C1.5 4.5 1.5 0.5 1.5 0.5Z"
-          fill="#555555"
-        />
-      </G>
-      <G transform="translate(3.5,4.415)">
-        <Path
-          d="M4.333 2.038C4.247 1.7 3.849 0.737 3.398 0.272C3.112 -0.023 2.741 0.001 2.237 0C1.958 0.024 1.478 0.082 1.068 0.111C0.659 0.141 0.334 0.141 0 0.141"
-          fill="none"
-          stroke="#555555"
-          strokeWidth={1.5}
-          strokeLinecap="round"
-        />
-      </G>
-      <G transform="translate(5.833,11.887)">
-        <Path
-          d="M0 0C1.333 1.189 3.025 0.34 4.667 0.34C6.167 0.34 7.833 1.019 9.333 0"
-          fill="none"
-          stroke="#555555"
-          strokeWidth={1.5}
-          strokeLinecap="square"
-        />
-      </G>
-    </G>
-  </Svg>
-);
 
 const currency = (value: number): string => {
   const rounded = Math.round(value * 100) / 100;
@@ -428,8 +379,23 @@ const SproutHomeScreen: React.FC = () => {
   const setupUnknown = isOrgLoading || productCountLoading || !currentOrg?.id;
   // Only surface ACTIONABLE headlines — status noise ("Insights paused") stays off the hero.
   const rawHeadline = insight?.topDIN?.headline?.trim();
+  // The backend insight is LLM-cached for 6h with no invalidation when the seller
+  // publishes or sells, so an onboarding-flavored headline ("Publish 1 item to
+  // unlock first sale") generated while the org looked empty can linger for hours
+  // after they've acted. Once there's real activity — a clearout exists or setup is
+  // done — suppress that whole class here. Belt-and-suspenders to the backend fix.
+  const pastSetup = (controller.campaigns?.length || 0) > 0 || hasSetup;
+  const isOnboardingNudge =
+    !!rawHeadline &&
+    /unlock|first sale|first item|publish (your|1|a) |connect (a|your) platform|add your first|get started|sync incoming/i.test(
+      rawHeadline,
+    );
   const insightHeadline =
-    rawHeadline && !/paused|unavailable|disabled|error/i.test(rawHeadline) ? rawHeadline : undefined;
+    rawHeadline &&
+    !/paused|unavailable|disabled|error/i.test(rawHeadline) &&
+    !(pastSetup && isOnboardingNudge)
+      ? rawHeadline
+      : undefined;
 
   // Insight handoff → chat. The backend scopes by StrategyId; mobile threads key on
   // session ids, so match against the loaded campaigns and fall back to the newest —
@@ -651,6 +617,22 @@ const SproutHomeScreen: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     } catch (e: any) {
       Alert.alert('Could not pause', String(e?.message || e));
+    }
+  }, [selectedIds, tap, exitSelect, controller]);
+
+  // Mark selected clearouts done — moves them to the Completed filter. Optimistic
+  // (setCampaignStatus reloads from the server if the write fails), same path Pause
+  // uses, so it persists via PATCH sessions/:id/status.
+  const completeSelected = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    tap(Haptics.ImpactFeedbackStyle.Medium);
+    exitSelect();
+    try {
+      await Promise.all(ids.map(id => controller.setCampaignStatus(id, 'completed')));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    } catch (e: any) {
+      Alert.alert('Could not complete', String(e?.message || e));
     }
   }, [selectedIds, tap, exitSelect, controller]);
 
@@ -1098,7 +1080,7 @@ const SproutHomeScreen: React.FC = () => {
             ) : (
               <View style={[styles.emptyCard, isNight && styles.emptyCardNight]}>
                 <View style={[styles.emptyIconWrap, isNight && { backgroundColor: 'rgba(147,200,34,0.16)' }]}>
-                  <Icon name="sprout-outline" size={26} color={BRAND} />
+                  <AnorhaFace size={26} />
                 </View>
                 <Text style={[styles.emptyTitle, isNight && { color: '#F4F4EE' }]}>
                   {activeFilter === 'All' ? 'Ready to clear out?' : `No ${activeFilter.toLowerCase()} clearouts`}
@@ -1180,6 +1162,15 @@ const SproutHomeScreen: React.FC = () => {
             >
               <Icon name="pause" size={16} color={isNight ? '#E4E4E7' : '#3F3F46'} />
               <Text style={[styles.selectActionText, isNight && styles.selectActionTextNight]}>Pause</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.selectAction, styles.selectActionDone, selectedIds.size === 0 && styles.selectActionDisabled]}
+              onPress={completeSelected}
+              disabled={selectedIds.size === 0}
+              activeOpacity={0.8}
+            >
+              <Icon name="check" size={16} color="#3B6300" />
+              <Text style={[styles.selectActionText, styles.selectActionDoneText]}>Done</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.selectAction, styles.selectActionDanger, selectedIds.size === 0 && styles.selectActionDisabled]}
@@ -1452,6 +1443,12 @@ const styles = StyleSheet.create({
   },
   selectActionTextNight: {
     color: '#E4E4E7',
+  },
+  selectActionDone: {
+    backgroundColor: 'rgba(147,200,34,0.18)',
+  },
+  selectActionDoneText: {
+    color: '#3B6300',
   },
   selectActionDanger: {
     backgroundColor: '#DC2626',

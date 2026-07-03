@@ -3,12 +3,12 @@
 // mistakes" footer. Brand leaf mark + one short line, faint so it never competes.
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { AnorhaFace } from '../../../components/brand/AnorhaFace';
 
 export const SproutDisclaimer = () => (
   <View style={styles.wrap}>
     <View style={styles.mark}>
-      <Icon name="leaf" size={12} color="#5D7E16" />
+      <AnorhaFace size={13} />
     </View>
     <Text style={styles.text}>Sprout can make mistakes. Double-check important details.</Text>
   </View>

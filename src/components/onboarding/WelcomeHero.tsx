@@ -16,6 +16,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Line } from 'react-native-svg';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { AnorhaFace } from '../brand/AnorhaFace';
 
 // anorha green family (no more muddy dark green)
 const BRAND = '#93C822';
@@ -201,7 +202,7 @@ const ChatPhone = () => (
         <Text style={styles.userText}>Reprice my winter rack</Text>
       </Animated.View>
       <Animated.View entering={FadeInUp.delay(520).duration(380)} style={styles.sproutRow}>
-        <View style={styles.sproutAvatar}><Icon name="sprout" size={11} color="#fff" /></View>
+        <View style={styles.sproutAvatar}><AnorhaFace size={12} /></View>
         <View style={styles.sproutBubble}><Text style={styles.sproutText}>On it — repriced 8 ✓</Text></View>
       </Animated.View>
       <Animated.View entering={FadeInUp.delay(1020).duration(420)} style={styles.prodCard}>
