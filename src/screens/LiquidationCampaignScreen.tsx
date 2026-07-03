@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-  ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Trash2, Check,
+  ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Check,
   Search, X, Plus, PlusCircle, ChevronRight, AlertCircle, CheckCircle2,
 } from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
@@ -198,9 +198,11 @@ const LiquidationCampaignScreen = () => {
     catch (e: any) { Alert.alert('Could not load settings', e?.message || 'Unable to load'); }
   };
 
-  const deleteCampaign = (campaignId: string, title: string) => {
-    confirmThen('Delete campaign', `Delete "${title}"?`, () => {
-      controller.deleteCampaign(campaignId).catch((e: any) => Alert.alert('Delete failed', e?.message || 'Unable'));
+  // Close (end) the clearout — the single terminal action; a clearout is only ever
+  // soft-hidden, never destroyed, so this replaces "Delete". Moves it to Completed.
+  const closeClearout = (campaignId: string, title: string) => {
+    confirmThen('Close clearout', `Close "${title}"? It'll move to Completed. You won't lose anything.`, () => {
+      controller.setCampaignStatus(campaignId, 'completed').catch((e: any) => Alert.alert('Could not close', e?.message || 'Unable'));
       navigation.goBack();
     });
   };
@@ -594,9 +596,9 @@ const LiquidationCampaignScreen = () => {
             </TouchableOpacity>
             <View style={s.dropDivider} />
             <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) deleteCampaign(cam.id, cam.title); }}>
-              <Trash2 size={18} color="#DC2626" />
-              <Text style={[s.dropText, { color: '#DC2626' }]}>Delete</Text>
+              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) closeClearout(cam.id, cam.title); }}>
+              <CheckCircle2 size={18} color="#3B6300" />
+              <Text style={[s.dropText, { color: '#3B6300' }]}>Close clearout</Text>
             </TouchableOpacity>
           </View>
         </View>

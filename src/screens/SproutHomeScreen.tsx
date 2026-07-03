@@ -620,46 +620,36 @@ const SproutHomeScreen: React.FC = () => {
     }
   }, [selectedIds, tap, exitSelect, controller]);
 
-  // Mark selected clearouts done — moves them to the Completed filter. Optimistic
-  // (setCampaignStatus reloads from the server if the write fails), same path Pause
-  // uses, so it persists via PATCH sessions/:id/status.
-  const completeSelected = useCallback(async () => {
-    const ids = Array.from(selectedIds);
-    if (!ids.length) return;
-    tap(Haptics.ImpactFeedbackStyle.Medium);
-    exitSelect();
-    try {
-      await Promise.all(ids.map(id => controller.setCampaignStatus(id, 'completed')));
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
-    } catch (e: any) {
-      Alert.alert('Could not complete', String(e?.message || e));
-    }
-  }, [selectedIds, tap, exitSelect, controller]);
-
-  const deleteSelected = useCallback(() => {
+  // Close selected clearouts — ends them and moves them to the Completed filter.
+  // "Delete" was only ever a soft-delete (archive) that behaved the same as
+  // finishing, so the two are unified into one honest action: nothing is destroyed,
+  // the clearout just moves to Completed. Optimistic (setCampaignStatus reloads from
+  // the server if the write fails), same path Pause uses — persists via
+  // PATCH sessions/:id/status.
+  const closeSelected = useCallback(() => {
     const ids = Array.from(selectedIds);
     if (!ids.length) return;
     Alert.alert(
-      `Delete ${ids.length} clearout${ids.length === 1 ? '' : 's'}?`,
-      'This removes the campaign and its chats. This cannot be undone.',
+      `Close ${ids.length} clearout${ids.length === 1 ? '' : 's'}?`,
+      "They'll move to Completed. You won't lose anything.",
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
-          style: 'destructive',
+          text: 'Close clearout',
           onPress: async () => {
+            tap(Haptics.ImpactFeedbackStyle.Medium);
             exitSelect();
             try {
-              await Promise.all(ids.map(id => controller.deleteCampaign(id)));
+              await Promise.all(ids.map(id => controller.setCampaignStatus(id, 'completed')));
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
             } catch (e: any) {
-              Alert.alert('Could not delete', String(e?.message || e));
+              Alert.alert('Could not close', String(e?.message || e));
             }
           },
         },
       ],
     );
-  }, [selectedIds, exitSelect, controller]);
+  }, [selectedIds, tap, exitSelect, controller]);
 
   const handleCreate = useCallback(async (input: NewClearoutInput) => {
     setCreating(true);
@@ -1165,21 +1155,12 @@ const SproutHomeScreen: React.FC = () => {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.selectAction, styles.selectActionDone, selectedIds.size === 0 && styles.selectActionDisabled]}
-              onPress={completeSelected}
+              onPress={closeSelected}
               disabled={selectedIds.size === 0}
               activeOpacity={0.8}
             >
               <Icon name="check" size={16} color="#3B6300" />
-              <Text style={[styles.selectActionText, styles.selectActionDoneText]}>Done</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.selectAction, styles.selectActionDanger, selectedIds.size === 0 && styles.selectActionDisabled]}
-              onPress={deleteSelected}
-              disabled={selectedIds.size === 0}
-              activeOpacity={0.8}
-            >
-              <Icon name="trash-can-outline" size={16} color="#FFFFFF" />
-              <Text style={[styles.selectActionText, styles.selectActionDangerText]}>Delete</Text>
+              <Text style={[styles.selectActionText, styles.selectActionDoneText]}>Close clearout</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1449,12 +1430,6 @@ const styles = StyleSheet.create({
   },
   selectActionDoneText: {
     color: '#3B6300',
-  },
-  selectActionDanger: {
-    backgroundColor: '#DC2626',
-  },
-  selectActionDangerText: {
-    color: '#FFFFFF',
   },
   selectActionDisabled: {
     opacity: 0.45,

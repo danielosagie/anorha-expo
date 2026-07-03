@@ -18,7 +18,7 @@ import { useAuth } from '@clerk/expo';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { ChevronLeft, ChevronDown, Target, Gauge, ShieldCheck, TriangleAlert, Trash2 } from 'lucide-react-native';
+import { ChevronLeft, ChevronDown, Target, Gauge, ShieldCheck, CheckCircle2 } from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 
@@ -91,19 +91,21 @@ const CampaignSettingsScreen = () => {
     }
   };
 
-  const del = () => {
+  // Close (end) the clearout — the single terminal action. A clearout is only ever
+  // soft-hidden, never destroyed, so this replaces the old "Delete": it moves the
+  // clearout to Completed via PATCH sessions/:id/status, nothing is lost.
+  const close = () => {
     const name = passedTitle || controller.activeCampaign?.title || 'this clearout';
-    Alert.alert('Delete clearout', `Delete "${name}"? This cannot be undone.`, [
+    Alert.alert('Close clearout', `Close "${name}"? It'll move to Completed. You won't lose anything.`, [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Delete',
-        style: 'destructive',
+        text: 'Close clearout',
         onPress: async () => {
           try {
-            await controller.deleteCampaign(campaignId);
+            await controller.setCampaignStatus(campaignId, 'completed');
             navigation.navigate('SproutHomeScreen');
           } catch (e: any) {
-            Alert.alert('Delete failed', e?.message || 'Unable to delete');
+            Alert.alert('Could not close', e?.message || 'Unable to close this clearout');
           }
         },
       },
@@ -162,10 +164,10 @@ const CampaignSettingsScreen = () => {
               </View>
             </Section>
 
-            <Section title="Danger zone" icon={<TriangleAlert size={18} color="#DC2626" />} open={open.danger} onToggle={() => toggleSec('danger')}>
-              <TouchableOpacity style={s.deleteBtn} onPress={del} activeOpacity={0.85}>
-                <Trash2 size={18} color="#DC2626" />
-                <Text style={s.deleteText}>Delete this clearout</Text>
+            <Section title="End clearout" icon={<CheckCircle2 size={18} color="#3B6300" />} open={open.danger} onToggle={() => toggleSec('danger')}>
+              <TouchableOpacity style={s.deleteBtn} onPress={close} activeOpacity={0.85}>
+                <CheckCircle2 size={18} color="#3B6300" />
+                <Text style={s.deleteText}>Close clearout</Text>
               </TouchableOpacity>
             </Section>
           </>
@@ -285,8 +287,8 @@ const s = StyleSheet.create({
   switchLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 2 },
   switchSub: { fontSize: 12, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 17 },
 
-  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13, borderRadius: 14, backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA' },
-  deleteText: { fontSize: 15, color: '#DC2626', fontFamily: 'Inter_600SemiBold' },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13, borderRadius: 14, backgroundColor: 'rgba(147,200,34,0.12)', borderWidth: 1, borderColor: 'rgba(147,200,34,0.35)' },
+  deleteText: { fontSize: 15, color: '#3B6300', fontFamily: 'Inter_600SemiBold' },
 
   // Sticky save bar
   saveBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 8, backgroundColor: '#FFFFFF' },

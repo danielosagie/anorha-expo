@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import {
+  Alert,
   Dimensions,
   Keyboard,
   PanResponder,
@@ -361,6 +362,30 @@ const CampaignThreadScreen = () => {
     setMenuOpen(false);
     navigation.navigate('CampaignSettings', { campaignId, title: passedTitle });
   };
+  // Close (end) the clearout — moves it to the Completed filter. This is the single
+  // terminal action; there's no separate delete because a clearout is only ever
+  // soft-hidden, never destroyed. Persists via PATCH sessions/:id/status.
+  const closeClearout = () => {
+    setMenuOpen(false);
+    Alert.alert(
+      'Close clearout?',
+      "It'll move to Completed. You won't lose anything.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Close clearout',
+          onPress: async () => {
+            try {
+              await controller.setCampaignStatus(campaignId, 'completed');
+              navigation.navigate('SproutHomeScreen');
+            } catch (e: any) {
+              Alert.alert('Could not close', e?.message || 'Unable to close this clearout');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   // Stage-aware nudge: before the first sale, invite a first move; once it's selling,
   // it's about steering. Keeps the composer from reading like a generic blank box.
@@ -602,6 +627,11 @@ const CampaignThreadScreen = () => {
             <TouchableOpacity style={s.dropItem} onPress={goToSettings} activeOpacity={0.7}>
               <Settings size={18} color="#3F3F46" />
               <Text style={s.dropText}>Campaign settings</Text>
+            </TouchableOpacity>
+            <View style={s.dropDivider} />
+            <TouchableOpacity style={s.dropItem} onPress={closeClearout} activeOpacity={0.7}>
+              <CheckCircle2 size={18} color="#3B6300" />
+              <Text style={[s.dropText, { color: '#3B6300' }]}>Close clearout</Text>
             </TouchableOpacity>
           </View>
         </View>
