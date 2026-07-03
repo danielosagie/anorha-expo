@@ -20,7 +20,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Moon, Sun } from 'lucide-react-native';
+import Svg, { G, Path } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { StreamingText } from '../components/StreamingText';
@@ -64,6 +64,55 @@ const greetingForHour = (hour: number): string => {
   return 'Good evening';
 };
 
+// The Anorha face mark — the brand mascot (two brows, nose, smile) on its white
+// chip, lifted from the dashboard mockup ("home blurb"). Sits right after the
+// greeting name in the header, in every time-of-day state.
+const AnorhaFace = ({ size = 20 }: { size?: number }) => (
+  <Svg width={(size * 23) / 19} height={size} viewBox="0 0 23 19">
+    <G transform="translate(1,1)">
+      <Path
+        d="M18.833 0C18.833 0 2.167 0 2.167 0C0.97 0 0 0.988 0 2.208L0 14.774C0 15.993 0.97 16.981 2.167 16.981L18.833 16.981C20.03 16.981 21 15.993 21 14.774L21 2.208C21 0.988 20.03 0 18.833 0Z"
+        fill="#FFFFFF"
+        stroke="#555555"
+        strokeWidth={2.5}
+      />
+      <G transform="translate(12.833,4.415)">
+        <Path
+          d="M0 2.038C0.087 1.7 0.484 0.737 0.935 0.272C1.222 -0.023 1.592 0.001 2.097 0C2.376 0.024 2.855 0.082 3.265 0.111C3.674 0.141 3.999 0.141 4.333 0.141"
+          fill="none"
+          stroke="#555555"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+        />
+      </G>
+      <G transform="translate(9.75,4.491)">
+        <Path
+          d="M0 0.5C0 0.5 0 0 0 0C0 0 1.5 0 1.5 0C1.5 0 1.5 0.5 1.5 0.5C1.5 0.5 0.75 0.5 0.75 0.5C0.75 0.5 0 0.5 0 0.5ZM1.5 4.5C1.5 4.776 1.164 5 0.75 5C0.336 5 0 4.776 0 4.5C0 4.5 0.75 4.5 0.75 4.5C0.75 4.5 1.5 4.5 1.5 4.5ZM1.5 0.5C1.5 0.5 0.75 0.5 0.75 0.5C0.75 0.5 0 0.5 0 0.5C0 0.5 0 4.5 0 4.5C0 4.5 0.75 4.5 0.75 4.5C0.75 4.5 1.5 4.5 1.5 4.5C1.5 4.5 1.5 0.5 1.5 0.5Z"
+          fill="#555555"
+        />
+      </G>
+      <G transform="translate(3.5,4.415)">
+        <Path
+          d="M4.333 2.038C4.247 1.7 3.849 0.737 3.398 0.272C3.112 -0.023 2.741 0.001 2.237 0C1.958 0.024 1.478 0.082 1.068 0.111C0.659 0.141 0.334 0.141 0 0.141"
+          fill="none"
+          stroke="#555555"
+          strokeWidth={1.5}
+          strokeLinecap="round"
+        />
+      </G>
+      <G transform="translate(5.833,11.887)">
+        <Path
+          d="M0 0C1.333 1.189 3.025 0.34 4.667 0.34C6.167 0.34 7.833 1.019 9.333 0"
+          fill="none"
+          stroke="#555555"
+          strokeWidth={1.5}
+          strokeLinecap="square"
+        />
+      </G>
+    </G>
+  </Svg>
+);
+
 const currency = (value: number): string => {
   const rounded = Math.round(value * 100) / 100;
   return `$${rounded.toLocaleString(undefined, { minimumFractionDigits: rounded % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`;
@@ -101,8 +150,10 @@ const DAY_THEME: Palette = {
   strong: '#FFFFFF', dim: 'rgba(255,255,255,0.6)', faint: 'rgba(255,255,255,0.78)',
   pillBg: 'rgba(255,255,255,0.18)', pillBorder: 'rgba(0,0,0,0.06)', newBg: 'rgba(20,30,8,0.30)',
   chart: 'rgba(255,255,255,0.95)', divider: 'rgba(255,255,255,0.34)',
-  chipIdleBg: '#EBEDE7', chipIdleText: '#52525B',
-  chipActiveBg: '#FFFFFF', chipActiveText: '#18181B', chipBorder: 'rgba(0,0,0,0.08)',
+  chipIdleBg: '#E4E4E7', chipIdleText: '#71717A',
+  // Active = the darker slate chip from the mockup (NOT white — white washes out
+  // against the light body). White text on slate, matching the top filter tabs.
+  chipActiveBg: '#71717A', chipActiveText: '#FFFFFF', chipBorder: 'transparent',
   rangeIdleText: 'rgba(255,255,255,0.78)', rangeActiveBg: '#FFFFFF', rangeActiveText: '#43631A',
   blur: 'light',
 };
@@ -113,8 +164,8 @@ const NIGHT_THEME: Palette = {
   strong: '#FFFFFF', dim: 'rgba(255,255,255,0.4)', faint: 'rgba(255,255,255,0.8)',
   pillBg: 'rgba(244,244,245,0.2)', pillBorder: 'rgba(0,0,0,0.25)', newBg: 'rgba(255,255,255,0.2)',
   chart: 'rgba(255,255,255,0.92)', divider: 'rgba(255,255,255,0.9)',
-  chipIdleBg: 'rgba(255,255,255,0.2)', chipIdleText: '#CECECE',
-  chipActiveBg: '#FFFFFF', chipActiveText: '#000000', chipBorder: 'transparent',
+  chipIdleBg: 'rgba(255,255,255,0.14)', chipIdleText: '#CECECE',
+  chipActiveBg: '#71717A', chipActiveText: '#FFFFFF', chipBorder: 'transparent',
   rangeIdleText: 'rgba(244,244,238,0.6)', rangeActiveBg: '#F4F4EE', rangeActiveText: '#1F2218',
   blur: 'dark',
 };
@@ -700,10 +751,10 @@ const SproutHomeScreen: React.FC = () => {
             it didn't do anything in this state). Content sits higher as a result. */}
         <View style={styles.topBarRow}>
           <View style={[styles.greetingRow, { flex: 1, marginBottom: 0, marginRight: 12 }]}>
-            {isNight ? <Moon size={20} color={THEME.faint} /> : <Sun size={20} color={THEME.faint} />}
             <Text style={[styles.greeting, { color: THEME.strong }]} numberOfLines={1}>
               {greeting}, {firstName}
             </Text>
+            <AnorhaFace size={20} />
           </View>
           <TouchableOpacity
             style={[styles.newBtn, { backgroundColor: THEME.newBg, borderColor: THEME.pillBorder }]}
@@ -799,7 +850,11 @@ const SproutHomeScreen: React.FC = () => {
             </>
           )}
 
-          <View style={[styles.dashedDivider, { borderColor: THEME.divider }]} />
+          {/* Divider + today's numbers only when there's something below the fold —
+              a brand-new seller with 0 sales sees the greeting + recap, nothing dead. */}
+          {(heroSold > 0 || heroRevenue > 0 || displayEvents.length > 0 || chartSeries.length >= 2) && (
+            <View style={[styles.dashedDivider, { borderColor: THEME.divider }]} />
+          )}
 
           {/* Timestamped events ("Offer 1 · 9:31 PM") */}
           {displayEvents.length > 0 && (
@@ -813,13 +868,15 @@ const SproutHomeScreen: React.FC = () => {
             </View>
           )}
 
-          {/* Hero stats — sales today + revenue */}
-          <View style={styles.statsRow}>
-            <Text style={[styles.salesToday, { color: THEME.strong }]}>
-              {heroSold} {heroSold === 1 ? 'sale' : 'sales'} today
-            </Text>
-            <Text style={[styles.salesDelta, { color: THEME.strong }]}>+{currency(heroRevenue)}</Text>
-          </View>
+          {/* Hero stats — only once there's an actual sale/revenue to show */}
+          {(heroSold > 0 || heroRevenue > 0) && (
+            <View style={styles.statsRow}>
+              <Text style={[styles.salesToday, { color: THEME.strong }]}>
+                {heroSold} {heroSold === 1 ? 'sale' : 'sales'} today
+              </Text>
+              <Text style={[styles.salesDelta, { color: THEME.strong }]}>+{currency(heroRevenue)}</Text>
+            </View>
+          )}
 
           {/* Sparkline — only when there is real revenue history to plot */}
           {chartSeries.length >= 2 && (
@@ -935,7 +992,7 @@ const SproutHomeScreen: React.FC = () => {
                 onChangeText={setCampaignQuery}
                 placeholder="Search clearouts"
                 placeholderTextColor={THEME.chipIdleText}
-                style={[styles.searchInput, { color: THEME.strong }]}
+                style={[styles.searchInput, { color: isNight ? '#F4F4EE' : '#18181B' }]}
                 autoFocus
                 autoCorrect={false}
                 returnKeyType="search"
@@ -1205,8 +1262,9 @@ const CampaignCard: React.FC<{
 
   const titleColor = isCompleted ? '#09090B' : isNight ? '#FFFFFF' : '#000000';
   const subColor = isCompleted ? '#666666' : isNight ? '#71717A' : '#666666';
-  // Days badge: solid green by day, muted olive on the dark night card.
-  const daysBadgeBg = isCompleted ? '#7F7F7F' : isNight ? '#494B44' : '#93C822';
+  // Days badge: the neutral filter-tab chip (slate text on light grey), not a
+  // loud green pill — the day counter is metadata, not a status.
+  const daysBadgeBg = '#E4E4E7';
   // Pending pill: amber by day, muted olive at night (matches mockup variants).
   const pendingBg = isNight ? '#494B44' : '#A56300';
   // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
@@ -1671,8 +1729,8 @@ const styles = StyleSheet.create({
   cardHeaderText: { flex: 1 },
   cardTitle: { color: '#18181B', fontFamily: FONT.medium, fontSize: 16, lineHeight: 20, marginBottom: 5 },
   cardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  daysBadge: { backgroundColor: '#494B44', borderRadius: 4, paddingHorizontal: 9, paddingVertical: 2 },
-  daysBadgeText: { color: '#FFFFFF', fontFamily: FONT.medium, fontSize: 13 },
+  daysBadge: { backgroundColor: '#E4E4E7', borderRadius: 6, paddingHorizontal: 9, paddingVertical: 2 },
+  daysBadgeText: { color: '#71717A', fontFamily: FONT.medium, fontSize: 13 },
   cardSubMeta: { color: '#71717A', fontFamily: FONT.medium, fontSize: 14 },
 
   percentText: { color: '#09090B', fontFamily: FONT.medium, fontSize: 14 },
