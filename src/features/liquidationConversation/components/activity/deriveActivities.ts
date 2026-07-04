@@ -61,10 +61,14 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
   //    tool-run receipt. A turn with only plain steps is byte-identical to before.
   const steps = (Array.isArray(meta.toolSteps) ? meta.toolSteps : []) as ConversationToolStep[];
   const reasoning = typeof meta.reasoning === 'string' ? (meta.reasoning as string) : undefined;
+  const textLen = typeof message.content === 'string' ? message.content.length : 0;
   if (steps.length > 0 || hasText(reasoning)) {
     const out: ActivityPayload[] = [];
     const plain: ConversationToolStep[] = [];
     steps.forEach((step, i) => {
+      // Where this card sits inline. A promoted card (report / diff) anchors to its own
+      // step; on reload (no anchor) it falls beneath the reply (textLen).
+      const anchor = typeof step.textAnchor === 'number' ? step.textAnchor : textLen;
       if (step.document && Array.isArray(step.document.sections)) {
         // A report the agent authored — its own tappable card (opens the editable sheet).
         out.push({
@@ -73,6 +77,7 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
           title: step.document.title || 'Report',
           status: step.status === 'failed' ? 'failed' : 'ok',
           document: step.document,
+          anchor,
         });
       } else if (Array.isArray(step.changes) && step.changes.length) {
         out.push({
@@ -85,13 +90,20 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
           evidence: step.evidence,
           itemRef: step.itemRef,
           undo: step.undo,
+          anchor,
         });
       } else {
         plain.push(step);
       }
     });
-    // The receipt for the remaining plain steps (+ reasoning) leads the turn.
+    // The receipt for the remaining plain steps (+ reasoning). It anchors to the FIRST
+    // plain step's position (queries/research usually run before the reply text), so it
+    // leads the turn like the Claude-app reasoning header.
     if (plain.length > 0 || hasText(reasoning)) {
+      const receiptAnchor = plain.reduce<number | undefined>((min, s) => {
+        const a = typeof s.textAnchor === 'number' ? s.textAnchor : undefined;
+        return a === undefined ? min : min === undefined ? a : Math.min(min, a);
+      }, undefined);
       out.unshift({
         kind: 'tool-run',
         id: `${message.id}-toolrun`,
@@ -99,6 +111,7 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
         status: anyFailed(plain) ? 'failed' : 'ok',
         steps: plain,
         reasoning,
+        anchor: receiptAnchor ?? 0,
       });
     }
     if (out.length) return out;

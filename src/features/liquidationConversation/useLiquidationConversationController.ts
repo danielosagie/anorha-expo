@@ -456,12 +456,16 @@ export const useLiquidationConversationController = ({
           },
           // Completed tool steps attach to THIS run's assistant bubble as compact
           // items (label + status only; arguments never reach the client).
-          onToolCompleted: ({ tool, label, status, durationMs, resultSummary, changes, reason, itemRef }) => {
+          // Forward the WHOLE step (label, status, changes, reason, itemRef, undo,
+          // resultDetail, document, …) minus the transport-only threadId, so every
+          // structured field the stream carries — including an authored report
+          // document — reaches the bubble instead of a hand-picked subset.
+          onToolCompleted: ({ threadId: _t, ...step }) => {
             setThreadStateFor(threadId, current => appendAssistantToolStep(
               current,
               item.campaignId,
               threadId,
-              { tool, label, status, durationMs, resultSummary, changes, reason, itemRef },
+              step,
               assistantId,
             ));
           },
@@ -795,6 +799,38 @@ export const useLiquidationConversationController = ({
     void processQueue(threadId);
   }, [adapter, processQueue, setThreadStateFor, uploadAndSendPhotos]);
 
+  // Regenerate a finished assistant reply: re-send the user message that preceded it
+  // as a fresh turn, so Sprout answers the same prompt again. (There's no server-side
+  // "rerun this turn" endpoint; re-asking is the honest equivalent and reuses the
+  // normal streaming path.) No-op if there's nothing before it to re-ask.
+  const regenerateMessage = useCallback(async (assistantMessageId: string) => {
+    const threadId = activeThreadIdRef.current;
+    if (!threadId) return;
+    const msgs = threadStatesRef.current[threadId]?.messages || [];
+    const idx = msgs.findIndex(m => m.id === assistantMessageId || m.serverMessageId === assistantMessageId);
+    if (idx < 0) return;
+    for (let i = idx - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role === 'user' && m.content && m.content.trim()) {
+        await queueTextMessage(m.content.trim());
+        return;
+      }
+    }
+  }, [queueTextMessage]);
+
+  // Persist a thumbs up/down on an assistant reply (null clears it). Non-fatal — the
+  // bubble already reflects the tap optimistically, so a failed write just isn't recorded.
+  const submitMessageFeedback = useCallback(async (messageId: string, vote: 'up' | 'down' | null) => {
+    const campaignId = activeCampaignIdRef.current;
+    const threadId = activeThreadIdRef.current;
+    if (!campaignId || !messageId) return;
+    try {
+      await adapter.submitMessageFeedback(campaignId, messageId, vote, threadId || undefined);
+    } catch {
+      /* feedback is a best-effort signal */
+    }
+  }, [adapter]);
+
   // Cancel a message the seller queued while Sprout was still responding, before it's sent.
   // Only a still-'queued' message can be pulled — once it's 'sending'/'streaming' it's in
   // flight. Removes the queue item AND the optimistic bubble so it vanishes cleanly.
@@ -956,9 +992,9 @@ export const useLiquidationConversationController = ({
             appendAssistantDelta(current, campaignId, threadId, delta, messageId || assistantId)),
           onReasoning: ({ reasoning, messageId }) => setThreadStateFor(threadId, current =>
             appendAssistantReasoning(current, campaignId, threadId, reasoning, messageId || assistantId)),
-          onToolCompleted: ({ tool, label, status, durationMs, resultSummary, changes, reason, itemRef }) =>
+          onToolCompleted: ({ threadId: _t, ...step }) =>
             setThreadStateFor(threadId, current => appendAssistantToolStep(current, campaignId, threadId,
-              { tool, label, status, durationMs, resultSummary, changes, reason, itemRef }, assistantId)),
+              step, assistantId)),
           onAssistantCompleted: ({ content, messageId }) => setThreadStateFor(threadId, current =>
             completeAssistantMessage(current, content, messageId || assistantId), { immediate: true }),
           onError: () => { kickedOffRef.current[threadId] = false; },
@@ -1142,6 +1178,8 @@ export const useLiquidationConversationController = ({
     sendComposer,
     dispatchAction,
     retryMessage,
+    regenerateMessage,
+    submitMessageFeedback,
     onRefresh,
     loadCampaignDetails,
     loadThreads,

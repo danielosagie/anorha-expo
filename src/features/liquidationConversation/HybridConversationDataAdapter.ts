@@ -426,6 +426,13 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 ...(readString((payload as any).reason) ? { reason: readString((payload as any).reason) } : {}),
                 ...((payload as any).itemRef && typeof (payload as any).itemRef === 'object' ? { itemRef: (payload as any).itemRef } : {}),
                 ...((payload as any).undo && typeof (payload as any).undo === 'object' ? { undo: (payload as any).undo } : {}),
+                // An agent-authored report (create_report / revise_report). Ingesting it
+                // live lets the report card render as the turn streams; without this the
+                // report only appeared after a cold reload (toolSteps[].document), which
+                // read as "the tool call came out empty".
+                ...((payload as any).document && typeof (payload as any).document === 'object' && Array.isArray((payload as any).document.sections)
+                  ? { document: (payload as any).document }
+                  : {}),
                 threadId,
               });
               break;
@@ -834,6 +841,20 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       `/api/agent/sessions/${campaignId}/pending-actions`,
     ).catch(() => null);
     return pick(all?.pendingActions);
+  }
+
+  // Record a thumbs up/down on an assistant reply (null clears it). Fire-and-forget
+  // from the caller's view — feedback is a signal, never worth blocking the UI on.
+  async submitMessageFeedback(
+    campaignId: string,
+    messageId: string,
+    vote: 'up' | 'down' | null,
+    threadId?: string,
+  ): Promise<void> {
+    await this.requestNest(
+      `/api/agent/sessions/${campaignId}/messages/${encodeURIComponent(messageId)}/feedback`,
+      { method: 'POST', body: JSON.stringify({ vote, threadId }) },
+    );
   }
 
   // Record the seller's answer (does NOT resume the turn — the controller sends

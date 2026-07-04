@@ -1,5 +1,5 @@
 import React, { useContext, useMemo, useState } from 'react';
-import { Image, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { BRAND_PRIMARY } from '../../../design/tokens';
@@ -60,12 +60,23 @@ const AttachedImages = ({ urls }: { urls: string[] }) => {
   );
 };
 
-const ACTION_HITSLOP = { top: 7, bottom: 7, left: 7, right: 7 };
+const ACTION_HITSLOP = { top: 10, bottom: 10, left: 10, right: 10 };
 
-// The quiet control bar under a finished assistant reply — copy, share, and a
-// thumbs up/down so the seller can react. Feedback is local-only for now (an honest
-// affordance, no dead network call); copy/share fully work.
-const MessageActions = ({ text }: { text: string }) => {
+// The control bar under a finished assistant reply — copy, retry, and a thumbs
+// up/down. Bigger tap targets than before (the row was fiddly to hit). Copy grabs
+// the whole message; retry re-asks the same prompt; the vote is recorded server-side
+// via onFeedback (optimistic — the icon fills the instant you tap).
+const MessageActions = ({
+  text,
+  messageId,
+  onRegenerate,
+  onFeedback,
+}: {
+  text: string;
+  messageId: string;
+  onRegenerate?: (messageId: string) => void;
+  onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
+}) => {
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<null | 'up' | 'down'>(null);
   const tap = () => Haptics.selectionAsync().catch(() => undefined);
@@ -79,33 +90,44 @@ const MessageActions = ({ text }: { text: string }) => {
       /* clipboard can fail silently */
     }
   };
-  const share = () => {
+  const castVote = (next: 'up' | 'down') => {
     tap();
-    Share.share({ message: text }).catch(() => undefined);
+    setVote((prev) => {
+      const resolved = prev === next ? null : next;
+      onFeedback?.(messageId, resolved);
+      return resolved;
+    });
   };
   return (
     <View style={styles.actionsRow}>
       <TouchableOpacity style={styles.actionIcon} onPress={copy} hitSlop={ACTION_HITSLOP} accessibilityLabel="Copy">
-        <Icon name={copied ? 'check' : 'content-copy'} size={15} color={copied ? '#5D7E16' : '#9CA3AF'} />
+        <Icon name={copied ? 'check' : 'content-copy'} size={18} color={copied ? '#5D7E16' : '#9CA3AF'} />
       </TouchableOpacity>
-      <TouchableOpacity style={styles.actionIcon} onPress={share} hitSlop={ACTION_HITSLOP} accessibilityLabel="Share">
-        <Icon name="tray-arrow-up" size={16} color="#9CA3AF" />
-      </TouchableOpacity>
+      {onRegenerate ? (
+        <TouchableOpacity
+          style={styles.actionIcon}
+          onPress={() => { tap(); onRegenerate(messageId); }}
+          hitSlop={ACTION_HITSLOP}
+          accessibilityLabel="Retry"
+        >
+          <Icon name="refresh" size={18} color="#9CA3AF" />
+        </TouchableOpacity>
+      ) : null}
       <TouchableOpacity
         style={styles.actionIcon}
-        onPress={() => { tap(); setVote(v => (v === 'up' ? null : 'up')); }}
+        onPress={() => castVote('up')}
         hitSlop={ACTION_HITSLOP}
         accessibilityLabel="Good response"
       >
-        <Icon name={vote === 'up' ? 'thumb-up' : 'thumb-up-outline'} size={15} color={vote === 'up' ? '#52525B' : '#9CA3AF'} />
+        <Icon name={vote === 'up' ? 'thumb-up' : 'thumb-up-outline'} size={18} color={vote === 'up' ? '#5D7E16' : '#9CA3AF'} />
       </TouchableOpacity>
       <TouchableOpacity
         style={styles.actionIcon}
-        onPress={() => { tap(); setVote(v => (v === 'down' ? null : 'down')); }}
+        onPress={() => castVote('down')}
         hitSlop={ACTION_HITSLOP}
         accessibilityLabel="Bad response"
       >
-        <Icon name={vote === 'down' ? 'thumb-down' : 'thumb-down-outline'} size={15} color={vote === 'down' ? '#52525B' : '#9CA3AF'} />
+        <Icon name={vote === 'down' ? 'thumb-down' : 'thumb-down-outline'} size={18} color={vote === 'down' ? '#52525B' : '#9CA3AF'} />
       </TouchableOpacity>
     </View>
   );
@@ -119,6 +141,14 @@ const markdownRules = {
     <HorizontalFadeScroll key={node.key} fadeColor="#FFFFFF" style={styles.mdTableScroll}>
       <View style={styles.mdTable}>{children}</View>
     </HorizontalFadeScroll>
+  ),
+  // Make the reply's text long-press selectable so the seller can grab part of a
+  // message (not only the whole-message Copy button). textgroup wraps the text of
+  // paragraphs, headings, list items and table cells, so one override covers them all.
+  textgroup: (node: any, children: React.ReactNode, _parent: any, mdStyles: any) => (
+    <Text key={node.key} style={mdStyles.textgroup} selectable>
+      {children}
+    </Text>
   ),
 };
 
@@ -148,6 +178,92 @@ class MarkdownBoundary extends React.Component<
   }
 }
 
+// Safety net: the seller wants no em dashes in chat. Strip them from a segment of
+// assistant text in case the model slips one in. Applied per text block (offsets are
+// computed against the raw reply, so stripping here never shifts a card's anchor).
+const stripEmDash = (s: string): string => s.replace(/\s*[—]\s*/g, ', ').replace(/[–]/g, '-');
+
+type AssistantBlock =
+  | { type: 'text'; key: string; text: string }
+  | { type: 'card'; key: string; payload: ActivityPayload };
+
+// Snap a card's anchor to a line boundary so a text block never gets split mid-line
+// (which would break markdown). At/after the end → render beneath the whole reply.
+const clampAnchor = (text: string, anchor: number | undefined, len: number): number => {
+  if (typeof anchor !== 'number' || anchor >= len) return len;
+  if (anchor <= 0) return 0;
+  if (text[anchor - 1] === '\n') return anchor;
+  const nl = text.lastIndexOf('\n', anchor - 1);
+  return nl >= 0 ? nl + 1 : anchor;
+};
+
+// Weave the reply text and its activity cards into one ordered list, so each card sits
+// inline where the reply produced it (tool receipt up top, a diff mid-reply, the report
+// beneath the closing line) — instead of every card stacked above the text.
+const buildBlocks = (raw: string, activities: ActivityPayload[]): AssistantBlock[] => {
+  const len = raw.length;
+  if (!activities.length) return raw ? [{ type: 'text', key: 't0', text: raw }] : [];
+  const placed = activities
+    .map((a, i) => ({ a, i, at: clampAnchor(raw, a.anchor, len) }))
+    .sort((x, y) => x.at - y.at || x.i - y.i);
+  const blocks: AssistantBlock[] = [];
+  let cursor = 0;
+  placed.forEach(({ a, at }) => {
+    if (at > cursor) {
+      blocks.push({ type: 'text', key: `t${cursor}`, text: raw.slice(cursor, at) });
+      cursor = at;
+    }
+    blocks.push({ type: 'card', key: a.id, payload: a });
+  });
+  if (cursor < len) blocks.push({ type: 'text', key: `t${cursor}`, text: raw.slice(cursor) });
+  return blocks;
+};
+
+// One markdown text segment of an assistant reply (em-dashes stripped at render).
+const TextBlock = ({ text }: { text: string }) => {
+  const md = stripEmDash(text);
+  if (!md.trim()) return null;
+  return (
+    <MarkdownBoundary content={md}>
+      <Markdown style={styles.markdown} rules={markdownRules}>{md}</Markdown>
+    </MarkdownBoundary>
+  );
+};
+
+// The assistant reply body: text and activity cards interleaved in reply order.
+const AssistantBody = ({
+  raw,
+  activities,
+  isStreaming,
+  onOpenTray,
+  onOpenItem,
+}: {
+  raw: string;
+  activities: ActivityPayload[];
+  isStreaming: boolean;
+  onOpenTray?: (payload: ActivityPayload) => void;
+  onOpenItem?: (productId: string) => void;
+}) => {
+  const blocks = useMemo(() => buildBlocks(raw, activities), [raw, activities]);
+  return (
+    <>
+      {blocks.map((b) =>
+        b.type === 'card' ? (
+          <ActivityCard
+            key={b.key}
+            payload={b.payload}
+            streaming={isStreaming}
+            onOpenTray={onOpenTray}
+            onOpenItem={onOpenItem}
+          />
+        ) : (
+          <TextBlock key={b.key} text={b.text} />
+        ),
+      )}
+    </>
+  );
+};
+
 type MessageWithTime = ConversationMessage & { time: string };
 
 type Props = {
@@ -160,9 +276,13 @@ type Props = {
   onOpenTray?: (payload: ActivityPayload) => void;
   /** Jump from an activity to the product it touched. */
   onOpenItem?: (productId: string) => void;
+  /** Regenerate this finished reply (re-ask the preceding user turn). */
+  onRegenerate?: (messageId: string) => void;
+  /** Record a thumbs up/down on this reply (null clears it). */
+  onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
 };
 
-const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem }: Props) => {
+const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onRegenerate, onFeedback }: Props) => {
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -188,11 +308,11 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
     return null;
   }, [message.actionMeta?.status, message.deliveryState, message.kind]);
 
-  // Safety net: the seller wants no em dashes in chat. Strip them from assistant
-  // text in case the model slips one in.
-  const content = isUser
-    ? message.content
-    : (message.content || '').replace(/\s*[—]\s*/g, ', ').replace(/[–]/g, '-');
+  // Assistant text is kept RAW for interleaving (card anchors are offsets into it);
+  // em-dashes are stripped per text block at render (stripEmDash in TextBlock). The
+  // stripped `content` here is only for the whole-message Copy action + the markdown gate.
+  const assistantRaw = isUser ? '' : (message.content || '');
+  const content = isUser ? message.content : stripEmDash(assistantRaw);
   // Render assistant text as markdown the WHOLE time, including mid-stream, so it
   // never shows raw ** ## - syntax. (Previously markdown only rendered once the
   // turn finished, so the seller watched raw markdown the entire response.)
@@ -244,37 +364,26 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           </View>
         ) : null}
 
-        {/* The inline activity cards for the turn: a quiet live "working on it"
-            pill, the foldable tool receipt (legacy turns render exactly as before),
-            and the tappable price/inventory/status diff + routine cards that open
-            the review tray. deriveActivities decides which, with full back-compat. */}
-        {!isUser && activities.length > 0
-          ? activities.map((a) => (
-              <ActivityCard
-                key={a.id}
-                payload={a}
-                streaming={isStreaming}
-                onOpenTray={onOpenTray}
-                onOpenItem={onOpenItem}
-              />
-            ))
-          : null}
-
         {/* Attached photos render above the text, like iMessage — so the chat
             history shows what the seller (or agent) actually sent. */}
         {imageUrls.length ? <AttachedImages urls={imageUrls} /> : null}
 
         {isUser ? (
-          content ? <Text style={[styles.messageText, styles.userMessageText]}>{content}</Text> : null
-        ) : renderMarkdown ? (
-          // Stream the reply live: render the partial markdown as deltas arrive
-          // (content accumulates via appendAssistantDelta). The typing bubble only
-          // shows BEFORE the first token, while the agent is still working or calling
-          // tools (the activity card above shows those steps as they land).
-          <MarkdownBoundary content={content}>
-            <Markdown style={styles.markdown} rules={markdownRules}>{content}</Markdown>
-          </MarkdownBoundary>
-        ) : null}
+          content ? <Text selectable style={[styles.messageText, styles.userMessageText]}>{content}</Text> : null
+        ) : (
+          // The reply body: text and its activity cards (live pill, tool receipt,
+          // price/status diffs, and the report card) INTERLEAVED in reply order —
+          // a card sits inline where the reply produced it, or beneath the closing
+          // line, instead of every card stacked above the text. Streams live as
+          // deltas + tool steps arrive; deriveActivities keeps full back-compat.
+          <AssistantBody
+            raw={assistantRaw}
+            activities={activities}
+            isStreaming={isStreaming}
+            onOpenTray={onOpenTray}
+            onOpenItem={onOpenItem}
+          />
+        )}
 
         {/* The tappable cart card sits BELOW the agent's message response (the seller
             reads the value check first, then taps to review the draft listing). */}
@@ -350,7 +459,12 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
 
         {/* The after-message control bar — only under a finished assistant reply. */}
         {!isUser && !isStreaming && !isFailed && renderMarkdown ? (
-          <MessageActions text={content} />
+          <MessageActions
+            text={content}
+            messageId={message.serverMessageId || message.id}
+            onRegenerate={onRegenerate}
+            onFeedback={onFeedback}
+          />
         ) : null}
       </View>
     </Animated.View>
@@ -755,18 +869,18 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
-  // After-message control bar (copy / share / thumbs).
+  // After-message control bar (copy / retry / thumbs). Bigger, easier-to-hit targets.
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    marginTop: 4,
-    marginLeft: -6,
+    gap: 6,
+    marginTop: 8,
+    marginLeft: -8,
   },
   actionIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },

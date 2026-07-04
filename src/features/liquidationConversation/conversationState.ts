@@ -234,7 +234,10 @@ export const appendAssistantToolStep = (
         ...(message.metadata || {}),
         toolSteps: [
           ...((message.metadata?.toolSteps as any[]) || []),
-          step,
+          // Stamp where in the reply this step landed (text streamed so far), so the
+          // card renders inline at that point instead of stacked above the whole reply.
+          // Keep any anchor the caller already set; default to the current text length.
+          { ...step, textAnchor: (step as any).textAnchor ?? (message.content?.length ?? 0) },
         ],
       },
     })),

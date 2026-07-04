@@ -426,6 +426,8 @@ const CampaignThreadScreen = () => {
         loading={controller.isLoadingMessages}
         onDecision={controller.submitDecision}
         onRetry={controller.retryMessage}
+        onRegenerate={controller.regenerateMessage}
+        onFeedback={controller.submitMessageFeedback}
         onCancelQueued={controller.cancelQueuedMessage}
         onOpenCart={(sessionId: string) => {
           // AddProduct is a hidden TAB screen, so go through the nested navigator
