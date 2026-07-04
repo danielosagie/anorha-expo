@@ -64,6 +64,8 @@ export interface ActivityTraySheetProps {
   onRoutineAction?: (id: string, action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
   /** Send the seller's revision request for a report back to Sprout (revise_report). */
   onReviseDocument?: (documentId: string, title: string, note: string) => void;
+  /** Approve / Revise / Follow-up a proposed plan (hits the pending-action endpoint). */
+  onApprovePlan?: (planId: string, action: 'approve' | 'revise' | 'follow_up') => void;
 }
 
 export default function ActivityTraySheet({
@@ -74,6 +76,7 @@ export default function ActivityTraySheet({
   onUndo,
   onRoutineAction,
   onReviseDocument,
+  onApprovePlan,
 }: ActivityTraySheetProps) {
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
@@ -276,6 +279,12 @@ export default function ActivityTraySheet({
               payload={payload}
               insetBottom={Math.max(insets.bottom, 16)}
               confirmUndo={confirmUndo}
+              onApprovePlan={(action) => {
+                if (payload.kind === 'plan' && payload.plan.pendingActionId) {
+                  onApprovePlan?.(payload.plan.pendingActionId, action);
+                }
+                onClose();
+              }}
               onAskUndo={() => setConfirmUndo(true)}
               onCancelUndo={() => setConfirmUndo(false)}
               onConfirmUndo={async (change) => {
@@ -436,6 +445,30 @@ function PageBody({
   }
 
   // root
+  if (payload.kind === 'plan') {
+    const plan = payload.plan;
+    return (
+      <View style={{ gap: 14 }}>
+        {plan.summary ? <Text style={styles.docSummary}>{plan.summary}</Text> : null}
+        {plan.steps?.length ? (
+          <View style={{ gap: 10 }}>
+            {plan.steps.map((step, i) => (
+              <View key={i} style={styles.planStepRow}>
+                <Text style={styles.planStepNum}>{i + 1}</Text>
+                <View style={styles.flex}>
+                  <Text style={styles.planStepTitle}>{step.title}</Text>
+                  {step.detail ? <Text style={styles.planStepDetail}>{step.detail}</Text> : null}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <EmptyNote text="Sprout will run this once you approve." />
+        )}
+      </View>
+    );
+  }
+
   if (payload.kind === 'document') {
     return (
       <DocumentPage
@@ -789,6 +822,7 @@ function Footer({
   onConfirmUndo,
   onOpenItem,
   onRoutineAction,
+  onApprovePlan,
 }: {
   page: TrayPage;
   payload: ActivityPayload;
@@ -799,10 +833,30 @@ function Footer({
   onConfirmUndo: (change?: ValueChange) => void;
   onOpenItem: (productId?: string | null) => void;
   onRoutineAction: (action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
+  onApprovePlan: (action: 'approve' | 'revise' | 'follow_up') => void;
 }) {
   // The document's actions live in its header "···" menu + inline "Ask Sprout to revise".
   if (payload.kind === 'document') return null;
   const pad = { paddingBottom: insetBottom };
+
+  // Plan approval: the seller runs it, sends it back to revise, or asks a follow-up.
+  if (payload.kind === 'plan') {
+    return (
+      <View style={[styles.footer, pad]}>
+        <TouchableOpacity style={styles.planApprove} onPress={() => onApprovePlan('approve')} activeOpacity={0.85}>
+          <Text style={styles.planApproveText}>Approve</Text>
+        </TouchableOpacity>
+        <View style={styles.footerRow}>
+          <TouchableOpacity style={styles.ghostBtn} onPress={() => onApprovePlan('revise')} activeOpacity={0.85}>
+            <Text style={styles.ghostBtnText}>Revise</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.ghostBtn} onPress={() => onApprovePlan('follow_up')} activeOpacity={0.85}>
+            <Text style={styles.ghostBtnText}>Follow-up</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   // Routine controls
   if (payload.kind === 'routine') {
@@ -1111,6 +1165,23 @@ const styles = StyleSheet.create({
 
   emptyNote: { paddingVertical: 28, alignItems: 'center' },
   emptyNoteText: { fontSize: 13.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, textAlign: 'center' },
+
+  // plan detail (numbered steps) + approve footer
+  planStepRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  planStepNum: {
+    width: 22, height: 22, borderRadius: 11, backgroundColor: '#EFF7E0', color: '#5C8A0E',
+    fontSize: 12, fontFamily: CHAT_FONT.bold, textAlign: 'center', lineHeight: 22, overflow: 'hidden',
+  },
+  planStepTitle: { fontSize: 14, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold },
+  planStepDetail: { fontSize: 12.5, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular, lineHeight: 18, marginTop: 2 },
+  planApprove: {
+    height: 52,
+    borderRadius: 999,
+    backgroundColor: CHAT_COLORS.brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planApproveText: { color: '#FFFFFF', fontSize: 15, fontFamily: CHAT_FONT.bold },
 
   // footer
   footer: {
