@@ -33,6 +33,8 @@ type Props = {
   onRoutineAction?: (id: string, action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
   /** Send the seller's revision request for a report back to Sprout. */
   onReviseDocument?: (documentId: string, title: string, note: string) => void;
+  /** Approve / Revise / Follow-up a proposed plan from its tray. */
+  onApprovePlan?: (planId: string, action: 'approve' | 'revise' | 'follow_up') => void;
   ListHeaderComponent?: React.ReactElement | null;
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
@@ -52,6 +54,7 @@ export const ConversationList = ({
   onUndo,
   onRoutineAction,
   onReviseDocument,
+  onApprovePlan,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
@@ -227,6 +230,7 @@ export const ConversationList = ({
         onUndo={onUndo}
         onRoutineAction={onRoutineAction}
         onReviseDocument={onReviseDocument}
+        onApprovePlan={onApprovePlan}
       />
     </View>
   );

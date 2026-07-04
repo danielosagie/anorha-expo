@@ -433,6 +433,11 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 ...((payload as any).document && typeof (payload as any).document === 'object' && Array.isArray((payload as any).document.sections)
                   ? { document: (payload as any).document }
                   : {}),
+                // A proposed plan (propose_plan) → rendered as an approvable card in the
+                // conversation; pendingActionId is what Approve/Revise hit.
+                ...((payload as any).plan && typeof (payload as any).plan === 'object' && typeof (payload as any).plan.title === 'string'
+                  ? { plan: (payload as any).plan }
+                  : {}),
                 threadId,
               });
               break;

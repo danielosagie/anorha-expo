@@ -10,7 +10,7 @@
 //
 // Every finished activity is tappable and opens ONE review tray. Calm law: the
 // normal finished turn stays quiet; only failed / out-of-sync goes loud.
-import React from 'react';
+import React, { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
@@ -40,9 +40,50 @@ export default function ActivityCard({ payload, streaming, onOpenTray }: Activit
       return <RichActivityCard payload={payload} onOpenTray={onOpenTray} />;
     case 'document':
       return <DocumentCard payload={payload} onOpenTray={onOpenTray} />;
+    case 'plan':
+      return <PlanActivityCard payload={payload} onOpenTray={onOpenTray} />;
     default:
       return null;
   }
+}
+
+// ── Plan card: a proposed plan the seller approves. Tap opens the tray to the full
+// plan (title, why, ordered steps) with Approve / Revise / Follow-up. Brand-tinted
+// because it's an action waiting on the seller, not a quiet receipt. ──
+
+function PlanActivityCard({
+  payload,
+  onOpenTray,
+}: {
+  payload: Extract<ActivityPayload, { kind: 'plan' }>;
+  onOpenTray?: (payload: ActivityPayload) => void;
+}) {
+  const plan = payload.plan;
+  const stepCount = plan.steps?.length ?? 0;
+  const press = () => {
+    Haptics.selectionAsync().catch(() => undefined);
+    onOpenTray?.(payload);
+  };
+  return (
+    <TouchableOpacity style={styles.planCard} activeOpacity={0.85} onPress={press}>
+      <View style={styles.richHeader}>
+        <View style={styles.planTile}>
+          <Icon name="clipboard-check-outline" size={18} color={CHAT_COLORS.brandDeep} />
+        </View>
+        <View style={styles.richTextCol}>
+          <Text style={styles.richTitle} numberOfLines={2}>{plan.title || payload.title}</Text>
+          {plan.summary ? <Text style={styles.richSub} numberOfLines={2}>{plan.summary}</Text> : null}
+        </View>
+        <Icon name="chevron-right" size={18} color="#C4C4CC" />
+      </View>
+      <View style={styles.planFooter}>
+        <Icon name="gesture-tap-button" size={13} color={CHAT_COLORS.brandDeep} />
+        <Text style={styles.planFooterText}>
+          Review and approve{stepCount ? ` · ${stepCount} step${stepCount === 1 ? '' : 's'}` : ''}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
 }
 
 // ── Document card: a tappable report summary. Tap opens the tray to the full,
@@ -175,9 +216,10 @@ function ToolRunCard({
   onOpenTray?: (payload: ActivityPayload) => void;
 }) {
   const steps = payload.steps ?? [];
-  const reasoning = payload.reasoning;
-  const hasReasoning = !!(reasoning && reasoning.trim().length);
+  const reasoning = payload.reasoning?.trim();
+  const hasReasoning = !!reasoning;
   const count = steps.length;
+  const [expanded, setExpanded] = useState(false);
 
   if (!streaming && !count && !hasReasoning) return null;
 
@@ -196,29 +238,56 @@ function ToolRunCard({
     onOpenTray?.(payload);
   };
 
+  // The reasoning trace, shown inline (not buried in the tray): it streams live while
+  // the model is still thinking, then collapses to a tappable "Thought it through" row.
+  const thinkingLive = streaming && count === 0;
+  const showReasoningBody = hasReasoning && (expanded || thinkingLive);
+  // Suppress the "Working on it" pill during the pure-thinking phase so the reasoning
+  // block stands alone; once steps land (or there's no reasoning) the receipt shows.
+  const showStepsRow = count > 0 || (streaming && !hasReasoning);
+
   return (
-    <TouchableOpacity
-      style={[styles.activityCard, streaming && styles.activityCardLive]}
-      activeOpacity={canOpen ? 0.7 : 1}
-      disabled={!canOpen}
-      onPress={press}
-    >
-      <View style={styles.activityHeader}>
-        {streaming ? (
-          <ActivityIndicator size="small" color="#8A95A3" style={styles.activitySpinner} />
-        ) : (
-          <View style={styles.activityDoneChip}>
-            <Icon name="check" size={11} color={CHAT_COLORS.brandDeep} />
+    <View style={styles.toolRunWrap}>
+      {hasReasoning ? (
+        <TouchableOpacity style={styles.reasoningCard} activeOpacity={0.7} onPress={() => setExpanded((e) => !e)}>
+          <View style={styles.reasoningHead}>
+            <Icon name="lightbulb-on-outline" size={13} color={CHAT_COLORS.brandDeep} />
+            <Text style={styles.reasoningLabel}>{thinkingLive ? 'Thinking' : 'Thought it through'}</Text>
+            {thinkingLive ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
+            <View style={styles.activitySpacer} />
+            <Icon name={showReasoningBody ? 'chevron-up' : 'chevron-down'} size={16} color="#C4C4CC" />
           </View>
-        )}
-        <Text style={[styles.activityHeaderText, streaming && styles.activityHeaderTextLive]} numberOfLines={1}>
-          {streaming ? livePhrase : doneSummary}
-        </Text>
-        {streaming ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
-        <View style={styles.activitySpacer} />
-        {canOpen ? <Icon name="chevron-right" size={15} color="#C4C4CC" /> : null}
-      </View>
-    </TouchableOpacity>
+          {showReasoningBody ? (
+            <Text style={styles.reasoningBody} numberOfLines={expanded ? undefined : 8}>{reasoning}</Text>
+          ) : null}
+        </TouchableOpacity>
+      ) : null}
+
+      {showStepsRow ? (
+        <TouchableOpacity
+          style={[styles.activityCard, streaming && styles.activityCardLive]}
+          activeOpacity={canOpen ? 0.7 : 1}
+          disabled={!canOpen}
+          onPress={press}
+        >
+          <View style={styles.activityHeader}>
+            {streaming ? (
+              <ActivityIndicator size="small" color="#8A95A3" style={styles.activitySpinner} />
+            ) : (
+              <View style={styles.activityDoneChip}>
+                <Icon name="check" size={11} color={CHAT_COLORS.brandDeep} />
+              </View>
+            )}
+            <Text style={[styles.activityHeaderText, streaming && styles.activityHeaderTextLive]} numberOfLines={1}>
+              {streaming ? livePhrase : doneSummary}
+            </Text>
+            {streaming ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
+            <View style={styles.activitySpacer} />
+            {canOpen ? <Icon name="chevron-right" size={15} color="#C4C4CC" /> : null}
+          </View>
+        </TouchableOpacity>
+      ) : null}
+    </View>
   );
 }
 
@@ -261,6 +330,37 @@ const styles = StyleSheet.create({
   previewDiff: { marginLeft: 'auto' },
   moreLine: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.faint },
 
+  // ── Plan card (brand-tinted, opens the approve sheet) ──
+  planCard: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    marginBottom: 10,
+    borderRadius: 16,
+    backgroundColor: '#F7FBEE',
+    borderWidth: 1,
+    borderColor: '#E4EFC9',
+    paddingVertical: 12,
+    paddingHorizontal: 13,
+  },
+  planTile: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(147,200,34,0.20)',
+  },
+  planFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 11,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E4EFC9',
+  },
+  planFooterText: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+
   // ── Document card footer ──
   docFooter: {
     flexDirection: 'row',
@@ -273,9 +373,26 @@ const styles = StyleSheet.create({
   },
   docFooterText: { fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
 
-  // ── Tool-run receipt (live pill + tappable done summary) ──
+  // ── Tool-run receipt (reasoning block + live pill / done summary) ──
+  toolRunWrap: { alignSelf: 'flex-start', maxWidth: '100%', gap: 6, marginBottom: 10 },
+  reasoningCard: {
+    borderRadius: 14,
+    backgroundColor: '#FAFAF7',
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  reasoningHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  reasoningLabel: { fontSize: 12, color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.semibold },
+  reasoningBody: {
+    marginTop: 7,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.regular,
+  },
   activityCard: {
-    marginBottom: 10,
     borderRadius: 14,
     backgroundColor: '#FAFAF7',
     borderWidth: 1,

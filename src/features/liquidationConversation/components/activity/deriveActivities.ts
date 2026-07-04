@@ -66,10 +66,22 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
     const out: ActivityPayload[] = [];
     const plain: ConversationToolStep[] = [];
     steps.forEach((step, i) => {
-      // Where this card sits inline. A promoted card (report / diff) anchors to its own
-      // step; on reload (no anchor) it falls beneath the reply (textLen).
-      const anchor = typeof step.textAnchor === 'number' ? step.textAnchor : textLen;
-      if (step.document && Array.isArray(step.document.sections)) {
+      // Where this card sits. A report / plan / diff belongs BENEATH the reply (the
+      // seller reads the answer, then the result to act on). This backend streams every
+      // tool call BEFORE any reply text, so a real mid-text position is only used when
+      // one genuinely exists (textAnchor > 0); otherwise the card falls to the end.
+      const anchor = typeof step.textAnchor === 'number' && step.textAnchor > 0 ? step.textAnchor : textLen;
+      if (step.plan && typeof step.plan.title === 'string') {
+        // A plan the agent proposed — its own approvable card (opens the plan sheet).
+        out.push({
+          kind: 'plan',
+          id: `${message.id}-plan-${i}`,
+          title: step.plan.title,
+          status: step.status === 'failed' ? 'failed' : 'ok',
+          plan: step.plan,
+          anchor,
+        });
+      } else if (step.document && Array.isArray(step.document.sections)) {
         // A report the agent authored — its own tappable card (opens the editable sheet).
         out.push({
           kind: 'document',

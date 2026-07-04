@@ -413,6 +413,16 @@ const CampaignThreadScreen = () => {
   const hasPendingAsks = (controller.campaignOverview?.needsInput?.length || 0) > 0;
   const latestAsk = controller.campaignOverview?.needsInput?.[0];
 
+  // If the proposed plan already shows as an inline card in the feed (openable → approve),
+  // don't ALSO float the plan bar above the composer — keep one plan surface.
+  const planShownInline = useMemo(() => {
+    const id = controller.pendingPlan?.planId;
+    if (!id) return false;
+    return controller.activeMessages.some((m) =>
+      ((m.metadata as any)?.toolSteps as any[] | undefined)?.some((s) => s?.plan?.pendingActionId === id),
+    );
+  }, [controller.pendingPlan?.planId, controller.activeMessages]);
+
   return (
     <View style={s.root}>
       <StatusBar barStyle="dark-content" />
@@ -457,13 +467,18 @@ const CampaignThreadScreen = () => {
         onReviseDocument={(_documentId, title, note) => {
           controller.setComposerText(`Revise the "${title}" report: ${note}`);
         }}
+        // Plan approval from the inline plan card's tray → the same decision pipeline the
+        // floating plan card uses (approve runs it via the pending-action endpoint).
+        onApprovePlan={(planId, action) =>
+          controller.submitDecision({ id: planId, kind: 'approve', title: 'Plan', planId }, action)
+        }
         contentTopInset={headerH + 8}
         contentBottomInset={footerH + 8 + feedKeyboardInset}
       />
 
       {/* ── Faded scrim behind the question/plan card so it reads as a focused tray sitting
           where the keyboard was. Non-interactive (taps fall through to scroll the feed). ── */}
-      {(controller.pendingQuestion || controller.pendingPlan) ? (
+      {(controller.pendingQuestion || (controller.pendingPlan && !planShownInline)) ? (
         <View pointerEvents="none" style={s.cardScrim} />
       ) : null}
 
@@ -480,7 +495,7 @@ const CampaignThreadScreen = () => {
             and the last message can't hide behind the pending-question card. */}
         <View onLayout={e => setFooterH(e.nativeEvent.layout.height)}>
         {/* ── Sprout's proposed plan (Accept / Revise / Follow-up), above the composer ── */}
-        {controller.pendingPlan && (
+        {controller.pendingPlan && !planShownInline && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
             <PlanCard
               prompt={controller.pendingPlan}

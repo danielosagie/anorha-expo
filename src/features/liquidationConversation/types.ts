@@ -105,6 +105,17 @@ export interface PlanStep {
   detail?: string;
 }
 
+/** A plan the agent proposed (propose_plan), carried on the tool step so it renders
+ *  as an approvable card in the conversation. pendingActionId is what Approve/Revise hit. */
+export interface PlanPayload {
+  pendingActionId?: string;
+  title: string;
+  summary?: string;
+  planType?: string;
+  steps?: PlanStep[];
+  strategyId?: string;
+}
+
 export interface DecisionPrompt {
   id: string;
   kind: 'approve' | 'revise' | 'follow_up';
@@ -319,6 +330,8 @@ export interface ConversationToolStep {
   undo?: UndoRef;
   /** A report the agent authored in this step — promoted to a {kind:'document'} card. */
   document?: ReportDocument;
+  /** A plan the agent proposed in this step — promoted to a {kind:'plan'} approvable card. */
+  plan?: PlanPayload;
   /** Length of the assistant text streamed so far when this step completed. Lets the
    *  bubble drop the card inline at the point the reply "brought it up" (client-stamped
    *  during streaming; absent on history reload → the card falls beneath the text). */
@@ -370,7 +383,8 @@ export type ActivityPayload =
   | (ActivityBase & { kind: 'publish'; changes: ValueChange[]; channels?: string[]; itemRef?: ActivityItemRef })
   | (ActivityBase & { kind: 'routine'; routine: Routine })
   | (ActivityBase & { kind: 'reminder'; whenAtLabel: string; what: string; nextRunAt?: string })
-  | (ActivityBase & { kind: 'document'; document: ReportDocument });
+  | (ActivityBase & { kind: 'document'; document: ReportDocument })
+  | (ActivityBase & { kind: 'plan'; plan: PlanPayload });
 
 export interface StreamTurnObserver {
   onThreadCreated?: (threadId: string) => void;
