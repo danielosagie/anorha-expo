@@ -9,16 +9,18 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { Check } from 'lucide-react-native';
 
 import PlatformLogo from '../PlatformLogo';
+import ConnectFlowSheet from '../ConnectFlowSheet';
 import { listPlatforms } from '../../config/platforms';
 
-import { usePlatformConnect, ConnectablePlatform } from '../../hooks/usePlatformConnect';
+import { type ConnectablePlatform } from '../../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
+import { useFacebookJobStatus } from '../../hooks/useFacebookJobStatus';
+import { derivePlatformConnectStatus } from '../../lib/platformConnectStatus';
 
 const INK = '#1C1B17';
 const SUBTLE = '#8A887E';
@@ -49,44 +51,26 @@ export default function ConnectAccountsStep({
   email?: string;
   onDone: () => void;
 }) {
-  const { connect } = usePlatformConnect({ orgId });
   const { liveConnections, refresh } = usePlatformConnections();
+  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
 
-  const [busy, setBusy] = useState<ConnectablePlatform | null>(null);
-  // Platforms connected during this session (we kicked off a scan for these).
+  // The platform whose combined connect flow (OAuth + link-computer) is open.
+  const [flowPlatform, setFlowPlatform] = useState<ConnectablePlatform | null>(null);
+  // Platforms the user finished connecting during THIS session (optimistic).
   const [justConnected, setJustConnected] = useState<Set<ConnectablePlatform>>(new Set());
-  const [errors, setErrors] = useState<Partial<Record<ConnectablePlatform, string>>>({});
 
-  // Platforms already connected before onboarding (rare, but keep it truthful).
-  const alreadyConnected = useMemo(() => {
-    const set = new Set<string>();
-    (liveConnections || []).forEach((c: any) => set.add(String(c.PlatformType || '').toLowerCase()));
-    return set;
-  }, [liveConnections]);
-
-  const handleConnect = useCallback(
-    async (key: ConnectablePlatform) => {
-      if (busy) return;
-      setErrors((e) => ({ ...e, [key]: undefined }));
-      setBusy(key);
-      try {
-        const res = await connect(key);
-        if (res.success) {
-          setJustConnected((prev) => new Set(prev).add(key));
-          refresh?.();
-        } else if (!res.cancelled && res.errorMessage) {
-          setErrors((e) => ({ ...e, [key]: res.errorMessage }));
-        }
-      } finally {
-        setBusy(null);
-      }
-    },
-    [busy, connect, refresh],
+  // Fully connected = every required step done (Facebook needs OAuth AND a linked
+  // computer). justConnected covers the brief window before the row lands live.
+  const isFullyConnected = useCallback(
+    (key: ConnectablePlatform) =>
+      justConnected.has(key) ||
+      derivePlatformConnectStatus(key, liveConnections, { computerOnline, presenceLoaded }).isFullyConnected,
+    [justConnected, liveConnections, computerOnline, presenceLoaded],
   );
 
   const connectedCount = useMemo(
-    () => PLATFORMS.filter((p) => justConnected.has(p.key) || alreadyConnected.has(p.key)).length,
-    [justConnected, alreadyConnected],
+    () => PLATFORMS.filter((p) => isFullyConnected(p.key)).length,
+    [isFullyConnected],
   );
   const name = orgName?.trim() || 'My store';
   const initial = name.charAt(0).toUpperCase();
@@ -116,9 +100,7 @@ export default function ConnectAccountsStep({
         <Text style={styles.sectionLabel}>CONNECTED STORES</Text>
 
         {PLATFORMS.map((p, i) => {
-          const isConnected = justConnected.has(p.key) || alreadyConnected.has(p.key);
-          const isBusy = busy === p.key;
-          const err = errors[p.key];
+          const connected = isFullyConnected(p.key);
           return (
             <View key={p.key} style={[styles.row, i > 0 && styles.rowBorder]}>
               <View style={styles.logoSquare}>
@@ -128,26 +110,18 @@ export default function ConnectAccountsStep({
                 <Text style={styles.rowName}>{p.name}</Text>
                 {justConnected.has(p.key) ? (
                   <Text style={styles.rowStatus} numberOfLines={1}>Importing inventory…</Text>
-                ) : err ? (
-                  <Text style={[styles.rowStatus, styles.rowError]} numberOfLines={1}>{err}</Text>
                 ) : null}
               </View>
 
-              {isConnected ? (
+              {connected ? (
                 <View style={styles.connectedWrap}>
                   <View style={styles.checkCircle}><Check size={11} color="#FFFFFF" /></View>
                   <Text style={styles.connectedText}>Connected</Text>
                 </View>
-              ) : isBusy ? (
-                <View style={styles.connectingPill}>
-                  <ActivityIndicator size="small" color={GREEN_DEEP} />
-                  <Text style={styles.connectingText}>Connecting</Text>
-                </View>
               ) : (
                 <TouchableOpacity
                   style={styles.connectPill}
-                  onPress={() => handleConnect(p.key)}
-                  disabled={!!busy}
+                  onPress={() => setFlowPlatform(p.key)}
                   activeOpacity={0.85}
                 >
                   <Text style={styles.connectText}>Connect</Text>
@@ -170,6 +144,19 @@ export default function ConnectAccountsStep({
           <Text style={styles.skipText}>Skip for now</Text>
         </TouchableOpacity>
       </View>
+
+      <ConnectFlowSheet
+        visible={!!flowPlatform}
+        platform={flowPlatform}
+        orgId={orgId}
+        onCancel={() => setFlowPlatform(null)}
+        onConnected={() => {
+          setJustConnected((prev) => (flowPlatform ? new Set(prev).add(flowPlatform) : prev));
+          setFlowPlatform(null);
+          refresh?.();
+          setTimeout(() => refresh?.(), 2500);
+        }}
+      />
     </Animated.View>
   );
 }

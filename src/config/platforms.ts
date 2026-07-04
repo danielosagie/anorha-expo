@@ -36,6 +36,14 @@ export type PlatformKey =
   | 'whatnot'
   | 'depop';
 
+/**
+ * A single step required to fully connect a platform. 'oauth' = the account
+ * login / connection marker; 'linkComputer' = pairing the user's own desktop
+ * (for browser-driven platforms like Facebook Marketplace). A platform counts as
+ * connected only when ALL of its steps are done.
+ */
+export type ConnectStepKind = 'oauth' | 'linkComputer';
+
 /** How a platform's OAuth / connect flow is kicked off from the mobile client. */
 export interface PlatformConnectDef {
   /**
@@ -52,6 +60,13 @@ export interface PlatformConnectDef {
   redirectStyle: 'bare' | 'tagged';
   /** Extra query params appended to the login URL (e.g. Facebook's mode). */
   extraParams?: Record<string, string>;
+  /**
+   * Ordered connect steps this platform requires. Omit to use the derived
+   * default (see connectStepsFor): ['oauth'], plus 'linkComputer' when
+   * capabilities.writeVia === 'computer'. Set explicitly only when the order or
+   * set is non-obvious.
+   */
+  requiredSteps?: ConnectStepKind[];
 }
 
 /** What a platform can do — drives capability gates across the UI. */
@@ -339,6 +354,24 @@ export const getPlatformWriteVia = (raw?: string | null): 'api' | 'computer' =>
 /** True when a platform posts through the user's own computer (e.g. Facebook). */
 export const platformRequiresComputer = (raw?: string | null): boolean =>
   getPlatformWriteVia(raw) === 'computer';
+
+/**
+ * The ordered connect steps a platform requires to be FULLY connected. Explicit
+ * `connect.requiredSteps` wins; otherwise derived: 'oauth' for any connectable
+ * platform, plus 'linkComputer' for computer-write platforms (Facebook). A
+ * platform with no connect def and no computer write returns []. This is the ONE
+ * place the reusable connect flow reads, so adding a computer-write platform
+ * automatically gets the combined OAuth + link-computer flow with no other edits.
+ */
+export const connectStepsFor = (raw?: string | null): ConnectStepKind[] => {
+  const def = getPlatform(raw);
+  if (!def) return [];
+  if (def.connect?.requiredSteps) return def.connect.requiredSteps;
+  const steps: ConnectStepKind[] = [];
+  if (def.connect) steps.push('oauth');
+  if (def.capabilities.writeVia === 'computer') steps.push('linkComputer');
+  return steps;
+};
 
 /**
  * Human-friendly display name for a raw platform value. Strips Shopify's

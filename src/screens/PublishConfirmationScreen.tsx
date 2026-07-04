@@ -9,6 +9,9 @@ import PrintingComplete from '../components/import/PrintingComplete';
 import { normalizeDisplayName } from '../config/platforms';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import LinkComputerSheet from '../components/LinkComputerSheet';
+import ConnectFlowSheet from '../components/ConnectFlowSheet';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
 import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -48,21 +51,33 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // Facebook posts asynchronously through the user's computer — show its live
   // dispatch status here instead of implying a synchronous "Published!".
   const fbDispatch = useFacebookJobStatus();
+  const { liveConnections } = usePlatformConnections();
   const fbSelected = (platforms || []).map((p: string) => String(p).toLowerCase()).includes('facebook');
   const fbStatus = fbSelected ? fbDispatch.statusForVariant(variantId) : null;
+  // State A: is Facebook connected (OAuth marker exists)? This is distinct from
+  // the computer being offline (State B). Publishing needs the connection first,
+  // so a user with no connection should be told to connect, not to link a computer.
+  const fbConnected = derivePlatformConnectStatus('facebook', liveConnections, {
+    computerOnline: fbDispatch.computerOnline,
+    presenceLoaded: fbDispatch.presenceLoaded,
+  }).oauthConnected;
   // Pre-flight: Facebook posts through the user's computer. If none is online we
   // still queue the job (it posts when a computer comes on) — but say so calmly
   // and up front, with a one-tap way to link one, instead of surfacing it as an
   // after-the-fact "problem" once the receipt has already printed.
   const { currentOrg } = useOrg();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
+  const [connectFlowOpen, setConnectFlowOpen] = useState(false);
   // Only warn once presence has actually loaded (else it flashes on mount while
   // the query is in flight), only when the FB job isn't already live/posting
   // (a posted listing shouldn't say "posts when your computer's on"), and never
   // in degraded mode where onlineness is unknown.
   const fbAlreadyMoving = fbStatus?.tone === 'good' || fbStatus?.label === 'Live';
+  // No Facebook connection yet → prompt to connect (State A), never "computer offline".
+  const showConnectFacebook = fbSelected && !fbConnected;
   const showComputerPreflight =
     fbSelected &&
+    fbConnected &&
     fbDispatch.presenceLoaded &&
     !fbDispatch.computerOnline &&
     !fbDispatch.degraded &&
@@ -332,13 +347,26 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
           <Text style={styles.hint}>{anyLiveLink ? 'Tap a channel to open the live listing.' : 'Tap a channel to manage it.'}</Text>
 
+          {showConnectFacebook ? (
+            <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
+              <TouchableOpacity activeOpacity={0.7} onPress={() => setConnectFlowOpen(true)} style={styles.preflightCard}>
+                <Icon name="facebook" size={20} color="#BA7517" />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={styles.preflightTitle}>Connect Facebook first</Text>
+                  <Text style={styles.preflightBody}>Link your Facebook account to post here. It only takes a moment.</Text>
+                </View>
+                <Icon name="chevron-right" size={18} color="#C4C8CE" />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {showComputerPreflight ? (
             <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
               <TouchableOpacity activeOpacity={0.7} onPress={() => setLinkComputerOpen(true)} style={styles.preflightCard}>
                 <Icon name="laptop" size={20} color="#BA7517" />
                 <View style={{ flex: 1, gap: 2 }}>
                   <Text style={styles.preflightTitle}>Posts when your computer’s on</Text>
-                  <Text style={styles.preflightBody}>Facebook goes live through your Mac. It’ll post automatically once Anorha is open — or link a computer now.</Text>
+                  <Text style={styles.preflightBody}>Facebook goes live through your Mac. It’ll post automatically once Anorha is open, or link a computer now.</Text>
                 </View>
                 <Icon name="chevron-right" size={18} color="#C4C8CE" />
               </TouchableOpacity>
@@ -362,6 +390,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         visible={linkComputerOpen}
         orgId={currentOrg?.id}
         onClose={() => setLinkComputerOpen(false)}
+      />
+      <ConnectFlowSheet
+        visible={connectFlowOpen}
+        platform="facebook"
+        orgId={currentOrg?.id}
+        onCancel={() => setConnectFlowOpen(false)}
+        onConnected={() => setConnectFlowOpen(false)}
       />
     </View>
   );

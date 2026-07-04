@@ -36,6 +36,91 @@ interface Props {
   onCancel: () => void;
 }
 
+/**
+ * The consent content (icon pair + disclosures + Continue), WITHOUT the modal
+ * chrome, so it can be embedded either in PlatformConnectSheet's own modal or as
+ * the OAuth step inside the reusable ConnectFlowSheet. One copy, no drift.
+ */
+export function PlatformConsentBody({
+  platform,
+  busy = false,
+  error,
+  onContinue,
+  onCancel,
+  continueLabel,
+}: {
+  platform: string;
+  busy?: boolean;
+  error?: string | null;
+  onContinue: () => void;
+  /** Omit to hide the soft "Not now" (the flow owns its own cancel chrome). */
+  onCancel?: () => void;
+  /** Override the CTA label (default "Continue to <Platform>"). */
+  continueLabel?: string;
+}) {
+  const def = getPlatform(platform);
+  const d = DISCLOSURES[platform];
+  if (!def || !d) return null;
+
+  return (
+    <View style={{ width: '100%', alignItems: 'center' }}>
+      {/* Platform ··· Anorha icon pair */}
+      <View style={styles.iconRow}>
+        <View style={styles.iconTile}>
+          <PlatformLogo type={platform} size={34} />
+        </View>
+        <View style={styles.dots}>
+          {[0, 1, 2, 3].map((i) => (
+            <View key={i} style={styles.dot} />
+          ))}
+        </View>
+        <View style={styles.iconTile}>
+          <Image source={ANORHA_MARK} style={styles.anorhaImg} resizeMode="contain" />
+        </View>
+      </View>
+
+      <Text style={styles.title}>{d.title}</Text>
+      <Text style={styles.subtitle}>{d.subtitle}</Text>
+
+      <View style={styles.bulletCard}>
+        {d.bullets.map((b, i) => {
+          const Ico = BULLET_ICONS[i] ?? RefreshCw;
+          return (
+            <View key={b} style={[styles.bulletRow, i > 0 && styles.bulletBorder]}>
+              <View style={styles.bulletIcon}>
+                <Ico size={18} color="#52525B" />
+              </View>
+              <Text style={styles.bulletText}>{b}</Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <Pressable
+        style={[styles.continueBtn, busy && styles.disabled]}
+        disabled={busy}
+        onPress={onContinue}
+        accessibilityRole="button"
+        accessibilityLabel={continueLabel || `Continue to ${def.label}`}
+      >
+        {busy ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.continueLabel}>{continueLabel || `Continue to ${def.label}`}</Text>
+        )}
+      </Pressable>
+
+      {onCancel ? (
+        <Pressable onPress={onCancel} disabled={busy} style={styles.cancelBtn} hitSlop={8}>
+          <Text style={styles.cancel}>Not now</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 export default function PlatformConnectSheet({
   visible,
   platform,
@@ -57,58 +142,13 @@ export default function PlatformConnectSheet({
         <Pressable style={StyleSheet.absoluteFill} onPress={busy ? undefined : onCancel} />
         <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
           <View style={styles.grabber} />
-
-          {/* Platform ··· Anorha icon pair */}
-          <View style={styles.iconRow}>
-            <View style={styles.iconTile}>
-              <PlatformLogo type={platform} size={34} />
-            </View>
-            <View style={styles.dots}>
-              {[0, 1, 2, 3].map((i) => (
-                <View key={i} style={styles.dot} />
-              ))}
-            </View>
-            <View style={styles.iconTile}>
-              <Image source={ANORHA_MARK} style={styles.anorhaImg} resizeMode="contain" />
-            </View>
-          </View>
-
-          <Text style={styles.title}>{d.title}</Text>
-          <Text style={styles.subtitle}>{d.subtitle}</Text>
-
-          <View style={styles.bulletCard}>
-            {d.bullets.map((b, i) => {
-              const Ico = BULLET_ICONS[i] ?? RefreshCw;
-              return (
-                <View key={b} style={[styles.bulletRow, i > 0 && styles.bulletBorder]}>
-                  <View style={styles.bulletIcon}>
-                    <Ico size={18} color="#52525B" />
-                  </View>
-                  <Text style={styles.bulletText}>{b}</Text>
-                </View>
-              );
-            })}
-          </View>
-
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-
-          <Pressable
-            style={[styles.continueBtn, busy && styles.disabled]}
-            disabled={busy}
-            onPress={onContinue}
-            accessibilityRole="button"
-            accessibilityLabel={`Continue to ${def.label}`}
-          >
-            {busy ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.continueLabel}>Continue to {def.label}</Text>
-            )}
-          </Pressable>
-
-          <Pressable onPress={onCancel} disabled={busy} style={styles.cancelBtn} hitSlop={8}>
-            <Text style={styles.cancel}>Not now</Text>
-          </Pressable>
+          <PlatformConsentBody
+            platform={platform}
+            busy={busy}
+            error={error}
+            onContinue={onContinue}
+            onCancel={onCancel}
+          />
         </View>
       </View>
     </Modal>

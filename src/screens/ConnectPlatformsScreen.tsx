@@ -12,15 +12,12 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PlatformLogo from '../components/PlatformLogo';
-import PlatformConnectSheet from '../components/PlatformConnectSheet';
-import { listPlatforms, resolvePlatformKey, getPlatformAvailability, PlatformDef, PlatformKey } from '../config/platforms';
-import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
+import ConnectFlowSheet from '../components/ConnectFlowSheet';
+import { listPlatforms, getPlatformAvailability, PlatformDef, PlatformKey } from '../config/platforms';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
-import { createLogger } from '../utils/logger';
-
-const log = createLogger('ConnectPlatformsScreen');
-
 type Props = StackScreenProps<AppStackParamList, 'ConnectPlatforms'>;
 
 // One-line "what you get" per platform — plain, calm, verb-first.
@@ -48,33 +45,20 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
-  const { connect } = usePlatformConnect({ orgId: currentOrg?.id });
+  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
 
   const [query, setQuery] = useState('');
-  const [consentPlatform, setConsentPlatform] = useState<PlatformKey | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
+  const [flowPlatform, setFlowPlatform] = useState<PlatformKey | null>(null);
 
-  const connectedKeys = useMemo(() => {
-    // A just-connected row cycles pending → scanning → syncing before landing
-    // on 'active' — all of those count as CONNECTED here: the row exists, and
-    // offering Connect again would start a duplicate OAuth flow. Only
-    // truly-dead rows fall back to the Connect button.
-    const NOT_CONNECTED = new Set(['disconnected', 'error', 'revoked', 'disabled', 'needs_reauth']);
-    const set = new Set<PlatformKey>();
-    for (const c of liveConnections || []) {
-      const status = (c.Status || '').toLowerCase();
-      if (NOT_CONNECTED.has(status) || c.IsEnabled === false) continue;
-      // PlatformType is free-text ("Shopify", "facebook_marketplace", a store
-      // domain…); resolve it to a canonical key through the registry's
-      // alias + fuzzy-contains resolver so every spelling maps correctly.
-      const key = resolvePlatformKey(c.PlatformType);
-      if (key) set.add(key);
-    }
-    return set;
-  }, [liveConnections]);
-
-  const isConnected = useCallback((def: PlatformDef) => connectedKeys.has(def.key), [connectedKeys]);
+  // One truthful status per platform: connected ONLY when every required step is
+  // done. Facebook needs OAuth AND a linked computer, so the OAuth row alone no
+  // longer shows "Connected" (the old connectedKeys bug). Presence is read once
+  // here and folded per row via the pure derive, not one subscription per row.
+  const statusFor = useCallback(
+    (def: PlatformDef) =>
+      derivePlatformConnectStatus(def.key, liveConnections, { computerOnline, presenceLoaded }),
+    [liveConnections, computerOnline, presenceLoaded],
+  );
 
   const { available, comingSoon } = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -89,38 +73,35 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
     };
   }, [query]);
 
+  // Open the ONE combined flow. It runs OAuth, then link-computer for platforms
+  // that post through the computer (Facebook), skipping any step already done.
   const onConnect = useCallback((def: PlatformDef) => {
-    if (!def.connect) return;
-    setConnectError(null);
-    setConsentPlatform(def.key);
+    if (!def.connect && def.capabilities.writeVia !== 'computer') return;
+    setFlowPlatform(def.key);
   }, []);
 
-  const handleContinueConnect = useCallback(async () => {
-    if (!consentPlatform) return;
-    setConnecting(true);
-    setConnectError(null);
-    try {
-      const res = await connect(consentPlatform as ConnectablePlatform);
-      if (res.success) {
-        setConsentPlatform(null);
-        // The backend commits the new connection row on the OAuth callback —
-        // one immediate refresh can race that write. Nudge once more shortly
-        // after so the row flips to Connected without a manual reload.
-        refresh?.();
-        setTimeout(() => refresh?.(), 2500);
-      } else if (!res.cancelled && res.errorMessage) {
-        setConnectError(res.errorMessage);
-      }
-    } catch (e) {
-      log.error('connect failed', e);
-      setConnectError('Something went wrong. Please try again.');
-    } finally {
-      setConnecting(false);
-    }
-  }, [consentPlatform, connect, refresh]);
-
   const renderRow = (def: PlatformDef, connectable: boolean) => {
-    const connected = isConnected(def);
+    const st = statusFor(def);
+    const trailing = !connectable ? (
+      <View style={styles.soonPill}>
+        <Text style={styles.soonText}>Soon</Text>
+      </View>
+    ) : st.uiState === 'connected' ? (
+      <View style={styles.connectedPill}>
+        <View style={styles.liveDot} />
+        <Text style={styles.connectedText}>Connected</Text>
+      </View>
+    ) : st.uiState === 'needs-computer' ? (
+      // OAuth done but the computer isn't linked — one tap resumes the flow at
+      // the link-computer step rather than restarting OAuth.
+      <TouchableOpacity style={styles.finishBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
+        <Text style={styles.finishBtnText}>Finish setup</Text>
+      </TouchableOpacity>
+    ) : (
+      <TouchableOpacity style={styles.connectBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
+        <Text style={styles.connectBtnText}>Connect</Text>
+      </TouchableOpacity>
+    );
     return (
       <View key={def.key} style={styles.row}>
         <View style={styles.logoWrap}>
@@ -132,20 +113,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
             {BLURB[def.key] ?? ''}
           </Text>
         </View>
-        {connected ? (
-          <View style={styles.connectedPill}>
-            <View style={styles.liveDot} />
-            <Text style={styles.connectedText}>Connected</Text>
-          </View>
-        ) : connectable ? (
-          <TouchableOpacity style={styles.connectBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
-            <Text style={styles.connectBtnText}>Connect</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.soonPill}>
-            <Text style={styles.soonText}>Soon</Text>
-          </View>
-        )}
+        {trailing}
       </View>
     );
   };
@@ -209,15 +177,17 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         ) : null}
       </ScrollView>
 
-      <PlatformConnectSheet
-        visible={!!consentPlatform}
-        platform={consentPlatform ?? null}
-        busy={connecting}
-        error={connectError}
-        onContinue={handleContinueConnect}
-        onCancel={() => {
-          setConsentPlatform(null);
-          setConnectError(null);
+      <ConnectFlowSheet
+        visible={!!flowPlatform}
+        platform={flowPlatform}
+        orgId={currentOrg?.id}
+        onCancel={() => setFlowPlatform(null)}
+        onConnected={() => {
+          setFlowPlatform(null);
+          // The backend commits the connection row on the OAuth callback; nudge
+          // twice so the row flips to Connected without a manual reload.
+          refresh?.();
+          setTimeout(() => refresh?.(), 2500);
         }}
       />
     </View>
@@ -307,6 +277,18 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   connectBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  finishBtn: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  finishBtnText: { color: '#B45309', fontSize: 13.5, fontWeight: '700' },
   connectedPill: {
     flexDirection: 'row',
     alignItems: 'center',
