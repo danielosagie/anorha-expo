@@ -210,10 +210,13 @@ export interface FacebookJobStatus {
   /** False while the first presence result is still in flight — callers must
    *  not read computerOnline=false as "offline" until this flips true. */
   presenceLoaded: boolean;
+  /** Re-run the browserJobs bootstrap (pull-to-refresh). Recovers a degraded
+   *  client so the computers list can populate without a full app relaunch. */
+  refresh: () => Promise<void>;
 }
 
 export function useFacebookJobStatus(): FacebookJobStatus {
-  const { client, userId } = useBrowserJobsConvexContext();
+  const { client, userId, refresh } = useBrowserJobsConvexContext();
 
   const jobs = useWatchedQuery<BrowserJobDoc[]>(
     client,
@@ -289,6 +292,7 @@ export function useFacebookJobStatus(): FacebookJobStatus {
     fbNeedsCheck,
     computers,
     statusForVariant,
+    refresh,
     degraded: !client || !userId,
     // useWatchedQuery yields undefined until the first result lands — that's
     // "loading", not "no computers". (In degraded mode it never loads; treat

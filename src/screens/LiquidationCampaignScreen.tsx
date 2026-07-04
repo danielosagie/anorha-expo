@@ -10,6 +10,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -106,6 +107,7 @@ const LiquidationCampaignScreen = () => {
   // Note: The mock items here are removed in favor of fetching real ones.
   const [items, setItems] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadItems = useCallback(async () => {
     if (!initialCampaignId) return;
@@ -130,6 +132,11 @@ const LiquidationCampaignScreen = () => {
       setLoadingItems(false);
     }
   }, [adapter, initialCampaignId]);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.all([Promise.resolve(loadItems())]).finally(() => setRefreshing(false));
+  }, [loadItems]);
 
   // Reload items whenever the screen regains focus (e.g. after picking items).
   useFocusEffect(
@@ -440,6 +447,7 @@ const LiquidationCampaignScreen = () => {
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingHorizontal: 6, paddingTop: 4, paddingBottom: selectedItems.size > 0 ? 200 : 120 }}
               keyboardShouldPersistTaps="handled"
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
               ListEmptyComponent={
                 <View style={s.emptyState}>
                   <Text style={s.emptyStateText}>

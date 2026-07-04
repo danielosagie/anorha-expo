@@ -8,6 +8,7 @@ import {
   Alert,
   Clipboard,
   Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -23,6 +24,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import PlatformAvatar from '../components/PlatformAvatar';
 import PoolLocationPicker, { GroupedPlatform, groupAvailableLocations } from '../components/pools/PoolLocationPicker';
 
@@ -122,6 +124,13 @@ const PoolDetailScreen = () => {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  // Pull-to-refresh: re-pull the pool's locations, partnerships, and siblings.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.all([Promise.resolve(load())]).finally(() => setRefreshing(false));
   }, [load]);
 
   // Partnerships that reference this pool (rows only carry poolName).
@@ -276,6 +285,7 @@ const PoolDetailScreen = () => {
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
       >
         <PageHeader
           title={poolName}

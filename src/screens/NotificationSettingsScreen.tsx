@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Switch, ScrollView, Alert, TouchableOpacity, ActivityIndicator, StatusBar } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, Switch, ScrollView, Alert, TouchableOpacity, ActivityIndicator, StatusBar, RefreshControl } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CheckCircle2, Package, Sprout, AlertTriangle, Megaphone } from 'lucide-react-native';
 import { useAuth } from '@clerk/expo';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import PageHeader from '../components/ui/PageHeader';
 import { createLogger } from '../utils/logger';
 const log = createLogger('NotificationSettingsScreen');
@@ -16,6 +17,7 @@ export default function NotificationSettingsScreen() {
     const { getToken } = useAuth();
 
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [testSending, setTestSending] = useState(false);
     const [preferences, setPreferences] = useState({
         JobCompletions: true,
@@ -60,6 +62,11 @@ export default function NotificationSettingsScreen() {
             setLoading(false);
         }
     };
+
+    const onRefresh = useCallback(() => {
+        setRefreshing(true);
+        Promise.all([Promise.resolve(loadPreferences())]).finally(() => setRefreshing(false));
+    }, []);
 
     const togglePreference = async (key: keyof typeof preferences) => {
         const newValue = !preferences[key];
@@ -138,6 +145,7 @@ export default function NotificationSettingsScreen() {
             <ScrollView
                 contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
                 showsVerticalScrollIndicator={false}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
             >
                 <PageHeader title="Notifications" onBack={() => navigation.goBack()} />
 

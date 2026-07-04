@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/env';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, RefreshControl } from 'react-native';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -45,6 +46,7 @@ const SyncRulesScreen = () => {
   const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
   const [syncMode, setSyncMode] = useState<'manual' | 'auto' | 'batch'>('manual');
   const [batchTime, setBatchTime] = useState<string>('02:00');
+  const [refreshing, setRefreshing] = useState(false);
 
   // Load existing sync rules
   useEffect(() => {
@@ -127,6 +129,14 @@ const SyncRulesScreen = () => {
       setLoading(false);
     }
   };
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.all([
+      Promise.resolve(loadConnectionMeta()),
+      Promise.resolve(loadSyncRules()),
+    ]).finally(() => setRefreshing(false));
+  }, [connectionId]);
 
   const saveSyncRules = async () => {
     setSaving(true);
@@ -442,7 +452,10 @@ const SyncRulesScreen = () => {
         <Text style={styles.headerTitle}>Sync Settings for {displayName || platformName}</Text>
       </View>
 
-      <ScrollView style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
+      >
         {/* Stepper */}
         <Card style={styles.ruleSection}>
           <Text style={styles.sectionTitle}>Setup</Text>

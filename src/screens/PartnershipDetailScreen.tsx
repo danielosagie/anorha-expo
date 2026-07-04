@@ -9,10 +9,12 @@ import {
     TouchableOpacity,
     Alert,
     FlatList,
-    Switch
+    Switch,
+    RefreshControl
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
+import { BRAND_PRIMARY } from '../design/tokens';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { Partnership } from './PartnersScreen';
@@ -162,7 +164,7 @@ export default function PartnershipDetailScreen() {
                 renderItem={renderProduct}
                 keyExtractor={item => item.id}
                 contentContainerStyle={styles.listContent}
-                refreshControl={<ActivityIndicator animating={loading} />} // Simple loading for now
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
                 ListEmptyComponent={!loading ? (
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyText}>No linked products found.</Text>

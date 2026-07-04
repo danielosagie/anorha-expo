@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   FlatList,
   ScrollView,
+  RefreshControl,
   Modal,
   ActivityIndicator,
   Alert,
@@ -702,6 +703,79 @@ const InventoryOrdersScreen = observer(() => {
     }
   }, [fetchAllProductVariants, legendState]);
 
+  // Reusable refresh of the inventory data (variants + shared links + levels).
+  // Shared by the focus effect and pull-to-refresh so both re-run the SAME load path.
+  const refreshInventoryData = useCallback(async () => {
+    if (!legendState?.userId) return;
+
+    log.debug('[InventoryOrdersScreen] Refreshing products...');
+
+    try {
+      // Always refetch products to get latest data (covers both new AND updated products)
+      const data = await fetchAllProductVariants(legendState.userId);
+
+      if (data) {
+        const variantMap: Record<string, ProductVariantData> = {};
+        const variantIds: string[] = [];
+        data.forEach((v: any) => {
+          variantMap[v.Id] = v;
+          variantIds.push(v.Id);
+        });
+        setDirectFetchVariants(variantMap);
+
+        // Refresh CrossOrgProductLinks for shared inventory quantities
+        if (variantIds.length > 0) {
+          const { data: linksData, error: linksError } = await supabase
+            .from('CrossOrgProductLinks')
+            .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+            .in('TargetVariantId', variantIds)
+            .eq('Status', 'active');
+
+          if (linksError) {
+            log.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
+          } else {
+            const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+            (linksData || []).forEach((link: any) => {
+              if (link.TargetVariantId) {
+                linkMap[link.TargetVariantId] = {
+                  quantity: link.AvailableQuantity || 0,
+                  poolId: link.TargetPoolId || undefined,
+                };
+              }
+            });
+            setSharedLinkQuantities(linkMap);
+          }
+        }
+
+        // Also refresh inventory levels
+        if (variantIds.length > 0) {
+          const { data: levelsData } = await supabase
+            .from('InventoryLevels')
+            .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+            .in('ProductVariantId', variantIds);
+
+          if (levelsData && levelsData.length > 0) {
+            const levelsMap: Record<string, InventoryLevel> = {};
+            levelsData.forEach((l: any) => {
+              levelsMap[l.Id] = l;
+            });
+            setDirectFetchLevels(levelsMap);
+          }
+        }
+        log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
+      }
+    } catch (e) {
+      log.error('[InventoryOrdersScreen] Error during refresh:', e);
+    }
+  }, [fetchAllProductVariants, legendState?.userId]);
+
+  // Pull-to-refresh: re-run the same inventory load the screen uses on focus.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.resolve(refreshInventoryData()).finally(() => setRefreshing(false));
+  }, [refreshInventoryData]);
+
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
 
@@ -716,72 +790,8 @@ const InventoryOrdersScreen = observer(() => {
         return;
       }
 
-      const refreshOnFocus = async () => {
-        if (!legendState?.userId) return;
-
-        log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
-
-        try {
-          // Always refetch products to get latest data (covers both new AND updated products)
-          const data = await fetchAllProductVariants(legendState.userId);
-
-          if (data) {
-            const variantMap: Record<string, ProductVariantData> = {};
-            const variantIds: string[] = [];
-            data.forEach((v: any) => {
-              variantMap[v.Id] = v;
-              variantIds.push(v.Id);
-            });
-            setDirectFetchVariants(variantMap);
-
-            // Refresh CrossOrgProductLinks for shared inventory quantities
-            if (variantIds.length > 0) {
-              const { data: linksData, error: linksError } = await supabase
-                .from('CrossOrgProductLinks')
-                .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
-                .in('TargetVariantId', variantIds)
-                .eq('Status', 'active');
-
-              if (linksError) {
-                log.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
-              } else {
-                const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
-                (linksData || []).forEach((link: any) => {
-                  if (link.TargetVariantId) {
-                    linkMap[link.TargetVariantId] = {
-                      quantity: link.AvailableQuantity || 0,
-                      poolId: link.TargetPoolId || undefined,
-                    };
-                  }
-                });
-                setSharedLinkQuantities(linkMap);
-              }
-            }
-
-            // Also refresh inventory levels
-            if (variantIds.length > 0) {
-              const { data: levelsData } = await supabase
-                .from('InventoryLevels')
-                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
-                .in('ProductVariantId', variantIds);
-
-              if (levelsData && levelsData.length > 0) {
-                const levelsMap: Record<string, InventoryLevel> = {};
-                levelsData.forEach((l: any) => {
-                  levelsMap[l.Id] = l;
-                });
-                setDirectFetchLevels(levelsMap);
-              }
-            }
-            log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
-          }
-        } catch (e) {
-          log.error('[InventoryOrdersScreen] Error during focus refresh:', e);
-        }
-      };
-
-      refreshOnFocus();
-    }, [fetchAllProductVariants, legendState?.userId])
+      refreshInventoryData();
+    }, [refreshInventoryData])
   );
 
 
@@ -1546,6 +1556,9 @@ const InventoryOrdersScreen = observer(() => {
                 ref={listRef}
                 scrollEnabled={scrollEnabled}
                 data={inventoryToDisplay}
+                refreshControl={
+                  <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />
+                }
                 renderItem={renderInventoryItem}
                 keyExtractor={item => item.Id.toString()}
                 contentContainerStyle={styles.listContent}

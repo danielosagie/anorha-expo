@@ -29,6 +29,7 @@ import { useBrowserJobsConvex, BrowserJobsConvexValue } from '../hooks/useBrowse
 const BrowserJobsConvexContext = createContext<BrowserJobsConvexValue>({
   client: null,
   userId: null,
+  refresh: async () => {},
 });
 
 /** Read the resolved browserJobs client + userId from the nearest provider. */

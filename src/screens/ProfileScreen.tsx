@@ -1,7 +1,7 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform, RefreshControl } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -441,6 +441,7 @@ const ProfileScreen = () => {
   // Pools state (Location Groups)
   const [pools, setPools] = useState<Array<{ id: string; name: string; description?: string }>>([]);
   const [loadingPools, setLoadingPools] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // New state for location pool modals
   const [showCreatePool, setShowCreatePool] = useState(false);
@@ -624,6 +625,15 @@ const ProfileScreen = () => {
   useEffect(() => {
     loadPools();
   }, [currentOrg?.id, loadPools, refreshTrigger]);
+
+  // Pull-to-refresh: re-run the screen's focus/mount data loaders
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.all([
+      Promise.resolve(refreshConnections()),
+      Promise.resolve(loadPools()),
+    ]).finally(() => setRefreshing(false));
+  }, [refreshConnections, loadPools]);
 
   // --- GLOBAL OVERLAY: wire platform start connect ---
   const overlay = usePlatformPickerOverlay();
@@ -1780,6 +1790,7 @@ const ProfileScreen = () => {
       style={styles.container}
       contentContainerStyle={[styles.scrollViewContent, { paddingBottom: bottomSafePadding }]}
       showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
     >
       
 

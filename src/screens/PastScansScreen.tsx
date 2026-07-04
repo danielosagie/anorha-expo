@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image, RefreshControl } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
+import { BRAND_PRIMARY } from '../design/tokens';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PastScansScreen');
 
@@ -83,6 +84,7 @@ const PastScansScreen = () => {
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [draftScans, setDraftScans] = useState<DraftScan[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchPastGenerations = useCallback(async () => {
@@ -268,6 +270,12 @@ const PastScansScreen = () => {
     }
   }, [activeTab, fetchPastGenerations, fetchDraftScans]);
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    const load = activeTab === 'listings' ? fetchPastGenerations : fetchDraftScans;
+    Promise.resolve(load()).finally(() => setRefreshing(false));
+  }, [activeTab, fetchPastGenerations, fetchDraftScans]);
+
   const handleLoadGeneration = (job: GenerationJob) => {
     if (job.status === 'completed') {
       navigation.navigate('GenerateDetailsScreen', {
@@ -392,6 +400,7 @@ const PastScansScreen = () => {
           renderItem={renderScanItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.listContent, listTopPadding]}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} progressViewOffset={headerH} />}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Icon name="history" size={44} color={CHAT_COLORS.faint} />
@@ -408,6 +417,7 @@ const PastScansScreen = () => {
         renderItem={renderDraftItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={[styles.listContent, listTopPadding]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} progressViewOffset={headerH} />}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Icon name="history" size={44} color={CHAT_COLORS.faint} />

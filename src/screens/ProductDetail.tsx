@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing, Platform, RefreshControl } from 'react-native';
 import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ProgressiveBlurView from '../components/ProgressiveBlurView';
@@ -1380,6 +1380,17 @@ const ProductDetailScreen = observer(
         log.error('[ProductDetail] Error in loadProductDetails:', error);
       }
     }, [detailedItem]);
+
+    // Pull-to-refresh: re-run the same loaders the screen calls on mount.
+    const [refreshing, setRefreshing] = useState(false);
+    const onRefresh = useCallback(() => {
+      setRefreshing(true);
+      Promise.all([
+        Promise.resolve(loadProductDetails()),
+        Promise.resolve(loadPlatformData()),
+        Promise.resolve(loadPartnerships()),
+      ]).finally(() => setRefreshing(false));
+    }, [loadProductDetails, loadPlatformData, loadPartnerships]);
 
     // Helper to build platform locations from connections
     const buildPlatformLocations = useCallback(() => {
@@ -4053,6 +4064,7 @@ const ProductDetailScreen = observer(
         <ScrollView
           ref={scrollViewRef}
           contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 56, paddingBottom: bottomSafePadding }]}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
         >
 
 

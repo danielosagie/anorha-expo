@@ -4,7 +4,7 @@
 // and apps (Slack/Gmail via Composio, placeholders until it's configured).
 
 import React, { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
@@ -16,6 +16,7 @@ import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContex
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import { BRAND_PRIMARY } from '../design/tokens';
 import PlatformAvatar from '../components/PlatformAvatar';
 import PlatformConnectSheet from '../components/PlatformConnectSheet';
 import CreatePoolSheet from '../components/pools/CreatePoolSheet';
@@ -65,7 +66,7 @@ const ConnectionsScreen = () => {
   const [managing, setManaging] = useState(false);
 
   // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
-  const { computers } = useFacebookJobStatus();
+  const { computers, refresh: refreshComputers } = useFacebookJobStatus();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
@@ -190,12 +191,26 @@ const ConnectionsScreen = () => {
     }, [refresh, loadPools]),
   );
 
+  // Pull-to-refresh: re-pull everything the page shows — selling platforms, the
+  // pools list, and the browserJobs bootstrap (so a degraded/blank Computers
+  // section recovers without relaunching the app).
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.all([
+      Promise.resolve(refresh?.()),
+      loadPools(),
+      refreshComputers?.(),
+    ]).finally(() => setRefreshing(false));
+  }, [refresh, loadPools, refreshComputers]);
+
   return (
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" />
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} colors={[BRAND_PRIMARY]} />}
       >
         <PageHeader title="Connections" onBack={() => navigation.goBack()} />
 

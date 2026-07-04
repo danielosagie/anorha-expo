@@ -5,6 +5,7 @@ import {
   Dimensions,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -35,6 +36,7 @@ import { useIsNight } from '../hooks/useIsNight';
 import { useOrgNudges } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
+import { BRAND_PRIMARY } from '../design/tokens';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -348,6 +350,14 @@ const SproutHomeScreen: React.FC = () => {
   // Date range (header pill → Shopify-style presets/custom sheet)
   const [rangeOpen, setRangeOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange>(todayRange());
+
+  // Pull-to-refresh — re-runs the same full campaign/overview load the screen
+  // already fires on the error-banner Retry and after creating a clearout.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Promise.resolve(controller.onRefresh()).finally(() => setRefreshing(false));
+  }, [controller.onRefresh]);
 
   const tap = useCallback((style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     Haptics.impactAsync(style).catch(() => undefined);
@@ -922,6 +932,14 @@ const SproutHomeScreen: React.FC = () => {
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={BRAND_PRIMARY}
+            colors={[BRAND_PRIMARY]}
+          />
+        }
       >
         {/* ── BODY ─────────────────────────────────────────────────── */}
         <View style={styles.body}>

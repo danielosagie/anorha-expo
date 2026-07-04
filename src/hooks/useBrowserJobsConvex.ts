@@ -16,7 +16,7 @@
  * The client is a process-wide singleton keyed by URL (mirrors
  * src/providers/ConvexProvider.tsx) so we never spin up more than one socket.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../lib/apiClient';
@@ -67,6 +67,12 @@ function getClientFor(url: string | null): ConvexReactClient | null {
 export interface BrowserJobsConvexValue {
   client: ConvexReactClient | null;
   userId: string | null;
+  /**
+   * Re-run the bootstrap fetch on demand (e.g. pull-to-refresh). Recovers the
+   * degraded state where the first fetch failed (stale session, offline at
+   * launch) so the browserJobs client + userId resolve without a full relaunch.
+   */
+  refresh: () => Promise<void>;
 }
 
 /**
@@ -156,8 +162,28 @@ export function useBrowserJobsConvex(
   const url = signedIn && resolvedUserId ? (bootstrap?.convexURL ?? null) : null;
   const client = useMemo(() => getClientFor(url), [url]);
 
+  // Manual re-fetch for pull-to-refresh. Same authoritative call as effect step 2,
+  // minus the cache warm (we already have state) — safe because it only runs while
+  // the screen is mounted. A no-op when signed out.
+  const refresh = useCallback(async () => {
+    if (!signedIn) return;
+    try {
+      const res = await api.get<BootstrapResponse>(BOOTSTRAP_PATH);
+      const convexURL = res?.bootstrap?.convexURL?.trim() || '';
+      const userId = res?.bootstrap?.userId || fallbackUserId || '';
+      if (convexURL && userId) {
+        const next: BrowserJobsBootstrap = { convexURL, userId };
+        memoBootstrap = next;
+        setBootstrap(next);
+        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      }
+    } catch (e) {
+      log.debug('browserJobs bootstrap refresh failed', e);
+    }
+  }, [signedIn, fallbackUserId]);
+
   return useMemo(
-    () => (signedIn ? { client, userId: resolvedUserId } : { client: null, userId: null }),
-    [signedIn, client, resolvedUserId],
+    () => (signedIn ? { client, userId: resolvedUserId, refresh } : { client: null, userId: null, refresh }),
+    [signedIn, client, resolvedUserId, refresh],
   );
 }
