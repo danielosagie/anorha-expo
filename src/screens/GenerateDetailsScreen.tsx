@@ -2031,7 +2031,50 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (regenJobId) {
         log.debug(`[GEN-DETAILS] Started regeneration for ${platformKey}, jobId: ${regenJobId}`);
         activeRegenJobsRef.current[regenJobId] = platformKey;
-        // We return here and let the socket listener handle the rest!
+        // Normal path: the socket handler (onJobProgress) hydrates the fields and
+        // clears the spinner. SAFETY NET: if that event is missed (socket drop, app
+        // backgrounded, or a backend that didn't emit), poll the status endpoint so
+        // the spinner NEVER hangs forever — the original bug. activeRegenJobsRef is a
+        // claim: whichever of socket/poll acts first deletes it and the other no-ops.
+        void (async () => {
+          const pollBase = API_BASE_URL;
+          for (let i = 0; i < 36; i++) { // ~3 min at 5s
+            await new Promise(res => setTimeout(res, 5000));
+            if (!activeRegenJobsRef.current[regenJobId]) return; // socket handled it
+            try {
+              const t = await ensureSupabaseJwt();
+              if (!pollBase || !t) continue;
+              const sr = await fetch(`${pollBase}/api/products/regenerate/status/${regenJobId}`, { headers: { Authorization: `Bearer ${t}` } });
+              if (!sr.ok) continue;
+              const sj = await sr.json();
+              const st = String(sj?.status || sj?.job?.status || '').toLowerCase();
+              if (st !== 'completed' && st !== 'failed' && st !== 'cancelled') continue;
+              if (!activeRegenJobsRef.current[regenJobId]) return; // socket won the race
+              if (st === 'completed') {
+                try {
+                  const rr = await fetch(`${pollBase}/api/products/regenerate/results/${regenJobId}`, { headers: { Authorization: `Bearer ${t}` } });
+                  const rj = rr.ok ? await rr.json() : null;
+                  const resultArray = Array.isArray(rj?.results) ? rj.results : [];
+                  const matched = resultArray.find((r: any) => (typeof r.productIndex === 'number' ? r.productIndex : 0) === ((effectiveResult?.productIndex as number) ?? 0)) || resultArray[0];
+                  const gp = (matched?.platforms || {}) as Record<string, any>;
+                  if (gp && gp[platformKey]) {
+                    updatePlatforms(prev => hydratePlatformsFromBackend({ [platformKey]: normalizeForListingEditor(gp[platformKey]) }, prev));
+                  }
+                } catch (e) { log.error('[GEN-DETAILS] poll completion hydrate failed', e); }
+              } else {
+                showErrorModal('Generation failed', `We couldn’t generate ${platformKey} details. Please try again.`, 'error');
+              }
+              delete activeRegenJobsRef.current[regenJobId];
+              setGeneratingPlatformKeys(prev => { const next = new Set(prev); next.delete(platformKey); return next; });
+              return;
+            } catch { /* transient — keep polling */ }
+          }
+          // Hard timeout — un-stick the spinner even if status never resolved.
+          if (activeRegenJobsRef.current[regenJobId]) {
+            delete activeRegenJobsRef.current[regenJobId];
+            setGeneratingPlatformKeys(prev => { const next = new Set(prev); next.delete(platformKey); return next; });
+          }
+        })();
       } else {
         setGeneratingPlatformKeys(prev => {
           const next = new Set(prev);
