@@ -97,6 +97,12 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
       <TouchableOpacity style={styles.finishBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
         <Text style={styles.finishBtnText}>Finish setup</Text>
       </TouchableOpacity>
+    ) : st.uiState === 'checking' ? (
+      // OAuth done, computer status still loading — quiet neutral, never green.
+      <View style={styles.connectedPill}>
+        <View style={[styles.liveDot, { backgroundColor: '#9CA3AF' }]} />
+        <Text style={[styles.connectedText, { color: '#9CA3AF' }]}>Connected</Text>
+      </View>
     ) : (
       <TouchableOpacity style={styles.connectBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
         <Text style={styles.connectBtnText}>Connect</Text>

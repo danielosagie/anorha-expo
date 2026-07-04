@@ -89,6 +89,15 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     }
   }, [finish]);
 
+  // Auto-finish if the computer comes online while we're on the link step: the
+  // user may open/link their computer out of band, or presence may just arrive.
+  // Without this the sheet would sit on "Link your computer" until manually closed.
+  useEffect(() => {
+    if (phase === 'linkComputer' && status.computerOnline) {
+      finish();
+    }
+  }, [phase, status.computerOnline, finish]);
+
   const runOAuth = useCallback(async () => {
     if (!platform) return;
     setPhase('connecting');

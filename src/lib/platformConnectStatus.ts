@@ -46,11 +46,12 @@ export interface PlatformConnectStatus {
   nextStep?: ConnectStepKind;
   /**
    * What the row/pill should show:
-   *   'connected'      → all steps done (or computer status still loading).
+   *   'connected'      → every required step done (OAuth, and computer online when required).
    *   'needs-computer' → OAuth done, computer required and KNOWN offline.
+   *   'checking'       → OAuth done, computer required, presence still loading (do NOT claim green).
    *   'not-connected'  → no OAuth marker yet.
    */
-  uiState: 'connected' | 'needs-computer' | 'not-connected';
+  uiState: 'connected' | 'needs-computer' | 'checking' | 'not-connected';
 }
 
 export function derivePlatformConnectStatus(
@@ -75,14 +76,16 @@ export function derivePlatformConnectStatus(
   const stepDone = (s: ConnectStepKind) => (s === 'oauth' ? oauthConnected : computerOnline);
   const pendingSteps = steps.filter((s) => !stepDone(s));
 
-  // Only flag 'needs-computer' once presence has loaded, so a connected row does
-  // not flash the warning while the presence query is still in flight.
-  const knownComputerOffline = requiresComputer && computerKnown && !computerOnline;
-  const uiState: PlatformConnectStatus['uiState'] = !oauthConnected
-    ? 'not-connected'
-    : knownComputerOffline
-      ? 'needs-computer'
-      : 'connected';
+  // "Connected" requires the computer to be ONLINE when the platform needs one.
+  // Never claim connected optimistically while presence is still loading, or a
+  // Facebook row with no linked computer would briefly flash a green "Connected".
+  // When the computer is required but its status is unknown (presence loading),
+  // report 'checking' (a quiet, honest middle state) instead of green or amber.
+  let uiState: PlatformConnectStatus['uiState'];
+  if (!oauthConnected) uiState = 'not-connected';
+  else if (!requiresComputer || computerOnline) uiState = 'connected';
+  else if (computerKnown) uiState = 'needs-computer';
+  else uiState = 'checking';
 
   return {
     steps,
@@ -90,8 +93,8 @@ export function derivePlatformConnectStatus(
     requiresComputer,
     computerOnline,
     computerKnown,
-    // "Fully connected" for UI = the pill shows green. During presence loading we
-    // stay optimistic (a just-linked computer shouldn't flicker to not-connected).
+    // Green pill ONLY when truly connected (all steps satisfied). 'checking' and
+    // 'needs-computer' are NOT fully connected.
     isFullyConnected: uiState === 'connected' && steps.length > 0,
     pendingSteps,
     nextStep: pendingSteps[0],
