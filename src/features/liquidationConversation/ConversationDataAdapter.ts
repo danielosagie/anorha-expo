@@ -36,6 +36,7 @@ export interface ConversationDataAdapter {
   getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null>;
   getPendingPlan(campaignId: string, threadId: string): Promise<DecisionPrompt | null>;
   answerQuestion(campaignId: string, pendingActionId: string, answer: { answers?: Record<string, string[]>; other?: string; text?: string }): Promise<void>;
+  submitMessageFeedback(campaignId: string, messageId: string, vote: 'up' | 'down' | null, threadId?: string): Promise<void>;
   getCampaignConfig(campaignId: string): Promise<CampaignConfig>;
   updateCampaignConfig(campaignId: string, update: CampaignConfigUpdate): Promise<CampaignConfig>;
   getCampaignOverview(campaignId: string): Promise<CampaignOverview>;

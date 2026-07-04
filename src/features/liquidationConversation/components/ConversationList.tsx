@@ -21,6 +21,10 @@ type Props = {
   onRetry: (clientMessageId: string) => void;
   onOpenCart?: (sessionId: string) => void;
   onCancelQueued?: (clientMessageId: string) => void;
+  /** Regenerate a finished assistant reply (re-ask its preceding user turn). */
+  onRegenerate?: (messageId: string) => void;
+  /** Record a thumbs up/down on an assistant reply. */
+  onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
   /** Jump from an activity card / tray to the product it touched. */
   onOpenItem?: (productId: string) => void;
   /** Revert a value change from the review tray (optimistic). */
@@ -42,6 +46,8 @@ export const ConversationList = ({
   onRetry,
   onOpenCart,
   onCancelQueued,
+  onRegenerate,
+  onFeedback,
   onOpenItem,
   onUndo,
   onRoutineAction,
@@ -181,6 +187,8 @@ export const ConversationList = ({
             onCancelQueued={onCancelQueued}
             onOpenTray={openTray}
             onOpenItem={onOpenItem}
+            onRegenerate={onRegenerate}
+            onFeedback={onFeedback}
           />
         )}
         ListEmptyComponent={(

@@ -88,6 +88,7 @@ type Palette = {
   heroTop: string; bodyBg: string;
   strong: string; dim: string; faint: string;
   pillBg: string; pillBorder: string; newBg: string;
+  cardBorder: string;
   chart: string; divider: string;
   chipIdleBg: string; chipIdleText: string; chipActiveBg: string; chipActiveText: string;
   chipBorder: string;
@@ -99,7 +100,8 @@ const DAY_THEME: Palette = {
   bgFrom: '#9AC53C', bgTo: '#6F9C26',
   heroTop: '#9AC53C', bodyBg: '#F6F7F4',
   strong: '#FFFFFF', dim: 'rgba(255,255,255,0.6)', faint: 'rgba(255,255,255,0.78)',
-  pillBg: 'rgba(255,255,255,0.18)', pillBorder: 'rgba(0,0,0,0.06)', newBg: 'rgba(20,30,8,0.30)',
+  pillBg: 'rgba(255,255,255,0.18)', pillBorder: 'rgba(255,255,255,0.45)', newBg: 'rgba(20,30,8,0.30)',
+  cardBorder: 'rgba(255,255,255,0.28)',
   chart: 'rgba(255,255,255,0.95)', divider: 'rgba(255,255,255,0.34)',
   chipIdleBg: '#E4E4E7', chipIdleText: '#71717A',
   // Active = the darker slate chip from the mockup (NOT white — white washes out
@@ -113,7 +115,8 @@ const NIGHT_THEME: Palette = {
   bgFrom: '#0F1603', bgTo: '#0F1603',
   heroTop: '#0F1603', bodyBg: '#1C1E15',
   strong: '#FFFFFF', dim: 'rgba(255,255,255,0.4)', faint: 'rgba(255,255,255,0.8)',
-  pillBg: 'rgba(244,244,245,0.2)', pillBorder: 'rgba(0,0,0,0.25)', newBg: 'rgba(255,255,255,0.2)',
+  pillBg: 'rgba(244,244,245,0.2)', pillBorder: 'rgba(255,255,255,0.35)', newBg: 'rgba(255,255,255,0.2)',
+  cardBorder: 'rgba(255,255,255,0.22)',
   chart: 'rgba(255,255,255,0.92)', divider: 'rgba(255,255,255,0.9)',
   chipIdleBg: 'rgba(255,255,255,0.14)', chipIdleText: '#CECECE',
   chipActiveBg: '#71717A', chipActiveText: '#FFFFFF', chipBorder: 'transparent',
@@ -210,13 +213,21 @@ const HeroActionCard = ({
   subtitle,
   chip,
   onPress,
+  borderColor,
 }: {
   title: string;
   subtitle?: string;
   chip: string;
   onPress: () => void;
+  // Themed so the card + its chip keep a visible outline in night mode (the
+  // hardcoded black border vanished on the dark hero).
+  borderColor?: string;
 }) => (
-  <TouchableOpacity style={styles.reportCard} activeOpacity={0.85} onPress={onPress}>
+  <TouchableOpacity
+    style={[styles.reportCard, borderColor ? { borderColor } : null]}
+    activeOpacity={0.85}
+    onPress={onPress}
+  >
     <View style={styles.reportIconWrap}>
       <LinearGradient
         colors={['rgba(255,255,255,0.31)', 'rgba(153,153,153,0.31)']}
@@ -229,7 +240,7 @@ const HeroActionCard = ({
       <Text style={styles.reportTitle} numberOfLines={2}>{title}</Text>
       {!!subtitle && <Text style={styles.reportSub} numberOfLines={1}>{subtitle}</Text>}
     </View>
-    <View style={styles.reportChip}>
+    <View style={[styles.reportChip, borderColor ? { borderColor } : null]}>
       <Text style={styles.reportChipText}>{chip}</Text>
     </View>
   </TouchableOpacity>
@@ -777,6 +788,7 @@ const SproutHomeScreen: React.FC = () => {
                   subtitle="Here's what you missed"
                   chip="Review"
                   onPress={openReport}
+                  borderColor={THEME.cardBorder}
                 />
               )}
               {!DEMO && nextReportHours != null && (
@@ -810,6 +822,7 @@ const SproutHomeScreen: React.FC = () => {
                 <HeroActionCard
                   title={insightHeadline || 'Sprout has a move'}
                   chip={handoffTarget.label}
+                  borderColor={THEME.cardBorder}
                   onPress={() => {
                     tap();
                     navigation.navigate('CampaignThreadScreen', {

@@ -319,6 +319,10 @@ export interface ConversationToolStep {
   undo?: UndoRef;
   /** A report the agent authored in this step — promoted to a {kind:'document'} card. */
   document?: ReportDocument;
+  /** Length of the assistant text streamed so far when this step completed. Lets the
+   *  bubble drop the card inline at the point the reply "brought it up" (client-stamped
+   *  during streaming; absent on history reload → the card falls beneath the text). */
+  textAnchor?: number;
 }
 
 /** Shared fields on every inline activity card payload. */
@@ -327,6 +331,9 @@ export interface ActivityBase {
   /** Humanized outcome title shown on the card ("Lowered the price"). */
   title: string;
   status?: 'ok' | 'failed' | 'pending' | 'syncing';
+  /** Character offset into the assistant text where this card should sit inline.
+   *  Derived from the source step's textAnchor; undefined → render beneath the reply. */
+  anchor?: number;
 }
 
 /** One section of an agent-authored report. Whitelisted to three safe shapes,
