@@ -4196,7 +4196,7 @@ const ProductDetailScreen = observer(
             <View style={styles.channelsCard}>
               <View style={styles.channelsHeader}>
                 <Text style={styles.channelsTitle}>Active Channels</Text>
-                <TouchableOpacity style={styles.channelsManagePill} onPress={() => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => listingEditorRef.current?.openPlatformPicker?.(), 80); } else { listingEditorRef.current?.openPlatformPicker?.(); } }}>
+                <TouchableOpacity style={styles.channelsManagePill} onPress={() => (navigation as any).navigate('Connections')}>
                   <Text style={styles.channelsManageText}>Manage</Text>
                 </TouchableOpacity>
               </View>
