@@ -8,7 +8,7 @@ import { ActivityIndicator, Alert, RefreshControl, ScrollView, StatusBar, StyleS
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
-import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { usePlatformConnections, type PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
@@ -24,14 +24,17 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { getPlatform, normalizeDisplayName } from '../config/platforms';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { pickCsvImportPayload } from '../utils/pickCsvImport';
+import ConnectionDetailSheet from '../components/ConnectionDetailSheet';
+import {
+  derivePlatformConnectStatus,
+  getPlatformConnectStatusDisplay,
+  type ComputerPresence,
+} from '../lib/platformConnectStatus';
 
-const statusOf = (raw?: string): { label: string; color: string } => {
-  const s = (raw || '').toLowerCase();
-  if (s.includes('active') || s.includes('connect') || s === 'ok' || s === 'live') return { label: 'Connected', color: '#43631A' };
-  if (s.includes('error') || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Needs reconnect', color: '#DC2626' };
-  if (s.includes('sync')) return { label: 'Syncing…', color: '#A2611A' };
-  return { label: raw || 'Connected', color: '#71717A' };
-};
+const statusOf = (connection: PlatformConnectionRow, presence: ComputerPresence) =>
+  getPlatformConnectStatusDisplay(
+    derivePlatformConnectStatus(connection.PlatformType, [connection], presence),
+  );
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
 const shopLabel = (c: any): string =>
@@ -67,9 +70,15 @@ const ConnectionsScreen = () => {
   const [managing, setManaging] = useState(false);
 
   // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
-  const { computers, refresh: refreshComputers } = useFacebookJobStatus();
+  const {
+    computers,
+    refresh: refreshComputers,
+    computerOnline,
+    presenceLoaded,
+  } = useFacebookJobStatus();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+  const [detailConnection, setDetailConnection] = useState<PlatformConnectionRow | null>(null);
 
   // Wire the global platform-picker overlay so choosing a platform from the
   // "Connect a platform" sheet shows the consent page, then opens the OAuth
@@ -238,16 +247,14 @@ const ConnectionsScreen = () => {
           ) : (liveConnections?.length || 0) === 0 ? (
             <Text style={styles.empty}>No platforms connected yet.</Text>
           ) : (
-            liveConnections.map((c: any, i: number) => {
-              const st = statusOf(c.Status);
+            liveConnections.map((c, i: number) => {
+              const st = statusOf(c, { computerOnline, presenceLoaded });
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.row, i > 0 && styles.rowBorder]}
                   activeOpacity={0.7}
-                  onPress={() =>
-                    navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType })
-                  }
+                  onPress={() => setDetailConnection(c)}
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
                   <View style={styles.rowInfo}>
@@ -401,6 +408,23 @@ const ConnectionsScreen = () => {
         onCreated={() => {
           setCreatePoolOpen(false);
           void loadPools();
+        }}
+      />
+
+      <ConnectionDetailSheet
+        visible={detailConnection !== null}
+        connection={detailConnection}
+        onClose={() => setDetailConnection(null)}
+        onReview={(connection) => {
+          setDetailConnection(null);
+          navigation.navigate('SyncInbox', {
+            connectionId: connection.Id,
+            platformName: connection.PlatformType,
+          });
+        }}
+        onSyncRules={(connection) => {
+          setDetailConnection(null);
+          navigation.navigate('SyncRules', { connectionId: connection.Id });
         }}
       />
 

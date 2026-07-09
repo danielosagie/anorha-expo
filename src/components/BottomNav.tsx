@@ -34,6 +34,7 @@ type Props = {
   onBack?: () => void;
   onGeneratePress: () => void;
   onStartConnect?: (platform: string) => void;
+  onOpenConnection?: (platform: string) => void;
   /** "See all platforms" → the full connect page. The row only renders when a
    *  host provides this — hosts without navigation simply don't get the row,
    *  so the platform-key channel never carries sentinel values. */
@@ -73,6 +74,7 @@ const BottomNav: React.FC<Props> = ({
   onBack,
   onGeneratePress,
   onStartConnect,
+  onOpenConnection,
   onSeeAll,
   style,
   totalItemsCount = 1,
@@ -251,7 +253,10 @@ const BottomNav: React.FC<Props> = ({
                 key={p}
                 platform={p}
                 isSelected={false}
-                onPress={() => onStartConnect && onStartConnect(p)}
+                onPress={() => {
+                  if (isConnected(p)) onOpenConnection?.(p);
+                  else onStartConnect?.(p);
+                }}
                 isConnected={isConnected(p)}
                 activeCount={platformActiveCounts[p] || 0}
               />

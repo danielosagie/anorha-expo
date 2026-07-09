@@ -1,6 +1,6 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { NavigationContainer, NavigationContainerRef, CommonActions } from '@react-navigation/native';
-import { AppState, AppStateStatus, StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
+import { AppState, AppStateStatus, StatusBar, Linking, ActivityIndicator, View, Pressable } from 'react-native';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
@@ -11,7 +11,7 @@ import { LegendStateControlContext } from './src/context/LegendStateControlConte
 import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import FlashMessage from 'react-native-flash-message';
-import { PlatformConnectionsProvider, usePlatformConnections } from './src/context/PlatformConnectionsContext';
+import { PlatformConnectionsProvider, usePlatformConnections, type PlatformConnectionRow } from './src/context/PlatformConnectionsContext';
 import { PlatformPickerOverlayProvider, usePlatformPickerOverlay } from './src/context/PlatformPickerOverlayContext';
 import BottomNav from './src/components/BottomNav';
 import { Text } from 'react-native';
@@ -45,6 +45,10 @@ import {
   loadActiveFlowCheckpoint,
   saveActiveFlowCheckpoint,
 } from './src/utils/activeFlowPersistence';
+import ConnectionDetailSheet from './src/components/ConnectionDetailSheet';
+import { useFacebookJobStatus } from './src/hooks/useFacebookJobStatus';
+import { derivePlatformConnectStatus } from './src/lib/platformConnectStatus';
+import { resolvePlatformKey } from './src/config/platforms';
 
 // Crash visibility. Empty/missing DSN no-ops cleanly so dev builds are
 // unaffected. Must run at module load, before the app renders.
@@ -225,44 +229,6 @@ const App: React.FC = () => {
     useEffect(() => {
       const handleDeepLink = (url: string) => {
         try {
-          // Handle auth callback
-          if (url.startsWith('anorhaapp://auth-callback') || url.startsWith('anorhaapp://auth/callback')) {
-            const urlObject = new URL(url);
-            const status = urlObject.searchParams.get('status');
-            const platform = urlObject.searchParams.get('connection') || urlObject.searchParams.get('platform') || 'platform';
-            const errorMessage = urlObject.searchParams.get('message');
-
-            console.log(`[App] Auth callback received: platform=${platform}, status=${status}`);
-
-            if (status === 'success') {
-              // Show brief success message
-              Alert.alert('Success', `${platform.charAt(0).toUpperCase() + platform.slice(1)} connected successfully!`);
-              // Navigate to Profile with a unique refresh timestamp to trigger data reload
-              navigationRef.current?.dispatch(
-                CommonActions.reset({
-                  index: 0,
-                  routes: [{
-                    name: 'AppStack',
-                    state: {
-                      routes: [{
-                        name: 'TabNavigator',
-                        state: {
-                          routes: [{ name: 'Profile', params: { refresh: Date.now() } }],
-                          index: 0
-                        }
-                      }]
-                    }
-                  }],
-                })
-              );
-            } else if (status === 'error') {
-              Alert.alert('Connection Failed', errorMessage || `Failed to connect ${platform}. Please try again.`);
-              // Still navigate to Profile to show the connection attempt result
-              navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile' } });
-            }
-            return;
-          }
-
           // Handle partner invite deep link
           if (url.startsWith('anorhaapp://partner/accept')) {
             const urlObject = new URL(url);
@@ -553,57 +519,108 @@ const App: React.FC = () => {
 
     const GlobalPlatformPickerOverlay: React.FC = () => {
       const overlay = usePlatformPickerOverlay();
-      const { connections } = usePlatformConnections();
+      const { liveConnections } = usePlatformConnections();
+      const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+      const [detailConnection, setDetailConnection] = useState<PlatformConnectionRow | null>(null);
 
       const counts: Record<string, number> = {};
-      (connections || []).forEach((c: any) => {
-        if ((c.Status || '').toLowerCase() === 'active') {
-          counts[c.PlatformType] = (counts[c.PlatformType] || 0) + 1;
+      (liveConnections || []).forEach((connection) => {
+        const state = derivePlatformConnectStatus(connection.PlatformType, [connection], {
+          computerOnline,
+          presenceLoaded,
+        });
+        const key = resolvePlatformKey(connection.PlatformType);
+        if (state.isFullyConnected && key) {
+          counts[key] = (counts[key] || 0) + 1;
         }
       });
 
-      if (!overlay.visible) {
-        return null;
-      }
+      const isConnected = (platform: string) =>
+        derivePlatformConnectStatus(platform, liveConnections, {
+          computerOnline,
+          presenceLoaded,
+        }).isFullyConnected;
+
+      const openConnection = (platform: string) => {
+        const key = resolvePlatformKey(platform);
+        const connection = liveConnections.find((row) => {
+          if (resolvePlatformKey(row.PlatformType) !== key) return false;
+          return derivePlatformConnectStatus(row.PlatformType, [row], {
+            computerOnline,
+            presenceLoaded,
+          }).isFullyConnected;
+        });
+        if (!connection) return;
+        overlay.hide();
+        setDetailConnection(connection);
+      };
 
       return (
-        <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end', zIndex: 9999 }} pointerEvents="box-none">
-          <Pressable
-            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' }}
-            onPress={() => {
-              overlay.hide();
+        <>
+          {overlay.visible ? (
+            <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end', zIndex: 9999 }} pointerEvents="box-none">
+              <Pressable
+                style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' }}
+                onPress={() => {
+                  overlay.hide();
+                }}
+              />
+              <View style={{ flexDirection: "column", alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, width: '100%' }}>
+                <BottomNav
+                  state={'platformPicker'}
+                  selectedCount={0}
+                  selectedTemplate={null}
+                  selectedPlatforms={[]}
+                  isConnected={isConnected}
+                  platformActiveCounts={counts}
+                  onShowSelection={() => { }}
+                  onShowPlatforms={() => { }}
+                  onShowTemplates={() => { }}
+                  onBackToEmpty={() => { overlay.hide(); }}
+                  onBackToSelection={() => { }}
+                  onOpenTemplateModal={() => { }}
+                  onTemplateSelect={() => { }}
+                  onPlatformToggle={() => { }}
+                  onGeneratePress={() => { }}
+                  onStartConnect={(platform) => {
+                    overlay.hide();
+                    overlay.onStartConnect?.(platform);
+                  }}
+                  onOpenConnection={openConnection}
+                  // "See all platforms" → the full connect page. Wired here (root
+                  // owns the nav ref); pickers without navigation skip the row.
+                  onSeeAll={() => {
+                    overlay.hide();
+                    navigationRef.current?.navigate('AppStack', { screen: 'ConnectPlatforms' } as any);
+                  }}
+                />
+              </View>
+            </View>
+          ) : null}
+
+          <ConnectionDetailSheet
+            visible={detailConnection !== null}
+            connection={detailConnection}
+            onClose={() => setDetailConnection(null)}
+            onReview={(connection) => {
+              setDetailConnection(null);
+              navigationRef.current?.navigate('AppStack', {
+                screen: 'SyncInbox',
+                params: {
+                  connectionId: connection.Id,
+                  platformName: connection.PlatformType,
+                },
+              } as any);
+            }}
+            onSyncRules={(connection) => {
+              setDetailConnection(null);
+              navigationRef.current?.navigate('AppStack', {
+                screen: 'SyncRules',
+                params: { connectionId: connection.Id },
+              } as any);
             }}
           />
-          <View style={{ flexDirection: "column", alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, width: '100%' }}>
-            <BottomNav
-              state={'platformPicker'}
-              selectedCount={0}
-              selectedTemplate={null}
-              selectedPlatforms={[]}
-              isConnected={(p) => (connections || []).some((c: any) => c.PlatformType === p && (c.Status || '').toLowerCase() === 'active')}
-              platformActiveCounts={counts}
-              onShowSelection={() => { }}
-              onShowPlatforms={() => { }}
-              onShowTemplates={() => { }}
-              onBackToEmpty={() => { overlay.hide(); }}
-              onBackToSelection={() => { }}
-              onOpenTemplateModal={() => { }}
-              onTemplateSelect={() => { }}
-              onPlatformToggle={() => { }}
-              onGeneratePress={() => { }}
-              onStartConnect={(platform) => {
-                overlay.hide();
-                overlay.onStartConnect?.(platform);
-              }}
-              // "See all platforms" → the full connect page. Wired here (root
-              // owns the nav ref); pickers without navigation skip the row.
-              onSeeAll={() => {
-                overlay.hide();
-                navigationRef.current?.navigate('AppStack', { screen: 'ConnectPlatforms' } as any);
-              }}
-            />
-          </View>
-        </View>
+        </>
       );
     };
 

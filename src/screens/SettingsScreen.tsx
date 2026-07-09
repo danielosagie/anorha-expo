@@ -13,11 +13,17 @@ import {
 } from 'lucide-react-native';
 import { AuthContext } from '../context/AuthContext';
 import { useOrg } from '../context/OrgContext';
-import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { usePlatformConnections, type PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
 import { normalizeDisplayName } from '../config/platforms';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import {
+  derivePlatformConnectStatus,
+  getPlatformConnectStatusDisplay,
+  type ComputerPresence,
+} from '../lib/platformConnectStatus';
 
 type Card = {
   key: string;
@@ -26,13 +32,10 @@ type Card = {
   onPress: () => void;
 };
 
-const statusOf = (raw?: string): { label: string; color: string } => {
-  const s = (raw || '').toLowerCase();
-  if (s.includes('active') || s.includes('connect') || s === 'ok' || s === 'live') return { label: 'Connected', color: '#43631A' };
-  if (s.includes('error') || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Needs reconnect', color: '#DC2626' };
-  if (s.includes('sync')) return { label: 'Syncing…', color: '#A2611A' };
-  return { label: raw || 'Connected', color: '#71717A' };
-};
+const statusOf = (connection: PlatformConnectionRow, presence: ComputerPresence) =>
+  getPlatformConnectStatusDisplay(
+    derivePlatformConnectStatus(connection.PlatformType, [connection], presence),
+  );
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
 const shopLabel = (c: any): string =>
@@ -45,6 +48,7 @@ const SettingsScreen = () => {
   const { user } = useUser();
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
+  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
 
   useEffect(() => {
     refresh?.();
@@ -174,8 +178,8 @@ const SettingsScreen = () => {
               <ChevronRight size={20} color="#D4D4D8" />
             </TouchableOpacity>
           ) : (
-            platformPreview.map((c: any, i: number) => {
-              const st = statusOf(c.Status);
+            platformPreview.map((c, i: number) => {
+              const st = statusOf(c, { computerOnline, presenceLoaded });
               return (
                 <TouchableOpacity
                   key={c.Id}

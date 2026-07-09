@@ -19,6 +19,8 @@ export interface PlatformConnectionRow {
   Status: string;
   IsEnabled: boolean;
   LastSyncSuccessAt?: string | null;
+  NeedsReauth?: boolean | null;
+  RecommendedAction?: string | null;
   CreatedAt: string;
   UpdatedAt: string;
 }
