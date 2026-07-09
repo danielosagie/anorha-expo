@@ -37,6 +37,7 @@ interface InventoryListCardProps {
   searchQuery?: string;
   onPress: (id: string) => void;
   onLongPress?: (id: string) => void;
+  onPressOut?: (id: string) => void;
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onLayout?: (event: LayoutChangeEvent) => void;
@@ -64,6 +65,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   searchQuery,
   onPress,
   onLongPress,
+  onPressOut,
   isSelectionMode,
   isSelected,
   onLayout,
@@ -144,9 +146,14 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
         ]}
         onPress={() => onPress(id)}
         onLongPress={onLongPress ? () => onLongPress(id) : undefined}
+        onPressOut={onPressOut ? () => onPressOut(id) : undefined}
         activeOpacity={0.7}
         delayLongPress={300}
         onLayout={onLayout}
+        accessibilityRole="button"
+        accessibilityLabel={`${title || 'Inventory item'}${isSelectionMode ? (isSelected ? ', selected' : ', not selected') : ''}`}
+        accessibilityHint={isSelectionMode ? 'Toggles this item selection.' : 'Opens product details. Long press to select this item.'}
+        accessibilityState={{ selected: !!isSelected }}
       >
 
         {/* Selection Indicator */}
@@ -208,14 +215,9 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
               </View>
             )}
 
-            {hideSync ? null : lastSyncedAt ? (
-              <Text style={[styles.syncText, { color: isStale ? '#B45309' : '#6B7280' }]}>
-                Last synced: {new Date(lastSyncedAt).toLocaleString()}
-                {isStale ? ' • Stale' : ''}
-              </Text>
-            ) : (
-              <Text style={[styles.syncText, { color: '#9CA3AF' }]}>Last synced: unavailable</Text>
-            )}
+            {!hideSync && isStale ? (
+              <Text style={styles.syncText}>Needs sync</Text>
+            ) : null}
 
             {/* Match chips - only show when there's a search query and matches */}
             {searchQuery && matchLocations && matchLocations.length > 0 && (
@@ -341,6 +343,8 @@ const styles = StyleSheet.create({
   },
   syncText: {
     fontSize: 10,
+    color: '#BA7517',
+    fontWeight: '700',
     marginTop: -4,
     marginBottom: 8,
   },

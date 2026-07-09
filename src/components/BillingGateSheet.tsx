@@ -74,8 +74,8 @@ export default function BillingGateSheet({
           <>
             <View style={styles.separator} />
             <View style={styles.statRow}>
-              <Text style={styles.statLabel}>Free scans</Text>
-              <Text style={styles.statValue}>{gate.freeUsageCount}/{gate.freeLimit}</Text>
+              <Text style={styles.statLabel}>Free usage</Text>
+              <Text style={styles.statValue}>Limit reached</Text>
             </View>
           </>
         ) : null}

@@ -52,7 +52,7 @@ interface LocationMetadata {
 
 interface PoolLocationComboboxProps {
   orgId?: string; // Optional now, as we can use context
-  platformConnections?: PlatformConnection[]; // NEW: Pass connections like LocationsManagerV2
+  platformConnections?: PlatformConnection[];
   selectedItems: string[]; // location IDs
   onSelectionChange: (locationIds: string[]) => void;
   startOpen?: boolean;
@@ -81,7 +81,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Derive connection IDs and connection map from platformConnections (like LocationsManagerV2)
+  // Derive connection IDs and connection map from platformConnections.
   const connectionIds = useMemo(() => platformConnections?.map((c) => c.Id) || [], [platformConnections]);
 
   const connectionById = useMemo(() => {
@@ -123,7 +123,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
     setSelectedLocations(selectedItems);
   }, [selectedItems]);
 
-  // Load data exactly like LocationsManagerV2.loadList
+  // Load data for pools and platform locations.
   const loadData = useCallback(async () => {
     if (!effectiveOrgId) {
       log.debug('[PoolLocationCombobox] No org ID available');
@@ -134,7 +134,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
       setLoading(true);
       const token = await ensureSupabaseJwt();
 
-      // Load pools from API (same as LocationsManagerV2)
+      // Load pools from API.
       const poolsRes = await fetch(`${API_BASE_URL}/api/pools/org/${effectiveOrgId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -148,7 +148,7 @@ const PoolLocationCombobox: React.FC<PoolLocationComboboxProps> = ({
         setPools([]);
       }
 
-      // Load platform locations directly from Supabase (same as LocationsManagerV2)
+      // Load platform locations directly from Supabase.
       if (connectionIds.length > 0) {
         const { data: platformLocs, error } = await supabase
           .from('PlatformLocations')

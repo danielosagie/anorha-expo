@@ -893,7 +893,7 @@ export default function PartnersScreen() {
                         onPress={() => {
                             setOnboardingModal({ visible: false, message: '' });
                             refreshData();
-                            navigation.navigate('AccountSettings');
+                            navigation.navigate('Connections');
                         }}
                     >
                         <Text style={styles.modalButtonText}>Connect Now</Text>

@@ -264,7 +264,7 @@ const ActivityFeedScreen = observer(() => {
 
   // Fetch activity feed from backend
   const fetchActivityFeed = useCallback(async (cursor?: string, append = false) => {
-    // Wait for org context to be available (like ProfileScreen does)
+    // Wait for org context to be available.
     if (!currentOrg?.id) {
       setLoading(false);
       return;

@@ -203,12 +203,13 @@ const SettingsScreen = () => {
           )}
         </View>
 
-        <Text style={styles.gridLabel}>Settings</Text>
-        <View style={styles.grid}>
+        <Text style={styles.listLabel}>Settings</Text>
+        <View style={styles.settingsList}>
           {cards.map(c => (
-            <TouchableOpacity key={c.key} style={styles.card} onPress={c.onPress} activeOpacity={0.85}>
-              <View style={styles.cardIcon}>{c.icon}</View>
-              <Text style={styles.cardLabel}>{c.label}</Text>
+            <TouchableOpacity key={c.key} style={styles.settingsRow} onPress={c.onPress} activeOpacity={0.75}>
+              <View style={styles.rowIcon}>{c.icon}</View>
+              <Text style={styles.rowLabel}>{c.label}</Text>
+              <ChevronRight size={20} color="#D4D4D8" />
             </TouchableOpacity>
           ))}
         </View>
@@ -265,24 +266,30 @@ const styles = StyleSheet.create({
   },
   platformEmptySub: { fontSize: 13, color: '#9CA3AF', fontFamily: 'Inter_400Regular', marginTop: 2 },
 
-  gridLabel: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 12, marginLeft: 4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  card: {
-    width: '48.5%',
-    height: 128,
+  listLabel: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 12, marginLeft: 4 },
+  settingsList: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 22,
-    padding: 18,
-    marginBottom: 14,
-    justifyContent: 'space-between',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    marginBottom: 12,
     shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.03,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
-  cardIcon: { width: 28, height: 28, alignItems: 'flex-start', justifyContent: 'center' },
-  cardLabel: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  settingsRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F1EE',
+  },
+  rowIcon: { width: 28, height: 28, alignItems: 'flex-start', justifyContent: 'center' },
+  rowLabel: { flex: 1, fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 
   signOut: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 18, marginTop: 16 },
   signOutText: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold' },

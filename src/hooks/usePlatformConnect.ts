@@ -1,8 +1,8 @@
 // usePlatformConnect — a small, self-contained wrapper around the platform
-// OAuth + "start scan" flow, so screens outside ProfileScreen (e.g. the
+// OAuth + "start scan" flow, so screens outside the settings stack (e.g. the
 // onboarding "Connect your accounts" step) can connect a platform and kick off
 // the background inventory pull / draft-mapping build without dragging in
-// ProfileScreen's state. Mirrors the URL + callback patterns ProfileScreen uses.
+// screen-local state. Mirrors the shared URL + callback patterns.
 
 import { useCallback } from 'react';
 import * as WebBrowser from 'expo-web-browser';

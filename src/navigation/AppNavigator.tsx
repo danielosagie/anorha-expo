@@ -41,7 +41,6 @@ import AuthScreen from '../screens/AuthScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
 import ImportProgressBanner from '../components/ImportProgressBanner';
-import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
 import ConnectPlatformsScreen from '../screens/ConnectPlatformsScreen';
@@ -174,7 +173,6 @@ export type AppStackParamList = {
   SyncInbox: { connectionId: string; platformName: string };
   SyncRules: { connectionId: string };
   Profile: { refresh?: number };
-  AccountSettings: { refresh?: number } | undefined;
   Connections: undefined;
   ConnectPlatforms: undefined;
   PrivacySecurity: undefined;
@@ -373,6 +371,7 @@ export type AppStackParamList = {
     csvHeaders: string[];
     csvData: any[];
     sampleRow: Record<string, string>;
+    connectionName?: string;
   };
   Backups: undefined;
   LiquidationCampaignScreen: { campaignId: string; entryPoint?: 'tab' | 'detail' } | undefined;
@@ -588,10 +587,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PastScans" component={sb(PastScansScreen)} />
     <AppStackNav.Screen name="SyncInbox" component={sb(SyncInboxScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
-    {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
-        a stack route also named 'Profile' collided with the Profile TAB and made
-        navigate('Profile') push this legacy screen over the tabs. */}
-    <AppStackNav.Screen name="AccountSettings" component={sb(ProfileScreen)} />
     <AppStackNav.Screen name="Connections" component={sb(ConnectionsScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="ConnectPlatforms" component={sb(ConnectPlatformsScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="PrivacySecurity" component={sb(PrivacySecurityScreen)} options={{ headerShown: false }} />

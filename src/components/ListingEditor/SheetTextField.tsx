@@ -137,7 +137,17 @@ const styles = StyleSheet.create({
   },
   inputWrap: { position: 'relative' },
   inputWithTrailing: { paddingRight: 52 },
-  trailing: { position: 'absolute', right: 7, top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
+  trailing: {
+    position: 'absolute',
+    right: 7,
+    top: 0,
+    bottom: 0,
+    width: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 2,
+    elevation: 2,
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',

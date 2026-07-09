@@ -111,7 +111,7 @@ export const ROUTES: ExportRoute[] = [
 
   // ---------- Settings ----------
   { key: 'profile', title: 'Profile / Settings home', group: 'Settings', routeName: 'Profile',
-    load: () => import('../ProfileScreen') },
+    load: () => import('../SettingsScreen') },
   { key: 'notifications', title: 'Notification settings', group: 'Settings', routeName: 'NotificationSettings',
     load: () => import('../NotificationSettingsScreen') },
   { key: 'team', title: 'Team', group: 'Settings', routeName: 'Team',

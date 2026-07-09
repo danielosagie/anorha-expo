@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing, Platform, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, Switch, FlatList, Animated, Easing, Platform, RefreshControl, Dimensions } from 'react-native';
 import { ChevronLeft, ChevronRight, Copy, Check, Info, Box, AlertTriangle, X } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import ProgressiveBlurView from '../components/ProgressiveBlurView';
@@ -40,6 +40,7 @@ import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppMenu } from '../components/ui/AppMenu';
 import { createLogger } from '../utils/logger';
 const log = createLogger('ProductDetail');
 
@@ -47,19 +48,6 @@ const log = createLogger('ProductDetail');
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
 
-// Compact relative time for the Active Listings status rows ("2h ago", "3d ago").
-const relTime = (ms: number): string => {
-  if (!ms) return '';
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return 'just now';
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  return `${Math.floor(days / 30)}mo ago`;
-};
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
@@ -236,6 +224,8 @@ const ProductDetailScreen = observer(
     const { currentOrg } = useOrg();
     const fbDispatch = useFacebookJobStatus();
     const insets = useSafeAreaInsets();
+    const actionMenuWidth = Math.min(300, Dimensions.get('window').width - 32);
+    const actionMenuLeft = Math.max(16, Dimensions.get('window').width - actionMenuWidth - 16);
     // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
     // Saved/Saving…/Unsaved/Retry chip is the only save model now, so the scroll
     // content no longer needs to clear an 80px action bar.
@@ -741,6 +731,12 @@ const ProductDetailScreen = observer(
       return `Location ${level.PlatformLocationId || 'Unknown'}`;
     }, []);
 
+    const facebookMappingOperation = useCallback((mapping: PlatformProductMapping): string => {
+      const data = mapping.PlatformSpecificData;
+      if (!data || typeof data !== 'object') return '';
+      return String((data as any).pendingOperation || (data as any).operation || '').toLowerCase();
+    }, []);
+
     // Load platform connections and organize inventory with realtime updates
     const loadPlatformData = useCallback(async () => {
       if (!detailedItem) return;
@@ -882,7 +878,7 @@ const ProductDetailScreen = observer(
         // Load platform mappings for ALL variants
         const { data: mappingsData, error: mappingsError } = await supabase
           .from('PlatformProductMappings')
-          .select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt')
+          .select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, SyncErrorMessage, PlatformSpecificData, IsEnabled, LastSyncedAt, UpdatedAt')
           .in('ProductVariantId', allVariantIds);
 
         if (mappingsError) {
@@ -987,10 +983,10 @@ const ProductDetailScreen = observer(
               return;
             }
 
-            // CRITICAL FIX: Filter out "Ghost" locations where connection is missing and no PoolId
-            // This happens if a connection was deleted but inventory level remains stapled
+            // Local/default inventory is already shown in the inventory card below.
+            // Only platform-connected or pool-backed rows belong in the grouped platform section.
             if (!connection) {
-              log.warn('[ProductDetail] 👻 Ghost inventory detected (No Connection, No PoolId):', level.PlatformConnectionId);
+              log.debug('[ProductDetail] Skipping standalone inventory in platform grouping:', level.Id || level.ProductVariantId);
               return;
             }
 
@@ -2045,7 +2041,7 @@ const ProductDetailScreen = observer(
               {
                 text: 'Add Platform',
                 style: 'default',
-                onPress: () => navigation.navigate('AccountSettings')
+                onPress: () => navigation.navigate('ConnectPlatforms')
               }
             ]
           );
@@ -2189,8 +2185,7 @@ const ProductDetailScreen = observer(
               {
                 text: 'Re-authenticate',
                 onPress: () => {
-                  // Navigate to profile to trigger reauth
-                  navigation.navigate('Profile' as never, { openReauth: reauthPlatform.connectionId } as never);
+                  navigation.navigate('Connections' as never);
                 }
               },
             ]
@@ -2198,7 +2193,17 @@ const ProductDetailScreen = observer(
           return;
         }
 
-        showBanner(`🚀 Published to ${platformKey}!`);
+        const queuedForDesktop = Array.isArray(responseData?.publishResults)
+          && responseData.publishResults.some((result: any) =>
+            result?.success &&
+            result?.async &&
+            String(result?.platform || '').toLowerCase() === platformKey.toLowerCase()
+          );
+
+        showBanner(queuedForDesktop
+          ? `${platformKey} will publish from your computer`
+          : `Published to ${platformKey}!`
+        );
 
         capture(AnalyticsEvents.PUBLISH_COMPLETED, {
           origin: 'edit',
@@ -2228,7 +2233,7 @@ const ProductDetailScreen = observer(
               { text: 'Later', style: 'cancel' },
               {
                 text: 'Re-authenticate',
-                onPress: () => navigation.navigate('Profile' as never)
+                onPress: () => navigation.navigate('Connections' as never)
               },
             ]
           );
@@ -2288,12 +2293,17 @@ const ProductDetailScreen = observer(
                 headers: { 'Authorization': `Bearer ${token}` }
               });
 
+              const responseData = await res.json().catch(() => ({}));
+
               if (!res.ok) {
                 throw new Error('Failed to delist');
               }
 
-              showBanner(`Deleted listing from ${platformName}`);
-              // Refresh data to remove it from the list
+              showBanner(responseData?.pending
+                ? `Delisting from ${platformName}...`
+                : `Deleted listing from ${platformName}`
+              );
+              // Refresh data to either remove it or show its queued desktop status.
               await loadPlatformData();
             } catch (e: any) {
               log.error('Delist failed:', e);
@@ -2565,35 +2575,24 @@ const ProductDetailScreen = observer(
     };
 
     // In the delete handler
-    const handleDelete = () => {
-      Alert.alert(
-        'Confirm Delete',
-        'This action cannot be undone. Do you want to archive or hard delete?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Archive', onPress: () => archiveProduct() },
-          { text: 'Hard Delete', style: 'destructive', onPress: () => hardDeleteProduct() },
-        ]
-      );
-    };
-
     // Add functions
     const archiveProduct = async () => {
       if (!detailedItem?.Id) return;
       try {
         const token = await ensureSupabaseJwt();
-        await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/archive`, {
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/archive`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error(errorBody?.message || `Archive failed: ${response.status}`);
+        }
         navigation.goBack();
-      } catch (error) {
-        // handle
+      } catch (error: any) {
+        log.error('Archive product failed:', error);
+        Alert.alert('Archive failed', error?.message || 'Could not archive this product. Please try again.');
       }
-    };
-
-    const hardDeleteProduct = async () => {
-      // similar for delete
     };
 
     // Load initial data
@@ -4192,7 +4191,7 @@ const ProductDetailScreen = observer(
             />
             )}
 
-            {/* Active Channels — gray card with a white inner list (UJK-0) */}
+            {/* Active Channels — white card, status-led. Normal live state stays quiet. */}
             <View style={styles.channelsCard}>
               <View style={styles.channelsHeader}>
                 <Text style={styles.channelsTitle}>Active Channels</Text>
@@ -4208,21 +4207,49 @@ const ProductDetailScreen = observer(
                     const rawType = connection?.PlatformType || 'unknown';
                     const typeLabel = rawType.charAt(0).toUpperCase() + rawType.slice(1);
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
-                    const parsedSyncMs = mapping.LastSyncedAt ? new Date(mapping.LastSyncedAt).getTime() : 0;
-                    const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
-                    const statusColor = isStale ? '#BA7517' : '#16A34A';
-                    const statusText = isStale
-                      ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
-                      : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
-                    // Facebook posts through the user's computer (async). When a
-                    // dispatch job is in flight / waiting / paused / failed, show its
-                    // realtime status instead of the sync status \u2014 same dot+label idiom.
+                    const syncStatusValue = String(mapping.SyncStatus || '').toLowerCase();
+                    const pendingOperation = facebookMappingOperation(mapping);
+                    const isPendingMapping = syncStatusValue === 'pending' || syncStatusValue === 'processing';
+                    const pendingLabel = pendingOperation === 'delete_listing'
+                      ? 'Delisting...'
+                      : pendingOperation === 'update_listing'
+                        ? 'Updating...'
+                        : 'Publishing...';
+                    let dotColor = '#16A34A';
+                    let textColor = '#16A34A';
+                    let rowStatusText = 'Live';
+
+                    if (mapping.IsEnabled === false) {
+                      dotColor = '#9CA3AF';
+                      textColor = '#71717A';
+                      rowStatusText = 'Disabled';
+                    } else if (isPendingMapping) {
+                      dotColor = '#9CA3AF';
+                      textColor = '#71717A';
+                      rowStatusText = pendingLabel;
+                    } else if (syncStatusValue === 'error' || syncStatusValue === 'failed') {
+                      dotColor = '#BA7517';
+                      textColor = '#BA7517';
+                      rowStatusText = "Couldn't sync";
+                    } else if (syncStatusValue === 'conflict') {
+                      dotColor = '#BA7517';
+                      textColor = '#BA7517';
+                      rowStatusText = 'Needs review';
+                    } else if (syncStatusValue && syncStatusValue !== 'success') {
+                      dotColor = '#71717A';
+                      textColor = '#71717A';
+                      rowStatusText = 'Status unknown';
+                    }
+
                     const fbStatus = rawType.toLowerCase() === 'facebook'
                       ? fbDispatch.statusForVariant(mapping.ProductVariantId)
                       : null;
-                    const dotColor = fbStatus ? fbStatus.dotColor : statusColor;
-                    const textColor = fbStatus ? fbStatus.color : statusColor;
-                    const rowStatusText = fbStatus ? fbStatus.label : statusText;
+                    if (fbStatus && (isPendingMapping || syncStatusValue === 'error' || syncStatusValue === 'failed')) {
+                      dotColor = fbStatus.dotColor;
+                      textColor = fbStatus.color;
+                      rowStatusText = fbStatus.label;
+                    }
+                    const actionDisabled = isPendingMapping;
                     return (
                       <View key={mapping.Id} style={styles.alRow}>
                         <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
@@ -4233,8 +4260,14 @@ const ProductDetailScreen = observer(
                             <Text style={[styles.alStatusText, { color: textColor }]} numberOfLines={1}>{rowStatusText}</Text>
                           </View>
                         </View>
-                        <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
-                          <Text style={styles.alActionOutlineText}>Delist</Text>
+                        <TouchableOpacity
+                          style={[styles.alActionOutline, actionDisabled && styles.alActionDisabled]}
+                          onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}
+                          disabled={actionDisabled}
+                        >
+                          <Text style={[styles.alActionOutlineText, actionDisabled && styles.alActionDisabledText]}>
+                            {actionDisabled ? 'Pending' : 'Delist'}
+                          </Text>
                         </TouchableOpacity>
                       </View>
                     );
@@ -4243,6 +4276,11 @@ const ProductDetailScreen = observer(
                   {unpublishedPlatforms.map((platform) => {
                     const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
                     const isCurrentlyPublishing = isPublishing === platform;
+                    const platformConnection = connections.find(c =>
+                      c.PlatformType?.toLowerCase() === platform.toLowerCase() &&
+                      c.IsEnabled
+                    );
+                    const isConnected = !!platformConnection;
                     return (
                       <View key={platform} style={styles.alRow}>
                         <View style={styles.alLogo}>{getPlatform(platform) ? <PlatformLogo type={platform} size={20} /> : <Icon name="store" size={20} color={BRAND_PRIMARY} />}</View>
@@ -4250,11 +4288,19 @@ const ProductDetailScreen = observer(
                           <Text style={styles.alName} numberOfLines={1}>{platformLabel}</Text>
                           <View style={styles.alStatusLine}>
                             <View style={[styles.alDot, { backgroundColor: '#9CA3AF' }]} />
-                            <Text style={[styles.alStatusText, { color: '#71717A' }]}>Connected · not listed</Text>
+                            <Text style={[styles.alStatusText, { color: '#71717A' }]}>
+                              {isConnected ? 'Connected · not listed' : 'Not connected'}
+                            </Text>
                           </View>
                         </View>
-                        <TouchableOpacity style={styles.alActionGreen} onPress={() => handlePublishToPlatform(platform)} disabled={isCurrentlyPublishing}>
-                          {isCurrentlyPublishing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.alActionGreenText}>Publish</Text>}
+                        <TouchableOpacity
+                          style={isConnected ? styles.alActionGreen : styles.alActionOutline}
+                          onPress={() => isConnected ? handlePublishToPlatform(platform) : navigation.navigate('ConnectPlatforms')}
+                          disabled={isConnected && isCurrentlyPublishing}
+                        >
+                          {isConnected && isCurrentlyPublishing
+                            ? <ActivityIndicator size="small" color="#fff" />
+                            : <Text style={isConnected ? styles.alActionGreenText : styles.alActionOutlineText}>{isConnected ? 'Publish' : 'Connect'}</Text>}
                         </TouchableOpacity>
                       </View>
                     );
@@ -4379,87 +4425,37 @@ const ProductDetailScreen = observer(
           </View>
         </View>
 
-        {/* Action Menu Modal */}
-        <BaseModal
-          onClose={() => setActionMenuVisible(false)}
+        <AppMenu
           visible={actionMenuVisible}
-          showCloseButton={false}
-          containerStyle={{ width: '85%', maxWidth: 340 }}
-        >
-          <View style={{ width: '100%' }}>
-            {/* Header Row: Spacer - Title - Close */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
-              <View style={{ width: 24 }} />
-              <Text style={{ fontSize: 18, fontWeight: '700', flex: 1, textAlign: 'center' }}>
-                Product Actions
-              </Text>
-              <TouchableOpacity onPress={() => setActionMenuVisible(false)}>
-                <Icon name="close" size={24} color="#000" />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
-              onPress={openClearout}
-            >
-              <Icon name="sprout-outline" size={20} color="#5D7E16" style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 16, fontWeight: '600', color: '#5D7E16' }}>Add to clearout</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
-              onPress={() => {
-                setActionMenuVisible(false);
-                loadPlatformData();
-              }}
-            >
-              <Icon name="refresh" size={20} color={theme.colors.text} style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Refresh Data</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
-              onPress={() => {
-                setActionMenuVisible(false);
-                setVersionsVisible(true);
-              }}
-            >
-              <Icon name="history" size={20} color={theme.colors.text} style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.text }}>Version history</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
-              onPress={() => {
-                setActionMenuVisible(false);
-                Alert.alert(
-                  'Archive Product',
-                  'Are you sure you want to archive this product? It will be hidden from your active listings.',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Archive', style: 'default', onPress: () => { void archiveProduct(); } }
-                  ]
-                );
-              }}
-            >
-              <Icon name="archive-outline" size={20} color={theme.colors.warning} style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.warning }}>Archive Product</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={{ paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
-              onPress={() => {
-                setActionMenuVisible(false);
-                setTimeout(() => {
-                  handleDelete();
-                }, 400); // Small delay to allow modal to close smoothly
-              }}
-            >
-              <Icon name="delete-outline" size={20} color={theme.colors.error} style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 16, fontWeight: '500', color: theme.colors.error }}>Delete Product</Text>
-            </TouchableOpacity>
-          </View>
-        </BaseModal>
+          onClose={() => setActionMenuVisible(false)}
+          anchor={{ top: insets.top + 54, left: actionMenuLeft }}
+          width={actionMenuWidth}
+          sections={[
+            [
+              { key: 'clearout', label: 'Add to clearout', icon: 'sprout-outline', onPress: openClearout },
+              { key: 'refresh', label: 'Refresh data', icon: 'refresh', onPress: () => { setActionMenuVisible(false); loadPlatformData(); } },
+              { key: 'versions', label: 'Version history', icon: 'history', onPress: () => { setActionMenuVisible(false); setVersionsVisible(true); } },
+            ],
+            [
+              {
+                key: 'archive',
+                label: 'Archive product',
+                icon: 'archive-outline',
+                onPress: () => {
+                  setActionMenuVisible(false);
+                  Alert.alert(
+                    'Archive Product',
+                    'Are you sure you want to archive this product? It will be hidden from your active listings.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Archive', style: 'default', onPress: () => { void archiveProduct(); } }
+                    ]
+                  );
+                },
+              },
+            ],
+          ]}
+        />
 
         {/* Add-to-clearout picker */}
         <BaseModal
@@ -4949,13 +4945,13 @@ const styles = StyleSheet.create({
     margin: 0,
     marginTop: 0,
   },
-  // Active Channels — UJK-0 gray card wrapping a white inner list (matches the Inventory card)
-  channelsCard: { marginTop: 12, backgroundColor: '#F3F4F6', borderColor: '#F1F2F4', borderWidth: 1, borderRadius: 14, padding: 12 },
+  // Active Channels — same white surface as the preview cards; status rows carry the state.
+  channelsCard: { marginTop: 12, backgroundColor: '#FFFFFF', borderColor: '#EDEEF1', borderWidth: 1, borderRadius: 18, padding: 14, marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   channelsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9, paddingHorizontal: 2 },
-  channelsTitle: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#666666' },
-  channelsManagePill: { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB', borderWidth: 1, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 },
+  channelsTitle: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7, textTransform: 'uppercase' },
+  channelsManagePill: { backgroundColor: '#F9FAFB', borderColor: '#E5E7EB', borderWidth: 1, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 },
   channelsManageText: { fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#6B7280' },
-  channelsInner: { backgroundColor: '#FFFFFF', borderRadius: 14, paddingHorizontal: 14, overflow: 'hidden' },
+  channelsInner: { backgroundColor: '#FFFFFF', borderRadius: 14, paddingHorizontal: 0, overflow: 'hidden' },
   channelsAddRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 11, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', borderRadius: 13, paddingVertical: 10 },
   channelCampaignLogo: { backgroundColor: '#93C82218' },
   channelCampaignLabel: { fontSize: 10.5, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, marginBottom: 1 },
@@ -4992,6 +4988,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   alActionOutlineText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#6B7280' },
+  alActionDisabled: {
+    opacity: 0.6,
+  },
+  alActionDisabledText: {
+    color: '#9CA3AF',
+  },
   alActionGreen: {
     paddingHorizontal: 18,
     paddingVertical: 8,

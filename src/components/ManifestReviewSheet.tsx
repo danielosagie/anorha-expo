@@ -156,11 +156,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
             return;
         }
 
-        if (onAddToInventory) {
-            onAddToInventory(itemsToAdd);
-        } else {
-            Alert.alert('Coming Soon', 'Adding items to inventory will be available in a future update.');
-        }
+        onAddToInventory?.(itemsToAdd);
     };
 
     // Handle liquidate
@@ -171,11 +167,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
             return;
         }
 
-        if (onLiquidate) {
-            onLiquidate(itemsToLiquidate);
-        } else {
-            Alert.alert('Coming Soon', 'Liquidation flow will be available in the next update.');
-        }
+        onLiquidate?.(itemsToLiquidate);
     };
 
     // Calculate totals
@@ -339,7 +331,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
             )}
 
             {/* Bottom Action Bar */}
-            {editedItems.length > 0 && (
+            {editedItems.length > 0 && (onLiquidate || onAddToInventory) && (
                 <View style={[styles.actionBar, { backgroundColor: colors.surface, borderTopColor: border }]}>
                     <View style={styles.summaryRow}>
                         <Text style={[styles.summaryText, { color: colors.textSecondary }]}>
@@ -351,26 +343,31 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
                     </View>
 
                     <View style={{ flexDirection: 'row', gap: 12 }}>
-                        <TouchableOpacity
-                            style={[
-                                styles.addButton,
-                                { backgroundColor: colors.surface, borderWidth: 1, borderColor: '#FF9900', flex: 1 }
-                            ]}
-                            onPress={handleLiquidate}
-                            disabled={selectedCount === 0}
-                        >
-                            <Icon name="flash" size={20} color="#FF9900" />
-                            <Text style={[styles.addButtonText, { color: '#FF9900' }]}>Liquidate</Text>
-                        </TouchableOpacity>
+                        {onLiquidate ? (
+                            <TouchableOpacity
+                                style={[
+                                    styles.addButton,
+                                    selectedCount === 0 && styles.addButtonDisabled,
+                                    { backgroundColor: colors.surface, borderWidth: 1, borderColor: '#FF9900', flex: 1 }
+                                ]}
+                                onPress={handleLiquidate}
+                                disabled={selectedCount === 0}
+                            >
+                                <Icon name="flash" size={20} color="#FF9900" />
+                                <Text style={[styles.addButtonText, { color: '#FF9900' }]}>Liquidate</Text>
+                            </TouchableOpacity>
+                        ) : null}
 
-                        <TouchableOpacity
-                            style={[styles.addButton, selectedCount === 0 && styles.addButtonDisabled, { flex: 1 }]}
-                            onPress={handleAddToInventory}
-                            disabled={selectedCount === 0}
-                        >
-                            <Icon name="plus" size={20} color="#fff" />
-                            <Text style={styles.addButtonText}>Add Inventory</Text>
-                        </TouchableOpacity>
+                        {onAddToInventory ? (
+                            <TouchableOpacity
+                                style={[styles.addButton, selectedCount === 0 && styles.addButtonDisabled, { flex: 1 }]}
+                                onPress={handleAddToInventory}
+                                disabled={selectedCount === 0}
+                            >
+                                <Icon name="plus" size={20} color="#fff" />
+                                <Text style={styles.addButtonText}>Add Inventory</Text>
+                            </TouchableOpacity>
+                        ) : null}
                     </View>
                 </View>
             )}

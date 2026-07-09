@@ -109,10 +109,10 @@ const BottomNav: React.FC<Props> = ({
     >
       {state === 'empty' && (
         <View style={styles.emptyButtonSolo}>
-          <TouchableOpacity style={styles.mainEmptyButton}>
+          <View style={styles.mainEmptyButton}>
             <Icon name="cursor-default-click" size={20} color="#000" style={{ marginRight: 8 }} />
             <Text style={styles.secondaryButtonText}>Select product matches</Text>
-          </TouchableOpacity>
+          </View>
         </View>
       )}
 

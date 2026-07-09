@@ -27,8 +27,8 @@ const Y_TH = 150;
 
 interface SwipeCardProps {
   children: React.ReactNode;
-  onYes: () => void;
-  onNo: () => void;
+  onYes?: () => void;
+  onNo?: () => void;
   onIgnore?: () => void;
   enabled?: boolean;
   /** 0→1 down-drag progress, so the shell can swap the action bar for the tray. */
@@ -41,7 +41,7 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
   const gone = useSharedValue(false);
 
   const horiz = Gesture.Pan()
-    .enabled(enabled)
+    .enabled(enabled && (!!onYes || !!onNo))
     .activeOffsetX([-16, 16])
     .failOffsetY([-24, 24])
     .onUpdate((e) => {
@@ -49,10 +49,10 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
     })
     .onEnd((e) => {
       if (gone.value) return;
-      if (e.translationX > X_TH || e.velocityX > 800) {
+      if ((e.translationX > X_TH || e.velocityX > 800) && onYes) {
         gone.value = true;
         x.value = withTiming(W * 1.3, { duration: 180 }, () => runOnJS(onYes)());
-      } else if (e.translationX < -X_TH || e.velocityX < -800) {
+      } else if ((e.translationX < -X_TH || e.velocityX < -800) && onNo) {
         gone.value = true;
         x.value = withTiming(-W * 1.3, { duration: 180 }, () => runOnJS(onNo)());
       } else {
@@ -91,8 +91,12 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
       { rotateZ: `${interpolate(x.value, [-W, 0, W], [-8, 0, 8], Extrapolation.CLAMP)}deg` },
     ],
   }));
-  const yesStyle = useAnimatedStyle(() => ({ opacity: interpolate(x.value, [16, X_TH], [0, 1], Extrapolation.CLAMP) }));
-  const noStyle = useAnimatedStyle(() => ({ opacity: interpolate(x.value, [-X_TH, -16], [1, 0], Extrapolation.CLAMP) }));
+  const yesStyle = useAnimatedStyle(() => ({
+    opacity: onYes ? interpolate(x.value, [16, X_TH], [0, 1], Extrapolation.CLAMP) : 0,
+  }));
+  const noStyle = useAnimatedStyle(() => ({
+    opacity: onNo ? interpolate(x.value, [-X_TH, -16], [1, 0], Extrapolation.CLAMP) : 0,
+  }));
 
   return (
     <GestureDetector gesture={gesture}>

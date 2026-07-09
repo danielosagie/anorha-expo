@@ -731,7 +731,7 @@ const lk = StyleSheet.create({
   stripMore: { backgroundColor: '#C5C5C5', alignItems: 'center', justifyContent: 'center', marginRight: 0 },
   stripMoreText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 
-  // Up-next stage row (shared by UpNextRow + IssueLane). Clean ProfileScreen-style
+  // Up-next stage row (shared by UpNextRow + IssueLane). Clean settings-style
   // card: hairline border, soft icon tile, subtle pill — not the old chunky look.
   upRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10 },
   upRowActive: { backgroundColor: '#FFF7EC', borderColor: 'rgba(245,166,35,0.45)' },

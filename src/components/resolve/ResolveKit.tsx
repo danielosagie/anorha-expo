@@ -274,13 +274,14 @@ export function Field({
   onPress?: () => void;
 }) {
   const filled = !!value;
+  const Comp: any = onPress ? TouchableOpacity : View;
   return (
     <View style={half ? { flex: 1 } : undefined}>
       <View style={s.fieldLabelRow}>
         <Text style={s.fieldLabel}>{label.toUpperCase()}</Text>
         {required && !filled && <Text style={s.fieldReq}>required</Text>}
       </View>
-      <TouchableOpacity
+      <Comp
         activeOpacity={0.7}
         onPress={onPress}
         style={[s.field, { borderColor: filled ? RC.ink : required ? RC.danger : RC.line, backgroundColor: filled ? '#fff' : RC.surface }]}
@@ -288,7 +289,7 @@ export function Field({
         <Text style={[s.fieldValue, { color: filled ? RC.ink : RC.faint }]} numberOfLines={1}>
           {value || placeholder}
         </Text>
-      </TouchableOpacity>
+      </Comp>
     </View>
   );
 }
@@ -367,6 +368,8 @@ export function ResolveShell({
   const insets = useSafeAreaInsets();
   const badge = React.useContext(ResolveBadge);
   const actions = React.useContext(ResolveActions);
+  const canUsePrimary = primaryReady && !!onPrimary;
+  const canUseAlt = !!onAlt;
   return (
     <View style={[s.shell, { paddingTop: topInset + 8 }]}>
       <View style={s.progRow}>
@@ -419,17 +422,22 @@ export function ResolveShell({
       <View style={[s.footer, { paddingBottom: insets.bottom + 14 }]}>
         {!primaryReady && !!primaryGate && <Text style={s.gate}>{primaryGate}</Text>}
         <TouchableOpacity
-          activeOpacity={primaryReady ? 0.88 : 1}
-          disabled={!primaryReady}
-          onPress={primaryReady ? onPrimary : undefined}
-          style={[s.primaryBtn, !primaryReady && s.primaryBtnDim]}
+          activeOpacity={canUsePrimary ? 0.88 : 1}
+          disabled={!canUsePrimary}
+          onPress={canUsePrimary ? onPrimary : undefined}
+          style={[s.primaryBtn, !canUsePrimary && s.primaryBtnDim]}
         >
-          {!!primaryIcon && <MaterialCommunityIcons name={primaryIcon} size={20} color={primaryReady ? '#fff' : RC.faint} />}
-          <Text style={[s.primaryText, !primaryReady && { color: RC.faint }]}>{primary}</Text>
+          {!!primaryIcon && <MaterialCommunityIcons name={primaryIcon} size={20} color={canUsePrimary ? '#fff' : RC.faint} />}
+          <Text style={[s.primaryText, !canUsePrimary && { color: RC.faint }]}>{primary}</Text>
         </TouchableOpacity>
         {!!alt && (
-          <TouchableOpacity onPress={onAlt} activeOpacity={0.85} style={s.secondaryBtn}>
-            <Text style={s.secondaryText} numberOfLines={1}>{alt}</Text>
+          <TouchableOpacity
+            onPress={canUseAlt ? onAlt : undefined}
+            activeOpacity={canUseAlt ? 0.85 : 1}
+            disabled={!canUseAlt}
+            style={[s.secondaryBtn, !canUseAlt && s.secondaryBtnDim]}
+          >
+            <Text style={[s.secondaryText, !canUseAlt && { color: RC.faint }]} numberOfLines={1}>{alt}</Text>
           </TouchableOpacity>
         )}
         {onIgnore ? (
@@ -494,7 +502,8 @@ export function TinderShell({
   const pct = total ? Math.round((idx / total) * 100) : 0;
   const left = Math.max(0, total - idx + 1);
   const ignore = chrome?.onIgnore || onIgnore;
-  const noop = () => {};
+  const canUsePrimary = primaryReady && !!onPrimary;
+  const canUseAlt = !!onAlt;
 
   // Down-drag progress (0→1): fades the action bar out and the ignore tray in.
   const downV = useSharedValue(0);
@@ -538,7 +547,7 @@ export function TinderShell({
       <View style={ts.cardArea}>
         <View style={ts.peek2} pointerEvents="none" />
         <View style={ts.peek1} pointerEvents="none" />
-        <SwipeCard onYes={onPrimary || noop} onNo={onAlt || noop} onIgnore={ignore} downShared={downV}>
+        <SwipeCard onYes={canUsePrimary ? onPrimary : undefined} onNo={onAlt} onIgnore={ignore} downShared={downV}>
           <View style={ts.card}>
             {!!badge && (
               <View style={[ts.badge, { backgroundColor: `${badge.color}14` }]}>
@@ -594,17 +603,22 @@ export function TinderShell({
               </TouchableOpacity>
             ) : null}
             {!!alt && (
-              <TouchableOpacity onPress={onAlt} activeOpacity={0.85} style={ts.barSecondary}>
-                <Text style={ts.barSecondaryText} numberOfLines={1}>{alt}</Text>
+              <TouchableOpacity
+                onPress={canUseAlt ? onAlt : undefined}
+                activeOpacity={canUseAlt ? 0.85 : 1}
+                disabled={!canUseAlt}
+                style={[ts.barSecondary, !canUseAlt && ts.barSecondaryDim]}
+              >
+                <Text style={[ts.barSecondaryText, !canUseAlt && { color: RC.faint }]} numberOfLines={1}>{alt}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              onPress={primaryReady ? onPrimary : undefined}
-              activeOpacity={primaryReady ? 0.88 : 1}
-              disabled={!primaryReady}
-              style={[ts.barPrimary, !alt && { flex: 1 }, !primaryReady && ts.barPrimaryDim]}
+              onPress={canUsePrimary ? onPrimary : undefined}
+              activeOpacity={canUsePrimary ? 0.88 : 1}
+              disabled={!canUsePrimary}
+              style={[ts.barPrimary, !alt && { flex: 1 }, !canUsePrimary && ts.barPrimaryDim]}
             >
-              <Text style={[ts.barPrimaryText, !primaryReady && { color: RC.faint }]} numberOfLines={1}>{primary}</Text>
+              <Text style={[ts.barPrimaryText, !canUsePrimary && { color: RC.faint }]} numberOfLines={1}>{primary}</Text>
             </TouchableOpacity>
             {chrome ? (
               <TouchableOpacity
@@ -678,6 +692,7 @@ const ts = StyleSheet.create({
   gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginTop: 10 },
   bar: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   barSecondary: { flex: 1, height: 54, borderRadius: 27, borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', paddingHorizontal: 10 },
+  barSecondaryDim: { backgroundColor: RC.surface2, borderColor: RC.line },
   barSecondaryText: { fontSize: 16, fontWeight: '700', color: RC.muted },
   barPrimary: { flex: 1.3, height: 54, borderRadius: 27, backgroundColor: RC.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 10 },
   barPrimaryDim: { backgroundColor: RC.surface2 },
@@ -746,6 +761,7 @@ const s = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
   },
+  secondaryBtnDim: { backgroundColor: RC.surface2 },
   secondaryText: { fontSize: 16, fontWeight: '600', color: '#71717A' },
   gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginBottom: 2 },
 

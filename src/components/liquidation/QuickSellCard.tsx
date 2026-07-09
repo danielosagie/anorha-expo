@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ScrollView, ActivityIndicator, Image, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInUp } from 'react-native-reanimated';
-import { useOrg } from '../../context/OrgContext';
+import { useNavigation } from '@react-navigation/native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
-import InventoryListCard from '../InventoryListCard';
 import { createLogger } from '../../utils/logger';
 const log = createLogger('QuickSellCard');
 
@@ -15,117 +14,62 @@ interface QuickSellCardProps {
 }
 
 export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => {
-    const { currentOrg } = useOrg();
+    const navigation = useNavigation<any>();
     const [modalVisible, setModalVisible] = useState(false);
-    const [sourcesVisible, setSourcesVisible] = useState(false);
-    const [step, setStep] = useState<'setup' | 'analyzing' | 'plan' | 'success'>('setup');
+    const [step, setStep] = useState<'setup' | 'analyzing' | 'success'>('setup');
 
     // Form State
     const [targetRevenue, setTargetRevenue] = useState('2000');
     const [timeframeDays, setTimeframeDays] = useState('7');
     const [minPricePercent, setMinPricePercent] = useState('50'); // 50%
 
-    // Plan State
-    const [plan, setPlan] = useState<any>(null);
     const [loading, setLoading] = useState(false);
-
-    // Mock Products & Research
-    const mockItems = [
-        { id: '1', title: 'Sony WH-1000XM4 Headphones', price: 180, quantity: 2, imageUrl: 'https://images.unsplash.com/photo-1618366712010-f4ae9c647dcb?q=80&w=2576&auto=format&fit=crop', platformNames: ['ebay'] },
-        { id: '2', title: 'Vintage Leather Camera Bag', price: 85, quantity: 1, imageUrl: 'https://images.unsplash.com/photo-1551214012-84f95e060dee?q=80&w=2670&auto=format&fit=crop', platformNames: ['poshmark'] },
-        { id: '3', title: 'KitchenAid Stand Mixer - Red', price: 220, quantity: 1, imageUrl: 'https://images.unsplash.com/photo-1594385263720-6d9b93237e3d?q=80&w=2670&auto=format&fit=crop', platformNames: ['facebook'] },
-        { id: '4', title: 'Nintendo Switch OLED', price: 290, quantity: 3, imageUrl: 'https://images.unsplash.com/photo-1578303512597-81e6cc155b3e?q=80&w=2670&auto=format&fit=crop', platformNames: ['mercari'] },
-        { id: '5', title: 'Dewalt Cordless Drill Set', price: 110, quantity: 4, imageUrl: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?q=80&w=2156&auto=format&fit=crop', platformNames: ['ebay'] },
-    ];
-
-    const mockSources = [
-        { type: 'web', title: 'eBay Sold Listings (Last 30d)', url: 'https://ebay.com/itm/12345', snippet: 'Avg selling price: $195.00' },
-        { type: 'web', title: 'FB Marketplace Local (50mi)', url: 'https://facebook.com/marketplace/item/123', snippet: 'High demand in your area' },
-        { type: 'db', title: 'Internal Sales History', snippet: 'You sold similar items for $185 last month' },
-    ];
 
     const handleAnalyze = async () => {
         setLoading(true);
         setStep('analyzing');
 
         try {
-            // Simulation of API call to generated plan
-            await new Promise(r => setTimeout(r, 2000));
+            const token = await ensureSupabaseJwt();
+            if (!token) {
+                throw new Error('Not authenticated');
+            }
 
             const revenue = parseInt(targetRevenue) || 2000;
-
-            const mockPlan = {
-                goal: { revenue: revenue, days: parseInt(timeframeDays) },
-                confidence: 'high',
-                phases: [
-                    {
-                        days: '1-3',
-                        action: 'List priority items',
-                        items: 8,
-                        channel: 'FB Marketplace (Local)',
-                        revenue: Math.round(revenue * 0.45)
-                    },
-                    {
-                        days: '4-6',
-                        action: 'List remaining + Bundles',
-                        items: 12,
-                        channel: 'FB Marketplace + OfferUp',
-                        revenue: Math.round(revenue * 0.35)
-                    },
-                    {
-                        days: '7',
-                        action: 'Flash Sale (20% off)',
-                        items: 'Remaining',
-                        channel: 'All Channels',
-                        revenue: Math.round(revenue * 0.20)
-                    }
-                ],
-                items: mockItems,
-                sources: mockSources
-            };
-
-            setPlan(mockPlan);
-            setStep('plan');
-        } catch (e) {
-            log.error(e);
-            setStep('setup');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleStartCampaign = async () => {
-        setLoading(true);
-        try {
-            const token = await ensureSupabaseJwt();
-            // Fire and forget call to real backend
-            await fetch(`${API_BASE_URL}/liquidation/strategies`, {
+            const days = parseInt(timeframeDays) || 7;
+            const response = await fetch(`${API_BASE_URL}/api/agent/quick/liquidation`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    targetRevenue: parseInt(targetRevenue),
-                    timeframeDays: parseInt(timeframeDays),
+                    targetRevenue: revenue,
+                    timeframeDays: days,
                     inventoryScope: 'all',
                     aggressiveness: minPricePercent === '50' ? 'balanced' : 'aggressive'
                 })
             });
+
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result?.sessionId) {
+                throw new Error(result?.message || `Failed to start campaign: ${response.status}`);
+            }
 
             setStep('success');
             setTimeout(() => {
                 setModalVisible(false);
                 setStep('setup');
                 onRefreshed?.();
-            }, 2000);
-        } catch (e) {
+                navigation.navigate('LiquidationCampaignScreen', {
+                    campaignId: result.sessionId,
+                    entryPoint: 'detail',
+                });
+            }, 900);
+        } catch (e: any) {
             log.error(e);
-            setStep('success'); // Fallback demo
-            setTimeout(() => {
-                setModalVisible(false);
-                setStep('setup');
-            }, 2000);
+            setStep('setup');
+            Alert.alert('Error', e?.message || 'Failed to start liquidation campaign');
         } finally {
             setLoading(false);
         }
@@ -183,7 +127,6 @@ export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => 
                             <Text style={styles.modalTitle}>
                                 {step === 'setup' && 'Quick Sell Setup'}
                                 {step === 'analyzing' && 'Analyzing Inventory'}
-                                {step === 'plan' && 'Liquidation Plan'}
                                 {step === 'success' && 'Campaign Active'}
                             </Text>
                             {step !== 'success' && step !== 'analyzing' && (
@@ -246,64 +189,6 @@ export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => 
                             {/* ANALYZING STEP */}
                             {step === 'analyzing' && <AnalysisStep />}
 
-                            {/* PLAN REVIEW STEP */}
-                            {step === 'plan' && plan && (
-                                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-                                    <View style={styles.planSummary}>
-                                        <Text style={styles.planGoal}>Goal: ${plan.goal.revenue.toLocaleString()} in {plan.goal.days} days</Text>
-                                        <View style={styles.confidenceBadge}>
-                                            <MaterialCommunityIcons name="check-decagram" size={16} color="#15803D" />
-                                            <Text style={styles.confidenceText}>Confidence: {plan.confidence.toUpperCase()}</Text>
-                                        </View>
-                                    </View>
-
-                                    {/* Sources Pill */}
-                                    <TouchableOpacity style={styles.sourcesPill} onPress={() => setSourcesVisible(true)}>
-                                        <MaterialCommunityIcons name="bullseye-arrow" size={16} color="#4B5563" />
-                                        <Text style={styles.sourcesText}>{plan.sources.length} Research Sources Available</Text>
-                                        <MaterialCommunityIcons name="chevron-right" size={16} color="#9CA3AF" />
-                                    </TouchableOpacity>
-
-                                    {/* Phases */}
-                                    {plan.phases.map((phase: any, idx: number) => (
-                                        <View key={idx} style={styles.phaseCard}>
-                                            <View style={styles.phaseHeader}>
-                                                <MaterialCommunityIcons name="calendar-clock" size={18} color="#F97316" />
-                                                <Text style={styles.phaseTitle}>Days {phase.days}</Text>
-                                            </View>
-                                            <Text style={styles.phaseAction}>{phase.action}</Text>
-                                            <Text style={styles.phaseDetailText}>Expected: ${phase.revenue}</Text>
-                                        </View>
-                                    ))}
-
-                                    <View style={styles.divider} />
-
-                                    {/* Items List */}
-                                    <Text style={styles.sectionHeader}>Strategy Items ({plan.items.length})</Text>
-                                    {plan.items.map((item: any) => (
-                                        <InventoryListCard
-                                            key={item.id}
-                                            id={item.id}
-                                            title={item.title}
-                                            price={item.price}
-                                            totalQuantity={item.quantity}
-                                            imageUrl={item.imageUrl}
-                                            platformNames={item.platformNames}
-                                            onPress={() => { }}
-                                        />
-                                    ))}
-
-                                    <TouchableOpacity style={styles.primaryBtn} onPress={handleStartCampaign} disabled={loading}>
-                                        {loading ? <ActivityIndicator color="#FFF" /> : (
-                                            <>
-                                                <Text style={styles.primaryBtnText}>Start Campaign</Text>
-                                                <MaterialCommunityIcons name="rocket-launch" size={20} color="#FFF" />
-                                            </>
-                                        )}
-                                    </TouchableOpacity>
-                                </ScrollView>
-                            )}
-
                             {/* SUCCESS STEP */}
                             {step === 'success' && (
                                 <View style={styles.loadingState}>
@@ -315,42 +200,6 @@ export const QuickSellCard: React.FC<QuickSellCardProps> = ({ onRefreshed }) => 
                         </View>
                     </View>
                 </View>
-
-                {/* SOURCES MODAL */}
-                <Modal
-                    visible={sourcesVisible}
-                    animationType="slide"
-                    transparent={true}
-                    onRequestClose={() => setSourcesVisible(false)}
-                >
-                    <View style={styles.modalBackdropDark}>
-                        <View style={styles.sourcesSheet}>
-                            <View style={styles.sheetHeader}>
-                                <Text style={styles.sheetTitle}>Market Research</Text>
-                                <TouchableOpacity onPress={() => setSourcesVisible(false)}>
-                                    <MaterialCommunityIcons name="close-circle" size={24} color="#6B7280" />
-                                </TouchableOpacity>
-                            </View>
-                            <ScrollView>
-                                <Text style={styles.researchIntro}>
-                                    We analyzed market data to build your liquidation strategy.
-                                </Text>
-                                {plan?.sources?.map((source: any, idx: number) => (
-                                    <View key={idx} style={styles.sourceItem}>
-                                        <View style={styles.sourceIcon}>
-                                            <MaterialCommunityIcons name={source.type === 'web' ? 'web' : 'database'} size={20} color="#F97316" />
-                                        </View>
-                                        <View style={styles.sourceContent}>
-                                            <Text style={styles.sourceTitle}>{source.title}</Text>
-                                            <Text style={styles.sourceSnippet}>{source.snippet}</Text>
-                                            {source.url && <Text style={styles.sourceUrl} numberOfLines={1}>{source.url}</Text>}
-                                        </View>
-                                    </View>
-                                ))}
-                            </ScrollView>
-                        </View>
-                    </View>
-                </Modal>
 
             </Modal>
         </>
@@ -527,56 +376,6 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: '#111827',
     },
-    planSummary: {
-        backgroundColor: '#F8FAFC',
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: '#E2E8F0',
-    },
-    planGoal: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#0F172A',
-        marginBottom: 4,
-    },
-    confidenceBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    confidenceText: {
-        fontSize: 12,
-        color: '#15803D',
-        fontWeight: '600',
-    },
-    phaseCard: {
-        marginBottom: 12,
-        borderLeftWidth: 3,
-        borderLeftColor: '#F97316',
-        paddingLeft: 12,
-    },
-    phaseHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        marginBottom: 2,
-    },
-    phaseTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: '#C2410C',
-    },
-    phaseAction: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    phaseDetailText: {
-        fontSize: 13,
-        color: '#4B5563',
-    },
     researchPulse: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -586,84 +385,5 @@ const styles = StyleSheet.create({
     researchText: {
         color: '#6B7280',
         fontSize: 13,
-    },
-    sourcesPill: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F3F4F6',
-        padding: 10,
-        borderRadius: 8,
-        marginBottom: 16,
-        gap: 8,
-    },
-    sourcesText: {
-        flex: 1,
-        fontSize: 13,
-        fontWeight: '500',
-        color: '#4B5563',
-    },
-    sectionHeader: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#111827',
-        marginBottom: 12,
-    },
-    divider: {
-        height: 1,
-        backgroundColor: '#E5E7EB',
-        marginVertical: 16,
-    },
-    sourcesSheet: {
-        backgroundColor: '#FFF',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 24,
-        height: '60%',
-    },
-    sheetHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    sheetTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-    },
-    researchIntro: {
-        fontSize: 14,
-        color: '#6B7280',
-        marginBottom: 16,
-        lineHeight: 20,
-    },
-    sourceItem: {
-        flexDirection: 'row',
-        marginBottom: 16,
-        gap: 12,
-    },
-    sourceIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: '#FFF7ED',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    sourceContent: {
-        flex: 1,
-    },
-    sourceTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    sourceSnippet: {
-        fontSize: 13,
-        color: '#4B5563',
-    },
-    sourceUrl: {
-        fontSize: 12,
-        color: '#F97316',
-        marginTop: 2,
     },
 });

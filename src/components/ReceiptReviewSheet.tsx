@@ -328,15 +328,8 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                             Qty: {item.quantity} • No match found
                                         </Text>
 
+                                        {onCreateNew ? (
                                         <View style={styles.actionButtons}>
-                                            <TouchableOpacity
-                                                style={styles.searchButton}
-                                                onPress={() => Alert.alert('Coming Soon', 'Search functionality will be added.')}
-                                            >
-                                                <Icon name="magnify" size={16} color="#fff" />
-                                                <Text style={styles.searchButtonText}>Search & Link</Text>
-                                            </TouchableOpacity>
-
                                             <TouchableOpacity
                                                 style={styles.createButton}
                                                 onPress={() => onCreateNew?.(item.parsedName)}
@@ -345,6 +338,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                                 <Text style={[styles.createButtonText, { color: '#4CAF50' }]}>Add New</Text>
                                             </TouchableOpacity>
                                         </View>
+                                        ) : null}
                                     </View>
                                 </Animated.View>
                             ))}

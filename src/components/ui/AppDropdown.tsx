@@ -51,7 +51,7 @@ export const AppDropdown: React.FC<AppDropdownProps> = ({
             valueField={valueField}
             placeholder={placeholder}
             value={value}
-            activeColor="#F0F9FF"
+            activeColor="#F2F2F2"
             dropdownPosition="bottom" // Forces the dropdown to open underneath
             onChange={onChange}
             {...props}
@@ -62,33 +62,34 @@ export const AppDropdown: React.FC<AppDropdownProps> = ({
 const styles = StyleSheet.create({
     dropdown: {
         height: 50,
-        backgroundColor: 'transparent',
+        backgroundColor: '#FFFFFF',
         borderColor: '#E5E7EB',
         borderWidth: 1,
-        borderRadius: 8,
-        paddingHorizontal: 12,
+        borderRadius: 16,
+        paddingHorizontal: 14,
     },
     container: {
-        backgroundColor: 'white',
-        borderRadius: 12,
-        marginTop: 4,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 22,
+        marginTop: 6,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 12,
-        elevation: 5,
-        padding: 4,
+        shadowOffset: { width: 0, height: 12 },
+        shadowOpacity: 0.18,
+        shadowRadius: 24,
+        elevation: 16,
+        padding: 8,
         borderWidth: 0,
         overflow: 'hidden', // Ensures border radius is respected
     },
     itemContainer: {
-        borderRadius: 8,
-        marginVertical: 2,
-        paddingHorizontal: 8,
+        borderRadius: 14,
+        marginVertical: 1,
+        paddingHorizontal: 6,
     },
     itemText: {
-        fontSize: 14,
-        color: '#374151',
+        fontSize: 16,
+        color: '#18181B',
+        fontFamily: 'Inter_600SemiBold',
     },
     placeholder: {
         fontSize: 14,
@@ -96,7 +97,8 @@ const styles = StyleSheet.create({
     },
     selectedText: {
         fontSize: 14,
-        color: '#000',
+        color: '#18181B',
+        fontFamily: 'Inter_500Medium',
         fontWeight: '500',
     },
     icon: {

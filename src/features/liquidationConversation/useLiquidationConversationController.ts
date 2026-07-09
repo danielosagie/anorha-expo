@@ -51,6 +51,8 @@ type ControllerOptions = {
 
 type ThreadStateMap = Record<string, ConversationThreadState>;
 
+const EMPTY_THREAD_KICKOFF_DELAY_MS = 900;
+
 export const useLiquidationConversationController = ({
   adapter,
   initialCampaignId,
@@ -1012,7 +1014,14 @@ export const useLiquidationConversationController = ({
     if (!activeCampaignId || !activeThreadId || isLoadingMessages) return;
     if (surfaceState === 'home_overview') return;
     if ((activeThreadState?.messages.length || 0) > 0) return;
-    void kickoffThread(activeCampaignId, activeThreadId);
+    const campaignId = activeCampaignId;
+    const threadId = activeThreadId;
+    const timer = setTimeout(() => {
+      const latestThread = threadStatesRef.current[threadId];
+      if ((latestThread?.messages.length || 0) > 0) return;
+      void kickoffThread(campaignId, threadId);
+    }, EMPTY_THREAD_KICKOFF_DELAY_MS);
+    return () => clearTimeout(timer);
   }, [activeCampaignId, activeThreadId, isLoadingMessages, surfaceState, activeThreadState?.messages.length, kickoffThread]);
 
   const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {

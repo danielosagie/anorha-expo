@@ -1256,6 +1256,9 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
   }
 
   private async safeConvexQuery<T>(path: string, args: Record<string, unknown>): Promise<T | null> {
+    if (!this.getClerkToken) {
+      return null;
+    }
     try {
       await this.setConvexAuth();
       return await this.convex.query(path as any, args);
@@ -1266,6 +1269,9 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
   }
 
   private async safeConvexMutation(path: string, args: Record<string, unknown>): Promise<void> {
+    if (!this.getClerkToken) {
+      return;
+    }
     try {
       await this.setConvexAuth();
       await this.convex.mutation(path as any, args);

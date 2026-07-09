@@ -40,6 +40,7 @@ import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import { AppMenu } from '../components/ui/AppMenu';
 import OrdersTab from './inventory/OrdersTab';
+import { mergeTagIntoList } from './inventory/bulkInventoryActions';
 import PlatformFilterChips from '../components/PlatformFilterChips';
 import InventoryListCard from '../components/InventoryListCard';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
@@ -89,16 +90,6 @@ type EnrichedProductVariant = ProductVariantData & {
   matchLocations?: MatchLocation[]; // Where the search query matched
   matchSnippet?: string; // Snippet of text where match occurred
 };
-
-interface MockOrderItemData {
-  id: string;
-  platform: string;
-  date: string;
-  customer: string;
-  items: number;
-  status: string;
-  total: number;
-}
 
 const InventoryOrdersScreen = observer(() => {
   const theme = useTheme();
@@ -278,6 +269,14 @@ const InventoryOrdersScreen = observer(() => {
     setScrollEnabled(false);
   };
 
+  const finishSelectionDrag = useCallback(() => {
+    if (!isDraggingSelection.current) return;
+    isDraggingSelection.current = false;
+    lastSelectedId.current = null;
+    autoScrollActive.current = false;
+    setScrollEnabled(true);
+  }, []);
+
   const handleToggleSelection = useCallback((id: string, forceState?: boolean) => {
     setSelectedItems(prev => {
       const next = new Set(prev);
@@ -294,11 +293,11 @@ const InventoryOrdersScreen = observer(() => {
     });
   }, []);
 
-  const handleExitSelectionMode = () => {
+  const handleExitSelectionMode = useCallback(() => {
     setIsSelectionMode(false);
     setSelectedItems(new Set());
     setBulkActionModalVisible(false);
-  };
+  }, []);
 
   // Preset: fetch slow movers variant IDs from nudges API (reuses insights data)
   const fetchSlowMoversVariantIds = useCallback(async () => {
@@ -450,16 +449,10 @@ const InventoryOrdersScreen = observer(() => {
       },
       onPanResponderTerminationRequest: () => false,
       onPanResponderRelease: () => {
-        isDraggingSelection.current = false;
-        lastSelectedId.current = null;
-        autoScrollActive.current = false;
-        setScrollEnabled(true);
+        finishSelectionDrag();
       },
       onPanResponderTerminate: () => {
-        isDraggingSelection.current = false;
-        lastSelectedId.current = null;
-        autoScrollActive.current = false;
-        setScrollEnabled(true);
+        finishSelectionDrag();
       },
     })
   ).current;
@@ -506,10 +499,14 @@ const InventoryOrdersScreen = observer(() => {
       log.error('Bulk delete failed', err);
       Alert.alert('Error', 'Failed to delete items. Please try again.');
     }
-  }, []);
+  }, [handleExitSelectionMode]);
 
   const handleBulkDelete = () => {
     const idsToDelete = Array.from(selectedItems);
+    if (idsToDelete.length === 0) {
+      Alert.alert('No items selected', 'Select at least one item before deleting.');
+      return;
+    }
     Alert.alert(
       'Delete Items',
       `Are you sure you want to delete ${idsToDelete.length} items? This will archive them from your inventory.`,
@@ -534,7 +531,7 @@ const InventoryOrdersScreen = observer(() => {
       log.error('Bulk archive failed', err);
       Alert.alert('Error', 'Failed to archive items. Please try again.');
     }
-  }, []);
+  }, [handleExitSelectionMode]);
 
 
 
@@ -775,6 +772,44 @@ const InventoryOrdersScreen = observer(() => {
     setRefreshing(true);
     Promise.resolve(refreshInventoryData()).finally(() => setRefreshing(false));
   }, [refreshInventoryData]);
+
+  const runBulkAddTagByIds = useCallback(async (ids: string[], rawTag: string) => {
+    const tag = rawTag.trim();
+    if (ids.length === 0) return;
+    if (!tag) {
+      Alert.alert('Tag required', 'Enter a tag before applying it.');
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('ProductVariants')
+        .select('Id, Tags')
+        .in('Id', ids);
+
+      if (error) throw error;
+
+      const rows = Array.isArray(data) ? data : [];
+      const byId = new Map(rows.map((row: any) => [row.Id, row.Tags]));
+
+      for (const id of ids) {
+        const mergedTags = mergeTagIntoList(byId.get(id), tag);
+        const { error: updateError } = await supabase
+          .from('ProductVariants')
+          .update({ Tags: mergedTags })
+          .eq('Id', id);
+        if (updateError) throw updateError;
+      }
+
+      setTagInput('');
+      setTagsModalVisible(false);
+      await refreshInventoryData();
+      handleExitSelectionMode();
+    } catch (err) {
+      log.error('Bulk tag failed', err);
+      Alert.alert('Error', 'Failed to add the tag. Please try again.');
+    }
+  }, [handleExitSelectionMode, refreshInventoryData]);
 
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
@@ -1161,11 +1196,12 @@ const InventoryOrdersScreen = observer(() => {
       const platformNames: string[] = getVariantPlatforms(variant);
 
       const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
-      const syncTimestamps = Object.values(mappings)
+      const relevantMappings = Object.values(mappings)
         .filter((mapping: PlatformProductMapping) =>
           variantIdsForSync.includes(mapping.ProductVariantId) &&
           mapping.IsEnabled !== false
-        )
+        );
+      const syncTimestamps = relevantMappings
         .map((mapping: PlatformProductMapping) => mapping.LastSyncedAt || mapping.UpdatedAt)
         .filter((value: any) => typeof value === 'string' && value.length > 0) as string[];
       const latestSyncMs = syncTimestamps.reduce((max, value) => {
@@ -1173,8 +1209,10 @@ const InventoryOrdersScreen = observer(() => {
         return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
       }, 0);
       const lastSyncedAt = latestSyncMs > 0 ? new Date(latestSyncMs).toISOString() : null;
-      const staleThresholdMs = 24 * 60 * 60 * 1000;
-      const isStale = !lastSyncedAt || (Date.now() - latestSyncMs) > staleThresholdMs;
+      const isStale = relevantMappings.some((mapping: PlatformProductMapping) => {
+        const status = String(mapping.SyncStatus || '').toLowerCase();
+        return status === 'error' || status === 'failed' || status === 'conflict';
+      });
 
       return {
         ...variant,
@@ -1474,6 +1512,7 @@ const InventoryOrdersScreen = observer(() => {
         searchQuery={searchQuery}
         onPress={handleItemPress}
         onLongPress={() => handleLongPressItem(item.Id)}
+        onPressOut={() => finishSelectionDrag()}
         isSelectionMode={isSelectionMode}
         isSelected={selectedItems.has(item.Id)}
         onLayout={(e) => {
@@ -1496,23 +1535,6 @@ const InventoryOrdersScreen = observer(() => {
     );
   };
 
-  const renderOrderItem = ({ item }: { item: MockOrderItemData }) => {
-    const trackButtonStyle = {
-      backgroundColor: theme.colors.primary + '00'
-    };
-
-    return (
-      <TouchableOpacity
-        onPress={() => { }}
-        activeOpacity={0.7}
-      >
-        <Text style={[styles.mockOrderText, { color: theme.colors.textSecondary }]}>
-          Orders view coming soon
-        </Text>
-      </TouchableOpacity>
-    );
-  };
-
   const platformsForChips = listPlatforms({ connectableOnly: true }).map((d) => d.key)
     .map(platformType => {
       const connectionCount = platformConnections.filter((conn: PlatformConnection) =>
@@ -1526,6 +1548,9 @@ const InventoryOrdersScreen = observer(() => {
       };
     })
     .filter(p => p.connectionCount > 0);
+
+  const hasBulkSelection = selectedItems.size > 0;
+  const bulkSelectionDisabledStyle = !hasBulkSelection && styles.actionChipDisabled;
 
   return (
     <View style={[styles.background]}>
@@ -1597,7 +1622,12 @@ const InventoryOrdersScreen = observer(() => {
                     {isSelectionMode ? (
                       <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
                         <View style={styles.selectionHeaderLeft}>
-                          <TouchableOpacity onPress={handleExitSelectionMode} style={styles.closeButton}>
+                          <TouchableOpacity
+                            onPress={handleExitSelectionMode}
+                            style={styles.closeButton}
+                            accessibilityRole="button"
+                            accessibilityLabel="Exit selection mode"
+                          >
                             <Icon name="close" size={24} color="#333" />
                           </TouchableOpacity>
                           <Text style={styles.selectionCountText}>
@@ -1606,6 +1636,8 @@ const InventoryOrdersScreen = observer(() => {
                         </View>
                         <TouchableOpacity
                           style={styles.selectAllButton}
+                          accessibilityRole="button"
+                          accessibilityLabel={selectedItems.size === filteredInventory.length && filteredInventory.length > 0 ? "Deselect all inventory items" : "Select all visible inventory items"}
                           onPress={() => {
                             if (selectedItems.size === filteredInventory.length && filteredInventory.length > 0) {
                               setSelectedItems(new Set());
@@ -1759,6 +1791,8 @@ const InventoryOrdersScreen = observer(() => {
               <TouchableOpacity
                 onPress={handleExitSelectionMode}
                 style={styles.countBadge}
+                accessibilityRole="button"
+                accessibilityLabel={`Exit selection mode, ${selectedItems.size} selected`}
               >
                 <Icon name="close-circle" size={18} color="#4B5563" />
                 <Text style={styles.countBadgeText}>{selectedItems.size}</Text>
@@ -1776,6 +1810,9 @@ const InventoryOrdersScreen = observer(() => {
                     style={[styles.actionChip, styles.addToClearoutChip]}
                     onPress={handleAddToClearout}
                     disabled={addingToCampaign || selectedItems.size === 0}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Add ${selectedItems.size} selected items to ${addToCampaign.title}`}
+                    accessibilityState={{ disabled: addingToCampaign || selectedItems.size === 0 }}
                   >
                     {addingToCampaign ? (
                       <ActivityIndicator size="small" color="#FFFFFF" />
@@ -1788,31 +1825,66 @@ const InventoryOrdersScreen = observer(() => {
                   </TouchableOpacity>
                 ) : null}
 
-                <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
-                  <Icon name="filter-variant-plus" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Bulk action</Text>
+                <TouchableOpacity
+                  style={[styles.actionChip, bulkSelectionDisabledStyle]}
+                  onPress={() => setBulkActionModalVisible(true)}
+                  disabled={!hasBulkSelection}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open bulk action command"
+                  accessibilityState={{ disabled: !hasBulkSelection }}
+                >
+                  <Icon name="filter-variant-plus" size={18} color={hasBulkSelection ? "#374151" : "#9CA3AF"} />
+                  <Text style={[styles.actionChipText, !hasBulkSelection && styles.actionChipTextDisabled]}>Bulk action</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
-                  <Icon name="tag-outline" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Liquidate</Text>
+                <TouchableOpacity
+                  style={[styles.actionChip, bulkSelectionDisabledStyle]}
+                  onPress={() => setLiquidationModalVisible(true)}
+                  disabled={!hasBulkSelection}
+                  accessibilityRole="button"
+                  accessibilityLabel="Start liquidation for selected items"
+                  accessibilityState={{ disabled: !hasBulkSelection }}
+                >
+                  <Icon name="tag-outline" size={18} color={hasBulkSelection ? "#374151" : "#9CA3AF"} />
+                  <Text style={[styles.actionChipText, !hasBulkSelection && styles.actionChipTextDisabled]}>Liquidate</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
-                  <Icon name="trash-can-outline" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Delete</Text>
+                <TouchableOpacity
+                  style={[styles.actionChip, bulkSelectionDisabledStyle]}
+                  onPress={handleBulkDelete}
+                  disabled={!hasBulkSelection}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete selected items"
+                  accessibilityState={{ disabled: !hasBulkSelection }}
+                >
+                  <Icon name="trash-can-outline" size={18} color={hasBulkSelection ? "#374151" : "#9CA3AF"} />
+                  <Text style={[styles.actionChipText, !hasBulkSelection && styles.actionChipTextDisabled]}>Delete</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.actionChip} onPress={() => setArchiveModalVisible(true)}>
-                  <Icon name="archive-outline" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Archive</Text>
+                <TouchableOpacity
+                  style={[styles.actionChip, bulkSelectionDisabledStyle]}
+                  onPress={() => setArchiveModalVisible(true)}
+                  disabled={!hasBulkSelection}
+                  accessibilityRole="button"
+                  accessibilityLabel="Archive selected items"
+                  accessibilityState={{ disabled: !hasBulkSelection }}
+                >
+                  <Icon name="archive-outline" size={18} color={hasBulkSelection ? "#374151" : "#9CA3AF"} />
+                  <Text style={[styles.actionChipText, !hasBulkSelection && styles.actionChipTextDisabled]}>Archive</Text>
                 </TouchableOpacity>
 
 
 
-                <TouchableOpacity style={styles.actionChip} onPress={() => setTagsModalVisible(true)}>
-                  <Icon name="tag-plus-outline" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Tags</Text>
+                <TouchableOpacity
+                  style={[styles.actionChip, bulkSelectionDisabledStyle]}
+                  onPress={() => setTagsModalVisible(true)}
+                  disabled={!hasBulkSelection}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add tags to selected items"
+                  accessibilityState={{ disabled: !hasBulkSelection }}
+                >
+                  <Icon name="tag-plus-outline" size={18} color={hasBulkSelection ? "#374151" : "#9CA3AF"} />
+                  <Text style={[styles.actionChipText, !hasBulkSelection && styles.actionChipTextDisabled]}>Tags</Text>
                 </TouchableOpacity>
               </ScrollView>
 
@@ -1820,6 +1892,8 @@ const InventoryOrdersScreen = observer(() => {
               <TouchableOpacity
                 style={styles.moreButton}
                 onPress={() => setMoreMenuVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="More inventory filters"
               >
                 <Icon name="dots-horizontal" size={24} color="#374151" />
               </TouchableOpacity>
@@ -2191,7 +2265,16 @@ const InventoryOrdersScreen = observer(() => {
         platformConnections={platformConnections}
         selectedLocationIds={selectedLocationIds}
         onLocationChange={setSelectedLocationIds}
-        onReset={() => { setSortBy('date'); setFilterStatus('active'); setSelectedLocationIds([]); }}
+        onReset={() => {
+          setSortBy('date');
+          setFilterStatus('active');
+          setSelectedLocationIds([]);
+          setLowStockOnly(false);
+          setPresetVariantIds(null);
+          setPriceMax(null);
+          setScannedBarcode(null);
+          setBarcodeSearchError(null);
+        }}
       />
 
       {/* More Actions Modal - Cleaner "Lowkey" Design */}
@@ -2205,44 +2288,40 @@ const InventoryOrdersScreen = observer(() => {
           {/* Header - Subtler */}
           <View style={{ marginBottom: 20 }}>
             <Text style={{ fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 4 }}>
-              Actions
+              More filters
             </Text>
             <Text style={{ fontSize: 13, color: '#6B7280', fontWeight: '500' }}>
-              {selectedItems.size} items selected
+              Refine what appears in your inventory list.
             </Text>
           </View>
 
           <View style={{ gap: 12 }}>
             <TouchableOpacity style={styles.modalOption} onPress={() => {
-              log.debug('[Analytics] Print low stock');
               setMoreMenuVisible(false);
-              Alert.alert("Coming Soon", "Low stock report will be generated as PDF");
+              handleExitSelectionMode();
+              setLowStockOnly(true);
+              setPresetVariantIds(null);
+              setPriceMax(null);
+              setSearchQuery('');
+              setScannedBarcode(null);
+              setBarcodeSearchError(null);
+              setSortBy('stock-low');
             }}>
               <View style={styles.modalOptionIconBg}>
-                <Icon name="printer-outline" size={20} color="#4B5563" />
+                <Icon name="package-down" size={20} color="#4B5563" />
               </View>
-              <Text style={styles.modalOptionText}>Print Low Stock Report</Text>
+              <Text style={styles.modalOptionText}>Show low stock</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.modalOption} onPress={() => {
-              log.debug('[Analytics] Fastest movers');
+            <TouchableOpacity style={styles.modalOption} disabled={loadingSlowMovers} onPress={() => {
               setMoreMenuVisible(false);
-              Alert.alert("Coming Soon", "Velocity analysis across platforms/locations");
+              handleExitSelectionMode();
+              void fetchSlowMoversVariantIds();
             }}>
               <View style={styles.modalOptionIconBg}>
                 <Icon name="trending-up" size={20} color="#4B5563" />
               </View>
-              <Text style={styles.modalOptionText}>Show Fastest Movers</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.modalOption} onPress={() => {
-              log.debug('[BulkDraft] Setting as draft');
-              setMoreMenuVisible(false);
-            }}>
-              <View style={styles.modalOptionIconBg}>
-                <Icon name="file-document-edit-outline" size={20} color="#4B5563" />
-              </View>
-              <Text style={styles.modalOptionText}>Set as Draft</Text>
+              <Text style={styles.modalOptionText}>{loadingSlowMovers ? 'Loading slow movers…' : 'Show slow movers'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2295,13 +2374,9 @@ const InventoryOrdersScreen = observer(() => {
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.modalButton, styles.confirmButton]}
-            onPress={() => {
-              log.debug('[BulkTags] Adding tag:', tagInput, 'to', Array.from(selectedItems));
-              setTagInput("");
-              setTagsModalVisible(false);
-              handleExitSelectionMode();
-            }}
+            style={[styles.modalButton, styles.confirmButton, (!tagInput.trim() || selectedItems.size === 0) && styles.modalButtonDisabled]}
+            disabled={!tagInput.trim() || selectedItems.size === 0}
+            onPress={() => runBulkAddTagByIds(Array.from(selectedItems), tagInput)}
           >
             <Text style={styles.confirmButtonText}>Add Tag</Text>
           </TouchableOpacity>
@@ -2659,11 +2734,6 @@ const styles = StyleSheet.create({
   listFooter: {
     height: 100,
   },
-  mockOrderText: {
-    textAlign: 'center',
-    fontSize: 16,
-    padding: 24,
-  },
   comingSoonContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -2812,6 +2882,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 6,
   },
+  actionChipDisabled: {
+    opacity: 0.45,
+  },
   addToClearoutChip: {
     backgroundColor: '#93C822',
   },
@@ -2819,6 +2892,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#374151', // Dark text
+  },
+  actionChipTextDisabled: {
+    color: '#9CA3AF',
   },
   moreButton: {
     padding: 8,
@@ -2917,6 +2993,9 @@ const styles = StyleSheet.create({
   },
   confirmButton: {
     backgroundColor: '#111',
+  },
+  modalButtonDisabled: {
+    opacity: 0.45,
   },
   cancelButtonText: {
     color: '#374151',

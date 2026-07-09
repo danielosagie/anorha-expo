@@ -6,8 +6,6 @@ import {
   StyleSheet,
   Modal,
   TouchableOpacity,
-  ScrollView,
-  Image,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
@@ -42,40 +40,37 @@ const Paywall: React.FC<PaywallProps> = ({
   const WHITE_BG = '#FFFFFF';
 
   const getTitle = () => {
-    if (!entitlements) return 'Start Your Free Trial';
+    if (!entitlements) return 'Start free trial';
 
     if (entitlements.subscriptionStatus === 'expired') {
-      return 'Your Subscription Has Expired';
+      return 'Plan expired';
     }
     if (entitlements.subscriptionStatus === 'trialing' && entitlements.trialDaysLeft <= 3) {
-      return 'Your Trial is Ending Soon';
+      return 'Trial ending';
     }
-    return 'Upgrade to Access This Feature';
+    return 'Upgrade to continue';
   };
 
   const getSubtitle = () => {
     if (!entitlements) {
-      return `Start your ${FREE_TRIAL_DAYS}-day free trial to unlock all features.`;
+      return `${FREE_TRIAL_DAYS} days free.`;
     }
 
     if (entitlements.subscriptionStatus === 'trialing') {
-      return `You have ${entitlements.trialDaysLeft} day${entitlements.trialDaysLeft !== 1 ? 's' : ''} left in your trial. Upgrade now to continue using all features.`;
+      return `${entitlements.trialDaysLeft} day${entitlements.trialDaysLeft !== 1 ? 's' : ''} left.`;
     }
 
     if (entitlements.subscriptionStatus === 'expired') {
-      return 'Reactivate your subscription to continue syncing inventory across platforms.';
+      return 'Restore sync and AI tools.';
     }
 
-    return feature
-      ? `Upgrade your plan to access ${feature}.`
-      : 'Upgrade to unlock premium features.';
+    return feature ? `Unlock ${feature}.` : 'Keep selling everywhere.';
   };
 
   const features = [
-    { icon: 'sync', title: 'Real-time Sync', description: 'Keep inventory synced across all platforms' },
-    { icon: 'scan-helper', title: 'AI Product Scanning', description: 'Scan and list products with AI' },
-    { icon: 'account-group', title: 'Team Collaboration', description: 'Invite team members and partners' },
-    { icon: 'chart-line', title: 'Analytics & Insights', description: 'Track inventory trends and performance' },
+    { icon: 'sync', title: 'Live sync' },
+    { icon: 'scan-helper', title: 'AI usage' },
+    { icon: 'account-group', title: 'Team access' },
   ];
 
   return (
@@ -94,9 +89,7 @@ const Paywall: React.FC<PaywallProps> = ({
             </View>
           </TouchableOpacity>
 
-          {/* Header */}
           <View style={styles.header}>
-            <Image source={require('../assets/anorha_logo.png')} style={{ width: 140, height: 40, resizeMode: 'contain', marginBottom: 16 }} />
             <Text style={[styles.title, { color: themeColors.text }]}>{titleProp ?? getTitle()}</Text>
             <Text style={[styles.subtitle, { color: themeColors.textSecondary }]}>{subtitleProp ?? getSubtitle()}</Text>
           </View>
@@ -111,23 +104,17 @@ const Paywall: React.FC<PaywallProps> = ({
             </View>
           )}
 
-          {/* Features list */}
-          <ScrollView style={styles.featuresContainer} showsVerticalScrollIndicator={false}>
+          <View style={styles.featuresContainer}>
             {features.map((item, index) => (
               <View key={index} style={styles.featureRow}>
                 <View style={[styles.featureIcon, { backgroundColor: ANORHA_GREEN + '15' }]}>
                   <Icon name={item.icon} size={20} color={ANORHA_GREEN} />
                 </View>
-                <View style={styles.featureText}>
-                  <Text style={[styles.featureTitle, { color: themeColors.text }]}>{item.title}</Text>
-                  <Text style={[styles.featureDescription, { color: themeColors.textSecondary }]}>
-                    {item.description}
-                  </Text>
-                </View>
+                <Text style={[styles.featureTitle, { color: themeColors.text }]}>{item.title}</Text>
                 <Icon name="check-circle" size={20} color={ANORHA_GREEN} />
               </View>
             ))}
-          </ScrollView>
+          </View>
 
           {/* Pricing options */}
           <View style={styles.pricingContainer}>
@@ -143,7 +130,7 @@ const Paywall: React.FC<PaywallProps> = ({
               </View>
               <Text style={[styles.pricingPrice, { color: themeColors.text }]}>$20<Text style={styles.pricingPeriod}>/month</Text></Text>
               <Text style={[styles.pricingFeatures, { color: themeColors.textSecondary }]}>
-                2 platforms • 40 AI scans/mo • 2 team members
+                Sync, scans, and 2 seats.
               </Text>
             </TouchableOpacity>
           </View>
@@ -151,18 +138,18 @@ const Paywall: React.FC<PaywallProps> = ({
           {/* CTA buttons */}
           <View style={styles.ctaContainer}>
             <Button
-              title="Upgrade Now"
+              title="Upgrade"
               onPress={onUpgrade}
               style={styles.upgradeButton}
             />
             <TouchableOpacity onPress={onClose} style={styles.maybeLaterButton}>
-              <Text style={[styles.maybeLaterText, { color: themeColors.textSecondary }]}>Maybe Later</Text>
+              <Text style={[styles.maybeLaterText, { color: themeColors.textSecondary }]}>Not now</Text>
             </TouchableOpacity>
           </View>
 
           {/* Footer note */}
           <Text style={[styles.footerNote, { color: themeColors.textSecondary }]}>
-            Cancel anytime. Secure payment via Polar.
+            Cancel anytime.
           </Text>
         </View>
       </View>
@@ -256,16 +243,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  featureText: {
-    flex: 1,
-  },
   featureTitle: {
+    flex: 1,
     fontSize: 15,
     fontWeight: '600',
-    marginBottom: 2,
-  },
-  featureDescription: {
-    fontSize: 13,
   },
   pricingContainer: {
     paddingTop: 16,
@@ -334,9 +315,6 @@ const styles = StyleSheet.create({
 });
 
 export default Paywall;
-
-
-
 
 
 

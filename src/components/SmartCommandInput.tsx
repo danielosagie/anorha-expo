@@ -160,9 +160,21 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
     const [recordingError, setRecordingError] = useState<string | null>(null);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const recordingActiveRef = useRef(false);
 
     // Use expo-audio recorder
     const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+    const safeStopRecorder = useCallback(() => {
+        if (!recordingActiveRef.current) return;
+
+        recordingActiveRef.current = false;
+        try {
+            audioRecorder.stop();
+        } catch (err) {
+            log.warn('[SmartCommandInput] Ignored recorder stop failure:', err);
+        }
+    }, [audioRecorder]);
 
     // ── Animations ──
     const expandAnim = useRef(new Animated.Value(0)).current;
@@ -282,6 +294,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             // Prepare and start recording
             await audioRecorder.prepareToRecordAsync();
             audioRecorder.record();
+            recordingActiveRef.current = true;
             setState('recording');
             setRecordingDuration(0);
 
@@ -315,7 +328,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
     }, [pulseAnim, audioRecorder]);
 
     const stopRecording = useCallback(async () => {
-        if (!audioRecorder.isRecording) return;
+        if (!recordingActiveRef.current) return;
 
         // Clear timer
         if (timerRef.current) {
@@ -331,7 +344,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
 
         try {
             // Stop recording
-            audioRecorder.stop();
+            safeStopRecorder();
 
             // Wait a moment for the recording to be finalized
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -375,7 +388,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
             log.error('[SmartCommandInput] Transcription error:', err);
             setState('expanded');
         }
-    }, [audioRecorder, apiBaseUrl, getAuthToken, pulseAnim, waveAnim]);
+    }, [audioRecorder, apiBaseUrl, getAuthToken, pulseAnim, safeStopRecorder, waveAnim]);
 
     // ── @ Mentions ──
     const handleTextChange = useCallback((value: string) => {
@@ -481,9 +494,7 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
                         style={styles.recordingBarButton}
                         onPress={() => {
                             if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-                            if (audioRecorder.isRecording) {
-                                audioRecorder.stop();
-                            }
+                            safeStopRecorder();
                             pulseLoop.current?.stop();
                             pulseAnim.setValue(1);
                             handleCollapse();

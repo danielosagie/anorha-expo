@@ -1371,17 +1371,15 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
                   const Logo = loc.platformType ? PLATFORM_LOGOS[loc.platformType as keyof typeof PLATFORM_LOGOS] : null;
 
                   return (
-                    <TouchableOpacity
+                    <View
                       key={loc.id}
-                      style={styles.accordionContainer} // Reuse container style for consistent border
-                      activeOpacity={0.8}
-                      onPress={() => { }} // No action on single location tap yet aside maybe edit? Design doesn't specify.
+                      style={styles.accordionContainer}
                     >
                       <View style={styles.singleLocationRow}>
                         <Text style={styles.accordionTitle}>{loc.name}</Text>
                         {Logo && <Logo width={20} height={20} />}
                       </View>
-                    </TouchableOpacity>
+                    </View>
                   );
                 })}
               </View>

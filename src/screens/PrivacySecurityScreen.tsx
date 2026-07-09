@@ -1,6 +1,6 @@
 // Privacy & Security — data policy summary plus the REAL delete-account flow
 // (type-to-confirm org name + reason → DELETE /api/users/me → sign out), which
-// previously only existed buried inside the legacy AccountSettings mega-screen.
+// previously only existed buried inside the old account mega-screen.
 
 import React, { useContext, useState } from 'react';
 import {

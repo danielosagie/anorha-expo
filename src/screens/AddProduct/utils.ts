@@ -33,8 +33,8 @@ export const getShelfProgressPresentation = (progress: ShelfProgressState) => {
   if (progress.status === 'error') {
     if (progress.reasonCode === 'free_tier_exhausted') {
       return {
-        title: 'Free scans used up',
-        subtitle: 'Upgrade to scan another shelf.',
+        title: 'Free usage limit reached',
+        subtitle: 'Upgrade to keep scanning.',
         instruction: 'ready' as CameraInstruction,
       };
     }

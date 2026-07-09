@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useActiveProcesses } from '../hooks/useProcessState';
-import { ProcessState, ProcessType, ProcessStatus } from '../utils/ProcessPersistence';
+import { ProcessPersistence, ProcessState, ProcessType, ProcessStatus } from '../utils/ProcessPersistence';
 
 interface ProcessResumptionModalProps {
   visible: boolean;
@@ -26,6 +26,8 @@ const ProcessResumptionModal: React.FC<ProcessResumptionModalProps> = ({
 }) => {
   const { processes, refreshProcesses } = useActiveProcesses();
   const [selectedProcess, setSelectedProcess] = useState<string | null>(null);
+  const [deletingProcessId, setDeletingProcessId] = useState<string | null>(null);
+  const processPersistence = ProcessPersistence.getInstance();
 
   useEffect(() => {
     if (visible) {
@@ -104,8 +106,13 @@ const ProcessResumptionModal: React.FC<ProcessResumptionModalProps> = ({
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            // TODO: Implement process deletion
-            refreshProcesses();
+            setDeletingProcessId(process.id);
+            try {
+              await processPersistence.deleteProcess(process.id);
+              refreshProcesses();
+            } finally {
+              setDeletingProcessId(null);
+            }
           },
         },
       ]
@@ -204,8 +211,13 @@ const ProcessResumptionModal: React.FC<ProcessResumptionModalProps> = ({
                   <TouchableOpacity
                     style={[styles.actionButton, styles.deleteButton]}
                     onPress={() => handleDeleteProcess(process)}
+                    disabled={deletingProcessId === process.id}
                   >
-                    <MaterialIcons name="delete-outline" size={20} color="#FF3B30" />
+                    {deletingProcessId === process.id ? (
+                      <ActivityIndicator size="small" color="#FF3B30" />
+                    ) : (
+                      <MaterialIcons name="delete-outline" size={20} color="#FF3B30" />
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>

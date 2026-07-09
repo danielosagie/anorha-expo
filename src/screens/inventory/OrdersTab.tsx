@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
-  TouchableOpacity,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { API_BASE_URL } from '../../config/env';
@@ -125,7 +124,7 @@ const OrdersTab: React.FC = () => {
       renderItem={({ item }) => {
         const st = statusStyle(item.status);
         return (
-          <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+          <View style={styles.row}>
             <View style={styles.leading}>
               <Icon name="receipt-text-outline" size={20} color={INK} />
             </View>
@@ -141,7 +140,7 @@ const OrdersTab: React.FC = () => {
                 <Text style={[styles.pillText, { color: st.fg }]} numberOfLines={1}>{st.label}</Text>
               </View>
             </View>
-          </TouchableOpacity>
+          </View>
         );
       }}
     />

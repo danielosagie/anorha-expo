@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Dimensions, Text, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from '../PlatformLogo';
 import { styles } from './styles';
+import { AppMenu } from '../ui/AppMenu';
 
 // Enhanced dropdown with platform logos for locations
 export function LocationDropdown({
@@ -15,13 +16,35 @@ export function LocationDropdown({
   onChange: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<View>(null);
+  const [anchor, setAnchor] = useState({ top: 0, left: 16, width: 220 });
   const selected = locations.find(l => l.id === selectedId) || locations[0];
+  const menuWidth = Math.min(280, Math.max(220, anchor.width));
+
+  const openMenu = () => {
+    triggerRef.current?.measureInWindow((x, y, width, height) => {
+      const nextWidth = Math.min(280, Math.max(220, width));
+      const windowWidth = Dimensions.get('window').width;
+      setAnchor({
+        top: y + height + 6,
+        left: Math.max(12, Math.min(x, windowWidth - nextWidth - 12)),
+        width: nextWidth,
+      });
+      setOpen(true);
+    });
+  };
 
   return (
-    <View style={{ position: 'relative', zIndex: open ? 1000 : 1, minWidth: 160 }}>
+    <View ref={triggerRef} style={{ position: 'relative', zIndex: open ? 1000 : 1, minWidth: 160 }}>
       <TouchableOpacity
         style={[styles.dropdown, { minWidth: 150, maxWidth: 200 }]}
-        onPress={() => setOpen(o => !o)}
+        onPress={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          openMenu();
+        }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
           {selected && <PlatformLogo type={selected.platformType} size={16} />}
@@ -31,22 +54,24 @@ export function LocationDropdown({
         </View>
         <Icon name="chevron-down" size={18} color="#000" style={{ marginLeft: 4 }} />
       </TouchableOpacity>
-      {open && (
-        <View style={[styles.dropdownMenu, { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000, marginTop: 0, maxHeight: 200 }]}>
-          <ScrollView nestedScrollEnabled>
-            {locations.map(loc => (
-              <TouchableOpacity
-                key={loc.id}
-                style={[styles.dropdownItem, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}
-                onPress={() => { onChange(loc.id); setOpen(false); }}
-              >
-                <PlatformLogo type={loc.platformType} size={16} />
-                <Text style={{ color: '#000', flex: 1 }} numberOfLines={1}>{loc.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+      <AppMenu
+        visible={open}
+        onClose={() => setOpen(false)}
+        anchor={{ top: anchor.top, left: anchor.left }}
+        width={menuWidth}
+        sections={[
+          locations.map(loc => ({
+            key: loc.id,
+            label: loc.name,
+            icon: 'map-marker-outline',
+            active: loc.id === selectedId,
+            onPress: () => {
+              onChange(loc.id);
+              setOpen(false);
+            },
+          })),
+        ]}
+      />
     </View>
   );
 }

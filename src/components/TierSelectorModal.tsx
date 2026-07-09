@@ -6,20 +6,17 @@ import {
     StyleSheet,
     Modal,
     TouchableOpacity,
-    ScrollView,
     ActivityIndicator,
     Dimensions,
-    Linking,
     Alert,
     Image,
-    SafeAreaView,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { X } from 'lucide-react-native';
-import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
+import { alertExternalBillingUnavailable, canOpenExternalBillingLinks } from '../utils/externalBilling';
 const log = createLogger('TierSelectorModal');
 
 
@@ -51,7 +48,7 @@ const TIERS: Tier[] = [
         features: [
             'Unlimited syncs',
             'Unlimited integrations',
-            '40 AI scans included',
+            'Up to 5x AI usage',
             'Email support',
         ],
     },
@@ -65,7 +62,7 @@ const TIERS: Tier[] = [
         additionalUserPrice: 8,
         features: [
             'Everything in Growth',
-            '120 AI scans included',
+            'Up to 12x AI usage',
             'Priority support',
         ],
     },
@@ -91,7 +88,7 @@ const WHITE_BG = '#FFFFFF';
 const TABULAR_FEATURES = [
     { label: 'Platform integrations', free: '1 Platform', growth: 'Unlimited', teams: 'Unlimited' },
     { label: 'Real-time syncings', free: 'Limited', growth: 'Unlimited', teams: 'Unlimited' },
-    { label: 'Included AI scans', free: '10 / mo', growth: '40 / mo', teams: '120 / mo' },
+    { label: 'AI usage', free: 'Base', growth: '5x', teams: '12x' },
     { label: 'Team members', free: '1 User', growth: '2 Users', teams: '5 Users' },
     { label: 'Priority Support', free: '-', growth: '-', teams: '✓' },
 ];
@@ -103,7 +100,6 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     usageInfo,
     hasSubscription = false,
 }) => {
-    const theme = useTheme();
     // Default selected tier is growth
     const [selectedTierId, setSelectedTierId] = useState<'growth' | 'teams'>(TIERS[0].id);
     const [isLoading, setIsLoading] = useState(false);
@@ -113,6 +109,10 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
 
         const tier = TIERS.find(t => t.id === selectedTierId);
         if (!tier) return;
+        if (!canOpenExternalBillingLinks()) {
+            alertExternalBillingUnavailable();
+            return;
+        }
 
         setIsLoading(true);
         try {
@@ -159,6 +159,11 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     };
 
     const handleManageAccount = async () => {
+        if (!canOpenExternalBillingLinks()) {
+            alertExternalBillingUnavailable();
+            return;
+        }
+
         setIsLoading(true);
         try {
             const token = await ensureSupabaseJwt();
@@ -183,12 +188,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
             const { url } = await response.json();
             if (url) {
                 onClose();
-                const supported = await Linking.canOpenURL(url);
-                if (supported) {
-                    await Linking.openURL(url);
-                } else {
-                    Alert.alert('Error', 'Cannot open billing portal');
-                }
+                await WebBrowser.openBrowserAsync(url);
             }
         } catch (error: any) {
             log.error('[TierSelector] Manage account error:', error);
@@ -227,7 +227,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                         {usageInfo && usageInfo.remaining === 0 && (
                             <View style={styles.usageBadge}>
                                 <Text style={styles.usageBadgeText}>
-                                    Free tier exhausted ({usageInfo.usageCount}/{usageInfo.freeLimit} scans used)
+                                    Free usage limit reached
                                 </Text>
                             </View>
                         )}

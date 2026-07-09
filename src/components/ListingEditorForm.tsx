@@ -15,7 +15,6 @@ import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, Chev
 import { getListingQuality } from '../utils/listingQuality';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
 import { AppDropdown } from './ui/AppDropdown';
 import { AppMenuSelect } from './ui/AppMenuSelect';
 import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, ChipsField, LocationDropdown } from './ListingEditor';
@@ -24,17 +23,15 @@ import FieldRow from './ListingEditor/FieldRow';
 import SheetTextField from './ListingEditor/SheetTextField';
 import { getRequiredFieldUnion } from '../utils/fieldVisibility';
 import InteractiveMapModal from './InteractiveMapModal';
-import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/v2/colors';
-import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
-import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { createLogger } from '../utils/logger';
+import { pickCsvImportPayload } from '../utils/pickCsvImport';
 const log = createLogger('ListingEditorForm');
 
 
@@ -406,6 +403,7 @@ export const PRESET_OPTIONS = [
 
 function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish }: Props, ref: React.Ref<ListingEditorFormRef>) {
   const isFocused = useIsFocused();
+  const navigation = useNavigation<any>();
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
     const keys = Object.keys(platforms || {}).filter((k) => typeof k === 'string' && k.trim().length > 0);
@@ -1297,6 +1295,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
   };
 
+  const patchPlatformByKey = (platformKey: string, updater: (prev: PlatformState) => PlatformState) => {
+    const keyToEdit = platformKey || activePlatformKey;
+    const prev = (platforms[keyToEdit] || platforms[canonicalKey] || {}) as PlatformState;
+    const nextPlatform = updater(prev);
+    onChangePlatforms({ ...platforms, [keyToEdit]: nextPlatform });
+  };
+
   const collapseSingleLocationLocs = useCallback(
     <T extends { id: string; locationId?: string }>(platformKey: string, locs: T[]): T[] => {
       const key = platformKey.toLowerCase();
@@ -1408,19 +1413,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setSelectedLocationId(firstValidLoc);
     }
   }, [locations]);
-
-  // Debug logging for inventory state (after locations are defined)
-  log.debug('[ListingEditorForm] Inventory state:', {
-    activePlatformKey,
-    selectedInventoryType,
-    isAdvanced,
-    supportsVariants,
-    hasOptions: (activeData.options || []).length,
-    hasVariants: (activeData.variants || []).length,
-    activeDataKeys: Object.keys(activeData),
-    locationsCount: locations.length,
-    shouldShowLocationDropdown: selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'
-  });
 
   const cartesian = (arrays: string[][]): string[][] => {
     return arrays.reduce<string[][]>((acc, curr) => {
@@ -1745,7 +1737,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   const setLocationQuantity = (locId: string, qty: number) => {
-    patchPlatform(prev => {
+    setLocationQuantityForPlatform(activePlatformKey, locId, qty);
+  };
+
+  const setLocationQuantityForPlatform = (platformKey: string, locId: string, qty: number) => {
+    patchPlatformByKey(platformKey, prev => {
       const next: PlatformState = {
         ...prev,
         locationQuantities: { ...(prev.locationQuantities || {}), [locId]: qty }
@@ -1884,11 +1880,17 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
   };
 
-  const handleStartConnectPlatform = useCallback((platform: string) => {
+  const handleStartConnectPlatform = useCallback(async (platform: string) => {
     platformPickerOverlay.hide();
-    if (platform === 'csv') return;
+    if (platform === 'csv') {
+      const payload = await pickCsvImportPayload();
+      if (payload) {
+        navigation.navigate('CSVColumnMapping' as never, payload as never);
+      }
+      return;
+    }
     addPlatform(platform, true);
-  }, [addPlatform, platformPickerOverlay.hide]);
+  }, [addPlatform, navigation, platformPickerOverlay.hide]);
 
   const handleStartConnectRef = useRef(handleStartConnectPlatform);
   handleStartConnectRef.current = handleStartConnectPlatform;
@@ -3053,14 +3055,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                     {/* Dropdown - only show if typing and matches exist */}
                     {newOptionName.length > 0 && allPlatformOptions.filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()) && o.name.toLowerCase() !== newOptionName.toLowerCase()).length > 0 && (
-                      <View style={{ position: 'absolute', top: 45, left: 0, right: 0, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eee', borderRadius: 8, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 5 }}>
+                      <View style={styles.autocompleteMenu}>
                         {allPlatformOptions
                           .filter(o => o.name.toLowerCase().includes(newOptionName.toLowerCase()))
                           .slice(0, 3)
                           .map((option, idx) => (
                             <TouchableOpacity
                               key={`ac-editor-${option.name}-${idx}`}
-                              style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                              style={styles.autocompleteItem}
                               onPress={() => {
                                 setNewOptionName(option.name);
                                 // Prefill values but let user edit/add more
@@ -3267,7 +3269,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           Remove "{deleteConfirmation?.value}"?
         </Text>
         <Text style={{ color: '#666', textAlign: 'center', marginBottom: 20 }}>
-          This will remove the option and associated variants.
+          Choose whether this value disappears only from the current platform, or from every platform copy of this listing.
         </Text>
         <View style={{ gap: 12, width: '100%' }}>
           <TouchableOpacity
@@ -3278,7 +3280,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               }
             }}
           >
-            <Text style={{ fontWeight: '500' }}>This Platform Only</Text>
+            <Text style={{ fontWeight: '500' }}>Remove from this platform</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={{ backgroundColor: '#EF4444', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
@@ -3288,7 +3290,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               }
             }}
           >
-            <Text style={{ color: '#fff', fontWeight: '600' }}>All Platforms</Text>
+            <Text style={{ color: '#fff', fontWeight: '600' }}>Remove everywhere</Text>
           </TouchableOpacity>
         </View>
       </BaseModal>
@@ -3300,11 +3302,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         <View style={{ marginVertical: 8, flexDirection: 'column', gap: 8 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={{ fontSize: 14, fontWeight: '500', color: '#666666' }}>Inventory</Text>
-            {/* DEBUG: Log LocationDropdown condition */}
-            {(() => {
-              log.debug(`[LocationDropdown DEBUG] activeTab=${activeTab}, selectedInventoryType=${selectedInventoryType}, shouldShow=${selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all'}, locationsCount=${locations?.length}`);
-              return null;
-            })()}
             {/* Locations only for LOCATION_VARIANT_WITH_OPTIONS; NEVER show for VARIANT_WITH_OPTIONS or BASIC */}
             {selectedInventoryType === 'LOCATION_VARIANT_WITH_OPTIONS' && activeTab !== 'all' && (() => {
               // Filter locations to only show the active platform's locations
@@ -3314,14 +3311,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 name: loc.name || 'Unknown Location',
                 platformType: activePlatformKey.toLowerCase()
               }));
-              log.debug(`[LocationDropdown FILTERED] platform=${activePlatformKey}, count=${platformLocs.length}`);
               if (platformLocs.length === 0) return null;
               return (
                 <LocationDropdown
                   locations={platformLocs}
                   selectedId={selectedLocationId}
                   onChange={(id) => {
-                    log.debug(`[LOC] Location changed from ${selectedLocationId} to ${id}`);
                     setSelectedLocationId(id);
                   }}
                 />
@@ -3665,12 +3660,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
                 // HANDLE BASE PRODUCT (non-variant product)
                 if (variantId === '_base') {
+                  const targetPlatform = activeTab === 'all' && resolvedLoc ? resolvedLoc.platformKey : activePlatformKey;
                   if (field === 'quantity') {
                     // Store per-location quantity in locationQuantities
-                    setLocationQuantity(rawLocationId, value);
+                    setLocationQuantityForPlatform(targetPlatform, rawLocationId, value);
                   } else if (field === 'price') {
                     // Price changes update the base product price for this platform
-                    patchPlatform(prev => ({ ...prev, price: value }));
+                    patchPlatformByKey(targetPlatform, prev => ({ ...prev, price: value }));
                   }
                   return;
                 }
@@ -3829,8 +3825,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 })
               );
 
-              // ROBUSTNESS FIX: Ensure every active platform has at least one location
-              Object.keys(platforms).forEach(pk => {
+              // Only add defaults for platforms that have a real connected location.
+              const platformsWithLocs = Object.keys(platforms).filter((pk) => (platformLocations || {})[pk]?.length > 0);
+              platformsWithLocs.forEach(pk => {
                 const hasLocation = allLocsRaw.some(l => l.platformKey === pk);
                 if (!hasLocation) {
                   const locationId = `default-${pk}`;
@@ -3907,12 +3904,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
               const resolvedLoc = allLocs.find(l => l.id === locationId);
               const rawLocationId = resolvedLoc?.locationId || locationId;
+              const targetPlatform = activeTab === 'all' && resolvedLoc ? resolvedLoc.platformKey : activePlatformKey;
               if (field === 'quantity') {
                 // Store per-location quantity in locationQuantities
-                setLocationQuantity(rawLocationId, value);
+                setLocationQuantityForPlatform(targetPlatform, rawLocationId, value);
               } else if (field === 'price') {
-                // Price changes update the base product price
-                patchPlatform(prev => ({ ...prev, price: value }));
+                // Price changes update the base product price for the row's platform.
+                patchPlatformByKey(targetPlatform, prev => ({ ...prev, price: toPrice(value) }));
               }
             };
 
@@ -4041,6 +4039,8 @@ const styles = StyleSheet.create({
   dropdown: { backgroundColor: CHAT_COLORS.white, borderWidth: 1, borderColor: CHAT_COLORS.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   dropdownMenu: { backgroundColor: CHAT_COLORS.white, borderWidth: 1, borderColor: CHAT_COLORS.border, borderRadius: 16, marginTop: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3 },
   dropdownItem: { paddingVertical: 14, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  autocompleteMenu: { position: 'absolute', top: 52, left: 0, right: 0, backgroundColor: '#FFFFFF', borderRadius: 22, padding: 8, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 12 }, elevation: 16, zIndex: 20 },
+  autocompleteItem: { paddingVertical: 13, paddingHorizontal: 12, borderRadius: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   scanBtn: { backgroundColor: CHAT_COLORS.brand, width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: -18 },
   // Unified with fieldLabel so section headers (Variants / Inventory) match the
   // rest of the field labels — one consistent size.

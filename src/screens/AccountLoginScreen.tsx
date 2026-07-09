@@ -1,5 +1,5 @@
 // Account & login — focused Shop-app-style account page replacing the legacy
-// AccountSettings mega-screen. One white card with Email / Phone / Name rows,
+// Account details screen. One white card with Email / Phone / Name rows,
 // a passkey promo card, and a red-outlined "Log out of all devices" button.
 
 import React, { useContext, useState } from 'react';

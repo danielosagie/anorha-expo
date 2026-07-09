@@ -52,6 +52,9 @@ const FONT = {
   bold: 'Inter_700Bold',
 };
 
+const SPROUT_MESSAGE_FONT = FONT.regular;
+const SPROUT_MESSAGE_STREAM_DELAY_MS = 800;
+
 const RANGES = ['1D', '1W', '1M', '3M', '6M', '1Y', 'All'] as const;
 type Range = (typeof RANGES)[number];
 
@@ -787,9 +790,10 @@ const SproutHomeScreen: React.FC = () => {
                 <StreamingText
                   text={latestDigest.text}
                   shouldStream={shouldStreamHero}
+                  startDelay={SPROUT_MESSAGE_STREAM_DELAY_MS}
                   onComplete={markHeroSeen}
                   speed={42}
-                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: SPROUT_MESSAGE_FONT }]}
                 />
               ) : null}
               {(DEMO || controller.campaigns.length > 0) && (
@@ -818,9 +822,10 @@ const SproutHomeScreen: React.FC = () => {
                 <StreamingText
                   text={heroMessage.text}
                   shouldStream={shouldStreamHero}
+                  startDelay={SPROUT_MESSAGE_STREAM_DELAY_MS}
                   onComplete={markHeroSeen}
                   speed={42}
-                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: SPROUT_MESSAGE_FONT }]}
                 />
               ) : null}
               {!controller.loading && lastActivityLine && (

@@ -306,7 +306,7 @@ const parseShelfScanErrorMessage = (rawMessage?: string) => {
     if (parsed?.statusCode === 402 || parsed?.code === 'free_tier_exhausted') {
       return {
         reasonCode: 'free_tier_exhausted',
-        message: 'Free scans are used up. Upgrade to scan another shelf.',
+        message: 'Free usage limit reached. Upgrade to keep scanning.',
       };
     }
 
@@ -318,7 +318,7 @@ const parseShelfScanErrorMessage = (rawMessage?: string) => {
     return {
       reasonCode: rawMessage.includes('402') ? 'free_tier_exhausted' : undefined,
       message: rawMessage.includes('402')
-        ? 'Free scans are used up. Upgrade to scan another shelf.'
+        ? 'Free usage limit reached. Upgrade to keep scanning.'
         : rawMessage,
     };
   }
@@ -344,8 +344,8 @@ const getShelfProgressPresentation = (progress: ShelfProgressState) => {
   if (progress.status === 'error') {
     if (progress.reasonCode === 'free_tier_exhausted') {
       return {
-        title: 'Free scans used up',
-        subtitle: 'Upgrade to scan another shelf.',
+        title: 'Free usage limit reached',
+        subtitle: 'Upgrade to keep scanning.',
         instruction: 'ready' as CameraInstruction,
       };
     }
@@ -778,6 +778,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [currentInstruction, setCurrentInstruction] = useState<CameraInstruction>(
     () => __ds === 'loading' ? 'processing' : 'ready'
   );
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number } | null>(null);
   const [showMatchSheet, setShowMatchSheet] = useState(() => __ds === 'matchSheet');
   const [showViewPhotosModal, setShowViewPhotosModal] = useState(false);
   const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(() => __ds === 'shelfScanning' || __ds === 'shelfComplete');
@@ -1595,9 +1596,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const buildFreemiumBlockedGate = useCallback((): BillingGateResponse => normalizeBillingGateResponse({
     code: 'free_tier_exhausted',
-    message: freemiumStatus
-      ? `Free scans used (${freemiumStatus.usageCount}/${freemiumStatus.freeLimit}). Upgrade billing to keep scanning.`
-      : 'Free scans are used up. Upgrade billing to keep scanning.',
+    message: 'Free usage limit reached. Upgrade billing to keep scanning.',
     featureKey: 'ai_quick_scan',
     blockingState: 'free_tier_exhausted',
     canProceed: false,
@@ -1701,7 +1700,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       case 'move_closer': return 'Move closer to product';
       case 'move_back': return 'Move back from product';
       case 'add_light': return 'Add more light to scene';
-      case 'focus': return 'Tap to focus';
+      case 'focus': return 'Hold steady';
       case 'processing': return 'Recognizing';
       case 'matches_found': return 'Matched';
       case 'no_matches': return 'Needs review';
@@ -1710,15 +1709,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   };
 
-  // Handle focus tap
+  // Give immediate feedback for a camera tap. Expo Camera handles continuous
+  // autofocus; this app does not have a coordinate-focus native API.
   const handleFocusTap = useCallback((event: any) => {
     const { locationX, locationY } = event.nativeEvent;
     setCurrentInstruction('focus');
-
-    // TODO: Implement actual focus at coordinates
-    log.debug('Focus at:', locationX, locationY);
+    setFocusPoint({ x: locationX, y: locationY });
+    log.debug('Focus tap at:', locationX, locationY);
 
     setTimeout(() => {
+      setFocusPoint(null);
       setCurrentInstruction('ready');
     }, 1000);
   }, []);
@@ -4396,7 +4396,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               openBulkItemsSheet();
             }
           }}
-        />
+        >
+          {focusPoint ? (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.focusReticle,
+                {
+                  left: Math.max(12, focusPoint.x - 26),
+                  top: Math.max(12, focusPoint.y - 26),
+                },
+              ]}
+            />
+          ) : null}
+        </Pressable>
 
         {/* Back button — sits where the old photo stack lived (top-left over the camera) */}
         <TouchableOpacity
@@ -4843,19 +4856,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setShowManifestSheet(false);
                   setManifestJobId(null);
                 }}
-                onAddToInventory={(items) => {
-                  log.debug('[MANIFEST] Adding items to inventory:', items.length);
-                  Alert.alert(
-                    'Coming Soon',
-                    `${items.length} items will be added to inventory in a future update.`,
-                    [{
-                      text: 'OK', onPress: () => {
-                        setShowManifestSheet(false);
-                        setManifestJobId(null);
-                      }
-                    }]
-                  );
-                }}
               />
             </View>
           </View>
@@ -5052,6 +5052,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+  },
+  focusReticle: {
+    position: 'absolute',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'rgba(147, 200, 34, 0.18)',
   },
   photoStackContainer: {
     position: 'absolute',

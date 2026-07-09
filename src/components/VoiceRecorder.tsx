@@ -37,9 +37,21 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const pulseAnim = useRef(new Animated.Value(1)).current;
     const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
+    const recordingActiveRef = useRef(false);
 
     // Use expo-audio recorder
     const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+    const safeStopRecorder = useCallback(() => {
+        if (!recordingActiveRef.current) return;
+
+        recordingActiveRef.current = false;
+        try {
+            audioRecorder.stop();
+        } catch (err) {
+            log.warn('[VoiceRecorder] Ignored recorder stop failure:', err);
+        }
+    }, [audioRecorder]);
 
     // Format duration as M:SS
     const formatDuration = (seconds: number) => {
@@ -58,11 +70,9 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
                 clearInterval(timerRef.current);
             }
             pulseLoop.current?.stop();
-            if (audioRecorder.isRecording) {
-                audioRecorder.stop();
-            }
+            safeStopRecorder();
         };
-    }, []);
+    }, [safeStopRecorder]);
 
     const startRecording = useCallback(async () => {
         try {
@@ -83,6 +93,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
             // Prepare and start recording
             await audioRecorder.prepareToRecordAsync();
             audioRecorder.record();
+            recordingActiveRef.current = true;
             setRecordingDuration(0);
 
             // Start duration timer
@@ -120,7 +131,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
     }, [audioRecorder, maxDuration]);
 
     const stopRecording = useCallback(async () => {
-        if (!audioRecorder.isRecording) return;
+        if (!recordingActiveRef.current) return;
 
         // Clear timer
         if (timerRef.current) {
@@ -135,7 +146,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
 
         try {
             // Stop recording
-            audioRecorder.stop();
+            safeStopRecorder();
             
             // Wait a moment for the recording to be finalized
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -175,7 +186,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
             setIsTranscribing(false);
             setError('Sorry, we didn\'t catch that. Please make sure your microphone is working.');
         }
-    }, [audioRecorder, apiBaseUrl, getAuthToken, onTranscription]);
+    }, [audioRecorder, apiBaseUrl, getAuthToken, onTranscription, safeStopRecorder]);
 
     const cancelRecording = useCallback(async () => {
         if (timerRef.current) {
@@ -184,12 +195,10 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         }
         pulseLoop.current?.stop();
         
-        if (audioRecorder.isRecording) {
-            audioRecorder.stop();
-        }
+        safeStopRecorder();
         
         onCancel();
-    }, [audioRecorder, onCancel]);
+    }, [onCancel, safeStopRecorder]);
 
     // Error state with nice styling like the image
     if (error) {
@@ -201,7 +210,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
                         <Text style={styles.errorTitle}>Sorry, we didn't catch that</Text>
                         <Text style={styles.errorSubtitle}>{error}</Text>
                     </View>
-                    <TouchableOpacity onPress={() => setError(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <TouchableOpacity onPress={() => { void cancelRecording(); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                         <Ionicons name="close" size={20} color="#d21616ff" />
                     </TouchableOpacity>
                 </View>

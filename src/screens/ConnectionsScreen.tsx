@@ -1,7 +1,7 @@
 // Connections — everything the org plugs into, in one place:
 // selling platforms (live status), POOLS (the location groups inventory syncs and
 // partners share through — managed here now, not buried in the legacy profile),
-// and apps (Slack/Gmail via Composio, placeholders until it's configured).
+// and apps (Slack/Gmail via Composio, shown as planned until configured).
 
 import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -23,6 +23,7 @@ import CreatePoolSheet from '../components/pools/CreatePoolSheet';
 import { PageHeader } from '../components/ui/PageHeader';
 import { getPlatform, normalizeDisplayName } from '../config/platforms';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
+import { pickCsvImportPayload } from '../utils/pickCsvImport';
 
 const statusOf = (raw?: string): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -72,30 +73,32 @@ const ConnectionsScreen = () => {
 
   // Wire the global platform-picker overlay so choosing a platform from the
   // "Connect a platform" sheet shows the consent page, then opens the OAuth
-  // webview. Without this, the sheet opened but `overlay.onStartConnect` was
-  // undefined here (only ProfileScreen registered one), so taps did nothing.
+  // webview.
   const { connect } = usePlatformConnect({ orgId: currentOrg?.id });
   const [consentPlatform, setConsentPlatform] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const handleStartConnect = useCallback(
-    (platform: string) => {
+    async (platform: string) => {
       overlay.hide();
       if (platform === 'csv') {
-        Alert.alert('Import from CSV', 'CSV import lives under Profile → Import Inventory for now.');
+        const payload = await pickCsvImportPayload();
+        if (payload) {
+          navigation.navigate('CSVColumnMapping' as never, payload as never);
+        }
         return;
       }
       const def = getPlatform(platform);
       if (!def?.connect) {
-        Alert.alert(def?.label ?? 'Platform', `${def?.label ?? 'This platform'} can’t be connected in-app yet.`);
+        navigation.navigate('ConnectPlatforms' as never);
         return;
       }
       // Show the per-platform consent page; the webview opens on "Continue".
       setConnectError(null);
       setConsentPlatform(def.key);
     },
-    [overlay],
+    [navigation, overlay],
   );
 
   // "Continue to <Platform>" on the consent page → run the OAuth webview.
@@ -333,25 +336,12 @@ const ConnectionsScreen = () => {
         {/* Pools — the location groups that platforms sync and partners share through */}
         <View style={styles.sectionHeaderRow}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Pools</Text>
-
         </View>
         <View style={styles.card}>
           {poolsLoading && pools.length === 0 ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
           ) : pools.length === 0 ? (
-            <><Text style={styles.empty}>
-                No pools yet. Pools group your store locations so inventory syncs together —
-                and they're what you share with partners.
-              </Text><TouchableOpacity
-                style={[styles.connectBtn, {backgroundColor: "#666"}]}
-                activeOpacity={0.8}
-                onPress={() => setCreatePoolOpen(true)}
-                disabled={!currentOrg?.id}
-              >
-                  <Plus size={14} color="#FFFFFF" />
-                  <Text style={styles.newPoolPillText}>New pool</Text>
-                </TouchableOpacity></>
-            
+            <Text style={styles.empty}>Group locations for shared stock.</Text>
           ) : (
             pools.map((p, i) => (
               <TouchableOpacity
@@ -373,23 +363,18 @@ const ConnectionsScreen = () => {
                 </View>
                 <ChevronRight size={20} color="#D4D4D8" />
               </TouchableOpacity>
-              
-              
             ))
           )}
-          
-
         </View>
         <TouchableOpacity
-            style={[styles.connectBtn, {backgroundColor: "#666",}]}
-            activeOpacity={0.8}
-            onPress={() => setCreatePoolOpen(true)}
-            disabled={!currentOrg?.id}
-          >
-            <Plus size={16} color="#FFFFFF" />
-            <Text style={styles.connectText}>New pool</Text>
-          </TouchableOpacity>
-
+          style={styles.connectBtn}
+          activeOpacity={0.8}
+          onPress={() => setCreatePoolOpen(true)}
+          disabled={!currentOrg?.id}
+        >
+          <Plus size={16} color="#FFFFFF" />
+          <Text style={styles.connectText}>New pool</Text>
+        </TouchableOpacity>
 
         {/* Apps (Slack, Gmail, …) */}
         <Text style={[styles.section, { marginTop: 26 }]}>Apps</Text>
@@ -401,13 +386,9 @@ const ConnectionsScreen = () => {
                 <Text style={styles.rowTitle}>{a.label}</Text>
                 <Text style={styles.rowSub} numberOfLines={1}>{a.sub}</Text>
               </View>
-              <TouchableOpacity
-                style={styles.connectPill}
-                activeOpacity={0.8}
-                onPress={() => Alert.alert(a.label, `Connecting ${a.label} is coming soon!`)}
-              >
-                <Text style={styles.connectPillText}>Connect</Text>
-              </TouchableOpacity>
+              <View style={styles.plannedPill}>
+                <Text style={styles.plannedPillText}>Planned</Text>
+              </View>
             </View>
           ))}
         </View>
@@ -470,8 +451,6 @@ const styles = StyleSheet.create({
 
   poolIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
   poolIconPartner: { backgroundColor: 'rgba(162,97,26,0.12)' },
-  newPoolPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#18181B', borderRadius: 999, paddingHorizontal: 13, paddingVertical: 7 },
-  newPoolPillText: { color: '#FFFFFF', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 
   appIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   managePill: {
@@ -485,8 +464,8 @@ const styles = StyleSheet.create({
     width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F1EE',
     alignItems: 'center', justifyContent: 'center',
   },
-  connectPill: { backgroundColor: '#18181B', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
-  connectPillText: { color: '#FFFFFF', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  plannedPill: { backgroundColor: '#F4F4F5', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  plannedPillText: { color: '#71717A', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 
   connectBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#93C822', borderRadius: 16, paddingVertical: 15, marginTop: 14 },
   connectText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 15 },

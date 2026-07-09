@@ -26,6 +26,7 @@ import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { createLogger } from '../utils/logger';
+import { alertExternalBillingUnavailable, canOpenExternalBillingLinks } from '../utils/externalBilling';
 const log = createLogger('BillingScreen');
 
 
@@ -219,7 +220,6 @@ export default function BillingScreen() {
   const teamMembersIncluded = safeNumber(summary?.team_members_included);
   const teamMembersExtra = Math.max(0, safeNumber(summary?.team_members_extra));
   const teamMembersCost = safeNumber(summary?.team_members_cost);
-  const pricePerScan = aiUnitCents / 100;
 
   let planTitle = 'No active plan';
   let planDescription = 'Choose a plan to unlock live sync, AI scanning, and team features.';
@@ -227,11 +227,11 @@ export default function BillingScreen() {
   if (planName === 'Growth') {
     planTitle = 'Growth · $20/month';
     basePrice = 20;
-    planDescription = `${teamMembersIncluded || 2} users/partners included, unlimited platforms & inventory, AI: ${aiScansLimit || 40} scans included then ${formatCurrency(pricePerScan)}/scan.`;
+    planDescription = `${teamMembersIncluded || 2} users/partners included, unlimited platforms and inventory, plus expanded AI usage.`;
   } else if (planName === 'Teams') {
     planTitle = 'Teams · $60/month';
     basePrice = 60;
-    planDescription = `${teamMembersIncluded || 5} users/partners (+$10/spot after), unlimited platforms & inventory, AI: ${aiScansLimit || 80} scans included then ${formatCurrency(pricePerScan)}/scan.`;
+    planDescription = `${teamMembersIncluded || 5} users/partners included, unlimited platforms and inventory, plus maximum AI usage.`;
   }
 
   const featureUsage = summary?.usage || {};
@@ -272,6 +272,11 @@ export default function BillingScreen() {
 
   const handleManageSubscription = async () => {
     setActionError(null);
+    if (!canOpenExternalBillingLinks()) {
+      alertExternalBillingUnavailable();
+      return;
+    }
+
     try {
       const token = await getToken();
       if (!token) return;
@@ -299,6 +304,11 @@ export default function BillingScreen() {
   };
 
   const handleAddPartnerPaymentMethod = async () => {
+    if (!canOpenExternalBillingLinks()) {
+      alertExternalBillingUnavailable();
+      return;
+    }
+
     setIsAddingPaymentMethod(true);
     try {
       const token = await getToken();
@@ -309,7 +319,7 @@ export default function BillingScreen() {
       });
       if (response.ok) {
         const data = await response.json();
-        if (data.checkoutUrl) await Linking.openURL(data.checkoutUrl);
+        if (data.checkoutUrl) await WebBrowser.openBrowserAsync(data.checkoutUrl);
       }
     } catch (error) {
       log.error('Failed to add payment method:', error);
@@ -320,6 +330,11 @@ export default function BillingScreen() {
 
   const handleAddCredits = async () => {
     if (!selectedCreditAmount) return;
+    if (!canOpenExternalBillingLinks()) {
+      alertExternalBillingUnavailable();
+      return;
+    }
+
     setIsTopUpLoading(true);
     try {
       const token = await getToken();
@@ -333,7 +348,7 @@ export default function BillingScreen() {
         const data = await res.json();
         if (data.checkoutUrl) {
           setShowCreditsModal(false);
-          await Linking.openURL(data.checkoutUrl);
+          await WebBrowser.openBrowserAsync(data.checkoutUrl);
         }
       }
     } catch (error) {

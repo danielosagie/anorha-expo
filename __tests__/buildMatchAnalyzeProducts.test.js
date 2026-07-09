@@ -9,7 +9,7 @@ test('buildMatchAnalyzeProducts includes quickMatchHint only for items with stor
     [{ id: 'item-1' }, { id: 'item-2' }],
     {
       'item-1': {
-        serpApiData: [
+        matchRows: [
           { title: 'Wrong one', link: 'https://listing/wrong' },
           { title: 'Correct one', link: 'https://listing/correct' },
         ],

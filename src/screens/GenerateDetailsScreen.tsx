@@ -3,7 +3,7 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing, Dimensions } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -38,6 +38,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
+import { AppMenu } from '../components/ui/AppMenu';
 
 
 const ACTION_BAR_HEIGHT = 80;
@@ -1006,6 +1007,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const raw = (it?.title || '').trim();
     return raw && !/^item \d+$/i.test(raw) ? raw : `Item ${currentItemPosition}`;
   }, [items, currentProductIndex, currentItemPosition]);
+  const itemMenuWidth = Math.min(330, Math.max(280, Dimensions.get('window').width - 32));
+  const itemMenuLeft = Math.max(16, (Dimensions.get('window').width - itemMenuWidth) / 2);
 
   // Initialize from generate job only when we didn't navigate with items/jobMap (e.g. deep link)
   // When we have items from params (came from Match), don't call - avoids loading "most recent" match job and mixing jobs
@@ -2474,11 +2477,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           {/* Title pill — absolutely centered in the header so it's ALWAYS dead-center,
               independent of the back button + right-side controls' widths. */}
           <View pointerEvents="box-none" style={styles.headerCenter}>
-            <TouchableOpacity
-              style={styles.titlePill}
-              activeOpacity={0.85}
-              onPress={() => setItemMenuOpen(open => !open)}
-            >
+              <TouchableOpacity
+                style={styles.titlePill}
+                activeOpacity={0.85}
+                disabled={items.length <= 1}
+                onPress={() => setItemMenuOpen(open => !open)}
+              >
               {(() => {
                 // While the save signal is up it OWNS the pill — the "Item N" title gives way
                 // to a clean "Saved" (with a check), so we never show "Item 1 · Saved" stacked.
@@ -2507,49 +2511,25 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {/* ── Item switcher dropdown (chat-style; replaces the bulk ItemJobsModal) ── */}
-      {itemMenuOpen ? (
-        <View style={[StyleSheet.absoluteFill, { zIndex: 5500 }]} pointerEvents="box-none">
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setItemMenuOpen(false)} />
-          {/* Centered under the title pill (middle of the page), not right-aligned. */}
-          <View pointerEvents="box-none" style={{ position: 'absolute', top: insets.top + 58, left: 0, right: 0, alignItems: 'center' }}>
-          <View style={[styles.itemDropdown, { position: 'relative', right: undefined, top: undefined }]}>
-            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
-              {items.map((it: any, i: number) => {
-                const status = itemStatusForIndex(it.index);
-                const active = it.index === currentProductIndex;
-                return (
-                  <TouchableOpacity
-                    key={`${it.index}-${i}`}
-                    style={[styles.itemRow, active && styles.itemRowActive]}
-                    onPress={() => switchToItem(it.index)}
-                    activeOpacity={0.7}
-                  >
-                    {it.thumb ? (
-                      <Image source={{ uri: it.thumb }} style={styles.itemThumb} />
-                    ) : (
-                      <View style={[styles.itemThumb, { alignItems: 'center', justifyContent: 'center' }]}>
-                        <Boxes size={14} color={CHAT_COLORS.faint} />
-                      </View>
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemRowTitle} numberOfLines={1}>{(it.title || '').trim() || `Item ${i + 1}`}</Text>
-                      <Text
-                        style={[styles.itemRowMeta, { color: status.color === CHAT_COLORS.idle ? CHAT_COLORS.faint : status.color }]}
-                        numberOfLines={1}
-                      >
-                        {status.label}
-                      </Text>
-                    </View>
-                    <View style={[styles.itemDot, { backgroundColor: status.color }]} />
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-          </View>
-        </View>
-      ) : null}
+      <AppMenu
+        visible={itemMenuOpen && items.length > 1}
+        onClose={() => setItemMenuOpen(false)}
+        anchor={{ top: insets.top + 58, left: itemMenuLeft }}
+        width={itemMenuWidth}
+        sections={[
+          items.map((it: any, i: number) => {
+            const status = itemStatusForIndex(it.index);
+            const title = (it.title || '').trim() || `Item ${i + 1}`;
+            return {
+              key: `${it.index}-${i}`,
+              label: `${title} · ${status.label}`,
+              icon: status.label === 'Ready to review' ? 'check-circle-outline' : status.label === 'Generation failed' ? 'alert-circle-outline' : 'package-variant',
+              active: it.index === currentProductIndex,
+              onPress: () => switchToItem(it.index),
+            };
+          }),
+        ]}
+      />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{
@@ -2664,7 +2644,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             <TouchableOpacity
               onPress={() => setIsInputExpanded(true)}
               activeOpacity={0.85}
-              style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22, backgroundColor: '#F4F4F2', borderWidth: 1, borderColor: CHAT_COLORS.border, marginBottom: 0 }}
+              style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 2, marginBottom: 0 }}
             >
               <PencilIcon size={15} color={CHAT_COLORS.inkSoft} />
               <Text style={{ fontSize: 14, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.inkSoft }}>Wanna change something?</Text>
@@ -2977,22 +2957,15 @@ const styles = StyleSheet.create({
   gapPillDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#BA7517' },
   gapPillText: { fontSize: 12.5, fontWeight: '700', color: '#BA7517' },
   headerCenter: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  modeToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: CHAT_COLORS.bubble, borderRadius: 999, padding: 3 },
+  modeToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 999, padding: 3, borderWidth: 1, borderColor: '#E5E7EB', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 2 },
   modeSeg: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999 },
-  modeSegActive: { backgroundColor: CHAT_COLORS.white },
+  modeSegActive: { backgroundColor: CHAT_COLORS.brandSoft },
   modeSegText: { fontSize: 12.5, fontWeight: '600', color: CHAT_COLORS.dim },
   modeSegTextActive: { color: CHAT_COLORS.ink, fontWeight: '700' },
   pillTitle: { ...GLASS_HEADER_STYLES.pillTitle },
   pillSub: { ...GLASS_HEADER_STYLES.pillSub },
   itemsPill: { ...GLASS_HEADER_STYLES.actionPill },
   itemsPillText: { ...GLASS_HEADER_STYLES.actionPillText },
-  itemDropdown: { ...GLASS_HEADER_STYLES.dropdown, minWidth: 260, maxWidth: 330, paddingVertical: 8 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 11, borderRadius: 14, marginHorizontal: 6 },
-  itemRowActive: { backgroundColor: CHAT_COLORS.brandSoft },
-  itemRowTitle: { fontSize: 15, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold },
-  itemRowMeta: { fontSize: 12, fontFamily: CHAT_FONT.medium, marginTop: 2 },
-  itemThumb: { width: 34, height: 34, borderRadius: 10, backgroundColor: CHAT_COLORS.bubble },
-  itemDot: { width: 8, height: 8, borderRadius: 4 },
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },
