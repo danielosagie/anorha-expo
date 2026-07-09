@@ -39,6 +39,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
 import { AppMenu } from '../components/ui/AppMenu';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 
 
 const ACTION_BAR_HEIGHT = 80;
@@ -77,6 +79,7 @@ const log = createLogger('GenerateDetailsScreen');
 
 function GenerateDetailsScreen({ route, navigation }: Props) {
   const isFocused = useIsFocused();
+  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
   const mainScrollRef = useRef<ScrollView>(null);
   const listingEditorRef = useRef<ListingEditorFormRef>(null);
   const [listingEditorY, setListingEditorY] = useState(0);
@@ -819,7 +822,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         // Even if AI generation didn't produce data for a platform, user should be able to publish to it
         const enabledPlatformTypes = [...new Set(
           connections
-            .filter((c: any) => c.IsEnabled && c.Status === 'active')
+            .filter((c: any) =>
+              derivePlatformConnectStatus(c.PlatformType, [c], {
+                computerOnline,
+                presenceLoaded,
+              }).isFullyConnected,
+            )
             .map((c: any) => c.PlatformType?.toLowerCase())
         )];
 
@@ -855,7 +863,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         log.error('Failed to fetch connections/locations:', e);
       }
     })();
-  }, []);
+  }, [computerOnline, presenceLoaded]);
 
 
   // Get shared JobsContext for cross-screen state sync (defined early to avoid a TDZ crash on web)

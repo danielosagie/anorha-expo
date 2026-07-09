@@ -746,6 +746,7 @@ const ProductDetailScreen = observer(
 
         log.debug('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
 
+        // TODO: Consume derivePlatformConnectStatus after this direct query is removed.
         // Load all ACTIVE platform connections for the org. (Clerk-native auth configures
         // the Supabase client with an accessToken, which blocks supabase.auth.getUser();
         // connections are org-owned, so scope by OrgId — matches Connections/Settings.)

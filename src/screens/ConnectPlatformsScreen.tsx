@@ -13,11 +13,12 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PlatformLogo from '../components/PlatformLogo';
 import ConnectFlowSheet from '../components/ConnectFlowSheet';
-import { listPlatforms, getPlatformAvailability, PlatformDef, PlatformKey } from '../config/platforms';
-import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { listPlatforms, getPlatformAvailability, PlatformDef, PlatformKey, resolvePlatformKey } from '../config/platforms';
+import { usePlatformConnections, type PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
+import ConnectionDetailSheet from '../components/ConnectionDetailSheet';
 type Props = StackScreenProps<AppStackParamList, 'ConnectPlatforms'>;
 
 // One-line "what you get" per platform — plain, calm, verb-first.
@@ -49,6 +50,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
 
   const [query, setQuery] = useState('');
   const [flowPlatform, setFlowPlatform] = useState<PlatformKey | null>(null);
+  const [detailConnection, setDetailConnection] = useState<PlatformConnectionRow | null>(null);
 
   // One truthful status per platform: connected ONLY when every required step is
   // done. Facebook needs OAuth AND a linked computer, so the OAuth row alone no
@@ -80,6 +82,21 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
     setFlowPlatform(def.key);
   }, []);
 
+  const openDetail = useCallback((def: PlatformDef) => {
+    const matching = liveConnections.filter(
+      (row) => resolvePlatformKey(row.PlatformType) === def.key,
+    );
+    const stateOf = (row: PlatformConnectionRow) =>
+      derivePlatformConnectStatus(def.key, [row], {
+        computerOnline,
+        presenceLoaded,
+      }).uiState;
+    const connection = matching.find((row) => stateOf(row) === 'connected')
+      || matching.find((row) => stateOf(row) === 'needs-reauth')
+      || matching[0];
+    if (connection) setDetailConnection(connection);
+  }, [liveConnections, computerOnline, presenceLoaded]);
+
   const renderRow = (def: PlatformDef, connectable: boolean) => {
     const st = statusFor(def);
     const trailing = !connectable ? (
@@ -87,10 +104,18 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         <Text style={styles.soonText}>Soon</Text>
       </View>
     ) : st.uiState === 'connected' ? (
-      <View style={styles.connectedPill}>
+      <TouchableOpacity
+        style={styles.connectedPill}
+        onPress={() => openDetail(def)}
+        activeOpacity={0.75}
+      >
         <View style={styles.liveDot} />
         <Text style={styles.connectedText}>Connected</Text>
-      </View>
+      </TouchableOpacity>
+    ) : st.uiState === 'needs-reauth' ? (
+      <TouchableOpacity style={styles.finishBtn} onPress={() => openDetail(def)} activeOpacity={0.85}>
+        <Text style={styles.finishBtnText}>Reconnect</Text>
+      </TouchableOpacity>
     ) : st.uiState === 'needs-computer' ? (
       // OAuth done but the computer isn't linked — one tap resumes the flow at
       // the link-computer step rather than restarting OAuth.
@@ -99,9 +124,9 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
       </TouchableOpacity>
     ) : st.uiState === 'checking' ? (
       // OAuth done, computer status still loading — quiet neutral, never green.
-      <View style={styles.connectedPill}>
-        <View style={[styles.liveDot, { backgroundColor: '#9CA3AF' }]} />
-        <Text style={[styles.connectedText, { color: '#9CA3AF' }]}>Connected</Text>
+        <View style={styles.connectedPill}>
+          <View style={[styles.liveDot, { backgroundColor: '#9CA3AF' }]} />
+          <Text style={[styles.connectedText, { color: '#9CA3AF' }]}>Checking</Text>
       </View>
     ) : (
       <TouchableOpacity style={styles.connectBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
@@ -194,6 +219,23 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
           // twice so the row flips to Connected without a manual reload.
           refresh?.();
           setTimeout(() => refresh?.(), 2500);
+        }}
+      />
+
+      <ConnectionDetailSheet
+        visible={detailConnection !== null}
+        connection={detailConnection}
+        onClose={() => setDetailConnection(null)}
+        onReview={(connection) => {
+          setDetailConnection(null);
+          navigation.navigate('SyncInbox', {
+            connectionId: connection.Id,
+            platformName: connection.PlatformType,
+          });
+        }}
+        onSyncRules={(connection) => {
+          setDetailConnection(null);
+          navigation.navigate('SyncRules', { connectionId: connection.Id });
         }}
       />
     </View>

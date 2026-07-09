@@ -182,6 +182,9 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
           <View style={styles.doneWrap}>
             <Icon name="check-circle" size={40} color={BRAND_PRIMARY} />
             <Text style={styles.doneText}>All set</Text>
+            <TouchableOpacity style={styles.doneBtn} onPress={onCancel} activeOpacity={0.85}>
+              <Text style={styles.doneBtnText}>Done</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
       </BaseModal>
@@ -239,4 +242,14 @@ const styles = StyleSheet.create({
   laterText: { color: TEXT_SECONDARY, fontSize: 14, fontWeight: '600' },
   doneWrap: { alignItems: 'center', gap: 10, paddingVertical: 28 },
   doneText: { fontSize: 16, fontWeight: '700', color: '#18181B' },
+  doneBtn: {
+    height: 50,
+    width: '100%',
+    borderRadius: 14,
+    backgroundColor: BRAND_PRIMARY,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  doneBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
 });

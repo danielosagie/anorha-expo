@@ -47,11 +47,14 @@ export interface PlatformConnectStatus {
   /**
    * What the row/pill should show:
    *   'connected'      → every required step done (OAuth, and computer online when required).
+   *   'needs-reauth'   → a connection row exists, but its authorization is broken.
    *   'needs-computer' → OAuth done, computer required and KNOWN offline.
    *   'checking'       → OAuth done, computer required, presence still loading (do NOT claim green).
    *   'not-connected'  → no OAuth marker yet.
    */
-  uiState: 'connected' | 'needs-computer' | 'checking' | 'not-connected';
+  uiState: 'connected' | 'needs-reauth' | 'needs-computer' | 'checking' | 'not-connected';
+  /** Short action for a broken authorization. */
+  ctaLabel?: 'Reconnect';
 }
 
 export function derivePlatformConnectStatus(
@@ -61,13 +64,21 @@ export function derivePlatformConnectStatus(
 ): PlatformConnectStatus {
   const key = resolvePlatformKey(platform);
   const steps = connectStepsFor(platform);
+  const matchingConnections = key
+    ? (liveConnections || []).filter((c) => resolvePlatformKey(c.PlatformType) === key)
+    : [];
   const oauthConnected =
     !!key &&
-    (liveConnections || []).some((c) => {
+    matchingConnections.some((c) => {
       const status = (c.Status || '').toLowerCase();
       if (NOT_CONNECTED.has(status) || c.IsEnabled === false) return false;
-      return resolvePlatformKey(c.PlatformType) === key;
+      return c.NeedsReauth !== true;
     });
+  const needsReauth =
+    !oauthConnected &&
+    matchingConnections.some((c) =>
+      (c.Status || '').toLowerCase() === 'error' || c.NeedsReauth === true,
+    );
 
   const requiresComputer = steps.includes('linkComputer');
   const computerOnline = !!presence.computerOnline;
@@ -82,7 +93,8 @@ export function derivePlatformConnectStatus(
   // When the computer is required but its status is unknown (presence loading),
   // report 'checking' (a quiet, honest middle state) instead of green or amber.
   let uiState: PlatformConnectStatus['uiState'];
-  if (!oauthConnected) uiState = 'not-connected';
+  if (needsReauth) uiState = 'needs-reauth';
+  else if (!oauthConnected) uiState = 'not-connected';
   else if (!requiresComputer || computerOnline) uiState = 'connected';
   else if (computerKnown) uiState = 'needs-computer';
   else uiState = 'checking';
@@ -99,5 +111,23 @@ export function derivePlatformConnectStatus(
     pendingSteps,
     nextStep: pendingSteps[0],
     uiState,
+    ctaLabel: uiState === 'needs-reauth' ? 'Reconnect' : undefined,
   };
+}
+
+export function getPlatformConnectStatusDisplay(
+  status: PlatformConnectStatus,
+): { label: string; color: string } {
+  switch (status.uiState) {
+    case 'connected':
+      return { label: 'Connected', color: '#43631A' };
+    case 'needs-reauth':
+      return { label: 'Needs reconnect', color: '#DC2626' };
+    case 'needs-computer':
+      return { label: 'Needs computer', color: '#A2611A' };
+    case 'checking':
+      return { label: 'Checking', color: '#71717A' };
+    default:
+      return { label: 'Not connected', color: '#71717A' };
+  }
 }
