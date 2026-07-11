@@ -2638,6 +2638,9 @@ const ProductDetailScreen = observer(
           return;
         }
         setIsLoading(true);
+        // Ignore responses that land after productId/passedItem changed, so a
+        // stale lookup can't overwrite the newer product's state.
+        let canceled = false;
         const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, IsArchived, Tags, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, Metadata, CreatedAt, UpdatedAt';
         const applyVariant = (data: any) => {
           setDetailedItem(data as ProductVariant);
@@ -2661,6 +2664,7 @@ const ProductDetailScreen = observer(
           .eq('Id', productId)
           .maybeSingle()  // Use maybeSingle to avoid error when product doesn't exist
           .then(({ data, error }) => {
+            if (canceled) return;
             if (data) {
               log.debug('[ProductDetail] Fetched item from Supabase:', data.Id);
               applyVariant(data);
@@ -2681,6 +2685,7 @@ const ProductDetailScreen = observer(
                 .limit(1)
                 .maybeSingle()
                 .then(({ data: byProduct }) => {
+                  if (canceled) return;
                   if (byProduct) {
                     log.debug('[ProductDetail] Resolved variant via ProductId:', byProduct.Id);
                     applyVariant(byProduct);
@@ -2693,6 +2698,7 @@ const ProductDetailScreen = observer(
                 });
             }
           });
+        return () => { canceled = true; };
       }
     }, [productId, passedItem]);
 

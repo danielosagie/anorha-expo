@@ -725,15 +725,41 @@ const SproutHomeScreen: React.FC = () => {
     });
   }, [openTray]);
 
-  // Review → open the actual report. Priority: the insight's own report
-  // document, else the newest persisted report from the org-wide list, and only
-  // when neither exists fall back to asking Sprout to write one in the thread.
-  const openReport = useCallback(async () => {
-    tap();
+  // Resolve the insight's own report: the embedded document when present,
+  // else fetch it by its persisted reportId. Returns true when a report opened.
+  const openInsightReport = useCallback(async (): Promise<boolean> => {
     if (insight?.report?.sections?.length) {
       openReportDocument(insight.report);
-      return;
+      return true;
     }
+    if (insight?.reportId) {
+      try {
+        const token = await ensureSupabaseJwt();
+        if (token) {
+          const res = await fetch(`${API_BASE_URL}/api/agent/reports/${encodeURIComponent(insight.reportId)}`, {
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const doc = data?.report?.document;
+            if (doc && Array.isArray(doc.sections) && doc.sections.length) {
+              openReportDocument(doc);
+              return true;
+            }
+          }
+        }
+      } catch { /* fall through */ }
+    }
+    return false;
+  }, [insight?.report, insight?.reportId, openReportDocument]);
+
+  // Review → open the actual report. Priority: the insight's own report
+  // (embedded, else by reportId), else the newest persisted report from the
+  // org-wide list, and only when none exists fall back to asking Sprout to
+  // write one in the thread.
+  const openReport = useCallback(async () => {
+    tap();
+    if (await openInsightReport()) return;
     try {
       const token = await ensureSupabaseJwt();
       if (token) {
@@ -757,7 +783,7 @@ const SproutHomeScreen: React.FC = () => {
       initialPrompt:
         'Give me the full report: everything that happened since I last checked, what it means, and the next moves — as a report document.',
     });
-  }, [insight?.report, openReportDocument, handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
+  }, [openInsightReport, openReportDocument, handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
 
   return (
     <View style={[styles.screen, { backgroundColor: THEME.bodyBg }]}>
@@ -855,16 +881,17 @@ const SproutHomeScreen: React.FC = () => {
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
               )}
               {/* The insight's backing report — opens the report sheet right here,
-                  no chat detour. This is the primary deliverable when present. */}
-              {!controller.loading && insight?.report?.sections?.length ? (
+                  no chat detour. Shown whether the document rides embedded on the
+                  insight or only as a persisted reportId (resolved on tap). */}
+              {!controller.loading && (insight?.report?.sections?.length || insight?.reportId) ? (
                 <HeroActionCard
-                  title={insight.report.title || insightHeadline || 'Sprout wrote a report'}
-                  subtitle={insight.report.summary || undefined}
+                  title={insight?.report?.title || insightHeadline || 'Sprout wrote a report'}
+                  subtitle={insight?.report?.summary || undefined}
                   chip="Open report"
                   borderColor={THEME.cardBorder}
                   onPress={() => {
                     tap();
-                    openReportDocument(insight.report!);
+                    void openInsightReport();
                   }}
                 />
               ) : null}
@@ -872,7 +899,7 @@ const SproutHomeScreen: React.FC = () => {
                   opens the campaign thread and fires it as a normal message. */}
               {!controller.loading && handoffTarget && (
                 <HeroActionCard
-                  title={insight?.report?.sections?.length ? handoffTarget.label : (insightHeadline || 'Sprout has a move')}
+                  title={(insight?.report?.sections?.length || insight?.reportId) ? handoffTarget.label : (insightHeadline || 'Sprout has a move')}
                   chip={handoffTarget.label}
                   borderColor={THEME.cardBorder}
                   onPress={() => {

@@ -62,7 +62,15 @@ const ReportsTab: React.FC = () => {
       `"${report.title}" will be removed from this list.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Archive', style: 'destructive', onPress: () => { archiveReport(report.id); } },
+        {
+          text: 'Archive',
+          style: 'destructive',
+          onPress: async () => {
+            if (!(await archiveReport(report.id))) {
+              Alert.alert('Could not archive report', 'Please try again.');
+            }
+          },
+        },
       ],
     );
   }, [archiveReport]);
@@ -79,12 +87,21 @@ const ReportsTab: React.FC = () => {
     return (
       <View style={styles.center}>
         <Icon name="file-document-outline" size={44} color="#C7C7CC" />
-        <Text style={styles.emptyTitle}>No reports yet</Text>
+        <Text style={styles.emptyTitle}>{error ? 'Reports could not load' : 'No reports yet'}</Text>
         <Text style={styles.emptySub}>
           {error
-            ? 'Reports could not load. Pull to retry.'
+            ? 'Check your connection and try again.'
             : 'Ask Sprout to audit your inventory or research the market, and the reports land here.'}
         </Text>
+        {error ? (
+          <TouchableOpacity style={styles.retryBtn} onPress={onRefresh} disabled={refreshing} activeOpacity={0.8}>
+            {refreshing ? (
+              <ActivityIndicator color="#93C822" />
+            ) : (
+              <Text style={styles.retryText}>Retry</Text>
+            )}
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
@@ -145,6 +162,11 @@ const styles = StyleSheet.create({
   date: { fontSize: 12, fontFamily: FONT.medium, color: DIM },
   pill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
   pillText: { fontSize: 11, fontFamily: FONT.semibold },
+  retryBtn: {
+    marginTop: 10, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 999,
+    borderWidth: 1.5, borderColor: '#93C822', minWidth: 96, alignItems: 'center',
+  },
+  retryText: { fontSize: 14, fontFamily: FONT.semibold, color: '#4E6B12' },
 });
 
 export default ReportsTab;

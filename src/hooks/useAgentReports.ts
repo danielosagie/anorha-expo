@@ -36,16 +36,21 @@ const normalizeReport = (raw: any): AgentReportRecord | null => {
   if (!raw || typeof raw !== 'object') return null;
   const document = raw.document;
   if (!document || !Array.isArray(document.sections)) return null;
+  // A stable id is required: an empty one would duplicate list keys, PATCH
+  // `/reports/` (empty segment), and make tray payloads collide.
+  const id = String(raw.id ?? '').trim() || String(raw.documentId || document.documentId || '').trim();
+  const documentId = String(raw.documentId || document.documentId || id).trim();
+  if (!id || !documentId) return null;
   return {
-    id: String(raw.id || document.documentId || ''),
-    documentId: String(raw.documentId || document.documentId || ''),
+    id,
+    documentId,
     source: (['chat', 'insight', 'digest', 'system'] as const).includes(raw.source) ? raw.source : 'chat',
     sessionId: raw.sessionId || null,
     threadId: raw.threadId || null,
     title: String(raw.title || document.title || 'Report'),
     summary: String(raw.summary || document.summary || ''),
     document: {
-      documentId: String(document.documentId || raw.documentId || ''),
+      documentId,
       title: String(document.title || raw.title || 'Report'),
       summary: String(document.summary || raw.summary || ''),
       format: 'report',
