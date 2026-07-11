@@ -65,3 +65,61 @@ export async function saveMarkdownFile(title: string, markdown: string): Promise
   }
   await Share.share({ title, message: markdown }).catch(() => undefined);
 }
+
+// ── CSV export (the spreadsheet path) ──────────────────────────────────────
+// Serializes the report's table + metrics sections to CSV so a report opens
+// straight into Numbers / Sheets / Excel. Prose sections are skipped: CSV is
+// for the data, the .md export carries the words.
+
+function csvCell(value: string): string {
+  const v = String(value ?? '');
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/** True when the document has at least one table or metrics section to export. */
+export function documentHasTabularData(doc: ReportDocument): boolean {
+  return (doc.sections || []).some((s) => s.kind === 'table' || s.kind === 'metrics');
+}
+
+export function documentToCsv(doc: ReportDocument): string {
+  const blocks: string[] = [];
+  for (const s of doc.sections || []) {
+    if (s.kind === 'table') {
+      const cols = s.columns.length ? s.columns : (s.rows[0] || []).map((_, i) => `Col ${i + 1}`);
+      const lines = [
+        ...(s.heading ? [csvCell(s.heading)] : []),
+        cols.map(csvCell).join(','),
+        ...s.rows.map((r) => r.map(csvCell).join(',')),
+      ];
+      blocks.push(lines.join('\n'));
+    } else if (s.kind === 'metrics') {
+      const lines = [
+        ...(s.heading ? [csvCell(s.heading)] : []),
+        'Label,Value,Note',
+        ...s.metrics.map((m) => [m.label, m.value, m.sub || ''].map(csvCell).join(',')),
+      ];
+      blocks.push(lines.join('\n'));
+    }
+  }
+  return blocks.join('\n\n') + '\n';
+}
+
+// Write the report's tabular data to a .csv and present the OS sheet.
+export async function saveCsvFile(title: string, doc: ReportDocument): Promise<void> {
+  const csv = documentToCsv(doc);
+  try {
+    const uri = `${FileSystem.cacheDirectory}${safeFileName(title)}.csv`;
+    await FileSystem.writeAsStringAsync(uri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, {
+        mimeType: 'text/csv',
+        dialogTitle: title,
+        UTI: 'public.comma-separated-values-text',
+      });
+      return;
+    }
+  } catch {
+    /* fall through to a text share */
+  }
+  await Share.share({ title, message: csv }).catch(() => undefined);
+}

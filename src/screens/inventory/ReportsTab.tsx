@@ -13,6 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useAgentReports, type AgentReportRecord } from '../../hooks/useAgentReports';
 import ActivityTraySheet from '../../features/liquidationConversation/components/activity/ActivityTraySheet';
 import { useActivityTray } from '../../features/liquidationConversation/components/activity/useActivityTray';
+import ReportsAnalyticsHeader from './ReportsAnalyticsHeader';
 
 // Reports tab — every report Sprout has authored (chat reports, home insights,
 // campaign wrap-ups), org-wide. Tapping a row opens the same report bottom
@@ -75,37 +76,6 @@ const ReportsTab: React.FC = () => {
     );
   }, [archiveReport]);
 
-  if (loading && reports.length === 0) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color="#93C822" />
-      </View>
-    );
-  }
-
-  if (reports.length === 0) {
-    return (
-      <View style={styles.center}>
-        <Icon name="file-document-outline" size={44} color="#C7C7CC" />
-        <Text style={styles.emptyTitle}>{error ? 'Reports could not load' : 'No reports yet'}</Text>
-        <Text style={styles.emptySub}>
-          {error
-            ? 'Check your connection and try again.'
-            : 'Ask Sprout to audit your inventory or research the market, and the reports land here.'}
-        </Text>
-        {error ? (
-          <TouchableOpacity style={styles.retryBtn} onPress={onRefresh} disabled={refreshing} activeOpacity={0.8}>
-            {refreshing ? (
-              <ActivityIndicator color="#93C822" />
-            ) : (
-              <Text style={styles.retryText}>Retry</Text>
-            )}
-          </TouchableOpacity>
-        ) : null}
-      </View>
-    );
-  }
-
   return (
     <View style={{ flex: 1 }}>
       <FlatList
@@ -113,6 +83,35 @@ const ReportsTab: React.FC = () => {
         keyExtractor={(r) => r.id || r.documentId}
         contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 140 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#93C822" />}
+        // Analytics live above the report rows: what happened (30d tiles +
+        // 14d revenue line), then every report the agent has authored.
+        ListHeaderComponent={<ReportsAnalyticsHeader />}
+        ListEmptyComponent={
+          loading ? (
+            <View style={styles.center}>
+              <ActivityIndicator color="#93C822" />
+            </View>
+          ) : (
+            <View style={styles.center}>
+              <Icon name="file-document-outline" size={44} color="#C7C7CC" />
+              <Text style={styles.emptyTitle}>{error ? 'Reports could not load' : 'No reports yet'}</Text>
+              <Text style={styles.emptySub}>
+                {error
+                  ? 'Check your connection and try again.'
+                  : 'Ask Sprout to audit your inventory or research the market, and the reports land here.'}
+              </Text>
+              {error ? (
+                <TouchableOpacity style={styles.retryBtn} onPress={onRefresh} disabled={refreshing} activeOpacity={0.8}>
+                  {refreshing ? (
+                    <ActivityIndicator color="#93C822" />
+                  ) : (
+                    <Text style={styles.retryText}>Retry</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )
+        }
         ItemSeparatorComponent={() => <View style={styles.sep} />}
         renderItem={({ item }) => {
           const meta = SOURCE_META[item.source] || SOURCE_META.chat;
@@ -148,7 +147,9 @@ const ReportsTab: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
+  // Rendered inside the FlatList's empty slot (beneath the analytics header),
+  // so it centers with padding rather than flex-filling the screen.
+  center: { alignItems: 'center', justifyContent: 'center', padding: 24, paddingVertical: 48, gap: 8 },
   emptyTitle: { fontSize: 17, fontFamily: FONT.semibold, color: INK, marginTop: 6 },
   emptySub: { fontSize: 13, fontFamily: FONT.regular, color: DIM, textAlign: 'center' },
   sep: { height: 1, backgroundColor: '#F1F2F4', marginLeft: 60 },

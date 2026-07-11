@@ -42,7 +42,7 @@ import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
 import type { ActivityPayload, ConversationToolStep, ReportDocument, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import { activityGlyph, humanizeCadence, humanizeChannel, toolDoneLabel, toolStepIcon } from './humanizers';
-import { copyMarkdown, documentToMarkdown, saveMarkdownFile, shareMarkdown } from './documentExport';
+import { copyMarkdown, documentHasTabularData, documentToMarkdown, saveCsvFile, saveMarkdownFile, shareMarkdown } from './documentExport';
 import { HorizontalFadeScroll } from '../HorizontalFadeScroll';
 
 const SCREEN_H = Dimensions.get('window').height;
@@ -241,6 +241,9 @@ export default function ActivityTraySheet({
                   <View style={styles.menuDivider} />
                   <DocMenuItem icon="content-copy" label="Copy" onPress={() => { setMenuOpen(false); Haptics.selectionAsync().catch(() => undefined); void copyMarkdown(docDraft); }} />
                   <DocMenuItem icon="tray-arrow-down" label="Save as file" onPress={() => { setMenuOpen(false); void saveMarkdownFile(payload.document.title, docDraft); }} />
+                  {documentHasTabularData(payload.document) ? (
+                    <DocMenuItem icon="table-arrow-down" label="Export CSV" onPress={() => { setMenuOpen(false); void saveCsvFile(payload.document.title, payload.document); }} />
+                  ) : null}
                   <DocMenuItem icon="share-variant" label="Share" onPress={() => { setMenuOpen(false); void shareMarkdown(payload.document.title, docDraft); }} />
                 </View>
               </>
