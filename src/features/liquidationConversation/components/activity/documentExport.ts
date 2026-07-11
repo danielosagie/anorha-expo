@@ -72,8 +72,11 @@ export async function saveMarkdownFile(title: string, markdown: string): Promise
 // for the data, the .md export carries the words.
 
 function csvCell(value: string): string {
-  const v = String(value ?? '');
-  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  let v = String(value ?? '');
+  // Neutralize CSV formula injection: a leading = + - @ would execute as a
+  // formula in Excel/Sheets. The apostrophe marks the cell as text.
+  if (/^[=+\-@]/.test(v)) v = `'${v}`;
+  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
 /** True when the document has at least one table or metrics section to export. */

@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Dimensions, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { API_BASE_URL } from '../../config/env';
 import { ensureSupabaseJwt } from '../../lib/supabase';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('ReportsAnalyticsHeader');
+
+// A hung mobile request must not leave the header loading forever.
+const FETCH_TIMEOUT_MS = 15000;
 
 // Analytics strip at the top of the Reports tab: what actually happened,
 // summarized (30d sales, revenue, avg sale) plus a single-series revenue line
@@ -58,11 +64,14 @@ export function useInventoryAnalytics(): AnalyticsState {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     (async () => {
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('no token');
         const res = await fetch(`${API_BASE_URL}/api/activity?limit=200`, {
+          signal: controller.signal,
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         });
         if (!res.ok) throw new Error(String(res.status));
@@ -109,11 +118,14 @@ export function useInventoryAnalytics(): AnalyticsState {
             series,
           });
         }
-      } catch {
+      } catch (e) {
+        log.warn('[analytics] fetch failed:', e instanceof Error ? e.message : e);
         if (!cancelled) setState((s) => ({ ...s, loading: false }));
+      } finally {
+        clearTimeout(timeout);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
   }, []);
 
   return state;
@@ -125,11 +137,14 @@ function useCampaignPortfolio(): { loading: boolean; campaigns: CampaignRow[] } 
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     (async () => {
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('no token');
         const res = await fetch(`${API_BASE_URL}/api/agent/sessions?type=liquidation&status=active`, {
+          signal: controller.signal,
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         });
         if (!res.ok) throw new Error(String(res.status));
@@ -165,11 +180,14 @@ function useCampaignPortfolio(): { loading: boolean; campaigns: CampaignRow[] } 
           };
         });
         if (!cancelled) setState({ loading: false, campaigns });
-      } catch {
+      } catch (e) {
+        log.warn('[campaigns] fetch failed:', e instanceof Error ? e.message : e);
         if (!cancelled) setState({ loading: false, campaigns: [] });
+      } finally {
+        clearTimeout(timeout);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
   }, []);
 
   return state;
@@ -187,7 +205,8 @@ const ReportsAnalyticsHeader: React.FC = () => {
   const portfolio = useCampaignPortfolio();
 
   const hasRevenue = useMemo(() => series.some((p) => p.revenue > 0), [series]);
-  const chartWidth = Dimensions.get('window').width - 48;
+  const { width: windowWidth } = useWindowDimensions();
+  const chartWidth = windowWidth - 48;
 
   // Sparse x labels: first, middle, last — the axis stays recessive.
   const labels = useMemo(
