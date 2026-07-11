@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureSupabaseJwt, supabase } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { OPTIMIZER_THRESHOLDS } from './useOptimizerQueues';
@@ -93,6 +93,15 @@ export function useBatchGenerate(): UseBatchGenerateResult {
   const [progressCount, setProgressCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const runningRef = useRef(false);
+  // The poll loop can run up to MAX_WAIT_MS (20 min). Flip false on unmount so
+  // the loop bails and no setState fires after the component is gone.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const setStatus = useCallback((ids: string[], status: BatchItemStatus) => {
     if (ids.length === 0) return;
@@ -211,7 +220,9 @@ export function useBatchGenerate(): UseBatchGenerateResult {
         const startedAt = Date.now();
         let finalJson: any = null;
         while (Date.now() - startedAt < MAX_WAIT_MS) {
+          if (!mountedRef.current) return; // unmounted — stop cleanly before waiting
           await delay(POLL_INTERVAL_MS);
+          if (!mountedRef.current) return; // unmounted during the wait — stop before fetch
           const pollToken = await ensureSupabaseJwt();
           if (!pollToken) continue;
           let statusRes: Response;
@@ -228,7 +239,7 @@ export function useBatchGenerate(): UseBatchGenerateResult {
           if (!statusRes.ok) continue; // e.g. status row not persisted yet
           const json = await statusRes.json().catch(() => null);
           if (!json) continue;
-          if (typeof json?.progress?.completedProducts === 'number') {
+          if (mountedRef.current && typeof json?.progress?.completedProducts === 'number') {
             setProgressCount(json.progress.completedProducts);
           }
           if (json.status === 'completed' || json.status === 'failed' || json.status === 'cancelled') {
@@ -236,6 +247,8 @@ export function useBatchGenerate(): UseBatchGenerateResult {
             break;
           }
         }
+
+        if (!mountedRef.current) return; // unmounted while polling — stop cleanly
 
         if (!finalJson || finalJson.status !== 'completed') {
           // Timed out or the whole job failed — every item this run is retryable.
@@ -293,6 +306,8 @@ export function useBatchGenerate(): UseBatchGenerateResult {
           if (finalTitleOk && finalDescOk) markDone.push(it.variantId);
           else markFailed.push(it.variantId); // wrote a partial improvement, but gap remains
         }
+
+        if (!mountedRef.current) return; // unmounted during persistence — writes are done, skip setState
 
         setStatus(markDone, 'done');
         setStatus(markFailed, 'failed');

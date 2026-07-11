@@ -44,6 +44,12 @@
  */
 export const MAX_ROWS = 50000;
 
+/**
+ * Hard cap on the picked file's byte size — reading a huge file into a JS string
+ * (via readAsStringAsync) can OOM the thread before {@link MAX_ROWS} ever trips.
+ */
+export const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB
+
 export type CsvParseResult = {
   headers: string[];
   rows: string[][];
@@ -77,10 +83,15 @@ export function parseCsv(text: string): CsvParseResult {
   let field = '';
   let row: string[] = [];
   let inQuotes = false;
+  // True once a quoted section has opened AND closed in the CURRENT field, so a
+  // stray quote after it (`"a"b`) is treated as a literal, not a re-open. Reset
+  // whenever a new field starts.
+  let quoteClosed = false;
 
   const pushField = () => {
     row.push(field);
     field = '';
+    quoteClosed = false;
   };
 
   const pushRow = () => {
@@ -111,6 +122,7 @@ export function parseCsv(text: string): CsvParseResult {
           i++;
         } else {
           inQuotes = false;
+          quoteClosed = true;
         }
       } else {
         field += c;
@@ -119,7 +131,15 @@ export function parseCsv(text: string): CsvParseResult {
     }
 
     if (c === '"') {
-      inQuotes = true;
+      // Only a quote at the very START of a field (and not right after a closed
+      // quote) opens a quoted section. A quote mid-field (`5" Speaker`) or junk
+      // after a closed quote (`"a"b`) is a literal char — degrade safely instead
+      // of swallowing the following commas/newlines.
+      if (field === '' && !quoteClosed) {
+        inQuotes = true;
+      } else {
+        field += '"';
+      }
     } else if (c === ',') {
       pushField();
     } else if (c === '\n') {
@@ -185,6 +205,16 @@ export async function pickAndParseCsv(): Promise<PickedCsv | null> {
   const file = result.assets[0];
   if (!file.uri) {
     throw new Error('Could not access the selected file.');
+  }
+
+  // Guard the file size BEFORE reading it into a string — an oversized file can
+  // OOM the JS thread mid-read, well before the row cap could catch it.
+  const info = await FileSystem.getInfoAsync(file.uri);
+  if (info.exists && typeof info.size === 'number' && info.size > MAX_FILE_BYTES) {
+    throw new Error(
+      `This file is too large (over ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB). ` +
+        'Split it into smaller files and import them in batches.',
+    );
   }
 
   const text = await FileSystem.readAsStringAsync(file.uri);

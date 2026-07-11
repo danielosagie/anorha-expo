@@ -56,7 +56,7 @@ built the wrapper for it.
 
 ## Screen map (target)
 
-```
+```text
 ConnectionsScreen ──"Import inbox (N)"──▶ ImportHub ◀── Settings badge / CSV finish / post-connect
        │ tap row                              │
        ▼                                      │ Continue / lane tap

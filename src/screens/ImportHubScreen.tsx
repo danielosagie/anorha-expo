@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, RefreshControl } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -30,11 +30,23 @@ export default function ImportHubScreen() {
   const [expandedMatches, setExpandedMatches] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const onRefresh = useCallback(() => {
+  // CSVColumnMappingScreen finishes with navigation.replace('ImportHub',
+  // { connectionId }). Once data has loaded, auto-expand the per-connection match
+  // rows so the just-imported connection's row is visible without a manual tap.
+  const handoffConnectionId = route.params?.connectionId;
+  useEffect(() => {
+    if (handoffConnectionId && !loading) setExpandedMatches(true);
+  }, [handoffConnectionId, loading]);
+
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    refresh();
-    // The hook fires its fetches immediately; drop the spinner after a beat.
-    setTimeout(() => setRefreshing(false), 800);
+    try {
+      // refresh() now resolves only once both data sources have settled — hold
+      // the spinner until then instead of a fixed timeout.
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
   }, [refresh]);
 
   // A total match-status outage shouldn't hide the optimizer lanes — their counts
@@ -194,7 +206,10 @@ export default function ImportHubScreen() {
               title="Review matches"
               sub={degraded ? 'Couldn’t load right now' : matchesSub}
               count={lanes.matches.count}
-              state={laneState('matches', lanes.matches.count)}
+              // Degraded ⇒ the inbox failed to load, so the lane isn't actually
+              // cleared. Show 'locked' (calm, unfinished) rather than 'done',
+              // which would render a check and read as complete.
+              state={degraded ? 'locked' : laneState('matches', lanes.matches.count)}
               onPress={lanes.matches.count > 0 ? onMatchesPress : undefined}
             />
             {expandedMatches && lanes.matches.byConnection.length > 1 && (

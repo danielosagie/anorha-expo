@@ -112,6 +112,25 @@ test('csvRowsToObjects: ignores cells beyond the header count', () => {
   assert.deepEqual(objs, [{ a: '1', b: '2' }]);
 });
 
+test('parseCsv: a mid-field inch-mark quote stays literal and preserves structure', () => {
+  // A stray unescaped `"` (e.g. `5" Speaker`) must NOT open quote mode and
+  // swallow the following commas/newlines — every row/column stays intact.
+  const { headers, rows } = parseCsv('name,size\n5" Speaker,large\nHat,small');
+  assert.deepEqual(headers, ['name', 'size']);
+  assert.deepEqual(rows, [
+    ['5" Speaker', 'large'],
+    ['Hat', 'small'],
+  ]);
+});
+
+test('parseCsv: stray characters after a closed quote append literally', () => {
+  // `"x"y` — junk after the closing quote degrades to a literal (`xy`) instead
+  // of corrupting parser state.
+  const { headers, rows } = parseCsv('a,b\n"x"y,z');
+  assert.deepEqual(headers, ['a', 'b']);
+  assert.deepEqual(rows, [['xy', 'z']]);
+});
+
 test('parseCsv + csvRowsToObjects: end-to-end on a quoted/CRLF file', () => {
   const csv = '﻿title,price,notes\r\n"Nike ""Air"", Max",149.99,"multi\nline"\r\n';
   const { headers, rows } = parseCsv(csv);

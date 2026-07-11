@@ -62,7 +62,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
             const { data, error } = await supabase
                 .from('ProductVariants')
                 .select(`
-                    Id, Title, Sku, Price,
+                    Id, Title, Description, Sku, Price,
                     ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
                 `)
                 .limit(100);

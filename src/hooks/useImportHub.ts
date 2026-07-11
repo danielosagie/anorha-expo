@@ -18,6 +18,19 @@ const API_BASE = (() => {
 
 const POLL_MS = 20000;
 
+// A stalled request must never leave `loading` stuck forever: cap every fetch in
+// this hook so a hung socket surfaces as an AbortError (which the existing
+// try/catch fallbacks already treat as failure).
+async function fetchWithTimeout(url: string, init?: RequestInit, ms = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // States that mean the connection is still importing — poll it and show the
 // in-flight strip until it settles.
 const IN_FLIGHT = new Set(['scanning', 'syncing', 'reconciling', 'pending', 'ready_to_sync']);
@@ -37,7 +50,7 @@ export interface ImportHubScanning {
 export interface ImportHubData {
   loading: boolean;
   error: string | null;
-  refresh: () => void;
+  refresh: () => Promise<void>;
   /** matches + photos + details — the single number the hero shows. */
   totalNeedsYou: number;
   scanning: ImportHubScanning[];
@@ -98,7 +111,7 @@ async function fetchInboxSummary(token: string | null): Promise<InboxSummaryResp
     'Content-Type': 'application/json',
   };
   try {
-    const res = await fetch(`${API_BASE}/sync/inbox/summary`, { headers });
+    const res = await fetchWithTimeout(`${API_BASE}/sync/inbox/summary`, { headers });
     if (!res.ok) return null; // 404 (not shipped yet) or any non-2xx → fall back
     const j: any = await res.json();
     if (!j || typeof j.totalNeedsAttention !== 'number' || !Array.isArray(j.connections)) {
@@ -147,7 +160,7 @@ async function fetchConnectionStatus(
     'Content-Type': 'application/json',
   };
   try {
-    const res = await fetch(`${API_BASE}/sync/connections/${conn.Id}/status`, { headers });
+    const res = await fetchWithTimeout(`${API_BASE}/sync/connections/${conn.Id}/status`, { headers });
     if (res.ok) {
       const j: any = await res.json();
       return {
@@ -161,7 +174,7 @@ async function fetchConnectionStatus(
     log.debug('status fetch failed, trying resolution', conn.Id, err?.message);
   }
   try {
-    const res = await fetch(`${API_BASE}/sync/connections/${conn.Id}/resolution`, { headers });
+    const res = await fetchWithTimeout(`${API_BASE}/sync/connections/${conn.Id}/resolution`, { headers });
     if (res.ok) {
       const j: any = await res.json();
       return {
@@ -225,6 +238,10 @@ export function useImportHub(): ImportHubData {
   const [focused, setFocused] = useState(false);
 
   const mountedRef = useRef(true);
+  // Monotonic refresh id. refresh() runs from focus, the 20s poll, and
+  // pull-to-refresh, so a slow older request can resolve after a newer one —
+  // every setState below bails unless its request is still the latest.
+  const refreshIdRef = useRef(0);
   const firstDoneRef = useRef(false);
   const optFirstDoneRef = useRef(false);
   // Once the aggregate endpoint answers 404 / non-2xx / malformed, remember it
@@ -241,9 +258,14 @@ export function useImportHub(): ImportHubData {
   }, [optLoading]);
 
   const refresh = useCallback(async (opts?: { retryAggregate?: boolean }) => {
+    // Claim this refresh as the latest; a later refresh bumps the id and any
+    // in-flight setState from this (now stale) run is skipped.
+    const myId = ++refreshIdRef.current;
+    const isCurrent = () => mountedRef.current && refreshIdRef.current === myId;
+
     const conns = enabledRef.current;
     if (!conns.length) {
-      if (mountedRef.current) {
+      if (isCurrent()) {
         setResults([]);
         setSummary(null);
         setError(null);
@@ -267,7 +289,7 @@ export function useImportHub(): ImportHubData {
     // learned this session that the endpoint isn't there.
     if (!aggregateDeadRef.current) {
       const agg = await fetchInboxSummary(token);
-      if (!mountedRef.current) return;
+      if (!isCurrent()) return;
       if (agg) {
         setSummary(agg);
         setResults([]);
@@ -282,7 +304,7 @@ export function useImportHub(): ImportHubData {
 
     // Fallback path: fan out over the existing per-connection prod endpoints.
     const settled = await Promise.all(conns.map((c) => fetchConnectionStatus(c, token)));
-    if (!mountedRef.current) return;
+    if (!isCurrent()) return;
     const ok = settled.filter((r): r is PerConnResult => r !== null);
     // Only a TOTAL failure surfaces an error — a single failing connection just
     // contributes 0.
@@ -294,9 +316,10 @@ export function useImportHub(): ImportHubData {
     setLoading(false);
   }, []);
 
-  const refreshAll = useCallback(() => {
-    refresh({ retryAggregate: true });
-    refreshOpt();
+  const refreshAll = useCallback(async () => {
+    // Await BOTH sources so callers (pull-to-refresh) can keep their spinner up
+    // until the data has actually settled.
+    await Promise.all([refresh({ retryAggregate: true }), refreshOpt()]);
   }, [refresh, refreshOpt]);
 
   useFocusEffect(
