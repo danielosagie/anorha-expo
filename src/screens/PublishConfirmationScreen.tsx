@@ -18,6 +18,7 @@ import { ensureSupabaseJwt } from '../lib/supabase';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
+import { InboxHeader, SuccessBlock, PillButton } from '../components/importinbox/InboxKit';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationScreen');
 
@@ -426,33 +427,28 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
   const primaryLabel = optLoading ? 'Checking what’s next…' : hasNext ? `Continue — ${optRemaining} need photos/details` : 'Done';
   const onPrimary = optLoading ? () => {} : hasNext ? goOptimize : goHub;
 
+  // Second status line: only when the optimizer still has gaps to fill.
+  const nextLine = hasNext
+    ? `${optRemaining} item${optRemaining === 1 ? '' : 's'} still need photos or details`
+    : null;
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top + 6 }}>
-      <View style={styles.headerRow}>
-        <TouchableOpacity
-          onPress={() => {
-            if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any);
-            else navigation.goBack();
-          }}
-          style={styles.backCircle}
-          activeOpacity={0.8}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Icon name="chevron-left" size={22} color="#18181B" />
-        </TouchableOpacity>
-      </View>
-      <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
-        <PrintingComplete
+    <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: insets.top + 6 }}>
+      <InboxHeader
+        onBack={() => {
+          if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any);
+          else navigation.goBack();
+        }}
+      />
+      <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 24 }}>
+        <SuccessBlock
           title={savedToInventory ? 'Saved to inventory' : 'Import complete'}
-          subtitle={subtitle}
-          platforms={platforms}
-          stamp={`#${String(receiptN).padStart(4, '0')} · SYNCED`}
-          syncingLabel="Syncing your listings…"
-          primaryLabel={primaryLabel}
-          onPrimary={onPrimary}
-          secondaryLabel="Review listings"
-          onSecondary={goReview}
+          lines={[subtitle, nextLine]}
         />
+      </View>
+      <View style={{ gap: 10, paddingHorizontal: 20, paddingBottom: insets.bottom + 16 }}>
+        <PillButton label="Review listings" variant="secondary" onPress={goReview} />
+        <PillButton label={primaryLabel} onPress={onPrimary} />
       </View>
     </View>
   );

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,8 +8,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useImportHub } from '../hooks/useImportHub';
-import { RC } from '../components/resolve/ResolveKit';
-import { LobbyHeader, UpNextRow, IconName } from '../components/quest/LobbyKit';
+import {
+  IC,
+  InboxHeader,
+  HeroNumeral,
+  SuccessBlock,
+  PillButton,
+  NumberedCard,
+  GroupRow,
+} from '../components/importinbox/InboxKit';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportHub'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportHub'>;
@@ -18,7 +25,8 @@ type LaneKey = 'matches' | 'photos' | 'details';
 
 // Import Inbox hub — the single wrapper around importing (docs/import-hub-redesign.md).
 // Modeled on an email backlog: one total, grouped lanes, in-flight progress. You
-// visit it when you want; nothing drags you in.
+// visit it when you want; nothing drags you in. Re-skinned to the Avec look — a
+// giant thin count over calm numbered step-cards (see InboxKit).
 export default function ImportHubScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation<NavType>();
@@ -132,116 +140,119 @@ export default function ImportHubScreen() {
     return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
   }, [scanning]);
 
+  // Matches lane derived state (kept out of JSX so the degraded/done/active
+  // branches read clearly). Degraded ⇒ the inbox failed to load, so the lane
+  // isn't actually cleared: not done, calm "couldn't load" copy, and the card
+  // itself becomes the retry affordance (no boxed banner).
+  const matchesLaneState = degraded ? 'locked' : laneState('matches', lanes.matches.count);
+  const photosLaneState = laneState('photos', lanes.photos.count);
+  const detailsLaneState = laneState('details', lanes.details.count);
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-      <LobbyHeader title="Import inbox" onBack={() => navigation.goBack()} />
+      <InboxHeader title="Import inbox" onBack={() => navigation.goBack()} />
 
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={RC.green} colors={[RC.green]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={IC.accent} colors={[IC.accent]} />}
       >
         {/* ── Hero ──────────────────────────────────────────────────────────── */}
         {loading ? (
           <View style={styles.heroLoading}>
-            <ActivityIndicator size="large" color={RC.green} />
+            <ActivityIndicator size="large" color={IC.accent} />
           </View>
         ) : hardError ? (
-          <View style={styles.errorCard}>
-            <MaterialCommunityIcons name="cloud-off-outline" size={30} color={RC.danger} />
+          <View style={styles.errorBlock}>
             <Text style={styles.errorTitle}>Couldn’t load your inbox</Text>
             <Text style={styles.errorSub}>{error}</Text>
-            <TouchableOpacity style={styles.retryBtn} activeOpacity={0.85} onPress={refresh}>
-              <Text style={styles.retryText}>Retry</Text>
-            </TouchableOpacity>
+            <PillButton label="Retry" variant="secondary" onPress={refresh} style={styles.errorRetry} />
           </View>
         ) : allClear ? (
-          <View style={styles.hero}>
-            <View style={styles.allClearBadge}>
-              <MaterialCommunityIcons name="check" size={34} color="#fff" />
-            </View>
-            <Text style={styles.allClearTitle}>All caught up</Text>
-            <Text style={styles.allClearSub}>
-              New items from your stores show up here as they import. Nothing needs you right now.
-            </Text>
+          <View style={styles.heroPad}>
+            <SuccessBlock
+              title="All caught up"
+              lines={['New items from your stores show up here as they import.']}
+            />
           </View>
         ) : (
-          <View style={styles.hero}>
-            <Text style={styles.heroCount}>{totalNeedsYou}</Text>
-            <Text style={styles.heroLabel}>item{totalNeedsYou === 1 ? '' : 's'} need you</Text>
-          </View>
+          <HeroNumeral value={totalNeedsYou} label={`item${totalNeedsYou === 1 ? '' : 's'} need you`} />
         )}
 
         {/* ── "Cleared" acknowledgment on return from a completed lane ──────── */}
         {completedLabel && !loading && !error && (
-          <View style={styles.completedNote}>
-            <MaterialCommunityIcons name="check-circle" size={15} color={RC.greenDark} />
-            <Text style={styles.completedNoteText}>{completedLabel} cleared</Text>
+          <View style={styles.inlineNote}>
+            <MaterialCommunityIcons name="check" size={15} color={IC.accent} />
+            <Text style={styles.inlineNoteText}>{completedLabel} cleared</Text>
           </View>
         )}
 
-        {degraded && !loading && (
-          <TouchableOpacity style={styles.degraded} activeOpacity={0.85} onPress={refresh}>
-            <MaterialCommunityIcons name="cloud-alert" size={15} color={RC.warnInk} />
-            <Text style={styles.degradedText}>Couldn’t check match queues — tap to retry</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* ── In-flight strip (non-blocking) ────────────────────────────────── */}
+        {/* ── In-flight line (non-blocking, no banner box) ──────────────────── */}
         {scanning.length > 0 && (
           <View style={styles.inflight}>
-            <ActivityIndicator size="small" color={RC.greenDark} />
+            <ActivityIndicator size="small" color={IC.muted} />
             <Text style={styles.inflightText} numberOfLines={2}>
-              Importing from {scanNames}… items will land here
+              {scanNames ? `Importing from ${scanNames}… items land here as they arrive` : 'Importing… items land here as they arrive'}
             </Text>
           </View>
         )}
 
-        {/* ── Lanes ─────────────────────────────────────────────────────────── */}
+        {/* ── Lanes → Avec numbered step-cards ──────────────────────────────── */}
         {!loading && !hardError && (
           <View style={styles.lanes}>
-            <UpNextRow
-              icon={'link-variant' as IconName}
+            <NumberedCard
+              index={1}
               title="Review matches"
-              sub={degraded ? 'Couldn’t load right now' : matchesSub}
-              count={lanes.matches.count}
-              // Degraded ⇒ the inbox failed to load, so the lane isn't actually
-              // cleared. Show 'locked' (calm, unfinished) rather than 'done',
-              // which would render a check and read as complete.
-              state={degraded ? 'locked' : laneState('matches', lanes.matches.count)}
-              onPress={lanes.matches.count > 0 ? onMatchesPress : undefined}
+              done={matchesLaneState === 'done'}
+              active={matchesLaneState === 'active'}
+              sub={
+                matchesLaneState === 'done'
+                  ? 'Done'
+                  : degraded
+                    ? 'Couldn’t load right now'
+                    : matchesSub
+              }
+              count={degraded ? undefined : lanes.matches.count}
+              onPress={
+                degraded
+                  ? refresh
+                  : lanes.matches.count > 0
+                    ? onMatchesPress
+                    : undefined
+              }
             />
             {expandedMatches && lanes.matches.byConnection.length > 1 && (
               <View style={styles.subLanes}>
                 {lanes.matches.byConnection.map((b) => (
-                  <UpNextRow
+                  <GroupRow
                     key={b.connectionId}
-                    icon={'store-outline' as IconName}
-                    title={b.platformName}
+                    label={b.platformName}
                     count={b.count}
-                    state="active"
+                    compact
                     onPress={() => openMatches(b.connectionId, b.platformName)}
                   />
                 ))}
               </View>
             )}
 
-            <UpNextRow
-              icon={'camera' as IconName}
+            <NumberedCard
+              index={2}
               title="Add photos"
-              sub={lanes.photos.count > 0 ? 'Items missing photos' : 'Every item has photos'}
+              done={photosLaneState === 'done'}
+              active={photosLaneState === 'active'}
+              sub={photosLaneState === 'done' ? 'Done' : 'Items missing photos'}
               count={lanes.photos.count}
-              state={laneState('photos', lanes.photos.count)}
               onPress={lanes.photos.count > 0 ? openPhotos : undefined}
             />
 
-            <UpNextRow
-              icon={'star-four-points' as IconName}
+            <NumberedCard
+              index={3}
               title="Fix details"
-              sub={lanes.details.count > 0 ? 'Titles, descriptions, SKUs' : 'Every item has details'}
+              done={detailsLaneState === 'done'}
+              active={detailsLaneState === 'active'}
+              sub={detailsLaneState === 'done' ? 'Done' : 'Titles, descriptions, SKUs'}
               count={lanes.details.count}
-              state={laneState('details', lanes.details.count)}
               onPress={lanes.details.count > 0 ? openDetails : undefined}
             />
           </View>
@@ -254,14 +265,9 @@ export default function ImportHubScreen() {
           <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
           <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
             {allClear || hardError || !firstNonEmpty ? (
-              <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.goBack()} style={styles.primaryBtn}>
-                <Text style={styles.primaryText}>Done</Text>
-              </TouchableOpacity>
+              <PillButton label="Done" onPress={() => navigation.goBack()} />
             ) : (
-              <TouchableOpacity activeOpacity={0.9} onPress={onContinue} style={styles.primaryBtn}>
-                <Text style={styles.primaryText}>Continue</Text>
-                <MaterialCommunityIcons name="arrow-right" size={18} color="#fff" />
-              </TouchableOpacity>
+              <PillButton label="Continue" onPress={onContinue} />
             )}
           </View>
         </>
@@ -271,47 +277,32 @@ export default function ImportHubScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: RC.bg },
-  scroll: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 150 },
+  screen: { flex: 1, backgroundColor: IC.bg },
+  scroll: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 150 },
 
   // Hero
-  heroLoading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 64 },
-  hero: { alignItems: 'center', paddingTop: 28, paddingBottom: 28 },
-  heroCount: { fontSize: 68, fontWeight: '800', color: RC.ink, letterSpacing: -2, lineHeight: 74 },
-  heroLabel: { fontSize: 16, fontWeight: '600', color: RC.muted, marginTop: 2 },
+  heroLoading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 72 },
+  heroPad: { paddingTop: 36, paddingBottom: 24 },
 
-  allClearBadge: { width: 72, height: 72, borderRadius: 36, backgroundColor: RC.green, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  allClearTitle: { fontSize: 22, fontWeight: '800', color: RC.ink, letterSpacing: -0.4 },
-  allClearSub: { fontSize: 14, fontWeight: '500', color: RC.muted, textAlign: 'center', lineHeight: 20, marginTop: 8, paddingHorizontal: 24 },
+  // Hard error — calm, no icon tile
+  errorBlock: { alignItems: 'center', paddingTop: 56, paddingHorizontal: 8 },
+  errorTitle: { fontSize: 22, fontWeight: '700', color: IC.ink, letterSpacing: -0.5, textAlign: 'center' },
+  errorSub: { fontSize: 15, color: IC.muted, textAlign: 'center', lineHeight: 21, marginTop: 10 },
+  errorRetry: { alignSelf: 'stretch', marginTop: 22, marginHorizontal: 16 },
 
-  // Error
-  degraded: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10,
-    paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12,
-    backgroundColor: RC.warnSoft, borderWidth: 1, borderColor: RC.warnLine,
-  },
-  degradedText: { flex: 1, fontSize: 13, fontWeight: '600', color: RC.warnInk },
-  errorCard: { alignItems: 'center', paddingTop: 44, paddingHorizontal: 24, gap: 8 },
-  errorTitle: { fontSize: 17, fontWeight: '700', color: RC.ink, marginTop: 6 },
-  errorSub: { fontSize: 13, fontWeight: '500', color: RC.muted, textAlign: 'center', lineHeight: 18 },
-  retryBtn: { marginTop: 12, paddingHorizontal: 22, paddingVertical: 11, borderRadius: 12, backgroundColor: RC.surface2 },
-  retryText: { fontSize: 14, fontWeight: '700', color: RC.ink },
+  // Inline note (cleared acknowledgment)
+  inlineNote: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 14 },
+  inlineNoteText: { fontSize: 14, color: IC.muted },
 
-  // Cleared note
-  completedNote: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 12 },
-  completedNoteText: { fontSize: 13, fontWeight: '700', color: RC.greenDark },
-
-  // In-flight strip
-  inflight: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: RC.greenSoft, borderWidth: 1, borderColor: RC.greenLine, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 14 },
-  inflightText: { flex: 1, fontSize: 13.5, fontWeight: '600', color: RC.greenInk },
+  // In-flight line
+  inflight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, marginBottom: 18 },
+  inflightText: { flexShrink: 1, fontSize: 14, color: IC.muted, textAlign: 'center', lineHeight: 20 },
 
   // Lanes
   lanes: { marginTop: 4 },
-  subLanes: { paddingLeft: 16, marginTop: -2, marginBottom: 6 },
+  subLanes: { paddingLeft: 20, marginTop: -4, marginBottom: 6 },
 
   // Footer
   fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 130 },
-  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 16 },
-  primaryBtn: { height: 54, borderRadius: 14, backgroundColor: RC.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  primaryText: { fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: -0.2 },
+  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 20 },
 });

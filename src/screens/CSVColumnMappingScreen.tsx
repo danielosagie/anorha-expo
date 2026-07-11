@@ -14,8 +14,15 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '@clerk/expo';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { API_BASE_URL } from '../config/env';
-import { RC, Chip, MiniProgress, Check } from '../components/resolve/ResolveKit';
-import PillTabs from '../components/ui/PillTabs';
+import {
+    IC,
+    InboxHeader,
+    CenteredParagraph,
+    TextTabs,
+    FieldCard,
+    ProgressLine,
+    PillButton,
+} from '../components/importinbox/InboxKit';
 import ErrorModal from '../components/ErrorModal';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { useOrg } from '../context/OrgContext';
@@ -349,9 +356,9 @@ export function CSVColumnMappingScreen() {
     }, [activeTab]);
 
     const tabs = [
-        { key: 'all' as const, id: 'all' as const, label: `All` },
-        { key: 'required' as const, id: 'required' as const, label: `Required` },
-        { key: 'optional' as const, id: 'optional' as const, label: `Optional` },
+        { key: 'all' as const, label: 'All' },
+        { key: 'required' as const, label: 'Required' },
+        { key: 'optional' as const, label: 'Optional' },
     ];
 
     const openSelectionModal = (fieldKey: string) => {
@@ -371,46 +378,24 @@ export function CSVColumnMappingScreen() {
     };
 
     return (
-        <View style={styles.container}>
-            {/* Header */}
-            <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-                <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={styles.circleBtn}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    accessibilityLabel="Go back"
-                >
-                    <MaterialCommunityIcons name="chevron-left" size={22} color={RC.ink} />
-                </TouchableOpacity>
-                <View style={styles.headerCenter}>
-                    <Text style={styles.headerTitle} numberOfLines={1}>Map columns</Text>
-                    <Text style={styles.headerSubtitle} numberOfLines={1}>
-                        {csvHeaders.length} columns · {mappedCount} mapped
-                    </Text>
-                </View>
-                <Chip
-                    label={`${mappedRequiredCount}/${requiredCount} required`}
-                    tone={ready ? 'ok' : 'warn'}
-                    dot={false}
-                    size={12}
-                />
+        <View style={[styles.container, { paddingTop: insets.top + 4 }]}>
+            {/* Header — bare chevron + centered title, calm one-line explanation */}
+            <InboxHeader title="Map your columns" onBack={() => navigation.goBack()} />
+            <View style={styles.explainWrap}>
+                <CenteredParagraph>Match your file’s columns so items import correctly</CenteredParagraph>
             </View>
 
-            {/* Auto-mapping indicator */}
+            {/* Auto-mapping indicator — a quiet inline line, no tinted bar */}
             {isLoadingAI && (
-                <View style={styles.aiLoadingBar}>
-                    <ActivityIndicator size="small" color={RC.green} />
+                <View style={styles.aiLoading}>
+                    <ActivityIndicator size="small" color={IC.muted} />
                     <Text style={styles.aiLoadingText}>Matching your columns…</Text>
                 </View>
             )}
 
-            {/* Tabs */}
+            {/* Segment filter — plain text tabs with an ink underline */}
             <View style={styles.tabsWrapper}>
-                <PillTabs
-                    tabs={tabs}
-                    value={activeTab}
-                    onChange={(k) => setActiveTab(k as any)}
-                />
+                <TextTabs tabs={tabs} value={activeTab} onChange={(k) => setActiveTab(k)} />
             </View>
 
             {/* List */}
@@ -429,43 +414,13 @@ export function CSVColumnMappingScreen() {
                             key={field.key}
                             entering={FadeInUp.delay(index * 24).springify()}
                         >
-                            <TouchableOpacity
-                                activeOpacity={0.85}
+                            <FieldCard
+                                label={field.label}
+                                required={field.required}
+                                mapped={isMapped ? mappedCol : undefined}
+                                sample={sample}
                                 onPress={() => openSelectionModal(field.key)}
-                                style={[styles.row, isMapped ? styles.rowMapped : styles.rowEmpty]}
-                                accessibilityLabel={`Map ${field.label}`}
-                            >
-                                <View style={[styles.iconBox, isMapped && styles.iconBoxMapped]}>
-                                    <MaterialCommunityIcons
-                                        name={field.icon}
-                                        size={18}
-                                        color={isMapped ? RC.greenDark : RC.muted}
-                                    />
-                                </View>
-
-                                <View style={styles.rowBody}>
-                                    <View style={styles.rowLabelLine}>
-                                        <Text style={styles.rowLabel} numberOfLines={1}>{field.label}</Text>
-                                        {field.required && !isMapped && (
-                                            <Text style={styles.reqTag}>required</Text>
-                                        )}
-                                    </View>
-                                    {isMapped ? (
-                                        <Text style={styles.rowValue} numberOfLines={1}>
-                                            {mappedCol}
-                                            {sample ? <Text style={styles.rowSample}>{`   ${sample}`}</Text> : null}
-                                        </Text>
-                                    ) : (
-                                        <Text style={styles.rowPlaceholder} numberOfLines={1}>Select CSV column</Text>
-                                    )}
-                                </View>
-
-                                {isMapped ? (
-                                    <Check on size={18} />
-                                ) : (
-                                    <MaterialCommunityIcons name="chevron-right" size={20} color={RC.faint} />
-                                )}
-                            </TouchableOpacity>
+                            />
                         </Animated.View>
                     );
                 })}
@@ -475,47 +430,29 @@ export function CSVColumnMappingScreen() {
             {/* Footer — confirm CTA + staged import progress */}
             <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
                 {isProcessing ? (
-                    <View style={styles.progressWrap}>
-                        <MiniProgress
-                            pct={stage === 'uploading' ? 85 : 35}
-                            left={
-                                stage === 'uploading'
-                                    ? `Uploading ${csvData.length} item${csvData.length === 1 ? '' : 's'}…`
-                                    : 'Creating import…'
-                            }
-                            right={stage === 'uploading' ? 'Step 2 of 2' : 'Step 1 of 2'}
-                        />
-                    </View>
+                    <ProgressLine
+                        pct={stage === 'uploading' ? 85 : 35}
+                        label={
+                            stage === 'uploading'
+                                ? `Uploading ${csvData.length} item${csvData.length === 1 ? '' : 's'}… · Step 2 of 2`
+                                : 'Creating import… · Step 1 of 2'
+                        }
+                    />
                 ) : (
                     !ready && (
                         <Text style={styles.gate}>Map {missingRequiredLabels.join(', ')} to import</Text>
                     )
                 )}
 
-                <TouchableOpacity
-                    style={[styles.primaryBtn, (!ready || isProcessing) && styles.primaryBtnDim]}
+                <PillButton
+                    label={`Import ${csvData.length} ${csvData.length === 1 ? 'product' : 'products'}`}
                     onPress={handleConfirm}
-                    disabled={!ready || isProcessing}
-                    accessibilityLabel="Import products"
-                >
-                    {isProcessing ? (
-                        <ActivityIndicator color="#fff" />
-                    ) : (
-                        <>
-                            <MaterialCommunityIcons
-                                name="tray-arrow-down"
-                                size={20}
-                                color={ready ? '#fff' : RC.faint}
-                            />
-                            <Text style={[styles.primaryBtnText, !ready && { color: RC.faint }]}>
-                                Import {csvData.length} {csvData.length === 1 ? 'product' : 'products'}
-                            </Text>
-                        </>
-                    )}
-                </TouchableOpacity>
+                    disabled={!ready}
+                    loading={isProcessing}
+                />
             </View>
 
-            {/* Column Selection Modal */}
+            {/* Column Selection Modal — white sheet, plain cards, no green fills */}
             <Modal
                 visible={selectionModalVisible}
                 animationType="slide"
@@ -523,7 +460,7 @@ export function CSVColumnMappingScreen() {
                 onRequestClose={() => setSelectionModalVisible(false)}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContainer, { paddingBottom: insets.bottom + 12 }]}>
+                    <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 12 }]}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Select column</Text>
                             <TouchableOpacity
@@ -531,15 +468,15 @@ export function CSVColumnMappingScreen() {
                                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                 accessibilityLabel="Close"
                             >
-                                <MaterialCommunityIcons name="close" size={22} color={RC.ink} />
+                                <MaterialCommunityIcons name="close" size={22} color={IC.ink} />
                             </TouchableOpacity>
                         </View>
-                        <ScrollView style={styles.modalList}>
+                        <ScrollView style={styles.modalList} contentContainerStyle={styles.modalListContent}>
                             <TouchableOpacity
                                 style={styles.modalItem}
                                 onPress={() => selectColumn('')}
                             >
-                                <Text style={[styles.modalItemText, { color: RC.danger }]}>Clear mapping</Text>
+                                <Text style={styles.modalClear}>Clear mapping</Text>
                             </TouchableOpacity>
                             {csvHeaders.map((header) => (
                                 <TouchableOpacity
@@ -574,219 +511,104 @@ export function CSVColumnMappingScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: RC.bg,
+        backgroundColor: IC.bg,
     },
-    // ── Header ──
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 16,
-        paddingBottom: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: RC.line,
+    // ── Header explanation ──
+    explainWrap: {
+        paddingTop: 6,
+        paddingBottom: 14,
     },
-    circleBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: RC.line,
-        backgroundColor: '#fff',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    headerCenter: {
-        flex: 1,
-        minWidth: 0,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: RC.ink,
-        letterSpacing: -0.3,
-    },
-    headerSubtitle: {
-        fontSize: 13,
-        fontWeight: '500',
-        color: RC.muted,
-        marginTop: 1,
-    },
-    // ── AI loading strip ──
-    aiLoadingBar: {
+    // ── AI loading line ──
+    aiLoading: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        paddingVertical: 8,
-        backgroundColor: RC.greenSoft,
+        paddingVertical: 6,
     },
     aiLoadingText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: RC.greenDark,
+        fontSize: 14,
+        color: IC.muted,
     },
     // ── Tabs ──
     tabsWrapper: {
         paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 4,
+        paddingTop: 2,
+        paddingBottom: 12,
     },
     // ── List ──
     content: {
         flex: 1,
     },
     contentContainer: {
-        paddingHorizontal: 16,
-        paddingTop: 8,
+        paddingHorizontal: 20,
+        paddingTop: 4,
         paddingBottom: 8,
-    },
-    row: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        minHeight: 64,
-        borderWidth: 1,
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        marginBottom: 10,
-    },
-    rowEmpty: {
-        borderColor: RC.line,
-        backgroundColor: '#fff',
-    },
-    rowMapped: {
-        borderColor: RC.greenLine,
-        backgroundColor: RC.greenSoft,
-    },
-    iconBox: {
-        width: 36,
-        height: 36,
-        borderRadius: 9,
-        backgroundColor: RC.surface2,
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-    },
-    iconBoxMapped: {
-        backgroundColor: '#fff',
-    },
-    rowBody: {
-        flex: 1,
-        minWidth: 0,
-    },
-    rowLabelLine: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    rowLabel: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: RC.ink,
-        flexShrink: 1,
-    },
-    reqTag: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: RC.danger,
-    },
-    rowValue: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: RC.greenDark,
-        marginTop: 2,
-    },
-    rowSample: {
-        fontWeight: '500',
-        color: RC.faint,
-    },
-    rowPlaceholder: {
-        fontSize: 13,
-        fontWeight: '500',
-        color: RC.faint,
-        marginTop: 2,
     },
     // ── Footer ──
     footer: {
-        paddingHorizontal: 16,
+        paddingHorizontal: 20,
         paddingTop: 12,
-        gap: 10,
+        gap: 12,
         borderTopWidth: 1,
-        borderTopColor: RC.line,
-        backgroundColor: '#fff',
-    },
-    progressWrap: {
-        paddingTop: 2,
-        paddingBottom: 2,
+        borderTopColor: IC.hairline,
+        backgroundColor: IC.bg,
     },
     gate: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: RC.danger,
+        fontSize: 14,
+        color: IC.muted,
         textAlign: 'center',
-    },
-    primaryBtn: {
-        width: '100%',
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: RC.green,
-        borderRadius: 12,
-        paddingVertical: 15,
-    },
-    primaryBtnDim: {
-        backgroundColor: RC.surface2,
-    },
-    primaryBtnText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '700',
     },
     // ── Modal ──
     modalOverlay: {
         flex: 1,
-        backgroundColor: 'rgba(17,24,39,0.45)',
+        backgroundColor: 'rgba(17,18,20,0.35)',
         justifyContent: 'flex-end',
     },
-    modalContainer: {
-        backgroundColor: '#fff',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
+    modalSheet: {
+        backgroundColor: '#FFFFFF',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
         maxHeight: '80%',
     },
     modalHeader: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: RC.line,
+        paddingHorizontal: 20,
+        paddingVertical: 18,
     },
     modalTitle: {
-        fontSize: 17,
+        fontSize: 18,
         fontWeight: '700',
-        color: RC.ink,
+        color: IC.ink,
+        letterSpacing: -0.3,
     },
     modalList: {},
+    modalListContent: {
+        paddingHorizontal: 16,
+        paddingBottom: 8,
+    },
     modalItem: {
+        backgroundColor: IC.card,
+        borderRadius: 14,
         paddingHorizontal: 16,
         paddingVertical: 14,
-        borderBottomWidth: 1,
-        borderBottomColor: RC.surface2,
+        marginBottom: 8,
     },
     modalItemText: {
         fontSize: 15,
         fontWeight: '600',
-        color: RC.ink2,
+        color: IC.ink,
     },
     modalItemSample: {
         fontSize: 13,
-        fontWeight: '500',
-        color: RC.faint,
-        marginTop: 3,
+        color: IC.muted,
+        marginTop: 4,
+    },
+    modalClear: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: IC.muted,
     },
 });
