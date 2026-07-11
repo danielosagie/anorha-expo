@@ -56,6 +56,7 @@ import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
 import PastScansScreen from '../screens/PastScansScreen';
 import TeamScreen from '../screens/TeamScreen';
 import SyncInboxScreen from '../screens/SyncInboxScreen';
+import ImportHubScreen from '../screens/ImportHubScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
 // LoadingScreen + MatchSelectionScreen were deprecated and deleted. Their param
@@ -172,6 +173,7 @@ export type AppStackParamList = {
   ProductDetail: { productId: string };
   PastScans: undefined;
   SyncInbox: { connectionId: string; platformName: string };
+  ImportHub: { completedLane?: 'matches' | 'photos' | 'details'; connectionId?: string } | undefined;
   SyncRules: { connectionId: string };
   Profile: { refresh?: number };
   AccountSettings: { refresh?: number } | undefined;
@@ -587,6 +589,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="ProductDetail" component={sb(ProductDetailScreen)} />
     <AppStackNav.Screen name="PastScans" component={sb(PastScansScreen)} />
     <AppStackNav.Screen name="SyncInbox" component={sb(SyncInboxScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="ImportHub" component={sb(ImportHubScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
     {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
         a stack route also named 'Profile' collided with the Profile TAB and made
