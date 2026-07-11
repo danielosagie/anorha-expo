@@ -73,7 +73,58 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     marketingUpdates: false,
   };
 
+  // ---- Import Hub / SyncInbox demo data ----
+  const inboxSummary = {
+    totalNeedsAttention: 7,
+    byReason: { multiple_candidates: 4, weak_match: 3 },
+    connections: [
+      { connectionId: 'conn_shopify', platformType: 'shopify', displayName: 'My Shopify Store', state: 'needs-attention', needsAttention: 4 },
+      { connectionId: 'conn_square', platformType: 'square', displayName: 'Square POS', state: 'needs-attention', needsAttention: 3 },
+      { connectionId: 'conn_csv', platformType: 'csv', displayName: 'Spring inventory.csv', state: 'scanning', needsAttention: 0 },
+    ],
+    recentImports: [
+      { importId: 'imp_1', connectionId: 'conn_shopify', source: 'platform_scan', status: 'complete', itemsTotal: 182, itemsCommitted: 178, itemsFailed: 0, createdAt: new Date(now - 86400000).toISOString(), completedAt: new Date(now - 86000000).toISOString() },
+      { importId: 'imp_2', connectionId: 'conn_csv', source: 'csv_upload', status: 'in_progress', itemsTotal: 120, itemsCommitted: 64, itemsFailed: 0, createdAt: new Date(now - 600000).toISOString(), completedAt: null },
+    ],
+  };
+
+  const mkItem = (i: number, reason: string, candidates: number) => ({
+    platformId: `plat_${i}`,
+    sku: `SKU-10${i}`,
+    barcode: null,
+    title: ['Ceramic Pour-Over Coffee Dripper', 'Linen Table Runner 72"', 'Walnut Serving Board', 'Stoneware Mug — Sage'][i % 4],
+    price: [24.99, 38.0, 54.5, 18.0][i % 4],
+    imageUrl: `https://picsum.photos/seed/inbox${i}/300/300`,
+    parentId: null,
+    direction: 'both',
+    resolution: candidates > 0
+      ? { kind: 'link', canonical: { id: `can_${i}`, sku: `SKU-10${i}`, title: 'Existing: Pour-Over Dripper', imageUrl: `https://picsum.photos/seed/can${i}/200/200` }, confidence: 0.82, via: 'title' }
+      : { kind: 'create' },
+    attention: reason,
+    candidates: Array.from({ length: candidates }, (_, k) => ({
+      id: `can_${i}_${k}`, sku: `SKU-10${i}${k}`, title: k === 0 ? 'Pour-Over Coffee Dripper (existing)' : 'Coffee Dripper V2', imageUrl: `https://picsum.photos/seed/cand${i}${k}/200/200`,
+    })),
+    recommended: candidates > 0 ? 'primary' : null,
+    reason: reason === 'multiple_candidates' ? 'Two close matches in your catalog' : 'Title similar but price differs',
+  });
+
+  const resolution = {
+    autoLink: [],
+    autoCreate: [],
+    needsAttention: [mkItem(0, 'multiple_candidates', 2), mkItem(1, 'weak_match', 1), mkItem(2, 'multiple_candidates', 2), mkItem(3, 'weak_match', 0)],
+    summary: { total: 182, autoLinked: 121, autoCreated: 57, needsAttention: 4, skipped: 0, pushSide: 0, clean: false, byReason: { multiple_candidates: 2, weak_match: 2 } },
+  };
+
+  const connStatus = {
+    state: 'needs-attention',
+    counts: { total: 182, autoLinked: 121, autoCreated: 57, needsAttention: 4 },
+    attention: resolution.needsAttention,
+  };
+
   const routes: Array<[RegExp, any]> = [
+    [/\/sync\/inbox\/summary/, inboxSummary],
+    [/\/sync\/connections\/[^/]+\/resolution/, resolution],
+    [/\/sync\/connections\/[^/]+\/status/, connStatus],
     [/\/billing\/summary/, billingSummary],
     [/\/billing\/invoices/, invoices],
     [/\/billing\/upcoming/, upcoming],

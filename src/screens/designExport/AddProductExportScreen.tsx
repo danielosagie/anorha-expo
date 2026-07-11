@@ -21,7 +21,9 @@ import ItemNavigationBar from '../../components/camera/ItemNavigationBar';
 import { ShelfScanProgressCard } from '../../components/camera/ShelfScanProgressCard';
 import BarcodeEntrySheet from '../../components/camera/BarcodeEntrySheet';
 import BusinessTemplateModal from '../../components/camera/BusinessTemplateModal';
-import UsageCounter from '../../components/UsageCounter';
+// NOTE: UsageCounter tile removed — src/components/UsageCounter.tsx is not in the repo
+// (untracked locally?) and an import of a missing file crashes the whole web bundle
+// with a resolver stack overflow. Re-add the tile once the component is committed.
 import BottomActionBar from '../../components/BottomActionBar';
 import TierSelectorModal from '../../components/TierSelectorModal';
 import BillingGateSheet from '../../components/BillingGateSheet';
@@ -141,9 +143,6 @@ export default function AddProductExportScreen() {
           <View style={styles.board}>
             <Frame label="PhotoStack" h={260}>
               <View style={styles.darkPad}><PhotoStack photos={mockPhotos} onPress={noop} /></View>
-            </Frame>
-            <Frame label="UsageCounter" h={160}>
-              <UsageCounter usageCount={8} freeLimit={10} onUpgradePress={noop} isSubscriber={false} />
             </Frame>
             <Frame label="BottomActionBar" h={180}>
               <BottomActionBar primaryLabel="Save item" onPrimary={noop} secondaryLabel="Cancel" onSecondary={noop}

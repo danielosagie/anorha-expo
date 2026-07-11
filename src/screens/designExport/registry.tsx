@@ -97,9 +97,9 @@ export const ROUTES: ExportRoute[] = [
     params: { initialCameraMode: 'shelf', designState: 'shelfScanning' }, load: () => import('../AddProductScreen') },
   { key: 'add-shelf-complete', title: 'Shelf · Complete', group: 'Add Product Flow', routeName: 'AddProduct',
     params: { initialCameraMode: 'shelf', designState: 'shelfComplete' }, load: () => import('../AddProductScreen') },
-  { key: 'photo-upload', title: 'Photo upload', group: 'Add Product Flow', routeName: 'PhotoUpload',
-    params: { onDone: noop },
-    load: () => import('../PhotoUploadScreen') },
+  // NOTE: the 'photo-upload' tile was removed — src/screens/PhotoUploadScreen.tsx is not
+  // in the repo (untracked locally?), and a registry entry pointing at a missing file
+  // crashes the whole web bundle with a resolver stack overflow. Re-add once committed.
   { key: 'past-scans', title: 'Past scans', group: 'Add Product Flow', routeName: 'PastScans',
     load: () => import('../PastScansScreen') },
   { key: 'generate-details', title: 'Generate details', group: 'Add Product Flow', routeName: 'GenerateDetailsScreen',
@@ -133,6 +133,14 @@ export const ROUTES: ExportRoute[] = [
     load: () => import('../DeleteAccountInfoScreen') },
 
   // ---------- Import ----------
+  { key: 'import-hub', title: 'Import inbox (hub)', group: 'Import', routeName: 'ImportHub',
+    load: () => import('../ImportHubScreen') },
+  { key: 'sync-inbox', title: 'Match resolver deck', group: 'Import', routeName: 'SyncInbox',
+    params: { connectionId: 'conn_shopify', platformName: 'My Shopify Store' },
+    load: () => import('../SyncInboxScreen') },
+  { key: 'import-complete', title: 'Import complete (summary)', group: 'Import', routeName: 'PublishConfirmation',
+    params: { origin: 'import', importCounts: { linked: 3, created: 1, ignored: 0, autoLinked: 121, autoCreated: 57 }, connectionId: 'conn_shopify', platformName: 'My Shopify Store', platforms: ['shopify'] },
+    load: () => import('../PublishConfirmationScreen') },
   { key: 'csv-mapping', title: 'CSV column mapping', group: 'Import', routeName: 'CSVColumnMapping',
     params: { connectionName: 'My CSV Import', csvHeaders: ['Title', 'SKU', 'Price', 'Quantity'], sampleRow: { Title: 'Nike Shoe', SKU: 'NIKE001', Price: '99.99', Quantity: '10' }, csvData: [ { Title: 'Nike Shoe', SKU: 'NIKE001', Price: '99.99', Quantity: '10' }, { Title: 'Adidas Shoe', SKU: 'ADIDAS001', Price: '89.99', Quantity: '15' } ] },
     load: () => import('../CSVColumnMappingScreen').then((m: any) => ({ default: m.default || m.CSVColumnMappingScreen })) },
