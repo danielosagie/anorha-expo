@@ -2622,41 +2622,76 @@ const ProductDetailScreen = observer(
         });
         setIsLoading(false);
       } else if (!passedItem && productId) {
-        // Fallback: Fetch from Supabase if not in local state
+        // Fallback: Fetch from Supabase if not in local state.
+        // Non-UUID ids (synthetic quick-scan candidates like "match-...",
+        // "agent_0") can never be rows — skip the query and land on the honest
+        // empty state instead of a Postgres uuid-cast error alert.
+        const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(productId));
+        if (!uuidLike) {
+          log.warn('[ProductDetail] Non-UUID productId (unsaved scan candidate?):', productId);
+          setDetailedItem(null);
+          setIsLoading(false);
+          Alert.alert(
+            'Not saved yet',
+            'This item is a scan result that has not been added to your inventory yet. Finish the item in the cart to save it.',
+          );
+          return;
+        }
         setIsLoading(true);
+        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, IsArchived, Tags, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, Metadata, CreatedAt, UpdatedAt';
+        const applyVariant = (data: any) => {
+          setDetailedItem(data as ProductVariant);
+          setFormData({
+            Title: data.Title || '',
+            Description: data.Description || '',
+            Price: data.Price || 0,
+            CompareAtPrice: data.CompareAtPrice || 0,
+            Sku: data.Sku || '',
+            Barcode: data.Barcode || '',
+            Weight: data.Weight || 0,
+            WeightUnit: data.WeightUnit || 'kg',
+            RequiresShipping: data.RequiresShipping !== false,
+            IsTaxable: data.IsTaxable !== false,
+            TaxCode: data.TaxCode || '',
+          });
+        };
         supabase
           .from('ProductVariants')
-          .select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, IsArchived, Tags, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, Metadata, CreatedAt, UpdatedAt')
+          .select(VARIANT_COLS)
           .eq('Id', productId)
           .maybeSingle()  // Use maybeSingle to avoid error when product doesn't exist
           .then(({ data, error }) => {
             if (data) {
               log.debug('[ProductDetail] Fetched item from Supabase:', data.Id);
-              setDetailedItem(data as ProductVariant);
-              setFormData({
-                Title: data.Title || '',
-                Description: data.Description || '',
-                Price: data.Price || 0,
-                CompareAtPrice: data.CompareAtPrice || 0,
-                Sku: data.Sku || '',
-                Barcode: data.Barcode || '',
-                Weight: data.Weight || 0,
-                WeightUnit: data.WeightUnit || 'kg',
-                RequiresShipping: data.RequiresShipping !== false,
-                IsTaxable: data.IsTaxable !== false,
-                TaxCode: data.TaxCode || '',
-              });
+              applyVariant(data);
+              setIsLoading(false);
             } else if (error) {
               log.error('[ProductDetail] Database error fetching item:', error);
               setDetailedItem(null);
+              setIsLoading(false);
               Alert.alert('Error', 'Failed to load product details. Please try again.');
             } else {
-              // No data and no error means product doesn't exist
-              log.warn('[ProductDetail] Product not found with ID:', productId);
-              setDetailedItem(null);
-              Alert.alert('Product Not Found', 'This product may still be syncing or no longer exists.');
+              // Not a variant id. Some callers (chat activity cards) pass a
+              // parent Products.Id — resolve its first variant before giving up.
+              supabase
+                .from('ProductVariants')
+                .select(VARIANT_COLS)
+                .eq('ProductId', productId)
+                .order('CreatedAt', { ascending: true })
+                .limit(1)
+                .maybeSingle()
+                .then(({ data: byProduct }) => {
+                  if (byProduct) {
+                    log.debug('[ProductDetail] Resolved variant via ProductId:', byProduct.Id);
+                    applyVariant(byProduct);
+                  } else {
+                    log.warn('[ProductDetail] Product not found with ID:', productId);
+                    setDetailedItem(null);
+                    Alert.alert('Product Not Found', 'This product may still be syncing or no longer exists.');
+                  }
+                  setIsLoading(false);
+                });
             }
-            setIsLoading(false);
           });
       }
     }, [productId, passedItem]);
