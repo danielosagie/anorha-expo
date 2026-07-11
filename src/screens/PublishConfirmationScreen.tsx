@@ -17,6 +17,7 @@ import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
+import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationScreen');
 
@@ -39,7 +40,6 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     quantityByPlatform = {},
     origin = 'generate',
     sourcePlatform,
-    importCount,
     syncRules,
 
     backRoute,
@@ -183,10 +183,6 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   };
 
-  const handleExitImport = () => {
-    navigation.navigate('TabNavigator' as any, { screen: 'Profile' } as any);
-  };
-
   const renderLogoSquare = () => {
     // Show platform + Anorha in the image square area
     const primaryPlatform = (platforms[0] || sourcePlatform || '').toLowerCase();
@@ -200,44 +196,11 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   };
 
   // Import / Optimize stages share this completion — the printing-receipt
-  // animation that morphs into the result card. (Single-product publish keeps
-  // the static layout below.)
+  // animation that morphs into the result card, now with the session tally and a
+  // next-step CTA (into the optimizer, or back to the inbox). Extracted so its
+  // useOptimizerQueues() only runs on the import path, never single-publish.
   if (origin === 'import') {
-    const n = typeof importCount === 'number' ? importCount : (platforms?.length || 0);
-    const sub =
-      platforms.length > 0
-        ? `${n} item${n === 1 ? '' : 's'} · live on ${platforms.length} channel${platforms.length === 1 ? '' : 's'}`
-        : `${n} item${n === 1 ? '' : 's'} ready`;
-    return (
-      <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top + 6 }}>
-        <View style={styles.headerRow}>
-          <TouchableOpacity
-            onPress={() => {
-              if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any);
-              else navigation.goBack();
-            }}
-            style={styles.backCircle}
-            activeOpacity={0.8}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Icon name="chevron-left" size={22} color="#18181B" />
-          </TouchableOpacity>
-        </View>
-        <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
-          <PrintingComplete
-            title={savedToInventory ? 'Saved to inventory' : 'Import complete'}
-            subtitle={sub}
-            platforms={platforms}
-            stamp={`#${String(n).padStart(4, '0')} · SYNCED`}
-            syncingLabel="Syncing your listings…"
-            primaryLabel="Review listings"
-            onPrimary={handleReviewInInventory}
-            secondaryLabel="Exit import"
-            onSecondary={handleExitImport}
-          />
-        </View>
-      </View>
-    );
+    return <ImportCompleteView params={params} navigation={navigation} />;
   }
 
   // Single-product publish — the receipt prints while the POST runs, then morphs into the
@@ -401,6 +364,96 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     </View>
   );
 
+};
+
+// Import completion — the "real ending" beat (docs/import-hub-redesign.md §3).
+// Shows the session tally (only non-zero rows) on the receipt subtitle, then a
+// smart primary: continue into the optimizer if it still has gaps, else Done →
+// back to the (now all-clear) inbox. Replaces so Back can't re-enter the deck.
+const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params, navigation }) => {
+  const insets = useSafeAreaInsets();
+  // Cheap gap check — same catalog-wide counts the hub/optimizer use.
+  const { counts: optCounts, loading: optLoading } = useOptimizerQueues();
+
+  const {
+    platforms = [],
+    importCount,
+    importCounts,
+    savedToInventory,
+    backRoute,
+    connectionId,
+    completedLane,
+  } = params;
+
+  const linked = importCounts?.linked ?? 0;
+  const created = importCounts?.created ?? 0;
+  const ignored = importCounts?.ignored ?? 0;
+  const autoImported = (importCounts?.autoLinked ?? 0) + (importCounts?.autoCreated ?? 0);
+
+  // Only non-zero rows, per the brief.
+  const segments = [
+    linked > 0 ? `${linked} linked` : null,
+    created > 0 ? `${created} added` : null,
+    ignored > 0 ? `${ignored} ignored` : null,
+    autoImported > 0 ? `${autoImported} auto-imported` : null,
+  ].filter(Boolean) as string[];
+
+  const receiptN = importCounts
+    ? linked + created + autoImported
+    : typeof importCount === 'number'
+      ? importCount
+      : platforms?.length || 0;
+
+  const subtitle = segments.length
+    ? segments.join(' · ')
+    : platforms.length > 0
+      ? `${receiptN} item${receiptN === 1 ? '' : 's'} · ${platforms.length} channel${platforms.length === 1 ? '' : 's'}`
+      : `${receiptN} item${receiptN === 1 ? '' : 's'} ready`;
+
+  const optRemaining = optCounts.photoNeeded + optCounts.dataNeeded + optCounts.manualQueue;
+  const hasNext = !optLoading && optRemaining > 0;
+
+  const goReview = () => navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
+  const goHub = () =>
+    navigation.replace('ImportHub' as any, { completedLane: completedLane ?? 'matches', connectionId });
+  const goOptimize = () =>
+    navigation.replace('BackfillOptimizer' as any, {
+      source: optCounts.photoNeeded > 0 ? 'hub-photos' : 'hub-details',
+    });
+
+  const primaryLabel = hasNext ? `Continue — ${optRemaining} need photos/details` : 'Done';
+  const onPrimary = hasNext ? goOptimize : goHub;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top + 6 }}>
+      <View style={styles.headerRow}>
+        <TouchableOpacity
+          onPress={() => {
+            if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any);
+            else navigation.goBack();
+          }}
+          style={styles.backCircle}
+          activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Icon name="chevron-left" size={22} color="#18181B" />
+        </TouchableOpacity>
+      </View>
+      <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
+        <PrintingComplete
+          title={savedToInventory ? 'Saved to inventory' : 'Import complete'}
+          subtitle={subtitle}
+          platforms={platforms}
+          stamp={`#${String(receiptN).padStart(4, '0')} · SYNCED`}
+          syncingLabel="Syncing your listings…"
+          primaryLabel={primaryLabel}
+          onPrimary={onPrimary}
+          secondaryLabel="Review listings"
+          onSecondary={goReview}
+        />
+      </View>
+    </View>
+  );
 };
 
 function platformLabel(key: string): string {

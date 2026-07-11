@@ -27,7 +27,9 @@ export default function MatchReviewDeck({
   platformName?: string;
   resolve: (platformId: string, choice: ResolveChoice, canonicalId?: string) => Promise<unknown>;
   resolving: string | null;
-  onDone?: () => void;
+  // Optional session tally so the caller can show a real ending ("X linked ·
+  // Y added · Z ignored"). Called with no arg when the user backs out mid-deck.
+  onDone?: (sessionCounts?: { linked: number; created: number; ignored: number }) => void;
   topInset?: number;
 }) {
   // Snapshot the queue ONCE so the resolver optimistically removing items
@@ -48,6 +50,9 @@ export default function MatchReviewDeck({
     return m;
   });
   const introShownRef = useRef(true);
+  // Latest decision per item (keyed by platformId) so re-deciding after an undo
+  // OVERWRITES rather than double-counts. Tallied once on done.
+  const decisionsRef = useRef<Record<string, ResolveChoice>>({});
 
   const cur = deck[pos];
 
@@ -55,11 +60,22 @@ export default function MatchReviewDeck({
     (choice: ResolveChoice, canonicalId?: string) => {
       if (!cur) return;
       introShownRef.current = false;
+      decisionsRef.current[cur.platformId] = choice;
       void resolve(cur.platformId, choice, canonicalId);
       setPos((p) => p + 1);
     },
     [cur, resolve],
   );
+
+  const tallyCounts = useCallback(() => {
+    const c = { linked: 0, created: 0, ignored: 0 };
+    for (const v of Object.values(decisionsRef.current)) {
+      if (v === 'link') c.linked += 1;
+      else if (v === 'create') c.created += 1;
+      else if (v === 'ignore') c.ignored += 1;
+    }
+    return c;
+  }, []);
 
   const undo = useCallback(() => setPos((p) => Math.max(0, p - 1)), []);
 
@@ -81,7 +97,7 @@ export default function MatchReviewDeck({
       <View style={[styles.done, { paddingTop: topInset + 40 }]}>
         <Text style={styles.doneTitle}>All caught up</Text>
         <Text style={styles.doneSub}>Every flagged item is sorted. Everything else matched on its own.</Text>
-        <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={onDone}>
+        <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={() => onDone?.(tallyCounts())}>
           <Text style={styles.doneBtnText}>Done</Text>
         </TouchableOpacity>
       </View>
@@ -110,7 +126,7 @@ export default function MatchReviewDeck({
           idx={pos + 1}
           total={total}
           title={cur.title}
-          onBack={onDone}
+          onBack={() => onDone?.()}
           primary={primaryLabel}
           primaryReady={resolving !== cur.platformId}
           alt={altLabel}

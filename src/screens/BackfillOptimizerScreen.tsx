@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -126,6 +126,31 @@ export function BackfillOptimizerScreen() {
     setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
     setView({ kind: 'review' });
   };
+
+  // Entered from a hub lane (source: 'hub-photos' | 'hub-details') → drop the user
+  // straight into that queue once the counts have loaded, skipping the lobby.
+  // Fires once; if the target queue is empty we simply stay in the lobby.
+  const initialSource: string | undefined = route.params?.source;
+  const autoEnteredRef = useRef(false);
+  useEffect(() => {
+    if (autoEnteredRef.current || loading) return;
+    if (initialSource !== 'hub-photos' && initialSource !== 'hub-details') {
+      autoEnteredRef.current = true;
+      return;
+    }
+    autoEnteredRef.current = true;
+    if (initialSource === 'hub-photos') {
+      if (photoQueue.length > 0) setView({ kind: 'lesson', q: 'photo' });
+    } else {
+      // hub-details → the details (data + manual) review path, same gating as
+      // enterBucket.
+      const detailIds = [...dataQueue, ...manualQueue].map((p) => p.Id);
+      if (detailIds.length > 0) {
+        setReviewIds(new Set(detailIds));
+        setView({ kind: 'review' });
+      }
+    }
+  }, [loading, initialSource, photoQueue, dataQueue, manualQueue]);
 
   // ── Photo / Details lessons keep the real camera + AI views ───────────────
   if (view.kind === 'lesson' && view.q === 'photo') {
@@ -306,13 +331,6 @@ const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: RC.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-
-  scroll: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 150 },
-  progressWrap: { marginBottom: 16 },
-
-  empty: { alignItems: 'center', paddingTop: 50, paddingHorizontal: 30 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: RC.ink, marginTop: 12 },
-  emptySub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
 
   fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 150 },
 
