@@ -129,8 +129,6 @@ export const ROUTES: ExportRoute[] = [
   { key: 'backups', title: 'Backups', group: 'Settings', routeName: 'Backups',
     params: { orgId: 'org_mock' },
     load: () => import('../BackupsScreen') },
-  { key: 'onboard-connection', title: 'Onboard connection', group: 'Settings', routeName: 'OnboardConnectionScreen',
-    load: () => import('../OnboardConnectionScreen') },
   { key: 'delete-account', title: 'Delete account info', group: 'Settings', routeName: 'DeleteAccountInfo',
     load: () => import('../DeleteAccountInfoScreen') },
 

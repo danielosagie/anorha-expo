@@ -1,8 +1,9 @@
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { BRAND_PRIMARY } from '../design/tokens';
 
-const ANORHA_GREEN = '#8cc63f';
+const ANORHA_GREEN = BRAND_PRIMARY;
 const NEUTRAL_GRAY_BG = '#E5E7EB';
 const NEUTRAL_GRAY_TEXT = '#111827';
 

@@ -344,22 +344,34 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                     )}
 
                     {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.REVIEW && (
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
-                            onPress={() => onReview(connection.Id, platformConfig.name)}
-                        >
-                            <Icon name="eye" size={18} color="#FF9500" />
-                            <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Review</Text>
-                        </TouchableOpacity>
+                        <>
+                            {/* Passive attention pill — the explicit deep-link into the
+                                review deck for this connection. No forced routing. */}
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#FF9500' + '20' }]}
+                                onPress={() => onReview(connection.Id, platformConfig.name)}
+                            >
+                                <Icon name="sync-alert" size={18} color="#FF9500" />
+                                <Text style={[styles.actionButtonText, { color: '#FF9500' }]}>Needs you</Text>
+                            </TouchableOpacity>
+                            {/* Primary action is management, not the deck. */}
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
+                                onPress={() => navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name })}
+                            >
+                                <Icon name="cog" size={18} color={theme.colors.primary} />
+                                <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
+                            </TouchableOpacity>
+                        </>
                     )}
 
                     {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.READY_TO_SYNC && (
                         <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: theme.colors.success + '15' }]}
-                            onPress={() => navigation.navigate('SyncInbox', { connectionId: connection.Id, platformName: platformConfig.name })}
+                            style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
+                            onPress={() => navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name })}
                         >
-                            <Icon name="check-circle" size={18} color={theme.colors.success} />
-                            <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>Ready</Text>
+                            <Icon name="cog" size={18} color={theme.colors.primary} />
+                            <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
                         </TouchableOpacity>
                     )}
 
@@ -381,7 +393,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                 case 'rescan': onStartScan(connection.Id, platformConfig.name, true); break;
                                 case 'fix_resume': onFix(connection.Id, platformConfig.name); break;
                                 case 'manage':
-                                    navigation.navigate('SyncInbox', { connectionId: connection.Id, platformName: platformConfig.name });
+                                    navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name });
                                     break;
                             }
                         };
@@ -409,7 +421,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     } else if (connection.PlatformType === 'csv') {
                                         openManageMenu();
                                     } else {
-                                        navigation.navigate('SyncInbox', { connectionId: connection.Id, platformName: platformConfig.name });
+                                        navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name });
                                     }
                                 }}
                             >
@@ -463,7 +475,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     }}
                                     onPress={() => {
                                         setManageMenuVisible(false);
-                                        navigation.navigate('SyncInbox', {
+                                        navigation.navigate('SyncRules', {
                                             connectionId: connection.Id,
                                             platformName: connection.DisplayName || 'CSV Connection',
                                         });

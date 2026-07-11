@@ -17,20 +17,12 @@ import * as Haptics from 'expo-haptics';
 import { useAuth } from '@clerk/expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
 import { createLogger } from '../../utils/logger';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RC } from '../resolve/ResolveKit';
 const log = createLogger('OptimizerBatchGenerateView');
 
 
 const { width } = Dimensions.get('window');
-
-const COLORS = {
-    primary: '#8cc63f',
-    primaryDark: '#70a826',
-    surface: '#ffffff',
-    background: '#f8f9fa',
-    text: '#1a1a1a',
-    textLight: '#6c757d',
-    border: '#e5e5e5',
-};
 
 interface OptimizerBatchGenerateViewProps {
     onBack: () => void;
@@ -41,6 +33,7 @@ interface OptimizerBatchGenerateViewProps {
 
 export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }: OptimizerBatchGenerateViewProps) {
     const { getToken } = useAuth();
+    const insets = useSafeAreaInsets();
     const [products, setProducts] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -158,11 +151,11 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
                     {/* Tags showing what will be generated */}
                     <View style={styles.tagsRow}>
                         <View style={styles.tag}>
-                            <MaterialCommunityIcons name="format-title" size={12} color={COLORS.primary} />
+                            <MaterialCommunityIcons name="format-title" size={12} color={RC.green} />
                             <Text style={styles.tagText}>Title</Text>
                         </View>
                         <View style={styles.tag}>
-                            <MaterialCommunityIcons name="text-short" size={12} color={COLORS.primary} />
+                            <MaterialCommunityIcons name="text-short" size={12} color={RC.green} />
                             <Text style={styles.tagText}>Desc</Text>
                         </View>
                     </View>
@@ -174,8 +167,8 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={COLORS.primary} />
-                <Text style={{ marginTop: 10, color: COLORS.textLight }}>Loading candidates...</Text>
+                <ActivityIndicator size="large" color={RC.green} />
+                <Text style={{ marginTop: 10, color: RC.muted }}>Loading candidates...</Text>
             </View>
         );
     }
@@ -183,9 +176,9 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                    <MaterialCommunityIcons name="close" size={24} color={COLORS.text} />
+                    <MaterialCommunityIcons name="close" size={24} color={RC.ink} />
                 </TouchableOpacity>
                 <View>
                     <Text style={styles.headerTitle}>Batch Magic</Text>
@@ -227,7 +220,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
                     disabled={selectedIds.size === 0 || isGenerating}
                 >
                     <LinearGradient
-                        colors={selectedIds.size > 0 ? [COLORS.primary, COLORS.primaryDark] : ['#e9ecef', '#ced4da']}
+                        colors={selectedIds.size > 0 ? [RC.green, RC.greenDark] : ['#e9ecef', '#ced4da']}
                         style={styles.gradientBtn}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 0 }}
@@ -259,7 +252,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: COLORS.background,
+        backgroundColor: RC.surface,
     },
     loadingContainer: {
         flex: 1,
@@ -270,12 +263,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingTop: 60,
         paddingHorizontal: 20,
         paddingBottom: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: RC.line,
     },
     backButton: {
         width: 40,
@@ -288,12 +280,12 @@ const styles = StyleSheet.create({
     headerTitle: {
         fontSize: 18,
         fontWeight: 'bold',
-        color: COLORS.text,
+        color: RC.ink,
         textAlign: 'center',
     },
     headerSubtitle: {
         fontSize: 12,
-        color: COLORS.textLight,
+        color: RC.muted,
         textAlign: 'center',
     },
     toolbar: {
@@ -302,9 +294,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 20,
         paddingVertical: 12,
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: RC.line,
     },
     selectAllBtn: {
         flexDirection: 'row',
@@ -314,11 +306,11 @@ const styles = StyleSheet.create({
     selectText: {
         fontSize: 14,
         fontWeight: '600',
-        color: COLORS.text,
+        color: RC.ink,
     },
     countText: {
         fontSize: 14,
-        color: COLORS.textLight,
+        color: RC.muted,
     },
     checkbox: {
         width: 20,
@@ -331,8 +323,8 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
     },
     checkboxChecked: {
-        backgroundColor: COLORS.primary,
-        borderColor: COLORS.primary,
+        backgroundColor: RC.green,
+        borderColor: RC.green,
     },
     checkboxContainer: {
         marginRight: 12,
@@ -344,7 +336,7 @@ const styles = StyleSheet.create({
     itemCard: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         padding: 12,
         borderRadius: 12,
         marginBottom: 10,
@@ -357,7 +349,7 @@ const styles = StyleSheet.create({
         borderColor: 'transparent',
     },
     itemCardSelected: {
-        borderColor: COLORS.primary,
+        borderColor: RC.green,
         backgroundColor: '#fbfdf8',
     },
     itemImage: {
@@ -382,12 +374,12 @@ const styles = StyleSheet.create({
     itemTitle: {
         fontSize: 15,
         fontWeight: '600',
-        color: COLORS.text,
+        color: RC.ink,
         marginBottom: 2,
     },
     itemSku: {
         fontSize: 12,
-        color: COLORS.textLight,
+        color: RC.muted,
         marginBottom: 6,
     },
     tagsRow: {
@@ -414,16 +406,16 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         padding: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         borderTopWidth: 1,
-        borderTopColor: COLORS.border,
+        borderTopColor: RC.line,
         paddingBottom: 40,
     },
     generateButton: {
         borderRadius: 16,
         overflow: 'hidden',
         height: 56,
-        shadowColor: COLORS.primary,
+        shadowColor: RC.green,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,

@@ -18,6 +18,7 @@ import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
 import { normalizeDisplayName } from '../config/platforms';
+import { useImportHub } from '../hooks/useImportHub';
 
 type Card = {
   key: string;
@@ -45,6 +46,8 @@ const SettingsScreen = () => {
   const { user } = useUser();
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
+  // Import inbox aggregate — feeds the passive "needs you" badge on Integrations.
+  const hub = useImportHub();
 
   useEffect(() => {
     refresh?.();
@@ -153,6 +156,11 @@ const SettingsScreen = () => {
           onPress={() => navigation.navigate('Connections')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
+          {hub.totalNeedsYou > 0 && (
+            <View style={styles.needsBadge}>
+              <Text style={styles.needsBadgeText}>{hub.totalNeedsYou}</Text>
+            </View>
+          )}
           <View style={styles.sectionChevron}>
             <ChevronRight size={16} color="#71717A" />
           </View>
@@ -182,7 +190,7 @@ const SettingsScreen = () => {
                   style={[styles.platformRow, i > 0 && styles.platformRowBorder]}
                   activeOpacity={0.7}
                   onPress={() =>
-                    navigation.navigate('SyncInbox', {
+                    navigation.navigate('SyncRules', {
                       connectionId: c.Id,
                       platformName: c.PlatformType,
                     })
@@ -244,6 +252,8 @@ const styles = StyleSheet.create({
 
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginLeft: 4 },
   sectionTitle: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  needsBadge: { minWidth: 22, height: 22, borderRadius: 11, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7 },
+  needsBadgeText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 12 },
   sectionChevron: {
     width: 22, height: 22, borderRadius: 11, backgroundColor: '#ECEBE6',
     alignItems: 'center', justifyContent: 'center',

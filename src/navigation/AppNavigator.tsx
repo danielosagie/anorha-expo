@@ -26,7 +26,6 @@ import {
   Inter_800ExtraBold,
 } from '@expo-google-fonts/inter';
 // import { CirclePlus } from 'lucide-react-native';
-import OnboardConnectionScreen from '../screens/OnboardConnectionScreen';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -40,7 +39,6 @@ import OnboardingSlides from '../screens/OnboardingSlides';
 import AuthScreen from '../screens/AuthScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
-import ImportProgressBanner from '../components/ImportProgressBanner';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
@@ -59,19 +57,11 @@ import SyncInboxScreen from '../screens/SyncInboxScreen';
 import ImportHubScreen from '../screens/ImportHubScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 import AddProductScreen from '../screens/AddProductScreen';
-// LoadingScreen + MatchSelectionScreen were deprecated and deleted. Their param
-// SHAPES are retained in AppStackParamList below (the LoadingScreen entry is the
-// canonical "active flow" payload used by activeFlowPersistence; no route is
-// registered, so nothing can navigate to either).
-// Relocated from the deleted MatchSelectionScreen — the match-job submit response
-// shape, still referenced by the param types below.
-export interface JobResponse {
-  jobId: string;
-  status?: string;
-  estimatedTimeMinutes?: number;
-  totalProducts?: number;
-  message?: string;
-}
+// LoadingScreen + MatchSelectionScreen were deprecated and deleted. The LoadingScreen
+// param SHAPE is retained in AppStackParamList below because it's the canonical
+// "active flow" payload used by activeFlowPersistence; no route is registered, so
+// nothing can navigate to it. The MatchSelectionScreen param type and its JobResponse
+// shape are gone too — nothing referenced them.
 import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
@@ -103,7 +93,6 @@ export type AuthStackParamList = {
   Auth: undefined;
   VerifyCode: { contactLabel?: string; mode?: 'signup' | 'signin' | 'reset' } | undefined;
   // PhoneAuthScreen: { phoneNumber: string } | undefined; // Commented out
-  OnboardConnectionScreen: undefined;
   CreateAccountScreen: undefined;
 };
 
@@ -199,126 +188,6 @@ export type AppStackParamList = {
     bulkItems?: any[];
     sessionId?: string;
   } | undefined;
-  MatchSelectionScreen: {
-    jobResponse?: JobResponse;
-    jobId?: string;
-    focusIndex?: number;
-    overrideFocusIndex?: number;
-    overrideResults?: any[];
-    isNewScan?: boolean;
-    items?: Array<{ index: number; title?: string; thumb?: string; matchesCount?: number; matchJobId?: string }>;
-    jobMap?: Record<number, { jobId: string; status?: string }>;
-    preResolvedSelections?: Record<number, number[]>;
-    preDeniedSelections?: Record<number, number[]>;
-    preRefineTextByIndex?: Record<number, string>;
-    bestGuessByIndex?: Record<number, boolean>;
-    returnToLoading?: AppStackParamList['LoadingScreen'];
-    response?: {
-      jobId?: string;
-      bulkItems?: any[];
-      firstPhotos?: any[];
-      jobResults?: any[];
-      analysis?: {
-        jobId: string;
-        userId: string;
-        status: string;
-        currentStage: string;
-        progress: {
-          totalProducts: number;
-          completedProducts: number;
-          currentProductIndex: number;
-          failedProducts: number;
-          stagePercentage: number;
-        };
-        results: Array<{
-          productIndex: number;
-          productId: string;
-          variantId: string;
-          matchRows: Array<{
-            position?: number;
-            title?: string;
-            link?: string;
-            source?: string;
-            source_icon?: string;
-            thumbnail?: string;
-            thumbnail_width?: number;
-            thumbnail_height?: number;
-            image?: string;
-            image_width?: number;
-            image_height?: number;
-            rating?: number;
-            reviews?: number;
-            price?: {
-              value?: string;
-              extracted_value?: number;
-              currency?: string;
-            };
-            condition?: string;
-            in_stock?: boolean;
-          }>;
-          rerankedResults: Array<{
-            position?: number;
-            title?: string;
-            link?: string;
-            source?: string;
-            source_icon?: string;
-            thumbnail?: string;
-            thumbnail_width?: number;
-            thumbnail_height?: number;
-            image?: string;
-            image_width?: number;
-            image_height?: number;
-            rank?: number;
-            score?: number;
-            rating?: number;
-            reviews?: number;
-            price?: {
-              value?: string;
-              extracted_value?: number;
-              currency?: string;
-            };
-            condition?: string;
-            in_stock?: boolean;
-          }>;
-          confidence: string; // Changed from number to string based on the JSON example
-          matchDecision?: 'matched' | 'classified' | 'needs_user_input';
-          userAssist?: {
-            required: boolean;
-            prompt: string;
-            requestedFields?: string[];
-            allowedActions?: Array<'confirm' | 'deny' | 'refine' | 'retake' | 'best_guess'>;
-            requestId?: string;
-          };
-          autoMatchMeta?: {
-            score?: number;
-            margin?: number;
-            blockedByRules?: string[];
-            stageUsed?: string;
-          };
-          vectorSearchFoundResults: boolean;
-          originalTargetImage: string;
-          timing: {
-            quickScanMs: number;
-            matchMs: number;
-            embeddingMs: number;
-            vectorSearchMs: number;
-            rerankingMs: number;
-            totalMs: number;
-          };
-        }>;
-        startedAt: string;
-        updatedAt: string;
-        summary: {
-          highConfidenceCount: number;
-          mediumConfidenceCount: number;
-          lowConfidenceCount: number;
-          totalEmbeddingsStored: number | null;
-          averageProcessingTimeMs: number | null;
-        };
-        completedAt: string;
-      }
-    }
-  };
   GenerateDetailsScreen: {
     jobId: string,
     status: string,
@@ -353,9 +222,6 @@ export type AppStackParamList = {
     platforms?: string[];
     quantityByPlatform?: Record<string, number>;
   }
-  OnboardConnectionScreen: {
-
-  };
   ActivityFeed: undefined;
   PartnerAccept: {
     inviteCode?: string;
@@ -451,7 +317,6 @@ const TabNavigator = () => {
   };
 
   return (
-    <>
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
@@ -541,8 +406,6 @@ const TabNavigator = () => {
         }}
       />
     </Tab.Navigator>
-    <ImportProgressBanner />
-    </>
   );
 };
 
@@ -629,7 +492,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
       }}
     />
     <AppStackNav.Screen name="PublishConfirmation" component={sb(PublishConfirmationScreen)} />
-    <AppStackNav.Screen name="OnboardConnectionScreen" component={sb(OnboardConnectionScreen)} />
     <AppStackNav.Screen name="PartnerAccept" component={sb(PartnerAcceptScreen)} />
     <AppStackNav.Screen name="PartnershipDetail" component={sb(PartnershipDetailScreen)} />
     <AppStackNav.Screen name="BackfillOptimizer" component={sb(BackfillOptimizerScreen)} />

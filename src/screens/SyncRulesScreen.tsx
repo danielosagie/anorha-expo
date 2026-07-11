@@ -4,14 +4,28 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'rea
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Card from '../components/Card';
+import { useImportHub } from '../hooks/useImportHub';
 import { createLogger } from '../utils/logger';
 const log = createLogger('SyncRulesScreen');
 
+// --- System-B palette (matches ConnectionsScreen) — this screen was revived out
+// of the legacy useTheme()/System-A look into the same hardcoded language. ---
+const INK = '#18181B';
+const SUBTLE = '#71717A';
+const MUTED = '#9CA3AF';
+const BG = '#F6F7F4';
+const SURFACE = '#FFFFFF';
+const BORDER = '#ECEBE6';
+const HAIRLINE = '#F1F1EE';
+const GREEN = '#93C822';
+const GREEN_DARK = '#43631A';
+const GREEN_TINT = 'rgba(147,200,34,0.12)';
+const AMBER = '#A2611A';
+const AMBER_TINT = 'rgba(162,97,26,0.12)';
 
 // Canonical backend enums (sync-rules.service.ts SyncRules) — keep these in
 // lockstep with the engine so saved directives are actually readable/enforced.
@@ -22,13 +36,20 @@ type SyncRulesScreenRouteProp = RouteProp<AppStackParamList, 'SyncRules'>;
 type SyncRulesScreenNavigationProp = StackNavigationProp<AppStackParamList, 'SyncRules'>;
 
 const SyncRulesScreen = () => {
-  const theme = useTheme();
   const route = useRoute<SyncRulesScreenRouteProp>();
   const navigation = useNavigation<SyncRulesScreenNavigationProp>();
   const { connectionId } = route.params;
-  const [platformName, setPlatformName] = useState<string>('Platform');
+  // Senders (ConnectionsScreen / ConnectedPlatformItem / SettingsScreen) pass an
+  // extra platformName so the header doesn't flash "Platform" before meta loads.
+  const routeParams = route.params as any;
+  const [platformName, setPlatformName] = useState<string>(routeParams?.platformName || 'Platform');
   const [displayName, setDisplayName] = useState<string>('');
-  const SSSYNC_API_BASE_URL = API_BASE_URL;
+  const API_ROOT = API_BASE_URL;
+
+  // Passive "needs you" signal for this connection (email-inbox model): the deck
+  // is reachable only from the explicit row below, never forced.
+  const hub = useImportHub();
+  const attn = hub.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
 
   // Sync Rules State
   const [syncDirection, setSyncDirection] = useState<SyncDirection>('bidirectional');
@@ -153,7 +174,7 @@ const SyncRulesScreen = () => {
         destinations: { connectionIds: selectedDestinations },
       };
 
-      const res = await fetch(`${SSSYNC_API_BASE_URL}/api/sync-rules/connections/${connectionId}`, {
+      const res = await fetch(`${API_ROOT}/api/sync-rules/connections/${connectionId}`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -194,7 +215,7 @@ const SyncRulesScreen = () => {
               // Non-destructive disconnect: keep all products/inventory (mirrors
               // ConnectionsScreen). A hard DELETE would cull inventory, which the
               // copy never warned about.
-              const res = await fetch(`${SSSYNC_API_BASE_URL}/api/platform-connections/${connectionId}/disconnect`, {
+              const res = await fetch(`${API_ROOT}/api/platform-connections/${connectionId}/disconnect`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ cleanupStrategy: 'keep' }),
@@ -211,190 +232,39 @@ const SyncRulesScreen = () => {
     );
   };
 
-  const renderSyncDirectionOption = (option: SyncDirection, title: string, subtitle: string, icon: string) => (
-    <TouchableOpacity
-      style={[styles.optionButton, syncDirection === option && styles.optionButtonSelected]}
-      onPress={() => setSyncDirection(option)}
-    >
-      <Icon
-        name={icon}
-        size={24}
-        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary}
-        style={styles.optionIcon}
-      />
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.optionTitle, syncDirection === option && styles.optionTitleSelected]}>{title}</Text>
-        <Text style={[styles.optionSubtitle, syncDirection === option && styles.optionSubtitleSelected]}>{subtitle}</Text>
-      </View>
-      <Icon
-        name={syncDirection === option ? 'radiobox-marked' : 'radiobox-blank'}
-        size={20}
-        color={syncDirection === option ? theme.colors.primary : theme.colors.textSecondary}
-      />
-    </TouchableOpacity>
-  );
+  const renderSyncDirectionOption = (option: SyncDirection, title: string, subtitle: string, icon: string) => {
+    const selected = syncDirection === option;
+    return (
+      <TouchableOpacity
+        style={[styles.optionButton, selected && styles.optionButtonSelected]}
+        onPress={() => setSyncDirection(option)}
+      >
+        <Icon name={icon} size={24} color={selected ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{title}</Text>
+          <Text style={[styles.optionSubtitle, selected && styles.optionSubtitleSelected]}>{subtitle}</Text>
+        </View>
+        <Icon name={selected ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={selected ? GREEN_DARK : SUBTLE} />
+      </TouchableOpacity>
+    );
+  };
 
-  const renderSourceOption = (option: SourceOfTruth, title: string, subtitle: string, icon: string) => (
-    <TouchableOpacity
-      style={[styles.optionButton, sourceOfTruth === option && styles.optionButtonSelected]}
-      onPress={() => setSourceOfTruth(option)}
-    >
-      <Icon
-        name={icon}
-        size={24}
-        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary}
-        style={styles.optionIcon}
-      />
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.optionTitle, sourceOfTruth === option && styles.optionTitleSelected]}>{title}</Text>
-        <Text style={[styles.optionSubtitle, sourceOfTruth === option && styles.optionSubtitleSelected]}>{subtitle}</Text>
-      </View>
-      <Icon
-        name={sourceOfTruth === option ? 'radiobox-marked' : 'radiobox-blank'}
-        size={20}
-        color={sourceOfTruth === option ? theme.colors.primary : theme.colors.textSecondary}
-      />
-    </TouchableOpacity>
-  );
-
-  const styles = StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: theme.colors.background,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingVertical: 15,
-      borderBottomWidth: 1,
-      borderBottomColor: '#e0e0e0',
-      backgroundColor: theme.colors.surface,
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginLeft: 15,
-    },
-    content: {
-      flex: 1,
-      padding: 20,
-    },
-    ruleSection: {
-      marginBottom: 20,
-      padding: 20,
-    },
-    sectionTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginBottom: 5,
-    },
-    sectionSubtitle: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
-      marginBottom: 15,
-      lineHeight: 20,
-    },
-    optionButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      padding: 15,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: '#e0e0e0',
-      marginBottom: 10,
-      backgroundColor: theme.colors.background,
-    },
-    optionButtonSelected: {
-      borderColor: theme.colors.primary,
-      backgroundColor: theme.colors.primary + '10',
-    },
-    optionIcon: {
-      marginRight: 12,
-    },
-    optionTitle: {
-      fontSize: 16,
-      fontWeight: '500',
-      color: theme.colors.text,
-    },
-    optionTitleSelected: {
-      color: theme.colors.primary,
-    },
-    optionSubtitle: {
-      fontSize: 13,
-      color: theme.colors.textSecondary,
-      marginTop: 2,
-    },
-    optionSubtitleSelected: {
-      color: theme.colors.primary,
-    },
-    switchRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: '#e0e0e030',
-    },
-    switchLabelContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      flex: 1,
-    },
-    switchLabel: {
-      fontSize: 16,
-      color: theme.colors.text,
-      marginLeft: 12,
-    },
-    advancedToggle: {
-      flexDirection: 'row',
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingVertical: 15,
-    },
-    advancedText: {
-      fontSize: 16,
-      color: theme.colors.primary,
-      fontWeight: '600',
-      marginLeft: 8,
-    },
-    saveButton: {
-      margin: 20,
-    },
-    presetCard: {
-      marginBottom: 15,
-      padding: 15,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: '#e0e0e0',
-    },
-    presetTitle: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginBottom: 5,
-    },
-    presetDescription: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
-      lineHeight: 18,
-    },
-    presetButton: {
-      marginTop: 10,
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      backgroundColor: theme.colors.primary + '20',
-      borderRadius: 8,
-      alignSelf: 'flex-start',
-    },
-    presetButtonText: {
-      fontSize: 14,
-      fontWeight: '600',
-      color: theme.colors.primary,
-    },
-  });
+  const renderSourceOption = (option: SourceOfTruth, title: string, subtitle: string, icon: string) => {
+    const selected = sourceOfTruth === option;
+    return (
+      <TouchableOpacity
+        style={[styles.optionButton, selected && styles.optionButtonSelected]}
+        onPress={() => setSourceOfTruth(option)}
+      >
+        <Icon name={icon} size={24} color={selected ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{title}</Text>
+          <Text style={[styles.optionSubtitle, selected && styles.optionSubtitleSelected]}>{subtitle}</Text>
+        </View>
+        <Icon name={selected ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={selected ? GREEN_DARK : SUBTLE} />
+      </TouchableOpacity>
+    );
+  };
 
   const applyPreset = (preset: 'conservative' | 'balanced' | 'aggressive') => {
     switch (preset) {
@@ -428,7 +298,7 @@ const SyncRulesScreen = () => {
   if (loading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Text style={{ color: theme.colors.text }}>Loading sync rules...</Text>
+        <Text style={{ color: INK, fontFamily: 'Inter_500Medium' }}>Loading sync rules...</Text>
       </View>
     );
   }
@@ -436,13 +306,28 @@ const SyncRulesScreen = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Icon name="arrow-left" size={24} color={theme.colors.text} />
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Icon name="arrow-left" size={24} color={INK} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Sync Settings for {displayName || platformName}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>Sync Settings · {displayName || platformName}</Text>
       </View>
 
-      <ScrollView style={styles.content}>
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 8 }}>
+        {/* Needs you — passive attention row; the ONE explicit deep-link into the
+            review deck for this connection. */}
+        {attn > 0 && (
+          <TouchableOpacity activeOpacity={0.85} onPress={gotoReview} style={styles.needsRow}>
+            <View style={styles.needsIcon}>
+              <Icon name="sync-alert" size={20} color={AMBER} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.needsTitle}>{attn} {attn === 1 ? 'item needs' : 'items need'} you</Text>
+              <Text style={styles.needsSub} numberOfLines={1}>Review matches for {displayName || platformName}</Text>
+            </View>
+            <Icon name="chevron-right" size={22} color={MUTED} />
+          </TouchableOpacity>
+        )}
+
         {/* Stepper */}
         <Card style={styles.ruleSection}>
           <Text style={styles.sectionTitle}>Setup</Text>
@@ -450,7 +335,7 @@ const SyncRulesScreen = () => {
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {[1, 2, 3, 4].map((n) => (
               <TouchableOpacity key={n} onPress={() => setStep(n)}>
-                <Icon name={step === n ? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={18} color={step === n ? theme.colors.primary : theme.colors.textSecondary} />
+                <Icon name={step === n ? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={18} color={step === n ? GREEN_DARK : SUBTLE} />
               </TouchableOpacity>
             ))}
           </View>
@@ -474,10 +359,10 @@ const SyncRulesScreen = () => {
             {availableConnections.map((c) => {
               const selected = selectedDestinations.includes(c.Id);
               return (
-                <TouchableOpacity key={c.Id} style={styles.optionButton} onPress={() => setSelectedDestinations((prev) => selected ? prev.filter(id => id !== c.Id) : [...prev, c.Id])}>
-                  <Icon name={selected ? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={selected ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+                <TouchableOpacity key={c.Id} style={[styles.optionButton, selected && styles.optionButtonSelected]} onPress={() => setSelectedDestinations((prev) => selected ? prev.filter(id => id !== c.Id) : [...prev, c.Id])}>
+                  <Icon name={selected ? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={selected ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.optionTitle}>{c.DisplayName}</Text>
+                    <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{c.DisplayName}</Text>
                     <Text style={styles.optionSubtitle}>{c.PlatformType}</Text>
                   </View>
                 </TouchableOpacity>
@@ -494,24 +379,24 @@ const SyncRulesScreen = () => {
             <Text style={styles.sectionTitle}>Sync behavior</Text>
             <Text style={styles.sectionSubtitle}>Pick how and when changes flow.</Text>
             {/* Mode */}
-            <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('manual')}>
-              <Icon name={syncMode === 'manual' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'manual' ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+            <TouchableOpacity style={[styles.optionButton, syncMode === 'manual' && styles.optionButtonSelected]} onPress={() => setSyncMode('manual')}>
+              <Icon name={syncMode === 'manual' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'manual' ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.optionTitle}>Manual only</Text>
+                <Text style={[styles.optionTitle, syncMode === 'manual' && styles.optionTitleSelected]}>Manual only</Text>
                 <Text style={styles.optionSubtitle}>You decide when to sync</Text>
               </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('auto')}>
-              <Icon name={syncMode === 'auto' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'auto' ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+            <TouchableOpacity style={[styles.optionButton, syncMode === 'auto' && styles.optionButtonSelected]} onPress={() => setSyncMode('auto')}>
+              <Icon name={syncMode === 'auto' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'auto' ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.optionTitle}>Automatic</Text>
+                <Text style={[styles.optionTitle, syncMode === 'auto' && styles.optionTitleSelected]}>Automatic</Text>
                 <Text style={styles.optionSubtitle}>Sync as changes happen</Text>
               </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.optionButton} onPress={() => setSyncMode('batch')}>
-              <Icon name={syncMode === 'batch' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'batch' ? theme.colors.primary : theme.colors.textSecondary} style={styles.optionIcon} />
+            <TouchableOpacity style={[styles.optionButton, syncMode === 'batch' && styles.optionButtonSelected]} onPress={() => setSyncMode('batch')}>
+              <Icon name={syncMode === 'batch' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'batch' ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.optionTitle}>Batched</Text>
+                <Text style={[styles.optionTitle, syncMode === 'batch' && styles.optionTitleSelected]}>Batched</Text>
                 <Text style={styles.optionSubtitle}>Run once daily</Text>
               </View>
             </TouchableOpacity>
@@ -524,8 +409,8 @@ const SyncRulesScreen = () => {
             {/* Direction */}
             <View style={{ height: 8 }} />
             {renderSyncDirectionOption('bidirectional', 'Two-way sync', 'Changes flow in both directions', 'sync')}
-            {renderSyncDirectionOption('push_only', 'Push to platform', 'SSSync updates your platform only', 'upload')}
-            {renderSyncDirectionOption('pull_only', 'Pull from platform', 'Platform updates SSSync only', 'download')}
+            {renderSyncDirectionOption('push_only', 'Push to platform', 'Anorha updates your platform only', 'upload')}
+            {renderSyncDirectionOption('pull_only', 'Pull from platform', 'Platform updates Anorha only', 'download')}
 
             <View style={{ marginTop: 10 }}>
               <Button title="Next" onPress={() => setStep(4)} icon="arrow-right" />
@@ -564,10 +449,185 @@ const SyncRulesScreen = () => {
       <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
         <Button title="Review & Sync" onPress={gotoReview} icon="playlist-check" />
         <View style={{ height: 10 }} />
-        <Button title={`Disconnect ${platformName}`} onPress={disconnectPlatform} icon="link-off" />
+        <Button title={`Disconnect ${platformName}`} onPress={disconnectPlatform} icon="link-off" outlined />
       </View>
     </View>
   );
 };
 
-export default SyncRulesScreen; 
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: BG,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    backgroundColor: SURFACE,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    color: INK,
+    marginLeft: 15,
+    flex: 1,
+  },
+  content: {
+    flex: 1,
+    padding: 20,
+  },
+  needsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: SURFACE,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 16,
+  },
+  needsIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: AMBER_TINT,
+  },
+  needsTitle: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: INK,
+  },
+  needsSub: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: SUBTLE,
+    marginTop: 2,
+  },
+  ruleSection: {
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    color: INK,
+    marginBottom: 5,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: SUBTLE,
+    marginBottom: 15,
+    lineHeight: 20,
+  },
+  optionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    marginBottom: 10,
+    backgroundColor: SURFACE,
+  },
+  optionButtonSelected: {
+    borderColor: GREEN,
+    backgroundColor: GREEN_TINT,
+  },
+  optionIcon: {
+    marginRight: 12,
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: INK,
+  },
+  optionTitleSelected: {
+    color: GREEN_DARK,
+  },
+  optionSubtitle: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: SUBTLE,
+    marginTop: 2,
+  },
+  optionSubtitleSelected: {
+    color: GREEN_DARK,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: HAIRLINE,
+  },
+  switchLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  switchLabel: {
+    fontSize: 16,
+    fontFamily: 'Inter_500Medium',
+    color: INK,
+    marginLeft: 12,
+  },
+  advancedToggle: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 15,
+  },
+  advancedText: {
+    fontSize: 16,
+    color: GREEN_DARK,
+    fontFamily: 'Inter_600SemiBold',
+    marginLeft: 8,
+  },
+  saveButton: {
+    marginHorizontal: 20,
+    marginVertical: 12,
+  },
+  presetCard: {
+    marginBottom: 15,
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  presetTitle: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: INK,
+    marginBottom: 5,
+  },
+  presetDescription: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: SUBTLE,
+    lineHeight: 18,
+  },
+  presetButton: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: GREEN_TINT,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  presetButtonText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: GREEN_DARK,
+  },
+});
+
+export default SyncRulesScreen;
