@@ -421,8 +421,10 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
       source: optCounts.photoNeeded > 0 ? 'hub-photos' : 'hub-details',
     });
 
-  const primaryLabel = hasNext ? `Continue — ${optRemaining} need photos/details` : 'Done';
-  const onPrimary = hasNext ? goOptimize : goHub;
+  // Hold a neutral label until optimizer counts settle so the CTA doesn't flip
+  // from "Done" to "Continue — N" mid-read.
+  const primaryLabel = optLoading ? 'Checking what’s next…' : hasNext ? `Continue — ${optRemaining} need photos/details` : 'Done';
+  const onPrimary = optLoading ? () => {} : hasNext ? goOptimize : goHub;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: insets.top + 6 }}>

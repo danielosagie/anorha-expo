@@ -37,6 +37,11 @@ export default function ImportHubScreen() {
     setTimeout(() => setRefreshing(false), 800);
   }, [refresh]);
 
+  // A total match-status outage shouldn't hide the optimizer lanes — their counts
+  // load independently. In that case run degraded: hero + lanes stay, matches goes quiet.
+  const degraded = !!error && lanes.photos.count + lanes.details.count > 0;
+  const hardError = !!error && !degraded;
+
   const allClear = !loading && !error && totalNeedsYou === 0;
 
   // Guided-pass order: the first non-empty lane is the "active" (highlighted)
@@ -130,7 +135,7 @@ export default function ImportHubScreen() {
           <View style={styles.heroLoading}>
             <ActivityIndicator size="large" color={RC.green} />
           </View>
-        ) : error ? (
+        ) : hardError ? (
           <View style={styles.errorCard}>
             <MaterialCommunityIcons name="cloud-off-outline" size={30} color={RC.danger} />
             <Text style={styles.errorTitle}>Couldn’t load your inbox</Text>
@@ -164,6 +169,13 @@ export default function ImportHubScreen() {
           </View>
         )}
 
+        {degraded && !loading && (
+          <TouchableOpacity style={styles.degraded} activeOpacity={0.85} onPress={refresh}>
+            <MaterialCommunityIcons name="cloud-alert" size={15} color={RC.warnInk} />
+            <Text style={styles.degradedText}>Couldn’t check match queues — tap to retry</Text>
+          </TouchableOpacity>
+        )}
+
         {/* ── In-flight strip (non-blocking) ────────────────────────────────── */}
         {scanning.length > 0 && (
           <View style={styles.inflight}>
@@ -175,12 +187,12 @@ export default function ImportHubScreen() {
         )}
 
         {/* ── Lanes ─────────────────────────────────────────────────────────── */}
-        {!loading && !error && (
+        {!loading && !hardError && (
           <View style={styles.lanes}>
             <UpNextRow
               icon={'link-variant' as IconName}
               title="Review matches"
-              sub={matchesSub}
+              sub={degraded ? 'Couldn’t load right now' : matchesSub}
               count={lanes.matches.count}
               state={laneState('matches', lanes.matches.count)}
               onPress={lanes.matches.count > 0 ? onMatchesPress : undefined}
@@ -226,7 +238,7 @@ export default function ImportHubScreen() {
         <>
           <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
           <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-            {allClear || error || !firstNonEmpty ? (
+            {allClear || hardError || !firstNonEmpty ? (
               <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.goBack()} style={styles.primaryBtn}>
                 <Text style={styles.primaryText}>Done</Text>
               </TouchableOpacity>
@@ -258,6 +270,12 @@ const styles = StyleSheet.create({
   allClearSub: { fontSize: 14, fontWeight: '500', color: RC.muted, textAlign: 'center', lineHeight: 20, marginTop: 8, paddingHorizontal: 24 },
 
   // Error
+  degraded: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10,
+    paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12,
+    backgroundColor: RC.warnSoft, borderWidth: 1, borderColor: RC.warnLine,
+  },
+  degradedText: { flex: 1, fontSize: 13, fontWeight: '600', color: RC.warnInk },
   errorCard: { alignItems: 'center', paddingTop: 44, paddingHorizontal: 24, gap: 8 },
   errorTitle: { fontSize: 17, fontWeight: '700', color: RC.ink, marginTop: 6 },
   errorSub: { fontSize: 13, fontWeight: '500', color: RC.muted, textAlign: 'center', lineHeight: 18 },

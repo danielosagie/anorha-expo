@@ -113,8 +113,10 @@ export function BackfillOptimizerScreen() {
       origin: 'import',
       importCount: polishedCount,
       savedToInventory: false,
+      // Hub uses this for its "{lane} cleared" note; details is the later bucket.
+      completedLane: completedDetailIds.size > 0 ? 'details' : 'photos',
     });
-  }, [navigation, polishedCount]);
+  }, [navigation, polishedCount, completedDetailIds]);
 
   const enterBucket = (b: Bucket) => {
     if (remainingFor(b) === 0) return;
