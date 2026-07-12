@@ -183,9 +183,6 @@ const SyncInboxScreen: React.FC = () => {
             showsVerticalScrollIndicator={false}
           >
             {!!platformName && <Text style={styles.groupsPlatform}>{platformName}</Text>}
-            <Text style={styles.groupsSubtitle}>
-              Grouped by what’s holding them back. Open a group, or review everything in order.
-            </Text>
 
             {!!clearedNote && (
               <View style={styles.inlineNote}>
@@ -293,8 +290,7 @@ const styles = StyleSheet.create({
   // Groups view (Avec / IC tokens)
   groupsScreen: { flex: 1, backgroundColor: IC.bg },
   groupsScroll: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 140 },
-  groupsPlatform: { fontSize: 13, color: IC.muted, textAlign: 'center', marginBottom: 8 },
-  groupsSubtitle: { fontSize: 15, color: IC.muted, textAlign: 'center', lineHeight: 21, marginBottom: 20, paddingHorizontal: 8 },
+  groupsPlatform: { fontSize: 13, color: IC.muted, textAlign: 'center', marginBottom: 18 },
   inlineNote: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 14 },
   inlineNoteText: { fontSize: 14, color: IC.muted },
   allRow: { backgroundColor: IC.cardActive, borderWidth: 1, borderColor: IC.accent, marginBottom: 16 },

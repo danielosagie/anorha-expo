@@ -1,11 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useImportHub, HubConnection } from '../hooks/useImportHub';
@@ -16,8 +15,6 @@ import {
   SuccessBlock,
   PillButton,
   NumberedCard,
-  CenteredHeading,
-  ExplainerCard,
   SectionCaption,
   AccountRow,
 } from '../components/importinbox/InboxKit';
@@ -27,24 +24,12 @@ type NavType = StackNavigationProp<AppStackParamList, 'ImportHub'>;
 
 type LaneKey = 'matches' | 'photos' | 'details';
 
-// Persisted once the user taps "Continue" past the one-time intro (below). Its
-// presence means: skip the explainer, go straight to the working lanes forever.
-const INTRO_STORAGE_KEY = 'anorha:importHub:introSeen';
-
-// The one-time "how this works" pass, modeled on Avec's numbered explainer cards.
-// Description-only (no counts, no chevrons) — these teach the three steps; the
-// working lanes below carry the live counts once the intro is dismissed.
-const EXPLAINER_STEPS: { title: string; description: string }[] = [
-  { title: 'Review matches', description: 'Link incoming items to your catalog or add them as new' },
-  { title: 'Add photos', description: 'Snap or pick photos for items missing them' },
-  { title: 'Fix details', description: 'Fill titles, descriptions and SKUs — AI can draft them' },
-];
-
 // Import Inbox hub — the single wrapper around importing (docs/import-hub-redesign.md).
 // Modeled on an email backlog: one total, grouped lanes, in-flight progress. You
 // visit it when you want; nothing drags you in. Re-skinned to the Avec look — a
-// giant thin count that COUNTS UP on arrival, a one-time explainer pass, calm
-// numbered step-cards, and a "Your stores" account list (see InboxKit).
+// giant thin count that COUNTS UP on arrival, calm numbered step-cards, and a
+// "Your stores" account list (see InboxKit). It goes straight to the working
+// lanes — no one-time explainer pass; the structure speaks for itself.
 export default function ImportHubScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation<NavType>();
@@ -54,31 +39,6 @@ export default function ImportHubScreen() {
   const { loading, error, refresh, totalNeedsYou, scanning, lanes, connections } = useImportHub();
 
   const [refreshing, setRefreshing] = useState(false);
-
-  // One-time intro flag. null → still reading storage (don't flash lanes then the
-  // explainer); false → show the explainer on first has-work visit; true → skip it.
-  const [introSeen, setIntroSeen] = useState<boolean | null>(null);
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(INTRO_STORAGE_KEY)
-      .then((v) => {
-        if (alive) setIntroSeen(v === '1');
-      })
-      .catch(() => {
-        // Storage unavailable → fail safe by skipping the intro (never nag).
-        if (alive) setIntroSeen(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const dismissIntro = useCallback(() => {
-    setIntroSeen(true);
-    AsyncStorage.setItem(INTRO_STORAGE_KEY, '1').catch(() => {
-      // Best-effort persist; the in-memory flip already advances this session.
-    });
-  }, []);
 
   // CSVColumnMappingScreen finishes with navigation.replace('ImportHub',
   // { connectionId }). The per-connection match sub-rows are gone (the "Your
@@ -104,15 +64,8 @@ export default function ImportHubScreen() {
 
   const allClear = !loading && !error && totalNeedsYou === 0;
 
-  // The "normal has-work state" is the ONLY place the explainer may appear
-  // (degraded / all-clear / error behavior is untouched).
-  const normalHasWork = !loading && !error && totalNeedsYou > 0;
-  const introDecided = introSeen !== null;
-  const showExplainer = normalHasWork && introDecided && introSeen === false;
-  // Hide the lanes while an undecided-or-unseen intro could still take over, so we
-  // never flash the working lanes for a frame and then swap in the explainer.
-  const suppressLanesForIntro = normalHasWork && (!introDecided || introSeen === false);
-  const showLanes = !loading && !hardError && !suppressLanesForIntro;
+  // Straight to the working lanes whenever we're not loading or hard-errored.
+  const showLanes = !loading && !hardError;
 
   // Guided-pass order: the first non-empty lane is the "active" (highlighted)
   // step; the rest stay tappable but calm. On return from a completed lane, that
@@ -266,18 +219,6 @@ export default function ImportHubScreen() {
           </View>
         )}
 
-        {/* ── One-time explainer pass (first has-work visit only) ───────────── */}
-        {showExplainer && (
-          <View style={styles.explainer}>
-            <CenteredHeading>Clear your import backlog in a couple of minutes</CenteredHeading>
-            <View style={styles.explainerCards}>
-              {EXPLAINER_STEPS.map((step, i) => (
-                <ExplainerCard key={step.title} index={i + 1} title={step.title} description={step.description} />
-              ))}
-            </View>
-          </View>
-        )}
-
         {/* ── Lanes → Avec numbered step-cards ──────────────────────────────── */}
         {showLanes && (
           <View style={styles.lanes}>
@@ -350,10 +291,7 @@ export default function ImportHubScreen() {
         <>
           <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
           <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-            {showExplainer ? (
-              // Intro → acknowledge, persist, and drop into the working lanes.
-              <PillButton label="Continue" onPress={dismissIntro} />
-            ) : allClear || hardError || !firstNonEmpty ? (
+            {allClear || hardError || !firstNonEmpty ? (
               <PillButton label="Done" onPress={() => navigation.goBack()} />
             ) : (
               <PillButton label="Continue" onPress={onContinue} />
@@ -386,10 +324,6 @@ const styles = StyleSheet.create({
   // In-flight line
   inflight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, marginBottom: 18 },
   inflightText: { flexShrink: 1, fontSize: 14, color: IC.muted, textAlign: 'center', lineHeight: 20 },
-
-  // Explainer (one-time intro)
-  explainer: { marginTop: 8 },
-  explainerCards: { marginTop: 22 },
 
   // Lanes
   lanes: { marginTop: 4 },

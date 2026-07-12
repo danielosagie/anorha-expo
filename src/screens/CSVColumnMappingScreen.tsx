@@ -17,7 +17,6 @@ import { API_BASE_URL } from '../config/env';
 import {
     IC,
     InboxHeader,
-    CenteredParagraph,
     TextTabs,
     FieldCard,
     ProgressLine,
@@ -379,11 +378,8 @@ export function CSVColumnMappingScreen() {
 
     return (
         <View style={[styles.container, { paddingTop: insets.top + 4 }]}>
-            {/* Header — bare chevron + centered title, calm one-line explanation */}
+            {/* Header — bare chevron + centered title (no explainer paragraph) */}
             <InboxHeader title="Map your columns" onBack={() => navigation.goBack()} />
-            <View style={styles.explainWrap}>
-                <CenteredParagraph>Match your file’s columns so items import correctly</CenteredParagraph>
-            </View>
 
             {/* Auto-mapping indicator — a quiet inline line, no tinted bar */}
             {isLoadingAI && (
@@ -512,11 +508,6 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: IC.bg,
-    },
-    // ── Header explanation ──
-    explainWrap: {
-        paddingTop: 6,
-        paddingBottom: 14,
     },
     // ── AI loading line ──
     aiLoading: {

@@ -222,16 +222,6 @@ export function PillButton({
   );
 }
 
-// ── CenteredParagraph — the calm explanatory line(s) under a header/hero ───────
-export function CenteredParagraph({ children }: { children: React.ReactNode }) {
-  return <Text style={s.paragraph}>{children}</Text>;
-}
-
-// ── CenteredHeading — the semibold centered line that titles a section/explainer ─
-export function CenteredHeading({ children }: { children: React.ReactNode }) {
-  return <Text style={s.centeredHeading}>{children}</Text>;
-}
-
 // ── SectionCaption — a small muted caption above a group of rows ("Your stores") ─
 export function SectionCaption({ children }: { children: React.ReactNode }) {
   return <Text style={s.sectionCaption}>{children}</Text>;
@@ -285,35 +275,6 @@ export function NumberedCard({
         </View>
       )}
     </Comp>
-  );
-}
-
-// ── ExplainerCard — NumberedCard's description-only sibling for the intro pass ──
-// Pure teaching card: "N." · bold title · a full muted DESCRIPTION (up to 3 lines).
-// No count, no chevron, no active/done state — it explains a step, it isn't one.
-export function ExplainerCard({
-  index,
-  title,
-  description,
-}: {
-  index: number;
-  title: string;
-  description: string;
-}) {
-  return (
-    <View style={s.card}>
-      <View style={s.cardLeading}>
-        <Text style={s.cardIndex}>{index}.</Text>
-      </View>
-      <View style={s.cardBody}>
-        <Text style={s.cardTitle} numberOfLines={1}>
-          {title}
-        </Text>
-        <Text style={s.explainerDesc} numberOfLines={3}>
-          {description}
-        </Text>
-      </View>
-    </View>
   );
 }
 
@@ -536,9 +497,7 @@ const s = StyleSheet.create({
   pillTextSecondary: { color: IC.ink },
   pillTextDim: { color: IC.muted },
 
-  // Paragraph
-  paragraph: { fontSize: 17, color: IC.muted, textAlign: 'center', lineHeight: 24, paddingHorizontal: 16 },
-  centeredHeading: { fontSize: 20, fontWeight: '600', color: IC.ink, textAlign: 'center', letterSpacing: -0.4, lineHeight: 26, paddingHorizontal: 20 },
+  // Section caption ("Your stores")
   sectionCaption: { fontSize: 13, color: IC.muted, letterSpacing: 0.1, marginBottom: 12, marginLeft: 4 },
 
   // Numbered card
@@ -551,7 +510,6 @@ const s = StyleSheet.create({
   cardSub: { fontSize: 15, color: IC.muted, marginTop: 3, lineHeight: 20 },
   cardCount: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 1 },
   cardCountText: { fontSize: 16, color: IC.muted, fontVariant: ['tabular-nums'] },
-  explainerDesc: { fontSize: 15, color: IC.muted, marginTop: 4, lineHeight: 21 },
 
   // Account row (Your stores)
   accountRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: IC.card, borderRadius: 16, paddingVertical: 13, paddingHorizontal: 14, marginBottom: 10 },
