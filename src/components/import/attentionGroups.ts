@@ -36,17 +36,11 @@ export function reasonKeyOf(item: SyncItem): GroupKey {
 }
 
 // Deterministic tiebreak when two groups have equal counts, so the list doesn't
-// reshuffle between renders. 'other' always sinks last.
-const TIE_ORDER: GroupKey[] = [
-  'multiple_candidates',
-  'weak_match',
-  'look_alike_group',
-  'duplicate_target',
-  'field_conflict',
-  'bundle',
-  'stale_link',
-  'other',
-];
+// reshuffle between renders. Derived from REASON_LABELS' declaration order (a
+// hand-kept parallel array could silently drift from GroupKey, and a missing key
+// → indexOf -1 would corrupt the order) — so REASON_LABELS is the single source
+// of order. Its declaration keeps 'other' last, which keeps that bucket sinking.
+const TIE_ORDER: GroupKey[] = Object.keys(REASON_LABELS) as GroupKey[];
 
 // Group items by reason, largest bucket first (stable tiebreak by TIE_ORDER).
 // Empty buckets are never emitted, so callers can render one row per group.

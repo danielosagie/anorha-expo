@@ -44,15 +44,34 @@ const SyncInboxScreen: React.FC = () => {
   // save paths (GenerateDetails / ProductDetail), never a native Alert.
   const [resolveErrorVisible, setResolveErrorVisible] = useState(false);
 
+  // The session's CONFIRMED-resolve tally and the source of truth for the
+  // completion arc. Keyed by platformId (not a running counter) so an undo +
+  // re-decide OVERWRITES the item's outcome instead of double-counting, and so
+  // it spans every deck run this session. resolveSafe records here ONLY when the
+  // resolve actually settled server-side — a caught failure rolls the row back
+  // and is deliberately never recorded, so the summary can't overstate what
+  // persisted. (The deck's own optimistic tally counts a card the instant it's
+  // swiped, before the server answers; we no longer trust it for the summary.)
+  const confirmedRef = useRef<Record<string, SyncItem['resolution']['kind']>>({});
+
   // A failed resolve refreshes+rolls back in the hook; surface it to the user
-  // too. Swallow the rejection (return null) so the deck's fire-and-forget
-  // commit doesn't produce an unhandled rejection.
+  // too, and DON'T record it. Swallow the rejection (return null) so the deck's
+  // fire-and-forget commit doesn't produce an unhandled rejection. Reaching the
+  // line after `await resolve(...)` means the hook did NOT throw: the item is
+  // settled — a 200 removed the row, or a 409 reconciled it (already resolved on
+  // another device). Both count as confirmed; only the caught-failure branch,
+  // which rolled the row back, is excluded.
   const resolveSafe = useCallback(
-    (platformId: string, choice: SyncItem['resolution']['kind'], canonicalId?: string) =>
-      resolve(platformId, choice, canonicalId).catch(() => {
+    async (platformId: string, choice: SyncItem['resolution']['kind'], canonicalId?: string) => {
+      try {
+        const res = await resolve(platformId, choice, canonicalId);
+        confirmedRef.current[platformId] = choice;
+        return res;
+      } catch {
         setResolveErrorVisible(true);
         return null;
-      }),
+      }
+    },
     [resolve],
   );
 
@@ -71,10 +90,6 @@ const SyncInboxScreen: React.FC = () => {
   // filtered run finishes while other groups still have work (hub's pattern).
   const [clearedNote, setClearedNote] = useState<string | null>(null);
   const runIdRef = useRef(0);
-  // Counts accumulated across EVERY completed deck run this session (all groups +
-  // any all-items run), so the final completion arc reports the whole session's
-  // tally — not just the last deck's. Back-outs don't complete, so they don't add.
-  const sessionCountsRef = useRef<SessionCounts>({ linked: 0, created: 0, ignored: 0 });
 
   const enterDeck = useCallback(
     (groupKey: GroupKey | null) => {
@@ -96,7 +111,14 @@ const SyncInboxScreen: React.FC = () => {
   // (untyped), the same way BackfillOptimizer already passes `origin:'import'`.
   // Contract documented in docs/import-hub-handoff.md; no AppNavigator edit.
   const goToCompletion = useCallback(() => {
-    const c = sessionCountsRef.current;
+    // Derive the tally from the CONFIRMED map (settled resolves only), so a
+    // failed resolve that rolled back never inflates the summary.
+    const c: SessionCounts = { linked: 0, created: 0, ignored: 0 };
+    for (const choice of Object.values(confirmedRef.current)) {
+      if (choice === 'link') c.linked += 1;
+      else if (choice === 'create') c.created += 1;
+      else if (choice === 'ignore') c.ignored += 1;
+    }
     navigation.replace('PublishConfirmation' as any, {
       origin: 'import',
       connectionId,
@@ -131,12 +153,11 @@ const SyncInboxScreen: React.FC = () => {
         return;
       }
 
-      // A real completion — fold this run into the session tally.
-      sessionCountsRef.current = {
-        linked: sessionCountsRef.current.linked + (counts.linked ?? 0),
-        created: sessionCountsRef.current.created + (counts.created ?? 0),
-        ignored: sessionCountsRef.current.ignored + (counts.ignored ?? 0),
-      };
+      // A real completion. `counts` (the deck's optimistic tally) still marks a
+      // completion vs a back-out, but it is NO LONGER folded into the session
+      // total: those numbers count a card the instant it's swiped, even if the
+      // resolve later failed and rolled back. The completion arc reads the
+      // confirmed map (populated by resolveSafe) instead — see goToCompletion.
 
       // Is there other work left? The all-items run always ends the arc. For a
       // filtered run, "remaining" is everything NOT in the group we just cleared

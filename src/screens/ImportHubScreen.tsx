@@ -111,10 +111,12 @@ export default function ImportHubScreen() {
 
   // "Your stores" row tap: attention → the review deck for that connection;
   // otherwise → SyncRules (management). Both carry { connectionId, platformName }
-  // exactly like ConnectionsScreen (platformName = the raw PlatformType).
+  // — prefer the friendly display name (falling back to the raw PlatformType) so
+  // the destination header reads "My Shopify Store", not the bare "shopify" slug,
+  // matching the friendly name the matches lane already passes.
   const openStore = useCallback(
     (conn: HubConnection) => {
-      const platformName = conn.platformType || conn.platformName;
+      const platformName = conn.platformName || conn.platformType || '';
       if (conn.needsAttention > 0) {
         navigation.navigate('SyncInbox', { connectionId: conn.connectionId, platformName });
         return;

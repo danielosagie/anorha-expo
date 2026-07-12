@@ -64,6 +64,52 @@ function BigImage({ uri, loading }: { uri?: string | null; loading?: boolean }) 
   );
 }
 
+// A field row: shared uppercase label, then one cell per column, aligned.
+// Module-scope (was declared inside CompareSheet's render body, so React saw a
+// brand-new component type every render and remounted the whole subtree across
+// loading transitions). `twoCol` is now an explicit prop instead of a closure.
+function FieldRow({
+  label,
+  left,
+  right,
+  multiline,
+  twoCol,
+}: {
+  label: string;
+  left: React.ReactNode;
+  right?: React.ReactNode;
+  multiline?: boolean;
+  twoCol: boolean;
+}) {
+  return (
+    <View style={styles.fieldRow}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={styles.cellsRow}>
+        <View style={styles.cell}>
+          {typeof left === 'string' ? (
+            <Text style={styles.value} numberOfLines={multiline ? undefined : 1}>
+              {left}
+            </Text>
+          ) : (
+            left
+          )}
+        </View>
+        {twoCol && (
+          <View style={styles.cell}>
+            {typeof right === 'string' ? (
+              <Text style={styles.value} numberOfLines={multiline ? undefined : 1}>
+                {right}
+              </Text>
+            ) : (
+              right
+            )}
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
 export default function CompareSheet({
   visible,
   onClose,
@@ -166,45 +212,6 @@ export default function CompareSheet({
         : [];
   const candPrimary = candImages[0];
 
-  // A field row: shared uppercase label, then one cell per column, aligned.
-  const FieldRow = ({
-    label,
-    left,
-    right,
-    multiline,
-  }: {
-    label: string;
-    left: React.ReactNode;
-    right?: React.ReactNode;
-    multiline?: boolean;
-  }) => (
-    <View style={styles.fieldRow}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <View style={styles.cellsRow}>
-        <View style={styles.cell}>
-          {typeof left === 'string' ? (
-            <Text style={styles.value} numberOfLines={multiline ? undefined : 1}>
-              {left}
-            </Text>
-          ) : (
-            left
-          )}
-        </View>
-        {twoCol && (
-          <View style={styles.cell}>
-            {typeof right === 'string' ? (
-              <Text style={styles.value} numberOfLines={multiline ? undefined : 1}>
-                {right}
-              </Text>
-            ) : (
-              right
-            )}
-          </View>
-        )}
-      </View>
-    </View>
-  );
-
   const dashOrSpinner = (val: string) =>
     val === '' && loading ? <ActivityIndicator size="small" color={RC.faint} style={styles.inlineSpin} /> : val || '—';
 
@@ -286,10 +293,10 @@ export default function CompareSheet({
         </View>
 
         {/* Fields — same field on the same row across both columns */}
-        <FieldRow label="TITLE" left={inTitle} right={dashOrSpinner(candTitle)} multiline />
-        <FieldRow label="SKU" left={inSku} right={dashOrSpinner(candSku)} />
-        <FieldRow label="BARCODE" left={inBarcode} right={dashOrSpinner(candBarcode)} />
-        <FieldRow label="PRICE" left={inPrice} right={dashOrSpinner(candPriceStr)} />
+        <FieldRow label="TITLE" left={inTitle} right={dashOrSpinner(candTitle)} multiline twoCol={twoCol} />
+        <FieldRow label="SKU" left={inSku} right={dashOrSpinner(candSku)} twoCol={twoCol} />
+        <FieldRow label="BARCODE" left={inBarcode} right={dashOrSpinner(candBarcode)} twoCol={twoCol} />
+        <FieldRow label="PRICE" left={inPrice} right={dashOrSpinner(candPriceStr)} twoCol={twoCol} />
         {twoCol && (
           <FieldRow
             label="DESCRIPTION"
@@ -302,6 +309,7 @@ export default function CompareSheet({
               )
             }
             multiline
+            twoCol={twoCol}
           />
         )}
       </ScrollView>

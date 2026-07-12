@@ -130,8 +130,23 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     { Id: 'v8', Title: 'Hemp Market Tote', Description: '', Sku: null, ProductImages: [img('v8a')] },
   ];
 
-  const routes: Array<[RegExp, any]> = [
-    [/\/rest\/v1\/ProductVariants/, demoVariants],
+  // CompareSheet fetches ONE variant with `.eq('Id', x).maybeSingle()`, which
+  // PostgREST encodes as `?...&Id=eq.<value>`. Honor that filter so maybeSingle
+  // gets exactly the matching row instead of all 8 (which makes it error/return
+  // null and the sheet fall back). Unfiltered calls (the optimizer queues page
+  // the whole table) still get the full array. Matching `[?&]Id=eq.` avoids the
+  // `select=Id,...` projection, which never carries the `Id=eq.` shape.
+  const productVariantsRoute = (url: string) => {
+    const m = /[?&]Id=eq\.([^&]+)/.exec(url);
+    if (!m) return demoVariants;
+    const id = decodeURIComponent(m[1]);
+    return demoVariants.filter((v) => v.Id === id);
+  };
+
+  // A route's value is either static data or a (url) => data function (the latter
+  // lets ProductVariants honor PostgREST query filters); everything else stays static.
+  const routes: Array<[RegExp, any | ((url: string) => any)]> = [
+    [/\/rest\/v1\/ProductVariants/, productVariantsRoute],
     [/\/rest\/v1\/PlatformProductMappings/, demoVariants.map((v) => ({ ProductVariantId: v.Id }))],
     [/\/sync\/inbox\/summary/, inboxSummary],
     [/\/sync\/connections\/[^/]+\/resolution/, resolution],
@@ -149,7 +164,10 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
   window.fetch = ((input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input?.url || '';
     for (const [re, data] of routes) {
-      if (re.test(url)) return Promise.resolve(json(data));
+      if (re.test(url)) {
+        const body = typeof data === 'function' ? data(url) : data;
+        return Promise.resolve(json(body));
+      }
     }
     return orig(input, init);
   }) as typeof window.fetch;
