@@ -3,19 +3,13 @@
  * and returns demo JSON so data-driven screens (Billing, Team, Notifications) render
  * populated instead of "no auth"/empty. Imported for its side effect by App.web.tsx.
  */
-import { supabase } from '../../lib/supabase';
+// IMPORTANT: do NOT import supabase at the top of this file. supabase-js captures
+// the global fetch BY VALUE at client construction, so the client must be created
+// only after window.fetch below is swapped — else the /rest/v1/* mocks never hit.
 
 if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(window as any).__sssyncFetchMocked) {
   (window as any).__sssyncFetchMocked = true;
   const orig = window.fetch.bind(window);
-
-  // Make screens that gate on a Supabase session (e.g. Team, Past scans) proceed on web.
-  try {
-    const mockUser: any = { id: 'user_mock', email: 'demo@sssync.app' };
-    const mockSession: any = { user: mockUser, access_token: 'mock_jwt_token', token_type: 'bearer', expires_at: Date.now() / 1000 + 3600 };
-    (supabase as any).auth.getUser = async () => ({ data: { user: mockUser }, error: null });
-    (supabase as any).auth.getSession = async () => ({ data: { session: mockSession }, error: null });
-  } catch {}
 
   const json = (data: any) =>
     new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -80,7 +74,7 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     connections: [
       { connectionId: 'conn_shopify', platformType: 'shopify', displayName: 'My Shopify Store', state: 'needs-attention', needsAttention: 4 },
       { connectionId: 'conn_square', platformType: 'square', displayName: 'Square POS', state: 'needs-attention', needsAttention: 3 },
-      { connectionId: 'conn_csv', platformType: 'csv', displayName: 'Spring inventory.csv', state: 'scanning', needsAttention: 0 },
+      { connectionId: 'conn_ebay', platformType: 'ebay', displayName: 'eBay Seller Hub', state: 'scanning', needsAttention: 0 },
     ],
     recentImports: [
       { importId: 'imp_1', connectionId: 'conn_shopify', source: 'platform_scan', status: 'complete', itemsTotal: 182, itemsCommitted: 178, itemsFailed: 0, createdAt: new Date(now - 86400000).toISOString(), completedAt: new Date(now - 86000000).toISOString() },
@@ -121,7 +115,24 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     attention: resolution.needsAttention,
   };
 
+  // Demo catalog for the optimizer queues (supabase REST). Thresholds in
+  // useOptimizerQueues: <2 images → needsPhotos; short/missing title/description
+  // → needsContent; missing Sku → manual. Keep the array <1000 so paging stops.
+  const img = (seed: string) => ({ ImageUrl: `https://picsum.photos/seed/${seed}/400/400` });
+  const demoVariants = [
+    { Id: 'v1', Title: 'Ceramic Pour-Over Coffee Dripper', Description: 'Hand-thrown stoneware dripper for slow mornings. Fits standard #2 filters and pours clean.', Sku: 'POUR-01', ProductImages: [img('v1a')] },
+    { Id: 'v2', Title: 'Walnut Serving Board', Description: 'Solid walnut, food-safe oil finish, juice groove on the flip side. 18 by 12 inches.', Sku: 'WAL-18', ProductImages: [] },
+    { Id: 'v3', Title: 'Linen Table Runner 72"', Description: 'Stonewashed European flax in sage. Machine washable, gets softer every cycle.', Sku: 'LIN-72', ProductImages: [img('v3a')] },
+    { Id: 'v4', Title: 'Stoneware Mug — Sage', Description: 'Short desc', Sku: 'MUG-SG', ProductImages: [img('v4a'), img('v4b')] },
+    { Id: 'v5', Title: 'Brass Plant Mister', Description: '', Sku: 'BRS-MST', ProductImages: [img('v5a'), img('v5b')] },
+    { Id: 'v6', Title: 'Oak', Description: 'Solid oak bookend pair with cork base, holds a full shelf of hardcovers without sliding.', Sku: 'OAK-BE', ProductImages: [img('v6a'), img('v6b')] },
+    { Id: 'v7', Title: 'Recycled Glass Carafe', Description: 'Mouth-blown recycled glass carafe with cork stopper, one liter, dishwasher safe.', Sku: null, ProductImages: [img('v7a'), img('v7b')] },
+    { Id: 'v8', Title: 'Hemp Market Tote', Description: '', Sku: null, ProductImages: [img('v8a')] },
+  ];
+
   const routes: Array<[RegExp, any]> = [
+    [/\/rest\/v1\/ProductVariants/, demoVariants],
+    [/\/rest\/v1\/PlatformProductMappings/, demoVariants.map((v) => ({ ProductVariantId: v.Id }))],
     [/\/sync\/inbox\/summary/, inboxSummary],
     [/\/sync\/connections\/[^/]+\/resolution/, resolution],
     [/\/sync\/connections\/[^/]+\/status/, connStatus],
@@ -142,6 +153,16 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     }
     return orig(input, init);
   }) as typeof window.fetch;
+
+  // Only now create the supabase client (captures the mocked fetch above), and
+  // make screens that gate on a session (Team, Past scans, optimizer) proceed.
+  try {
+    const { supabase } = require('../../lib/supabase');
+    const mockUser: any = { id: 'user_mock', email: 'demo@sssync.app' };
+    const mockSession: any = { user: mockUser, access_token: 'mock_jwt_token', token_type: 'bearer', expires_at: Date.now() / 1000 + 3600 };
+    (supabase as any).auth.getUser = async () => ({ data: { user: mockUser }, error: null });
+    (supabase as any).auth.getSession = async () => ({ data: { session: mockSession }, error: null });
+  } catch {}
 }
 
 export {};

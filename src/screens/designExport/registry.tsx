@@ -147,6 +147,12 @@ export const ROUTES: ExportRoute[] = [
   { key: 'backfill', title: 'Backfill optimizer', group: 'Import', routeName: 'BackfillOptimizer',
     params: { newlyImportedIds: ['prod_1', 'prod_2'] },
     load: () => import('../BackfillOptimizerScreen').then((m: any) => ({ default: m.default || m.BackfillOptimizerScreen })) },
+  { key: 'optimize-photos', title: 'Optimize · Photos (from hub)', group: 'Import', routeName: 'BackfillOptimizer',
+    params: { source: 'hub-photos' },
+    load: () => import('../BackfillOptimizerScreen').then((m: any) => ({ default: m.default || m.BackfillOptimizerScreen })) },
+  { key: 'optimize-details', title: 'Optimize · Details (from hub)', group: 'Import', routeName: 'BackfillOptimizer',
+    params: { source: 'hub-details' },
+    load: () => import('../BackfillOptimizerScreen').then((m: any) => ({ default: m.default || m.BackfillOptimizerScreen })) },
 ];
 
 export const ROUTES_BY_KEY: Record<string, ExportRoute> = Object.fromEntries(
