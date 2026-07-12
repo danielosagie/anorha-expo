@@ -41,6 +41,22 @@ export interface HubLaneConnection {
   count: number;
 }
 
+// Full per-connection row for the hub's "Your stores" list (every enabled
+// connection, whether or not it needs attention). Additive to the hub's output —
+// derived from the same aggregate/fan-out data the lanes already consume.
+export interface HubConnection {
+  /** PlatformConnections.Id — used to deep-link into SyncInbox / SyncRules. */
+  connectionId: string;
+  /** Friendly display name (bold row title), e.g. "myshop". */
+  platformName: string;
+  /** Raw PlatformType (muted subtitle + brand logo), e.g. "shopify". */
+  platformType?: string;
+  /** Lowercased connection state ('active'|'scanning'|'review'|…). */
+  state: string;
+  /** Items parked in this connection's inbox (0 ⇒ show the quiet "Synced" state). */
+  needsAttention: number;
+}
+
 export interface ImportHubScanning {
   connectionId: string;
   platformName: string;
@@ -54,6 +70,8 @@ export interface ImportHubData {
   /** matches + photos + details — the single number the hero shows. */
   totalNeedsYou: number;
   scanning: ImportHubScanning[];
+  /** Every enabled connection, for the hub's "Your stores" list. */
+  connections: HubConnection[];
   lanes: {
     matches: { count: number; byConnection: HubLaneConnection[] };
     photos: { count: number };
@@ -415,6 +433,33 @@ export function useImportHub(): ImportHubData {
     ? summary.totalNeedsAttention
     : matchesByConnection.reduce((a, b) => a + b.count, 0);
 
+  // Full "Your stores" list: always every enabled connection, enriched with the
+  // per-connection state/needsAttention from whichever path is active (aggregate
+  // summary or fan-out results). Keyed off `enabled` so a store with nothing to
+  // review still lists (as a quiet "Synced" row), not just the ones with matches.
+  const connections = useMemo<HubConnection[]>(() => {
+    const meta: Record<string, { state: string; needsAttention: number }> = {};
+    if (summary) {
+      for (const c of summary.connections) {
+        meta[c.connectionId] = { state: c.state, needsAttention: c.needsAttention };
+      }
+    } else {
+      for (const r of results) {
+        meta[r.connectionId] = { state: r.state, needsAttention: r.needsAttention };
+      }
+    }
+    return enabled.map((c) => {
+      const m = meta[c.Id];
+      return {
+        connectionId: c.Id,
+        platformName: normalizeDisplayName(c.DisplayName || c.PlatformType),
+        platformType: c.PlatformType,
+        state: m?.state || (c.Status || '').toLowerCase(),
+        needsAttention: m?.needsAttention || 0,
+      };
+    });
+  }, [enabled, summary, results]);
+
   const photosCount = optCounts.photoNeeded;
   const detailsCount = optCounts.dataNeeded + optCounts.manualQueue;
   const totalNeedsYou = matchesCount + photosCount + detailsCount;
@@ -428,6 +473,7 @@ export function useImportHub(): ImportHubData {
     refresh: refreshAll,
     totalNeedsYou,
     scanning,
+    connections,
     lanes: {
       matches: { count: matchesCount, byConnection: matchesByConnection },
       photos: { count: photosCount },

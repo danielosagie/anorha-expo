@@ -5,9 +5,10 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { AppStackParamList } from '../navigation/AppNavigator';
-import { useImportHub } from '../hooks/useImportHub';
+import { useImportHub, HubConnection } from '../hooks/useImportHub';
 import {
   IC,
   InboxHeader,
@@ -15,7 +16,10 @@ import {
   SuccessBlock,
   PillButton,
   NumberedCard,
-  GroupRow,
+  CenteredHeading,
+  ExplainerCard,
+  SectionCaption,
+  AccountRow,
 } from '../components/importinbox/InboxKit';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportHub'>;
@@ -23,28 +27,64 @@ type NavType = StackNavigationProp<AppStackParamList, 'ImportHub'>;
 
 type LaneKey = 'matches' | 'photos' | 'details';
 
+// Persisted once the user taps "Continue" past the one-time intro (below). Its
+// presence means: skip the explainer, go straight to the working lanes forever.
+const INTRO_STORAGE_KEY = 'anorha:importHub:introSeen';
+
+// The one-time "how this works" pass, modeled on Avec's numbered explainer cards.
+// Description-only (no counts, no chevrons) — these teach the three steps; the
+// working lanes below carry the live counts once the intro is dismissed.
+const EXPLAINER_STEPS: { title: string; description: string }[] = [
+  { title: 'Review matches', description: 'Link incoming items to your catalog or add them as new' },
+  { title: 'Add photos', description: 'Snap or pick photos for items missing them' },
+  { title: 'Fix details', description: 'Fill titles, descriptions and SKUs — AI can draft them' },
+];
+
 // Import Inbox hub — the single wrapper around importing (docs/import-hub-redesign.md).
 // Modeled on an email backlog: one total, grouped lanes, in-flight progress. You
 // visit it when you want; nothing drags you in. Re-skinned to the Avec look — a
-// giant thin count over calm numbered step-cards (see InboxKit).
+// giant thin count that COUNTS UP on arrival, a one-time explainer pass, calm
+// numbered step-cards, and a "Your stores" account list (see InboxKit).
 export default function ImportHubScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation<NavType>();
   const insets = useSafeAreaInsets();
   const completedLane = route.params?.completedLane;
 
-  const { loading, error, refresh, totalNeedsYou, scanning, lanes } = useImportHub();
+  const { loading, error, refresh, totalNeedsYou, scanning, lanes, connections } = useImportHub();
 
-  const [expandedMatches, setExpandedMatches] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // CSVColumnMappingScreen finishes with navigation.replace('ImportHub',
-  // { connectionId }). Once data has loaded, auto-expand the per-connection match
-  // rows so the just-imported connection's row is visible without a manual tap.
-  const handoffConnectionId = route.params?.connectionId;
+  // One-time intro flag. null → still reading storage (don't flash lanes then the
+  // explainer); false → show the explainer on first has-work visit; true → skip it.
+  const [introSeen, setIntroSeen] = useState<boolean | null>(null);
   useEffect(() => {
-    if (handoffConnectionId && !loading) setExpandedMatches(true);
-  }, [handoffConnectionId, loading]);
+    let alive = true;
+    AsyncStorage.getItem(INTRO_STORAGE_KEY)
+      .then((v) => {
+        if (alive) setIntroSeen(v === '1');
+      })
+      .catch(() => {
+        // Storage unavailable → fail safe by skipping the intro (never nag).
+        if (alive) setIntroSeen(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const dismissIntro = useCallback(() => {
+    setIntroSeen(true);
+    AsyncStorage.setItem(INTRO_STORAGE_KEY, '1').catch(() => {
+      // Best-effort persist; the in-memory flip already advances this session.
+    });
+  }, []);
+
+  // CSVColumnMappingScreen finishes with navigation.replace('ImportHub',
+  // { connectionId }). The per-connection match sub-rows are gone (the "Your
+  // stores" list below supersedes them), so instead of auto-expanding we HIGHLIGHT
+  // that connection's store row so the just-imported store is easy to spot.
+  const handoffConnectionId = route.params?.connectionId;
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -63,6 +103,16 @@ export default function ImportHubScreen() {
   const hardError = !!error && !degraded;
 
   const allClear = !loading && !error && totalNeedsYou === 0;
+
+  // The "normal has-work state" is the ONLY place the explainer may appear
+  // (degraded / all-clear / error behavior is untouched).
+  const normalHasWork = !loading && !error && totalNeedsYou > 0;
+  const introDecided = introSeen !== null;
+  const showExplainer = normalHasWork && introDecided && introSeen === false;
+  // Hide the lanes while an undecided-or-unseen intro could still take over, so we
+  // never flash the working lanes for a frame and then swap in the explainer.
+  const suppressLanesForIntro = normalHasWork && (!introDecided || introSeen === false);
+  const showLanes = !loading && !hardError && !suppressLanesForIntro;
 
   // Guided-pass order: the first non-empty lane is the "active" (highlighted)
   // step; the rest stay tappable but calm. On return from a completed lane, that
@@ -89,15 +139,13 @@ export default function ImportHubScreen() {
     [navigation],
   );
 
+  // Matches card tap: no more expand. With "Your stores" carrying per-connection
+  // access, a card with >1 connection just dives into the MOST-NEEDY one's deck.
   const onMatchesPress = useCallback(() => {
     const byConn = lanes.matches.byConnection;
-    if (byConn.length <= 1) {
-      const only = byConn[0];
-      if (only) openMatches(only.connectionId, only.platformName);
-      return;
-    }
-    // >1 connection with matches → expand into per-connection rows.
-    setExpandedMatches((v) => !v);
+    if (!byConn.length) return;
+    const target = byConn.reduce((a, b) => (b.count > a.count ? b : a), byConn[0]);
+    openMatches(target.connectionId, target.platformName);
   }, [lanes.matches.byConnection, openMatches]);
 
   const openPhotos = useCallback(() => {
@@ -107,6 +155,26 @@ export default function ImportHubScreen() {
   const openDetails = useCallback(() => {
     navigation.navigate('BackfillOptimizer', { source: 'hub-details' });
   }, [navigation]);
+
+  // "Your stores" row tap: attention → the review deck for that connection;
+  // otherwise → SyncRules (management). Both carry { connectionId, platformName }
+  // exactly like ConnectionsScreen (platformName = the raw PlatformType).
+  const openStore = useCallback(
+    (conn: HubConnection) => {
+      const platformName = conn.platformType || conn.platformName;
+      if (conn.needsAttention > 0) {
+        navigation.navigate('SyncInbox', { connectionId: conn.connectionId, platformName });
+        return;
+      }
+      // SyncRules only types { connectionId }; ConnectionsScreen passes the extra
+      // platformName too (SyncRulesScreen reads it to avoid a header flash). Route
+      // it through a variable so the extra prop rides along without an excess-
+      // property error against the narrower param type.
+      const params = { connectionId: conn.connectionId, platformName };
+      navigation.navigate('SyncRules', params);
+    },
+    [navigation],
+  );
 
   // Continue → dive into the first non-empty lane (matches → photos → details).
   const onContinue = useCallback(() => {
@@ -177,7 +245,7 @@ export default function ImportHubScreen() {
             />
           </View>
         ) : (
-          <HeroNumeral value={totalNeedsYou} label={`item${totalNeedsYou === 1 ? '' : 's'} need you`} />
+          <HeroNumeral value={totalNeedsYou} label={`item${totalNeedsYou === 1 ? '' : 's'} need you`} animate />
         )}
 
         {/* ── "Cleared" acknowledgment on return from a completed lane ──────── */}
@@ -198,8 +266,20 @@ export default function ImportHubScreen() {
           </View>
         )}
 
+        {/* ── One-time explainer pass (first has-work visit only) ───────────── */}
+        {showExplainer && (
+          <View style={styles.explainer}>
+            <CenteredHeading>Clear your import backlog in a couple of minutes</CenteredHeading>
+            <View style={styles.explainerCards}>
+              {EXPLAINER_STEPS.map((step, i) => (
+                <ExplainerCard key={step.title} index={i + 1} title={step.title} description={step.description} />
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* ── Lanes → Avec numbered step-cards ──────────────────────────────── */}
-        {!loading && !hardError && (
+        {showLanes && (
           <View style={styles.lanes}>
             <NumberedCard
               index={1}
@@ -222,19 +302,6 @@ export default function ImportHubScreen() {
                     : undefined
               }
             />
-            {expandedMatches && lanes.matches.byConnection.length > 1 && (
-              <View style={styles.subLanes}>
-                {lanes.matches.byConnection.map((b) => (
-                  <GroupRow
-                    key={b.connectionId}
-                    label={b.platformName}
-                    count={b.count}
-                    compact
-                    onPress={() => openMatches(b.connectionId, b.platformName)}
-                  />
-                ))}
-              </View>
-            )}
 
             <NumberedCard
               index={2}
@@ -257,6 +324,25 @@ export default function ImportHubScreen() {
             />
           </View>
         )}
+
+        {/* ── Your stores — the Avec account list (per-connection) ──────────── */}
+        {showLanes && connections.length > 0 && (
+          <View style={styles.stores}>
+            <SectionCaption>Your stores</SectionCaption>
+            {connections.map((conn) => (
+              <AccountRow
+                key={conn.connectionId}
+                logoType={conn.platformType || conn.platformName}
+                name={conn.platformName}
+                detail={conn.platformType}
+                count={conn.needsAttention}
+                rightLabel={conn.needsAttention > 0 ? undefined : 'Synced'}
+                highlighted={!!handoffConnectionId && conn.connectionId === handoffConnectionId}
+                onPress={() => openStore(conn)}
+              />
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       {/* ── Pinned CTA ──────────────────────────────────────────────────────── */}
@@ -264,7 +350,10 @@ export default function ImportHubScreen() {
         <>
           <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
           <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-            {allClear || hardError || !firstNonEmpty ? (
+            {showExplainer ? (
+              // Intro → acknowledge, persist, and drop into the working lanes.
+              <PillButton label="Continue" onPress={dismissIntro} />
+            ) : allClear || hardError || !firstNonEmpty ? (
               <PillButton label="Done" onPress={() => navigation.goBack()} />
             ) : (
               <PillButton label="Continue" onPress={onContinue} />
@@ -298,9 +387,15 @@ const styles = StyleSheet.create({
   inflight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, marginBottom: 18 },
   inflightText: { flexShrink: 1, fontSize: 14, color: IC.muted, textAlign: 'center', lineHeight: 20 },
 
+  // Explainer (one-time intro)
+  explainer: { marginTop: 8 },
+  explainerCards: { marginTop: 22 },
+
   // Lanes
   lanes: { marginTop: 4 },
-  subLanes: { paddingLeft: 20, marginTop: -4, marginBottom: 6 },
+
+  // Your stores
+  stores: { marginTop: 22 },
 
   // Footer
   fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 130 },

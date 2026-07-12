@@ -23,8 +23,50 @@ import {
   StyleProp,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import PlatformLogo from '../PlatformLogo';
 
 const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
+
+// ── useCountUp — a dependency-free, unmount-safe count-up ───────────────────────
+// Drives a number from its last shown value up (or down) to `target` with an
+// ease-out over `duration`ms, using the RN-global requestAnimationFrame. It only
+// (re)animates when `target` changes materially — a poll tick that re-renders with
+// the same target is a no-op, so the hero doesn't restart on every 20s refresh.
+function useCountUp(target: number, duration = 800): number {
+  const [display, setDisplay] = React.useState(0);
+  const displayRef = React.useRef(0);
+  const rafRef = React.useRef<number | null>(null);
+  const mountedRef = React.useRef(true);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const from = displayRef.current;
+    // No material change → leave the shown value exactly where it is (no restart).
+    if (from === target) return;
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    const start = Date.now();
+    const span = target - from;
+    const tick = () => {
+      if (!mountedRef.current) return;
+      const t = Math.min(1, (Date.now() - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      const next = t >= 1 ? target : Math.round(from + span * eased);
+      displayRef.current = next;
+      setDisplay(next);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [target, duration]);
+
+  return display;
+}
 
 // ── Tokens ───────────────────────────────────────────────────────────────────
 // The whole surface lives on these. `accent` is the ONLY saturated color allowed.
@@ -74,11 +116,28 @@ export function InboxHeader({
 }
 
 // ── HeroNumeral — the enormous thin count + a small muted label under it ───────
-export function HeroNumeral({ value, label }: { value: React.ReactNode; label: string }) {
+// When `value` is a number and `animate` is set, the numeral counts up from 0 on
+// first appearance (and re-animates only when the value changes materially — see
+// useCountUp). A non-numeric `value` (or animate off) renders verbatim.
+export function HeroNumeral({
+  value,
+  label,
+  animate = false,
+}: {
+  value: React.ReactNode;
+  label: string;
+  animate?: boolean;
+}) {
+  const isNumber = typeof value === 'number';
+  const animating = animate && isNumber;
+  // Hooks stay unconditional: the count-up runs against 0 (a no-op) when we're
+  // not animating a numeric value.
+  const counted = useCountUp(animating ? (value as number) : 0);
+  const shown = animating ? counted : value;
   return (
     <View style={s.hero}>
       <Text style={s.heroNumeral} numberOfLines={1} allowFontScaling={false}>
-        {value}
+        {shown}
       </Text>
       <Text style={s.heroLabel}>{label}</Text>
     </View>
@@ -168,6 +227,16 @@ export function CenteredParagraph({ children }: { children: React.ReactNode }) {
   return <Text style={s.paragraph}>{children}</Text>;
 }
 
+// ── CenteredHeading — the semibold centered line that titles a section/explainer ─
+export function CenteredHeading({ children }: { children: React.ReactNode }) {
+  return <Text style={s.centeredHeading}>{children}</Text>;
+}
+
+// ── SectionCaption — a small muted caption above a group of rows ("Your stores") ─
+export function SectionCaption({ children }: { children: React.ReactNode }) {
+  return <Text style={s.sectionCaption}>{children}</Text>;
+}
+
 // ── NumberedCard — Avec's numbered step: "N." · bold title · muted sub · N › ────
 // Done → the number becomes a plain accent check; active → a whiter surface with a
 // hairline accent border. The count renders as a bare muted "N ›" (no pill/icons).
@@ -215,6 +284,96 @@ export function NumberedCard({
           <MaterialCommunityIcons name="chevron-right" size={20} color={IC.muted} />
         </View>
       )}
+    </Comp>
+  );
+}
+
+// ── ExplainerCard — NumberedCard's description-only sibling for the intro pass ──
+// Pure teaching card: "N." · bold title · a full muted DESCRIPTION (up to 3 lines).
+// No count, no chevron, no active/done state — it explains a step, it isn't one.
+export function ExplainerCard({
+  index,
+  title,
+  description,
+}: {
+  index: number;
+  title: string;
+  description: string;
+}) {
+  return (
+    <View style={s.card}>
+      <View style={s.cardLeading}>
+        <Text style={s.cardIndex}>{index}.</Text>
+      </View>
+      <View style={s.cardBody}>
+        <Text style={s.cardTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={s.explainerDesc} numberOfLines={3}>
+          {description}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// ── AccountRow — Avec's account list row: logo/initial circle · bold name +
+// muted detail · right-aligned count+chevron (attention) or a quiet muted state ─
+// Used for the hub's "Your stores" list. `count` renders the amber-free muted
+// "N ›"; when there's no count, `rightLabel` (e.g. "Synced") shows in its place.
+export function AccountRow({
+  logoType,
+  name,
+  detail,
+  count,
+  rightLabel,
+  highlighted = false,
+  onPress,
+}: {
+  logoType?: string;
+  name: string;
+  detail?: string;
+  count?: number | null;
+  rightLabel?: string;
+  highlighted?: boolean;
+  onPress?: () => void;
+}) {
+  const Comp: any = onPress ? TouchableOpacity : View;
+  const showCount = typeof count === 'number' && count > 0;
+  const initial = (name || '?').trim().charAt(0).toUpperCase() || '?';
+  return (
+    <Comp
+      activeOpacity={0.85}
+      onPress={onPress}
+      style={[s.accountRow, highlighted && s.accountRowHighlighted]}
+    >
+      <View style={s.accountAvatar}>
+        {logoType ? (
+          <PlatformLogo type={logoType} size={22} />
+        ) : (
+          <Text style={s.accountInitial}>{initial}</Text>
+        )}
+      </View>
+      <View style={s.accountBody}>
+        <Text style={s.accountName} numberOfLines={1}>
+          {name}
+        </Text>
+        {!!detail && (
+          <Text style={s.accountDetail} numberOfLines={1}>
+            {detail}
+          </Text>
+        )}
+      </View>
+      <View style={s.accountRight}>
+        {showCount ? (
+          <Text style={s.accountCount}>{count}</Text>
+        ) : rightLabel ? (
+          <Text style={s.accountRightLabel}>{rightLabel}</Text>
+        ) : null}
+        {onPress ? (
+          <MaterialCommunityIcons name="chevron-right" size={20} color={IC.muted} />
+        ) : null}
+      </View>
     </Comp>
   );
 }
@@ -379,6 +538,8 @@ const s = StyleSheet.create({
 
   // Paragraph
   paragraph: { fontSize: 17, color: IC.muted, textAlign: 'center', lineHeight: 24, paddingHorizontal: 16 },
+  centeredHeading: { fontSize: 20, fontWeight: '600', color: IC.ink, textAlign: 'center', letterSpacing: -0.4, lineHeight: 26, paddingHorizontal: 20 },
+  sectionCaption: { fontSize: 13, color: IC.muted, letterSpacing: 0.1, marginBottom: 12, marginLeft: 4 },
 
   // Numbered card
   card: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: IC.card, borderRadius: 20, paddingVertical: 18, paddingHorizontal: 18, marginBottom: 12 },
@@ -390,6 +551,19 @@ const s = StyleSheet.create({
   cardSub: { fontSize: 15, color: IC.muted, marginTop: 3, lineHeight: 20 },
   cardCount: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 1 },
   cardCountText: { fontSize: 16, color: IC.muted, fontVariant: ['tabular-nums'] },
+  explainerDesc: { fontSize: 15, color: IC.muted, marginTop: 4, lineHeight: 21 },
+
+  // Account row (Your stores)
+  accountRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: IC.card, borderRadius: 16, paddingVertical: 13, paddingHorizontal: 14, marginBottom: 10 },
+  accountRowHighlighted: { borderWidth: 1, borderColor: IC.accent, backgroundColor: IC.cardActive, paddingVertical: 12, paddingHorizontal: 13 },
+  accountAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: IC.bg, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  accountInitial: { fontSize: 17, fontWeight: '700', color: IC.ink },
+  accountBody: { flex: 1, minWidth: 0 },
+  accountName: { fontSize: 16, fontWeight: '700', color: IC.ink, letterSpacing: -0.2 },
+  accountDetail: { fontSize: 14, color: IC.muted, marginTop: 2, textTransform: 'capitalize' },
+  accountRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  accountCount: { fontSize: 16, color: IC.muted, fontVariant: ['tabular-nums'] },
+  accountRightLabel: { fontSize: 14, color: IC.muted },
 
   // Group row
   groupRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: IC.card, borderRadius: 16, paddingVertical: 16, paddingHorizontal: 18, marginBottom: 10 },

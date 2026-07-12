@@ -3,21 +3,22 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { OptimizerBatchGenerateView } from '../components/optimizer/OptimizerBatchGenerateView';
 import { OptimizerPhotoModeView } from '../components/optimizer/OptimizerPhotoModeView';
 import OptimizerReviewView from '../components/optimizer/OptimizerReviewView';
 import { useOptimizerQueues, ClassifiedProduct } from '../hooks/useOptimizerQueues';
-import { RC } from '../components/resolve/ResolveKit';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { getPlatform } from '../config/platforms';
 import {
-  LobbyHeader,
-  UpNextRow,
-  IconName,
-} from '../components/quest/LobbyKit';
+  IC,
+  InboxHeader,
+  HeroNumeral,
+  SuccessBlock,
+  PillButton,
+  NumberedCard,
+} from '../components/importinbox/InboxKit';
 
 // Optimize v2 — one lobby of grouped gaps (photos · details · manual), each
 // routing to the fix it needs. Photo + details keep the real camera / AI views;
@@ -176,43 +177,29 @@ export function BackfillOptimizerScreen() {
     const n = dataQueue.length + manualQueue.length;
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-        <View style={styles.introBackRow}>
-          <TouchableOpacity onPress={() => setView({ kind: 'lobby' })} style={styles.introBackBtn} hitSlop={HIT}>
-            <MaterialCommunityIcons name="arrow-left" size={20} color={RC.ink} />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.introBody}>
-          <View style={styles.taskStrip}>
-            <View style={styles.taskStripDone}>
-              <MaterialCommunityIcons name="check-bold" size={14} color={RC.greenDark} />
-              <Text style={styles.taskStripDoneText}>Photos</Text>
-            </View>
-            <View style={styles.taskStripLine} />
-            <View style={styles.taskStripActive}>
-              <Text style={styles.taskStripActiveText}>Details</Text>
-            </View>
-          </View>
-          <Text style={styles.introTitle}>Now, the details</Text>
-          <Text style={styles.introSub}>
-            We&rsquo;ll write the title, description and category for {n} item{plural(n)} — for every channel.
-            You just review each one.
+        <InboxHeader onBack={() => setView({ kind: 'lobby' })} />
+        <View style={styles.centerBody}>
+          <Text style={styles.centerTitle}>Now, the details</Text>
+          <Text style={styles.centerCopy}>
+            We&rsquo;ll write the title, description and category for {n} item{plural(n)} — for every
+            channel. You just review each one.
           </Text>
         </View>
-        <View style={[styles.introFooter, { paddingBottom: insets.bottom + 18 }]}>
-          <TouchableOpacity
-            activeOpacity={0.9}
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+          <PillButton
+            label={`Generate details for ${n}`}
             onPress={() => {
               setReviewIds(new Set([...dataQueue, ...manualQueue].map((p) => p.Id)));
               if (dataQueue.length > 0) setView({ kind: 'lesson', q: 'data' });
               else setView({ kind: 'review' });
             }}
-            style={styles.introPrimary}
+          />
+          <TouchableOpacity
+            onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')}
+            style={styles.quietBtn}
+            activeOpacity={0.6}
           >
-            <MaterialCommunityIcons name="star-four-points" size={18} color="#fff" />
-            <Text style={styles.introPrimaryText}>Generate details for {n}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')} style={styles.introSkip}>
-            <Text style={styles.introSkipText}>I&rsquo;ll write them myself</Text>
+            <Text style={styles.quietText}>I&rsquo;ll write them myself</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -253,26 +240,26 @@ export function BackfillOptimizerScreen() {
   if (view.kind === 'done') {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
-        <View style={styles.doneWrap}>
-          <View style={styles.doneBadge}>
-            <MaterialCommunityIcons name="check" size={40} color="#fff" />
-          </View>
-          <Text style={styles.doneCount}>{view.n}</Text>
-          <Text style={styles.doneLabel}>{view.label}</Text>
-          <TouchableOpacity
-            style={styles.doneBtn}
-            activeOpacity={0.88}
+        <View style={styles.centerBody}>
+          <SuccessBlock
+            title={`${view.n} ${view.label}`}
+            lines={[firstBucket ? 'A little more to polish.' : 'Everything is polished.']}
+          />
+        </View>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+          <PillButton
+            label={firstBucket ? 'Keep going' : 'Finish'}
             onPress={() => (firstBucket ? setView({ kind: 'lobby' }) : finishOptimize())}
-          >
-            <Text style={styles.doneBtnText}>{firstBucket ? 'Keep going' : 'All set · finish'}</Text>
-            <MaterialCommunityIcons name="chevron-right" size={18} color="#fff" />
-          </TouchableOpacity>
+          />
         </View>
       </View>
     );
   }
 
-  // ── Step 0 · the optimize intro — names the two tasks (Photos · Details) ──
+  // ── Lobby · the optimize intro — a calm sibling of the hub ────────────────
+  // Direct entry only (the hub deep-links PAST this via source: hub-photos /
+  // hub-details). Two numbered cards name the tasks; the pill starts the first
+  // open one, or finishes when nothing's left.
   const photosLeft = photoQueue.length;
   const detailsLeft = dataQueue.length + manualQueue.length;
   const startBucket: Bucket | null =
@@ -280,87 +267,81 @@ export function BackfillOptimizerScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-      <LobbyHeader
-        title="Optimize"
-        countSuffix={`${counts.total} items`}
-        onBack={() => navigation.goBack()}
-      />
+      <InboxHeader title="Optimize" onBack={() => navigation.goBack()} />
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={RC.green} />
+          <ActivityIndicator size="large" color={IC.accent} />
         </View>
       ) : (
-        <View style={styles.taskList}>
-          <UpNextRow
-            icon="camera"
-            title="Photos"
-            count={photosLeft}
-            state={photosLeft > 0 ? 'active' : 'done'}
-            onPress={photosLeft > 0 ? () => enterBucket('photo') : undefined}
+        <ScrollView contentContainerStyle={styles.lobbyContent} showsVerticalScrollIndicator={false}>
+          <HeroNumeral
+            value={counts.attention}
+            label={counts.attention === 1 ? 'item to polish' : 'items to polish'}
           />
-          <UpNextRow
-            icon="star-four-points"
-            title="Details"
-            count={detailsLeft}
-            state={detailsLeft > 0 ? (photosLeft > 0 ? 'locked' : 'active') : 'done'}
-            onPress={detailsLeft > 0 ? () => enterBucket(dataQueue.length > 0 ? 'data' : 'manual') : undefined}
-          />
-        </View>
+          <View style={styles.cardList}>
+            <NumberedCard
+              index={1}
+              title="Photos"
+              done={photosLeft === 0}
+              active={photosLeft > 0}
+              sub={photosLeft > 0 ? `${photosLeft} item${plural(photosLeft)} missing photos` : 'Done'}
+              count={photosLeft}
+              onPress={photosLeft > 0 ? () => enterBucket('photo') : undefined}
+            />
+            <NumberedCard
+              index={2}
+              title="Details"
+              done={detailsLeft === 0}
+              active={detailsLeft > 0 && photosLeft === 0}
+              sub={
+                detailsLeft === 0
+                  ? 'Done'
+                  : photosLeft > 0
+                    ? 'Add photos first'
+                    : 'Titles, descriptions and SKUs'
+              }
+              count={detailsLeft}
+              onPress={
+                detailsLeft > 0
+                  ? () => enterBucket(dataQueue.length > 0 ? 'data' : 'manual')
+                  : undefined
+              }
+            />
+          </View>
+        </ScrollView>
       )}
 
-      <LinearGradient colors={['rgba(255,255,255,0)', '#FFFFFF']} style={styles.fade} pointerEvents="none" />
-      <View style={[styles.introFooter, { paddingBottom: insets.bottom + 18 }]}>
-        {startBucket ? (
-          <TouchableOpacity activeOpacity={0.9} onPress={() => enterBucket(startBucket)} style={styles.introPrimary}>
-            <Text style={styles.introPrimaryText}>Start</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity activeOpacity={0.9} onPress={finishOptimize} style={styles.introPrimary}>
-            <Text style={styles.introPrimaryText}>Finish</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.introSkip}>
-          <Text style={styles.introSkipText}>{startBucket ? 'Later' : 'Back'}</Text>
+      <LinearGradient colors={['rgba(255,255,255,0)', IC.bg]} style={styles.fade} pointerEvents="none" />
+      <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+        <PillButton
+          label={startBucket ? 'Start' : 'Finish'}
+          onPress={startBucket ? () => enterBucket(startBucket) : finishOptimize}
+        />
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.quietBtn} activeOpacity={0.6}>
+          <Text style={styles.quietText}>{startBucket ? 'Later' : 'Back'}</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
-
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: RC.bg },
+  screen: { flex: 1, backgroundColor: IC.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 150 },
+  // Lobby body (hero numeral + numbered cards). Bottom padding clears the pinned footer.
+  lobbyContent: { paddingHorizontal: 20, paddingBottom: 170 },
+  cardList: { marginTop: 4 },
 
-  doneWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, gap: 4 },
-  doneBadge: { width: 84, height: 84, borderRadius: 42, backgroundColor: RC.green, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
-  doneCount: { fontSize: 52, fontWeight: '800', color: RC.ink, letterSpacing: -1.5 },
-  doneLabel: { fontSize: 15, fontWeight: '600', color: RC.muted },
-  doneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: RC.green, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 28, marginTop: 28 },
-  doneBtnText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+  // Centered editorial beats (explainer handoff + done). Calm copy, no quest cards.
+  centerBody: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, gap: 12 },
+  centerTitle: { fontSize: 26, fontWeight: '700', color: IC.ink, letterSpacing: -0.6, textAlign: 'center' },
+  centerCopy: { fontSize: 16, color: IC.muted, textAlign: 'center', lineHeight: 23 },
 
-  // ── Step 0 intro + explainer (task framing) ───────────────────────────────
-  introTitle: { fontSize: 27, fontWeight: '800', color: RC.ink, letterSpacing: -0.6, lineHeight: 32 },
-  introSub: { fontSize: 14.5, fontWeight: '500', color: RC.muted, marginTop: 8 },
-  taskList: { paddingHorizontal: 16, paddingTop: 14 },
-
-  introBackRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: 40 },
-  introBackBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: RC.bg, borderWidth: 1, borderColor: RC.line, alignItems: 'center', justifyContent: 'center' },
-  introBody: { flex: 1, paddingHorizontal: 22, paddingTop: 12, gap: 8 },
-  taskStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  taskStripDone: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: RC.greenSoft, borderWidth: 1, borderColor: RC.greenLine, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
-  taskStripDoneText: { fontSize: 13, fontWeight: '700', color: RC.greenDark },
-  taskStripLine: { flex: 1, height: 2, backgroundColor: RC.line },
-  taskStripActive: { backgroundColor: RC.ink, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
-  taskStripActiveText: { fontSize: 13, fontWeight: '800', color: '#fff' },
-
-  introFooter: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 16, gap: 6 },
-  introPrimary: { height: 54, borderRadius: 14, backgroundColor: RC.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  introPrimaryText: { fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: -0.2 },
-  introSkip: { height: 40, alignItems: 'center', justifyContent: 'center' },
-  introSkipText: { fontSize: 14, fontWeight: '600', color: RC.faint },
+  // Pinned footer (full-width pill + quiet muted text button), shared by every beat.
+  fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 140 },
+  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 20, gap: 4 },
+  quietBtn: { height: 44, alignItems: 'center', justifyContent: 'center' },
+  quietText: { fontSize: 15, fontWeight: '600', color: IC.muted },
 });
