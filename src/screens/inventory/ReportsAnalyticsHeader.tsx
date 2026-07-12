@@ -38,8 +38,11 @@ const money = (n: number): string =>
 
 interface DayPoint { label: string; revenue: number }
 
+interface PlatformRow { name: string; revenue: number; sales: number }
+
 interface CampaignRow {
   id: string;
+  strategyId: string | null;
   collected: number;
   target: number;
   progressPct: number;
@@ -55,11 +58,13 @@ interface AnalyticsState {
   revenue30d: number;
   avgSale: number;
   series: DayPoint[];
+  /** Which platforms the sales came from (30d), ranked by revenue. */
+  platforms: PlatformRow[];
 }
 
 export function useInventoryAnalytics(): AnalyticsState {
   const [state, setState] = useState<AnalyticsState>({
-    loading: true, sales30d: 0, revenue30d: 0, avgSale: 0, series: [],
+    loading: true, sales30d: 0, revenue30d: 0, avgSale: 0, series: [], platforms: [],
   });
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function useInventoryAnalytics(): AnalyticsState {
         let sales = 0;
         let revenue = 0;
         const byDay = new Map<string, number>();
+        const byPlatform = new Map<string, { revenue: number; sales: number }>();
         for (const e of events) {
           if (!isOrderEvent(e.EventType)) continue;
           const t = Date.parse(e.Timestamp);
@@ -91,11 +97,20 @@ export function useInventoryAnalytics(): AnalyticsState {
           const amount = pickAmount(e.Details || {});
           sales += 1;
           revenue += amount;
+          const platform = String(e.PlatformType || 'other').toLowerCase();
+          const p = byPlatform.get(platform) || { revenue: 0, sales: 0 };
+          p.revenue += amount;
+          p.sales += 1;
+          byPlatform.set(platform, p);
           if (t >= cutoff14) {
             const day = new Date(t).toISOString().slice(0, 10);
             byDay.set(day, (byDay.get(day) || 0) + amount);
           }
         }
+        const platforms: PlatformRow[] = [...byPlatform.entries()]
+          .map(([name, p]) => ({ name, revenue: p.revenue, sales: p.sales }))
+          .sort((a, b) => b.revenue - a.revenue || b.sales - a.sales)
+          .slice(0, 5);
 
         // Continuous last-14-days series (zero-filled) so the line reads as a
         // timeline, not a scatter of only the days that had sales.
@@ -116,10 +131,70 @@ export function useInventoryAnalytics(): AnalyticsState {
             revenue30d: revenue,
             avgSale: sales > 0 ? revenue / sales : 0,
             series,
+            platforms,
           });
         }
       } catch (e) {
         log.warn('[analytics] fetch failed:', e instanceof Error ? e.message : e);
+        if (!cancelled) setState((s) => ({ ...s, loading: false }));
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+  }, []);
+
+  return state;
+}
+
+interface RecoverySummary { soldCount: number; recoveryRatePct: number | null; avgDaysToSale: number | null }
+interface PoolRow { id: string | null; name: string; units: number }
+
+/**
+ * Server-computed portfolio metrics: RECOVERY (how much of suggested value
+ * sold items captured, and how fast — the cost-basis-free P&L) overall and per
+ * campaign, plus which pools hold the units.
+ */
+function usePortfolioMetrics(): {
+  loading: boolean;
+  recovery: RecoverySummary | null;
+  recoveryByStrategy: Map<string, RecoverySummary>;
+  pools: PoolRow[];
+} {
+  const [state, setState] = useState<{
+    loading: boolean;
+    recovery: RecoverySummary | null;
+    recoveryByStrategy: Map<string, RecoverySummary>;
+    pools: PoolRow[];
+  }>({ loading: true, recovery: null, recoveryByStrategy: new Map(), pools: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    (async () => {
+      try {
+        const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('no token');
+        const res = await fetch(`${API_BASE_URL}/api/agent/analytics/portfolio`, {
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        const recovery: RecoverySummary | null =
+          data?.recovery && typeof data.recovery === 'object' ? data.recovery : null;
+        const recoveryByStrategy = new Map<string, RecoverySummary>(
+          (Array.isArray(data?.campaigns) ? data.campaigns : [])
+            .filter((c: any) => c?.strategyId)
+            .map((c: any) => [String(c.strategyId), c as RecoverySummary]),
+        );
+        const pools: PoolRow[] = (Array.isArray(data?.pools) ? data.pools : [])
+          .filter((p: any) => p && typeof p.units === 'number' && p.units > 0)
+          .map((p: any) => ({ id: p.id ?? null, name: String(p.name || 'Pool'), units: p.units }));
+        if (!cancelled) setState({ loading: false, recovery, recoveryByStrategy, pools });
+      } catch (e) {
+        log.warn('[portfolio] fetch failed:', e instanceof Error ? e.message : e);
         if (!cancelled) setState((s) => ({ ...s, loading: false }));
       } finally {
         clearTimeout(timeout);
@@ -170,6 +245,7 @@ function useCampaignPortfolio(): { loading: boolean; campaigns: CampaignRow[] } 
           }
           return {
             id: String(s.id),
+            strategyId: st.strategyId ? String(st.strategyId) : null,
             collected,
             target,
             progressPct,
@@ -201,8 +277,18 @@ const PACE_STYLE: Record<CampaignRow['pace'], { bg: string; fg: string }> = {
 };
 
 const ReportsAnalyticsHeader: React.FC = () => {
-  const { loading, sales30d, revenue30d, avgSale, series } = useInventoryAnalytics();
+  const { loading, sales30d, revenue30d, avgSale, series, platforms } = useInventoryAnalytics();
   const portfolio = useCampaignPortfolio();
+  const metrics = usePortfolioMetrics();
+
+  const maxPlatformRevenue = useMemo(
+    () => Math.max(...platforms.map((p) => p.revenue), 1),
+    [platforms],
+  );
+  const totalPoolUnits = useMemo(
+    () => metrics.pools.reduce((n, p) => n + p.units, 0) || 1,
+    [metrics.pools],
+  );
 
   const hasRevenue = useMemo(() => series.some((p) => p.revenue > 0), [series]);
   const { width: windowWidth } = useWindowDimensions();
@@ -232,6 +318,29 @@ const ReportsAnalyticsHeader: React.FC = () => {
           <Text style={styles.tileLabel}>Avg sale</Text>
         </View>
       </View>
+
+      {/* Recovery: the cost-basis-free P&L. How much of the suggested value
+          sold items captured, and how fast. */}
+      {metrics.recovery && metrics.recovery.soldCount > 0 ? (
+        <View style={styles.tileRow}>
+          <View style={styles.tile}>
+            <Text style={styles.tileValue}>
+              {metrics.recovery.recoveryRatePct != null ? `${metrics.recovery.recoveryRatePct}%` : '—'}
+            </Text>
+            <Text style={styles.tileLabel}>Value recovered</Text>
+          </View>
+          <View style={styles.tile}>
+            <Text style={styles.tileValue}>
+              {metrics.recovery.avgDaysToSale != null ? `${metrics.recovery.avgDaysToSale}d` : '—'}
+            </Text>
+            <Text style={styles.tileLabel}>Avg time to sale</Text>
+          </View>
+          <View style={styles.tile}>
+            <Text style={styles.tileValue}>{metrics.recovery.soldCount}</Text>
+            <Text style={styles.tileLabel}>Items sold</Text>
+          </View>
+        </View>
+      ) : null}
 
       {hasRevenue ? (
         <View style={styles.chartCard}>
@@ -264,12 +373,50 @@ const ReportsAnalyticsHeader: React.FC = () => {
         </View>
       )}
 
-      {/* Campaigns as portfolio positions: collected vs target, pace, live/sold. */}
+      {/* Which platforms the sales came from (30d), Shopify-analytics style. */}
+      {platforms.length > 0 ? (
+        <View style={styles.campaignCard}>
+          <Text style={styles.chartTitle}>Sales by platform · 30d</Text>
+          {platforms.map((p) => (
+            <View key={p.name} style={styles.breakdownRow}>
+              <Text style={styles.breakdownName} numberOfLines={1}>{p.name}</Text>
+              <View style={styles.breakdownBarArea}>
+                <View style={styles.paceTrack}>
+                  <View style={[styles.paceFill, { width: `${Math.max(4, Math.round((p.revenue / maxPlatformRevenue) * 100))}%` }]} />
+                </View>
+              </View>
+              <Text style={styles.breakdownValue}>{money(p.revenue)} · {p.sales}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {/* Which pools hold the inventory. */}
+      {metrics.pools.length > 0 ? (
+        <View style={styles.campaignCard}>
+          <Text style={styles.chartTitle}>Inventory by pool</Text>
+          {metrics.pools.map((p) => (
+            <View key={p.id ?? 'unassigned'} style={styles.breakdownRow}>
+              <Text style={styles.breakdownName} numberOfLines={1}>{p.name}</Text>
+              <View style={styles.breakdownBarArea}>
+                <View style={styles.paceTrack}>
+                  <View style={[styles.paceFill, { width: `${Math.max(4, Math.round((p.units / totalPoolUnits) * 100))}%` }]} />
+                </View>
+              </View>
+              <Text style={styles.breakdownValue}>{p.units.toLocaleString()} units</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {/* Campaigns as portfolio positions: collected vs target, pace, live/sold,
+          and recovery when the campaign has sales. */}
       {portfolio.campaigns.length > 0 ? (
         <View style={styles.campaignCard}>
           <Text style={styles.chartTitle}>Campaigns</Text>
           {portfolio.campaigns.map((c) => {
             const paceStyle = PACE_STYLE[c.pace];
+            const recovery = c.strategyId ? metrics.recoveryByStrategy.get(c.strategyId) : undefined;
             return (
               <View key={c.id} style={styles.campaignRow}>
                 <View style={{ flex: 1 }}>
@@ -278,6 +425,7 @@ const ReportsAnalyticsHeader: React.FC = () => {
                   </Text>
                   <Text style={styles.campaignSub} numberOfLines={1}>
                     {c.sold} sold · {c.listed} live{c.daysLeft != null ? ` · ${c.daysLeft}d left` : ''}
+                    {recovery?.recoveryRatePct != null ? ` · ${recovery.recoveryRatePct}% recovered` : ''}
                   </Text>
                   <View style={styles.paceTrack}>
                     <View style={[styles.paceFill, { width: `${Math.min(c.progressPct, 100)}%` }]} />
@@ -327,6 +475,10 @@ const styles = StyleSheet.create({
   paceFill: { height: 4, borderRadius: 999, backgroundColor: BRAND },
   pacePill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
   pacePillText: { fontSize: 10.5, fontFamily: FONT.semibold },
+  breakdownRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  breakdownName: { width: 92, fontSize: 12.5, fontFamily: FONT.semibold, color: INK, textTransform: 'capitalize' },
+  breakdownBarArea: { flex: 1 },
+  breakdownValue: { fontSize: 11.5, fontFamily: FONT.medium, color: DIM, minWidth: 74, textAlign: 'right' },
   sectionLabel: { fontSize: 13, fontFamily: FONT.semibold, color: DIM, marginTop: 10, marginBottom: 2, paddingHorizontal: 2 },
 });
 
