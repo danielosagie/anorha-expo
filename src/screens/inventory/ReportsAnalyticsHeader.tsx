@@ -10,6 +10,35 @@ const log = createLogger('ReportsAnalyticsHeader');
 // A hung mobile request must not leave the header loading forever.
 const FETCH_TIMEOUT_MS = 15000;
 
+// Authed GET with one deadline over the WHOLE chain. The token step can hang
+// too, and an AbortController only cancels the fetch — so the deadline is a
+// race, not just an abort. Callers abort the controller on unmount; that also
+// settles the race immediately instead of waiting out a stuck token call.
+async function fetchJsonAuthed(path: string, controller: AbortController): Promise<any> {
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await Promise.race([
+      (async () => {
+        const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('no token');
+        const res = await fetch(`${API_BASE_URL}${path}`, {
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+      })(),
+      new Promise<never>((_, reject) => {
+        const onAbort = () => reject(new Error('request timed out'));
+        if (controller.signal.aborted) onAbort();
+        else controller.signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // Analytics strip at the top of the Reports tab: what actually happened,
 // summarized (30d sales, revenue, avg sale) plus a single-series revenue line
 // for the last 14 days. Pulls the same /api/activity feed the Orders tab reads,
@@ -70,17 +99,9 @@ export function useInventoryAnalytics(): AnalyticsState {
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     (async () => {
       try {
-        const token = await ensureSupabaseJwt();
-        if (!token) throw new Error('no token');
-        const res = await fetch(`${API_BASE_URL}/api/activity?limit=200`, {
-          signal: controller.signal,
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const data = await res.json();
+        const data = await fetchJsonAuthed('/api/activity?limit=200', controller);
         const events: any[] = Array.isArray(data?.events) ? data.events : [];
         const now = Date.now();
         const cutoff30 = now - 30 * 86400000;
@@ -135,13 +156,12 @@ export function useInventoryAnalytics(): AnalyticsState {
           });
         }
       } catch (e) {
+        if (cancelled) return;
         log.warn('[analytics] fetch failed:', e instanceof Error ? e.message : e);
-        if (!cancelled) setState((s) => ({ ...s, loading: false }));
-      } finally {
-        clearTimeout(timeout);
+        setState((s) => ({ ...s, loading: false }));
       }
     })();
-    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+    return () => { cancelled = true; controller.abort(); };
   }, []);
 
   return state;
@@ -171,17 +191,9 @@ function usePortfolioMetrics(): {
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     (async () => {
       try {
-        const token = await ensureSupabaseJwt();
-        if (!token) throw new Error('no token');
-        const res = await fetch(`${API_BASE_URL}/api/agent/analytics/portfolio`, {
-          signal: controller.signal,
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const data = await res.json();
+        const data = await fetchJsonAuthed('/api/agent/analytics/portfolio', controller);
         const recovery: RecoverySummary | null =
           data?.recovery && typeof data.recovery === 'object' ? data.recovery : null;
         const recoveryByStrategy = new Map<string, RecoverySummary>(
@@ -194,13 +206,12 @@ function usePortfolioMetrics(): {
           .map((p: any) => ({ id: p.id ?? null, name: String(p.name || 'Pool'), units: p.units }));
         if (!cancelled) setState({ loading: false, recovery, recoveryByStrategy, pools });
       } catch (e) {
+        if (cancelled) return;
         log.warn('[portfolio] fetch failed:', e instanceof Error ? e.message : e);
-        if (!cancelled) setState((s) => ({ ...s, loading: false }));
-      } finally {
-        clearTimeout(timeout);
+        setState((s) => ({ ...s, loading: false }));
       }
     })();
-    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+    return () => { cancelled = true; controller.abort(); };
   }, []);
 
   return state;
@@ -213,17 +224,9 @@ function useCampaignPortfolio(): { loading: boolean; campaigns: CampaignRow[] } 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     (async () => {
       try {
-        const token = await ensureSupabaseJwt();
-        if (!token) throw new Error('no token');
-        const res = await fetch(`${API_BASE_URL}/api/agent/sessions?type=liquidation&status=active`, {
-          signal: controller.signal,
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const data = await res.json();
+        const data = await fetchJsonAuthed('/api/agent/sessions?type=liquidation&status=active', controller);
         const sessions: any[] = Array.isArray(data?.sessions) ? data.sessions : [];
         const now = Date.now();
         const campaigns: CampaignRow[] = sessions.slice(0, 6).map((s) => {
@@ -257,13 +260,12 @@ function useCampaignPortfolio(): { loading: boolean; campaigns: CampaignRow[] } 
         });
         if (!cancelled) setState({ loading: false, campaigns });
       } catch (e) {
+        if (cancelled) return;
         log.warn('[campaigns] fetch failed:', e instanceof Error ? e.message : e);
-        if (!cancelled) setState({ loading: false, campaigns: [] });
-      } finally {
-        clearTimeout(timeout);
+        setState({ loading: false, campaigns: [] });
       }
     })();
-    return () => { cancelled = true; clearTimeout(timeout); controller.abort(); };
+    return () => { cancelled = true; controller.abort(); };
   }, []);
 
   return state;
@@ -300,7 +302,9 @@ const ReportsAnalyticsHeader: React.FC = () => {
     [series],
   );
 
-  if (loading) return null;
+  // Wait for all three sources so the header appears once, whole — no sections
+  // popping in as the slower fetches resolve. Each is deadline-bounded above.
+  if (loading || portfolio.loading || metrics.loading) return null;
 
   return (
     <View style={styles.wrap}>
@@ -395,8 +399,8 @@ const ReportsAnalyticsHeader: React.FC = () => {
       {metrics.pools.length > 0 ? (
         <View style={styles.campaignCard}>
           <Text style={styles.chartTitle}>Inventory by pool</Text>
-          {metrics.pools.map((p) => (
-            <View key={p.id ?? 'unassigned'} style={styles.breakdownRow}>
+          {metrics.pools.map((p, idx) => (
+            <View key={p.id ?? `unassigned-${idx}`} style={styles.breakdownRow}>
               <Text style={styles.breakdownName} numberOfLines={1}>{p.name}</Text>
               <View style={styles.breakdownBarArea}>
                 <View style={styles.paceTrack}>
