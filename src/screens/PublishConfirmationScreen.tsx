@@ -259,10 +259,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 const url: string | undefined = typeof live === 'string' ? live : live?.url;
                 const hasLink = !!url;
                 // FB keeps its full dispatch vocabulary (queued / posting / waiting-for-computer /
-                // needs-a-check / couldn't-post); everything else without a link reads a quiet "Live".
+                // needs-a-check / couldn't-post); everything else without a link reads a quiet
+                // "Live" — unless this was an inventory-only save, where nothing is live yet.
                 const st = isFb
                   ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
-                  : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
+                  : savedToInventory
+                    ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
+                    : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
                 // A real listing link → open the marketplace page. Otherwise the row still
                 // opens the in-app product (where they can manage/retry); FB without a link is inert.
                 const tappable = hasLink || !isFb;

@@ -91,6 +91,8 @@ function ToggleRow({
         value={value}
         onValueChange={onValueChange}
         disabled={disabled}
+        accessibilityLabel={label}
+        accessibilityHint={sub}
         trackColor={{ false: IC.hairline, true: IC.accent }}
         thumbColor="#FFFFFF"
         ios_backgroundColor={IC.hairline}
@@ -128,6 +130,10 @@ export default function SyncPreferencesSheet({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Save stays disabled until a load for THIS connection succeeds — a failed read
+  // would otherwise let a full PUT of defaults (or a previous store's state)
+  // clobber the hidden round-tripped rules.
+  const [rulesReady, setRulesReady] = useState(false);
 
   // Editable essentials.
   const [syncDirection, setSyncDirection] = useState<SyncDirection>('bidirectional');
@@ -152,6 +158,7 @@ export default function SyncPreferencesSheet({
     (async () => {
       setLoading(true);
       setError(null);
+      setRulesReady(false);
       try {
         const { data, error: qErr } = await supabase
           .from('PlatformConnections')
@@ -224,6 +231,7 @@ export default function SyncPreferencesSheet({
             destinations: { connectionIds: [connectionId] },
           });
         }
+        setRulesReady(true);
       } catch (err) {
         log.error('Error loading sync rules:', err);
         if (alive) setError('Couldn’t load preferences.');
@@ -239,6 +247,7 @@ export default function SyncPreferencesSheet({
   // Save — identical endpoint + body shape to SyncRulesScreen.saveSyncRules. The
   // preserved fields ride along unchanged so this quick edit is purely additive.
   const save = async () => {
+    if (!rulesReady || saving) return;
     setSaving(true);
     setError(null);
     try {
@@ -364,7 +373,7 @@ export default function SyncPreferencesSheet({
       {/* Footer — Save · inline error · quiet "All settings" link */}
       <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
         {!!error && <Text style={styles.errorText}>{error}</Text>}
-        <PillButton label="Save" onPress={save} loading={saving} disabled={loading} />
+        <PillButton label="Save" onPress={save} loading={saving} disabled={loading || !rulesReady || saving} />
         <TouchableOpacity onPress={onOpenAllSettings} activeOpacity={0.7} style={styles.allSettings} hitSlop={HIT}>
           <Text style={styles.allSettingsText}>All settings</Text>
         </TouchableOpacity>
