@@ -24,6 +24,15 @@ import { API_BASE_URL } from '../config/env';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
+  savePlatformOverride,
+  fetchPlatformOverrides,
+  diffOverrideFields,
+  normalizeOverridePrice,
+  overrideFieldLabel,
+  OVERRIDE_FIELDS,
+  type PlatformOverrideValues,
+} from '../lib/platformOptions';
+import {
   ProductVariant,
   PlatformProductMapping,
   InventoryLevel,
@@ -580,6 +589,42 @@ const ProductDetailScreen = observer(
     // Surfaced autosave failure (null = no error). Replaces the old silent
     // swallow so a failed save is visible + retryable instead of lost.
     const [saveError, setSaveError] = useState<string | null>(null);
+
+    // ── Per-platform overrides ──────────────────────────────────────────────
+    // Edits made on a SPECIFIC platform tab (not the "all"/main view) save to that one
+    // channel via the platform-options PUT instead of the canonical autosave (which fans
+    // out to every platform). Pending edits accumulate per connection and flush on a
+    // debounce, matching the canonical autosave cadence.
+    const pendingOverridesRef = useRef<Map<string, PlatformOverrideValues>>(new Map());
+    const overrideSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Overrides confirmed this session (from PUT responses). Keyed by connectionId; a field
+    // value present = active override, explicit null = cleared. Merged over the server-
+    // fetched overrides so the quiet indicator reflects edits immediately, before any reload.
+    const [sessionOverrides, setSessionOverrides] = useState<Record<string, PlatformOverrideValues>>({});
+    // Server-stored overrides (dedicated ConnectionTitle/Description/Price columns on
+    // PlatformProductMappings, read via the platform-options GET). Keyed by connectionId;
+    // platformType is the lowercase platform key the value belongs to. A failed fetch
+    // simply leaves this empty — the screen falls back to session-only override state.
+    const [fetchedOverrides, setFetchedOverrides] = useState<
+      Record<string, { platformType: string; values: PlatformOverrideValues }>
+    >({});
+    // Ref mirror so the (once-per-product) hydration effect can overlay overrides without
+    // adding a reactive dependency; and a ref to the refresh fn so loadPlatformData can
+    // trigger it without dependency churn.
+    const fetchedOverridesRef = useRef<Record<string, { platformType: string; values: PlatformOverrideValues }>>({});
+    const refreshOverridesFnRef = useRef<() => void>(() => {});
+    // Tracks which variant the override state belongs to; reset on variant switch and used
+    // to drop a stale in-flight overrides fetch that resolves after the product changed.
+    const overridesVariantIdRef = useRef<string | null>(null);
+    useEffect(() => {
+      overridesVariantIdRef.current = detailedItem?.Id ?? null;
+      fetchedOverridesRef.current = {};
+      setFetchedOverrides({});
+      setSessionOverrides({});
+      pendingOverridesRef.current.clear();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailedItem?.Id]);
+
     const [deleteConfirmation, setDeleteConfirmation] = useState<{ visible: boolean; platformKey: string }>({ visible: false, platformKey: '' });
 
     // Custom Action Menu State
@@ -744,6 +789,37 @@ const ProductDetailScreen = observer(
       return `Location ${level.PlatformLocationId || 'Unknown'}`;
     }, []);
 
+    // Fetch this variant's stored per-connection overrides (ConnectionTitle/Description/
+    // Price on PlatformProductMappings) via the platform-options GET. Non-blocking and
+    // failure-tolerant: any error (404, offline, endpoint not deployed) is swallowed and
+    // the screen keeps its session-only override state.
+    const refreshPlatformOverrides = useCallback(async () => {
+      if (!detailedItem?.ProductId || !detailedItem?.Id) return;
+      const variantId = detailedItem.Id;
+      const entries = await fetchPlatformOverrides(detailedItem.ProductId, variantId);
+      if (!entries) return;
+      // Product switched while the fetch was in flight — drop the stale result.
+      if (overridesVariantIdRef.current !== variantId) return;
+      const next: Record<string, { platformType: string; values: PlatformOverrideValues }> = {};
+      for (const entry of entries) {
+        if (!entry.hasOverrides) continue;
+        const o = entry.overrides || ({} as any);
+        const values: PlatformOverrideValues = {};
+        if (o.title != null && String(o.title).length > 0) values.title = String(o.title);
+        if (o.description != null && String(o.description).length > 0) values.description = String(o.description);
+        const price = normalizeOverridePrice(o.price);
+        if (price !== null) values.price = price;
+        if (Object.keys(values).length === 0) continue;
+        next[entry.connectionId] = { platformType: (entry.platformType || '').toLowerCase(), values };
+      }
+      fetchedOverridesRef.current = next;
+      setFetchedOverrides(next);
+    }, [detailedItem?.ProductId, detailedItem?.Id]);
+
+    useEffect(() => {
+      refreshOverridesFnRef.current = () => { refreshPlatformOverrides(); };
+    }, [refreshPlatformOverrides]);
+
     // Load platform connections and organize inventory with realtime updates
     const loadPlatformData = useCallback(async () => {
       if (!detailedItem) return;
@@ -752,6 +828,10 @@ const ProductDetailScreen = observer(
         if (!currentOrg?.id) return;
 
         log.debug('[ProductDetail] Loading platform data for variant:', detailedItem.Id, 'ProductId:', detailedItem.ProductId);
+
+        // Refresh the per-connection overrides alongside the platform data (non-blocking;
+        // failures fall back to session-only override state).
+        refreshOverridesFnRef.current?.();
 
         // Load all ACTIVE platform connections for the org. (Clerk-native auth configures
         // the Supabase client with an accessToken, which blocks supabase.auth.getUser();
@@ -1721,6 +1801,256 @@ const ProductDetailScreen = observer(
         setIsSaving(false);
       }
     }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms, showBanner, loadPlatformData]);
+
+    // ── Per-platform override save path ─────────────────────────────────────
+    // Separate from performAutoSave: an edit on a specific platform tab targets ONE
+    // connection (never fanned out). Canonical/main-tab edits still go through
+    // performAutoSave above, untouched.
+
+    // Fold a server-confirmed override into the session record. Prefer the authoritative
+    // `overrides` the server echoes; fall back to what we sent. Empty/null fields drop out
+    // so the indicator only reflects real overrides.
+    const mergeConfirmedOverride = useCallback(
+      (
+        prev: PlatformOverrideValues | undefined,
+        sent: PlatformOverrideValues,
+        returned: Record<string, unknown> | undefined,
+      ): PlatformOverrideValues => {
+        const base: any = { ...(prev || {}) };
+        const apply = (src: Record<string, any>) => {
+          for (const f of OVERRIDE_FIELDS) if (f in src) base[f] = src[f];
+        };
+        apply(sent as any);
+        if (returned && typeof returned === 'object') apply(returned as any);
+        for (const f of OVERRIDE_FIELDS) {
+          const v = base[f];
+          if (v === null || v === undefined || v === '') delete base[f];
+        }
+        return base as PlatformOverrideValues;
+      },
+      [],
+    );
+
+    // Map a platform tab key (e.g. 'ebay') to the connection to override. Prefer an existing
+    // mapping for this variant; fall back to any enabled connection of that platform type.
+    const resolveConnectionIdForPlatform = useCallback(
+      (platformKey: string): string | undefined => {
+        const lower = platformKey.toLowerCase();
+        const mapping = mappings.find(
+          (m) =>
+            m.ProductVariantId === detailedItem?.Id &&
+            (connections.find((c) => c.Id === m.PlatformConnectionId)?.PlatformType || '').toLowerCase() === lower,
+        );
+        if (mapping?.PlatformConnectionId) return mapping.PlatformConnectionId;
+        const conn = connections.find((c) => (c.PlatformType || '').toLowerCase() === lower && c.IsEnabled);
+        return conn?.Id;
+      },
+      [mappings, connections, detailedItem?.Id],
+    );
+
+    const platformLabelForConnection = useCallback(
+      (connectionId: string): string => {
+        const conn = connections.find((c) => c.Id === connectionId);
+        const raw = (conn?.PlatformType || '').toString();
+        return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'this channel';
+      },
+      [connections],
+    );
+
+    // Active overrides per connection: server-fetched (dedicated ConnectionTitle/
+    // ConnectionDescription/ConnectionPrice mapping columns, via the platform-options GET)
+    // merged under this session's confirmed PUT results — session wins, including clears.
+    const overridesByConnection = useMemo(() => {
+      const out: Record<string, PlatformOverrideValues> = {};
+      for (const [connId, info] of Object.entries(fetchedOverrides)) {
+        out[connId] = { ...info.values };
+      }
+      for (const [connId, ov] of Object.entries(sessionOverrides)) {
+        const merged: any = { ...(out[connId] || {}) };
+        for (const f of OVERRIDE_FIELDS) {
+          if (f in ov) {
+            const v = (ov as any)[f];
+            if (v === null || v === undefined || v === '') delete merged[f];
+            else merged[f] = v;
+          }
+        }
+        if (Object.keys(merged).length > 0) out[connId] = merged;
+        else delete out[connId];
+      }
+      return out;
+    }, [fetchedOverrides, sessionOverrides]);
+
+    // Seed the platform tabs' displayed title/description/price from the fetched overrides,
+    // so an overridden eBay tab opens with its custom values instead of canonical. Only the
+    // override fields are touched; a field with a pending (unflushed) edit is skipped; and
+    // this writes displayedPlatforms directly — never through onChangePlatforms — so the
+    // per-tab diff heuristic below can't mistake seeding for a user edit.
+    useEffect(() => {
+      const seeds: Array<{ platformKey: string; values: PlatformOverrideValues }> = [];
+      for (const [connId, info] of Object.entries(fetchedOverrides)) {
+        const platformKey =
+          info.platformType ||
+          (connections.find((c) => c.Id === connId)?.PlatformType || '').toLowerCase();
+        if (!platformKey) continue;
+        // Session-confirmed values win over the fetched snapshot (including clears).
+        const merged: any = { ...info.values };
+        const sess = sessionOverrides[connId];
+        if (sess) {
+          for (const f of OVERRIDE_FIELDS) {
+            if (f in sess) {
+              const v = (sess as any)[f];
+              if (v === null || v === undefined || v === '') delete merged[f];
+              else merged[f] = v;
+            }
+          }
+        }
+        const pending = pendingOverridesRef.current.get(connId);
+        if (pending) {
+          for (const f of OVERRIDE_FIELDS) if (f in pending) delete merged[f];
+        }
+        if (Object.keys(merged).length > 0) seeds.push({ platformKey, values: merged });
+      }
+      if (seeds.length === 0) return;
+      setDisplayedPlatforms((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const { platformKey, values } of seeds) {
+          const cur = prev[platformKey];
+          if (!cur) continue; // platform not hydrated yet — the hydration overlay covers it
+          const patch: any = {};
+          if (values.title !== undefined && String(cur.title ?? '') !== String(values.title)) patch.title = values.title;
+          if (values.description !== undefined && String(cur.description ?? '') !== String(values.description)) patch.description = values.description;
+          if (values.price !== undefined && normalizeOverridePrice(cur.price) !== normalizeOverridePrice(values.price)) patch.price = values.price;
+          if (Object.keys(patch).length > 0) {
+            next[platformKey] = { ...cur, ...patch };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, [fetchedOverrides, sessionOverrides, connections]);
+
+    // Flush the debounced pending overrides — one PUT per connection.
+    const flushPendingOverrides = useCallback(async () => {
+      if (!detailedItem) return;
+      const entries = Array.from(pendingOverridesRef.current.entries());
+      pendingOverridesRef.current.clear();
+      if (entries.length === 0) return;
+      const productId = detailedItem.ProductId;
+      const variantId = detailedItem.Id;
+      let anyRefresh = false;
+      for (const [connectionId, fields] of entries) {
+        const label = platformLabelForConnection(connectionId);
+        try {
+          const { ok, data } = await savePlatformOverride(productId, variantId, connectionId, fields);
+          if (!ok || !data?.success) {
+            showBanner(`Couldn’t save custom ${label} details`, false);
+            continue;
+          }
+          setSessionOverrides((prev) => ({
+            ...prev,
+            [connectionId]: mergeConfirmedOverride(prev[connectionId], fields, data.overrides),
+          }));
+          // pushed:false = the override SAVED but the live push failed. Calm notice, and the
+          // refresh below repaints the Active Channels dot from the new SyncStatus.
+          if (data.pushed === false) {
+            showBanner(`Saved for ${label} — didn’t reach ${label}`, true);
+          }
+          anyRefresh = true;
+        } catch {
+          showBanner(`Couldn’t save custom ${label} details`, false);
+        }
+      }
+      if (anyRefresh) loadPlatformData().catch(() => {});
+    }, [detailedItem, platformLabelForConnection, showBanner, loadPlatformData, mergeConfirmedOverride]);
+
+    // Always fire the latest flush closure from the debounce timer.
+    const flushOverridesRef = useRef<() => void>(() => {});
+    useEffect(() => {
+      flushOverridesRef.current = flushPendingOverrides;
+    }, [flushPendingOverrides]);
+
+    const queueOverrideSave = useCallback((connectionId: string, fields: PlatformOverrideValues) => {
+      const prev = pendingOverridesRef.current.get(connectionId) || {};
+      pendingOverridesRef.current.set(connectionId, { ...prev, ...fields });
+      if (overrideSaveTimeoutRef.current) clearTimeout(overrideSaveTimeoutRef.current);
+      overrideSaveTimeoutRef.current = setTimeout(() => flushOverridesRef.current?.(), 1200);
+    }, []);
+
+    // Decide whether a form change is a per-platform override (a single specific-tab edit of
+    // title/description/price) vs a canonical/all edit. Relies on the form's own semantics:
+    // an "all" edit fans the value to EVERY platform key, so >1 platform moves; a specific
+    // tab moves exactly one. With <2 platforms there's no per-platform distinction.
+    const detectOverrideEdit = useCallback(
+      (
+        prev: Record<string, any>,
+        next: Record<string, any>,
+      ): { platformKey: string; connectionId: string; fields: PlatformOverrideValues } | null => {
+        const keys = Object.keys(next).filter(
+          (k) => typeof k === 'string' && k.trim().length > 0 && k.toLowerCase() !== 'pool',
+        );
+        if (keys.length < 2) return null;
+        const changed: Array<{ platformKey: string; fields: PlatformOverrideValues }> = [];
+        for (const k of keys) {
+          const diff = diffOverrideFields(prev[k], next[k]);
+          if (diff) changed.push({ platformKey: k, fields: diff });
+        }
+        if (changed.length !== 1) return null;
+        const { platformKey, fields } = changed[0];
+        const connectionId = resolveConnectionIdForPlatform(platformKey);
+        if (!connectionId) return null;
+        return { platformKey, connectionId, fields };
+      },
+      [resolveConnectionIdForPlatform],
+    );
+
+    // "Use main details" — clear this connection's overridden fields back to canonical.
+    const resetOverride = useCallback(
+      async (connectionId: string, platformKey: string) => {
+        if (!detailedItem) return;
+        const current = overridesByConnection[connectionId];
+        if (!current) return;
+        const clearFields: any = {};
+        for (const f of OVERRIDE_FIELDS) if (f in current) clearFields[f] = null;
+        const label = platformLabelForConnection(connectionId);
+        try {
+          const { ok, data } = await savePlatformOverride(
+            detailedItem.ProductId,
+            detailedItem.Id,
+            connectionId,
+            clearFields,
+          );
+          if (!ok || !data?.success) {
+            showBanner(`Couldn’t reset ${label}`, false);
+            return;
+          }
+          setSessionOverrides((prev) => ({ ...prev, [connectionId]: { ...(prev[connectionId] || {}), ...clearFields } }));
+          // Revert the tab's shown value to the canonical main details.
+          setDisplayedPlatforms((prev) => {
+            const p = prev[platformKey];
+            if (!p) return prev;
+            const reverted: any = { ...p };
+            if ('title' in clearFields) reverted.title = detailedItem.Title || '';
+            if ('description' in clearFields) reverted.description = detailedItem.Description || '';
+            if ('price' in clearFields) reverted.price = detailedItem.Price != null ? Number(detailedItem.Price) : reverted.price;
+            return { ...prev, [platformKey]: reverted };
+          });
+          if (data.pushed === false) showBanner(`Reset ${label} — didn’t reach ${label}`, true);
+          loadPlatformData().catch(() => {});
+        } catch {
+          showBanner(`Couldn’t reset custom ${label} details`, false);
+        }
+      },
+      [detailedItem, overridesByConnection, platformLabelForConnection, showBanner, loadPlatformData],
+    );
+
+    // Cancel any in-flight override debounce on unmount.
+    useEffect(
+      () => () => {
+        if (overrideSaveTimeoutRef.current) clearTimeout(overrideSaveTimeoutRef.current);
+      },
+      [],
+    );
 
     useEffect(() => {
       if (!ENABLE_AUTOSAVE) return;
@@ -3336,6 +3666,17 @@ const ProductDetailScreen = observer(
         log.debug('[ProductDetail] No platformSpecificData, using shopify as default with', shopifyLocs.length, 'locations');
       }
 
+      // Overlay the fetched per-connection overrides (ConnectionTitle/Description/Price on
+      // the mapping row — NOT in Metadata.platformSpecificData, so the build above only has
+      // canonical values). This makes an overridden tab hydrate with its custom values when
+      // the overrides GET resolved before this effect; the seeding effect handles the
+      // fetch-after-hydration order. Read via ref — this effect must not re-run on fetch.
+      for (const info of Object.values(fetchedOverridesRef.current)) {
+        const key = info.platformType;
+        if (!key || !allPlatforms[key]) continue;
+        allPlatforms[key] = { ...allPlatforms[key], ...info.values };
+      }
+
       // ⚡ Set displayedPlatforms - this only runs on FIRST load for this product
       // The early return above prevents re-hydration
       setDisplayedPlatforms(allPlatforms);
@@ -4201,7 +4542,17 @@ const ProductDetailScreen = observer(
                 // any prior save error so autosave re-arms.
                 editVersionRef.current += 1;
                 setSaveError(null);
-                setHasUnsavedChanges(true)
+                // Per-platform routing: a title/description/price edit made on ONE specific
+                // platform tab saves to that channel via the platform-options PUT and does
+                // NOT mark the canonical autosave dirty (which would fan it to every platform).
+                // Everything else (all-tab edits, variants, category, etc.) keeps the existing
+                // canonical autosave path exactly as-is.
+                const override = detectOverrideEdit(displayedPlatforms, next);
+                if (override) {
+                  queueOverrideSave(override.connectionId, override.fields);
+                } else {
+                  setHasUnsavedChanges(true);
+                }
                 // DEEP merge ONLY (no eager setDisplayedPlatforms(next) — that made the
                 // functional updater below receive the PARTIAL `next` as prev, so a
                 // category-only partial write collapsed state to just those fields and
@@ -4371,6 +4722,29 @@ const ProductDetailScreen = observer(
                             <View style={[styles.alDot, { backgroundColor: dotColor }]} />
                             <Text style={[styles.alStatusText, { color: textColor }]} numberOfLines={1}>{rowStatusText}</Text>
                           </View>
+                          {(() => {
+                            const ov = overridesByConnection[mapping.PlatformConnectionId];
+                            if (!ov) return null;
+                            const fields = OVERRIDE_FIELDS.filter((f) => f in ov).map(overrideFieldLabel);
+                            const fieldText =
+                              fields.length <= 1
+                                ? fields[0] || 'details'
+                                : `${fields.slice(0, -1).join(', ')} & ${fields[fields.length - 1]}`;
+                            return (
+                              <View style={styles.overrideLine}>
+                                <Text style={styles.overrideText} numberOfLines={1}>
+                                  Custom {fieldText} for {typeLabel}
+                                </Text>
+                                <Text style={styles.overrideDivider}>·</Text>
+                                <TouchableOpacity
+                                  onPress={() => resetOverride(mapping.PlatformConnectionId, rawType.toLowerCase())}
+                                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                >
+                                  <Text style={styles.overrideResetText}>Use main details</Text>
+                                </TouchableOpacity>
+                              </View>
+                            );
+                          })()}
                         </View>
                         <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
                           <Text style={styles.alActionOutlineText}>Delist</Text>
@@ -4391,6 +4765,30 @@ const ProductDetailScreen = observer(
                             <View style={[styles.alDot, { backgroundColor: '#9CA3AF' }]} />
                             <Text style={[styles.alStatusText, { color: '#71717A' }]}>Connected · not listed</Text>
                           </View>
+                          {(() => {
+                            const connId = resolveConnectionIdForPlatform(platform);
+                            const ov = connId ? overridesByConnection[connId] : undefined;
+                            if (!connId || !ov) return null;
+                            const fields = OVERRIDE_FIELDS.filter((f) => f in ov).map(overrideFieldLabel);
+                            const fieldText =
+                              fields.length <= 1
+                                ? fields[0] || 'details'
+                                : `${fields.slice(0, -1).join(', ')} & ${fields[fields.length - 1]}`;
+                            return (
+                              <View style={styles.overrideLine}>
+                                <Text style={styles.overrideText} numberOfLines={1}>
+                                  Custom {fieldText} for {platformLabel}
+                                </Text>
+                                <Text style={styles.overrideDivider}>·</Text>
+                                <TouchableOpacity
+                                  onPress={() => resetOverride(connId, platform.toLowerCase())}
+                                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                >
+                                  <Text style={styles.overrideResetText}>Use main details</Text>
+                                </TouchableOpacity>
+                              </View>
+                            );
+                          })()}
                         </View>
                         <TouchableOpacity style={styles.alActionGreen} onPress={() => handlePublishToPlatform(platform)} disabled={isCurrentlyPublishing}>
                           {isCurrentlyPublishing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.alActionGreenText}>Publish</Text>}
@@ -5122,6 +5520,11 @@ const styles = StyleSheet.create({
   alStatusLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   alDot: { width: 7, height: 7, borderRadius: 4 },
   alStatusText: { fontSize: 12.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', flexShrink: 1 },
+  // Quiet per-platform override indicator — muted, no pill, matches the calm status line.
+  overrideLine: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  overrideText: { fontSize: 11.5, fontFamily: CHAT_FONT.regular, color: '#9CA3AF', flexShrink: 1 },
+  overrideDivider: { fontSize: 11.5, color: '#D1D5DB' },
+  overrideResetText: { fontSize: 11.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
   alActionOutline: {
     paddingHorizontal: 16,
     paddingVertical: 8,
