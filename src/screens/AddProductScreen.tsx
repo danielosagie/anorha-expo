@@ -69,26 +69,42 @@ const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'm
 // Give up polling a single generate/match job after this long without a terminal status.
 const GEN_GIVE_UP_MS = 4 * 60 * 1000;
 
-// A job can report status 'completed' while its payload is actually empty (backend
-// partial failure). Treat that as a failure so the item lands in the retry lane instead
-// of a blank "generated" card. True only if SOME platform (or the top-level payload)
-// carries a non-empty title or description.
+// A job can report status 'completed' while some (or all) of its payload is empty
+// (backend partial failure). Validate PER ITEM so a partial response can't mark the
+// missing items as generated — those go to the retry lane, not a blank card.
 const nonEmptyStr = (v: any) => typeof v === 'string' && v.trim().length > 0;
-function generateResultsHaveContent(results: any[]): boolean {
-  if (!Array.isArray(results) || results.length === 0) return false;
-  return results.some((r: any) => {
-    const platforms = r?.platforms && typeof r.platforms === 'object' ? r.platforms : null;
-    if (!platforms) {
-      return nonEmptyStr(r?.title) || nonEmptyStr(r?.Title) || nonEmptyStr(r?.description) || nonEmptyStr(r?.Description);
-    }
-    return Object.values(platforms).some(
+const generateResultHasContent = (r: any): boolean => {
+  if (!r || r.error) return false;
+  // Top-level title/description counts even when a platforms object exists but is empty.
+  const topLevel =
+    nonEmptyStr(r?.title) || nonEmptyStr(r?.Title) || nonEmptyStr(r?.description) || nonEmptyStr(r?.Description);
+  const platforms = r?.platforms && typeof r.platforms === 'object' ? r.platforms : null;
+  if (!platforms || Object.keys(platforms).length === 0) return topLevel;
+  return (
+    topLevel ||
+    Object.values(platforms).some(
       (pv: any) =>
         pv &&
         typeof pv === 'object' &&
         (nonEmptyStr(pv.title) || nonEmptyStr(pv.Title) || nonEmptyStr(pv.name) ||
           nonEmptyStr(pv.description) || nonEmptyStr(pv.Description)),
-    );
-  });
+    )
+  );
+};
+// Results are emitted by the backend in product order (each carries productIndex), which
+// matches the order itemIds were queued — so correlation is positional. If the counts
+// don't line up (older backend, truncated payload), degrade to all-or-nothing on ANY
+// content rather than guessing which item got which result.
+function splitItemsByGeneratedContent(itemIds: string[], results: any[]): { ok: string[]; empty: string[] } {
+  if (!Array.isArray(results) || results.length === 0) return { ok: [], empty: [...itemIds] };
+  if (results.length === itemIds.length) {
+    const ok: string[] = [];
+    const empty: string[] = [];
+    itemIds.forEach((id, i) => (generateResultHasContent(results[i]) ? ok : empty).push(id));
+    return { ok, empty };
+  }
+  const any = results.some(generateResultHasContent);
+  return any ? { ok: [...itemIds], empty: [] } : { ok: [], empty: [...itemIds] };
 }
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -997,15 +1013,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (!token || cancelled) return;
       for (const job of genJobs) {
         // Age-based give-up: a job (e.g. killed by a backend deploy) can poll forever
-        // without a terminal status. After GEN_GIVE_UP_MS, stop and move its items to the
-        // error/retry lane rather than spinning "Generating…" indefinitely.
-        if (job.startedAt && Date.now() - job.startedAt > GEN_GIVE_UP_MS) {
+        // without a terminal status. Applied only AFTER a status check — polling pauses
+        // while backgrounded, so an old startedAt alone doesn't mean the job didn't
+        // complete while the app was suspended; a terminal status always wins.
+        const expired = !!job.startedAt && Date.now() - job.startedAt > GEN_GIVE_UP_MS;
+        const giveUp = () => {
           const msg = 'Generation is taking too long — retry';
           job.itemIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
           setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Timed out', error: msg }; }); return n; });
           genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
-          continue;
-        }
+        };
         try {
           const base = job.processType === 'generate'
             ? `${API_BASE_URL}/api/products/generate/jobs/`
@@ -1013,7 +1030,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           const res = await fetch(`${base}${encodeURIComponent(job.jobId)}/status`, {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           });
-          if (!res.ok || cancelled) continue;
+          if (cancelled) continue;
+          if (!res.ok) { if (expired) giveUp(); continue; }
           const snap: any = await res.json();
           const status = snap?.status;
           if (status === 'completed') {
@@ -1035,23 +1053,27 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 j.jobId === job.jobId && j.processType === 'match'
                   ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds, startedAt: Date.now() }
                   : j));
-            } else if (!generateResultsHaveContent(results)) {
-              // 'completed' but the payload has no usable title/description — a silent
-              // backend miss. Route to the retry lane instead of a blank "generated" card.
-              const msg = 'Couldn’t generate details';
-              job.itemIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
-              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: msg }; }); return n; });
-              genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
             } else {
-              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => delete n[id]); return n; });
-              setItemStageById((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = 'generated'; }); return n; });
-              // State machine: draft generated → awaiting per-item finalize.
-              job.itemIds.forEach((id) => transitionItem(id, 'ready_to_list'));
-              // Listing(s) ready — if the seller has left this screen (other tab) or the app
-              // isn't active, fire a local "ready" notification. (Fully backgrounded/killed
-              // delivery needs a backend push; the poll is paused while suspended.)
-              if (!isFocusedRef.current || AppState.currentState !== 'active') {
-                void notifyListingReady(job.itemIds.length);
+              // Per-item verdicts: a partially-empty payload sends only the missing
+              // items to the retry lane instead of blank "generated" cards (or, worse,
+              // failing the items that DID generate).
+              const { ok, empty } = splitItemsByGeneratedContent(job.itemIds, results);
+              if (empty.length > 0) {
+                const msg = 'Couldn’t generate details';
+                empty.forEach((id) => transitionItem(id, 'error', { error: msg }));
+                setItemLoadingStates((prev) => { const n = { ...prev }; empty.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: msg }; }); return n; });
+              }
+              if (ok.length > 0) {
+                setItemLoadingStates((prev) => { const n = { ...prev }; ok.forEach((id) => delete n[id]); return n; });
+                setItemStageById((prev) => { const n = { ...prev }; ok.forEach((id) => { n[id] = 'generated'; }); return n; });
+                // State machine: draft generated → awaiting per-item finalize.
+                ok.forEach((id) => transitionItem(id, 'ready_to_list'));
+                // Listing(s) ready — if the seller has left this screen (other tab) or the app
+                // isn't active, fire a local "ready" notification. (Fully backgrounded/killed
+                // delivery needs a backend push; the poll is paused while suspended.)
+                if (!isFocusedRef.current || AppState.currentState !== 'active') {
+                  void notifyListingReady(ok.length);
+                }
               }
               genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
             }
@@ -1059,12 +1081,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; }); return n; });
             job.itemIds.forEach((id) => transitionItem(id, 'error', { error: snap?.error || 'Generation failed' }));
             genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+          } else if (expired) {
+            // Still non-terminal past the deadline — NOW the give-up is justified.
+            giveUp();
           } else {
             const stage = snap?.currentStage || 'Generating…';
             setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage }; }); return n; });
           }
         } catch {
-          /* transient — keep polling */
+          // Transient fetch error — keep polling, unless the job is already past the
+          // deadline and its status is unknowable; then stop spinning.
+          if (expired) giveUp();
         }
       }
       } finally {
@@ -3356,7 +3383,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       } else {
         log.debug('[QUICK SCAN] No matches found');
-        showNotificationMessage('No quick matches found. Added to review.', 3000);
+        // Distinguish an AI/image-service OUTAGE from a genuine "couldn't identify it" so we don't
+        // blame the user's photo when the provider hiccuped. Backend tags the abstain reasonCode
+        // 'provider_error' (LLM/search tool threw) — tell them to retry the same photo, not chase a
+        // sharper one.
+        const providerHiccup = streamResult.reasonCode === 'provider_error';
+        showNotificationMessage(
+          providerHiccup
+            ? 'Our image service hiccuped — try again in a moment.'
+            : 'No quick matches found. Added to review.',
+          3000,
+        );
         setConfirmedQuickMatchByItemId(prev => {
           if (!prev[itemId]) return prev;
           const next = { ...prev };

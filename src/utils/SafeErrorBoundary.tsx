@@ -66,7 +66,9 @@ export class SafeErrorBoundary extends React.Component<Props, State> {
         return this.props.fallback;
       }
 
-      const goHome = this.state.resetCount >= 2;
+      // Only offer "Go home" when a handler exists — without one the button would just
+      // clear state, re-render the same throwing tree, and loop the user forever.
+      const goHome = this.state.resetCount >= 2 && !!this.props.onGoHome;
       return (
         <View style={styles.container}>
           <Text style={styles.title}>Something went wrong</Text>

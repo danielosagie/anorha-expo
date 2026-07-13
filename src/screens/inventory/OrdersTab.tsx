@@ -78,6 +78,14 @@ const relativeDate = (iso: string): string => {
 
 const money = (n?: number) => (typeof n === 'number' && isFinite(n) ? `$${n.toFixed(2)}` : '—');
 
+// Both loads need a deadline: a stalled /api/orders would otherwise never reach the
+// activity fallback or the finally that clears the spinner/refresh state.
+const fetchWithDeadline = (url: string, init: RequestInit, ms = 12000): Promise<Response> => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(t));
+};
+
 const OrdersTab: React.FC = () => {
   const { currentOrg } = useOrg();
   const [orders, setOrders] = useState<OrderEvent[]>([]);
@@ -92,7 +100,7 @@ const OrdersTab: React.FC = () => {
 
       // 1) Real orders from the Orders table.
       try {
-        const res = await fetch(`${API_BASE_URL}/api/orders?limit=100`, { headers });
+        const res = await fetchWithDeadline(`${API_BASE_URL}/api/orders?limit=100`, { headers });
         if (res.ok) {
           const data = await res.json();
           const rows: any[] = Array.isArray(data) ? data : Array.isArray(data?.orders) ? data.orders : [];
@@ -105,7 +113,7 @@ const OrdersTab: React.FC = () => {
 
       // 2) Fallback: order-shaped entries from the activity feed (pre-wiring
       //    history), so users with past orders aren't shown an empty tab.
-      const res = await fetch(`${API_BASE_URL}/api/activity?limit=100`, { headers });
+      const res = await fetchWithDeadline(`${API_BASE_URL}/api/activity?limit=100`, { headers });
       if (!res.ok) { setOrders([]); return; }
       const data = await res.json();
       const events: any[] = Array.isArray(data?.events) ? data.events : [];

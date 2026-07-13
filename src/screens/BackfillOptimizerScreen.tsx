@@ -322,15 +322,20 @@ export function BackfillOptimizerScreen() {
       )}
 
       <LinearGradient colors={['rgba(255,255,255,0)', IC.bg]} style={styles.fade} pointerEvents="none" />
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-        <PillButton
-          label={startBucket ? 'Start' : 'Finish'}
-          onPress={startBucket ? () => enterBucket(startBucket) : finishOptimize}
-        />
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.quietBtn} activeOpacity={0.6}>
-          <Text style={styles.quietText}>{startBucket ? 'Later' : 'Back'}</Text>
-        </TouchableOpacity>
-      </View>
+      {/* On a failed count load the zeroed queues would make this footer read "Finish"
+          and let the user complete with importCount 0 — the exact false "all done" the
+          error branch exists to prevent. Retry (or Back) is the only way out of error. */}
+      {!error && (
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+          <PillButton
+            label={startBucket ? 'Start' : 'Finish'}
+            onPress={startBucket ? () => enterBucket(startBucket) : finishOptimize}
+          />
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.quietBtn} activeOpacity={0.6}>
+            <Text style={styles.quietText}>{startBucket ? 'Later' : 'Back'}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }

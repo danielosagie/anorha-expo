@@ -98,7 +98,15 @@ export function useInventoryAnalytics(): AnalyticsState {
 
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
+    // One controller PER attempt: fetchJsonAuthed aborts its controller on timeout,
+    // so a shared one would leave the activity fallback with an already-dead signal.
+    // Track the live one so unmount still aborts whichever request is in flight.
+    let activeController: AbortController | null = null;
+    const authed = (path: string) => {
+      const ctrl = new AbortController();
+      activeController = ctrl;
+      return fetchJsonAuthed(path, ctrl);
+    };
 
     // 'YYYY-MM-DD' → 'M/D' (timezone-safe: parse the parts, don't new Date()).
     const dayLabel = (isoDate: string): string => {
@@ -110,7 +118,7 @@ export function useInventoryAnalytics(): AnalyticsState {
     // entries. Kept ONLY as a degraded fallback for when the real orders summary
     // endpoint is unavailable, so the header still shows something.
     const computeFromActivity = async (): Promise<AnalyticsState> => {
-      const data = await fetchJsonAuthed('/api/activity?limit=200', controller);
+      const data = await authed('/api/activity?limit=200');
       const events: any[] = Array.isArray(data?.events) ? data.events : [];
       const now = Date.now();
       const cutoff30 = now - 30 * 86400000;
@@ -149,7 +157,9 @@ export function useInventoryAnalytics(): AnalyticsState {
         const d = new Date(now - i * 86400000);
         const key = d.toISOString().slice(0, 10);
         series.push({
-          label: `${d.getMonth() + 1}/${d.getDate()}`,
+          // Label from the same UTC key the revenue lookup uses — local-time accessors
+          // shift the label a day in nonzero UTC offsets.
+          label: dayLabel(key),
           revenue: Math.round((byDay.get(key) || 0) * 100) / 100,
         });
       }
@@ -168,7 +178,7 @@ export function useInventoryAnalytics(): AnalyticsState {
       try {
         // Preferred: real order metrics computed server-side from the Orders
         // table (GET /api/orders/summary). Feed the tiles/chart the real numbers.
-        const summary = await fetchJsonAuthed('/api/orders/summary', controller);
+        const summary = await authed('/api/orders/summary');
         if (summary && typeof summary === 'object' && Array.isArray(summary.revenueByDay)) {
           const series: DayPoint[] = summary.revenueByDay.map((d: any) => ({
             label: dayLabel(d.date),
@@ -205,7 +215,7 @@ export function useInventoryAnalytics(): AnalyticsState {
         }
       }
     })();
-    return () => { cancelled = true; controller.abort(); };
+    return () => { cancelled = true; activeController?.abort(); };
   }, []);
 
   return state;
