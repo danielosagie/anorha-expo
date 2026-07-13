@@ -33,7 +33,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import BaseModal from '../BaseModal';
 import PlatformLogo from '../PlatformLogo';
-import { IC, PillButton, SectionCaption, SheetGrabber, OptionRow } from './InboxKit';
+import { IC, PillButton, SectionCaption, SheetGrabber } from './InboxKit';
 import { supabase } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import { createLogger } from '../../utils/logger';
@@ -48,12 +48,6 @@ type SourceOfTruth = 'ANORHA' | 'PLATFORM';
 // SyncRulesScreen builds its URL as `${API_BASE_URL}/api/sync-rules/...` (the raw
 // base, NOT the /api-normalized one) — mirror that exactly for endpoint parity.
 const API_ROOT = API_BASE_URL;
-
-const DIRECTION_OPTIONS: { value: SyncDirection; title: string; sub: string }[] = [
-  { value: 'bidirectional', title: 'Two-way sync', sub: 'Changes flow in both directions' },
-  { value: 'push_only', title: 'Push to platform', sub: 'Anorha updates your store only' },
-  { value: 'pull_only', title: 'Pull from platform', sub: 'Your store updates Anorha only' },
-];
 
 const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
 
@@ -339,18 +333,11 @@ export default function SyncPreferencesSheet({
             </TouchableOpacity>
           )}
 
-          <SectionCaption>Sync direction</SectionCaption>
-          {DIRECTION_OPTIONS.map((opt) => (
-            <OptionRow
-              key={opt.value}
-              title={opt.title}
-              sub={opt.sub}
-              selected={syncDirection === opt.value}
-              onPress={() => setSyncDirection(opt.value)}
-            />
-          ))}
-
-          <View style={styles.sectionGap} />
+          {/* Sync direction is intentionally NOT surfaced here: every connection
+              defaults to two-way, which is what nearly all sellers want, and the
+              extra choice only complicated the quick tune. Whatever direction is
+              already set round-trips untouched (see `syncDirection` in save), and
+              push-only / pull-only stay available under "All settings". */}
           <SectionCaption>Automation</SectionCaption>
           <View style={styles.toggleGroup}>
             <ToggleRow
