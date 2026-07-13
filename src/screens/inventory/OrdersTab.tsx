@@ -13,8 +13,10 @@ import { API_BASE_URL } from '../../config/env';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { useOrg } from '../../context/OrgContext';
 
-// Orders tab — behaves like the activity feed (pulls /api/activity) but renders order events
-// in a Shopify-orders row style: order title, date, a status pill, and the amount.
+// Orders tab — reads REAL orders from GET /api/orders (the Orders table), and
+// falls back to the /api/activity feed when the orders API is empty (so users
+// with pre-wiring activity history aren't blanked). Rows render Shopify-style:
+// order title, date · platform · item count, a status pill, and the amount.
 
 type OrderEvent = {
   id: string;
@@ -23,6 +25,24 @@ type OrderEvent = {
   platformType?: string;
   status: string;
   amount?: number;
+  itemCount?: number;
+};
+
+// Map a real Orders-table row (GET /api/orders) into a display row.
+const mapOrderRow = (o: any): OrderEvent => {
+  const items: any[] = Array.isArray(o?.OrderItems) ? o.OrderItems : [];
+  const itemCount = items.reduce((n, it) => n + (Number(it?.Quantity) || 0), 0);
+  const total = typeof o?.TotalAmount === 'string' ? parseFloat(o.TotalAmount) : o?.TotalAmount;
+  const orderNo = o?.OrderNumber ?? o?.PlatformOrderId;
+  return {
+    id: String(o?.Id ?? o?.PlatformOrderId ?? Math.random()),
+    timestamp: o?.OrderDate ?? o?.CreatedAt ?? new Date().toISOString(),
+    title: orderNo ? `Order #${orderNo}` : 'Order',
+    platformType: o?.PlatformConnection?.PlatformType,
+    status: o?.Status ?? '',
+    amount: typeof total === 'number' && isFinite(total) ? total : undefined,
+    itemCount: itemCount > 0 ? itemCount : undefined,
+  };
 };
 
 const INK = '#18181B';
@@ -58,6 +78,14 @@ const relativeDate = (iso: string): string => {
 
 const money = (n?: number) => (typeof n === 'number' && isFinite(n) ? `$${n.toFixed(2)}` : '—');
 
+// Both loads need a deadline: a stalled /api/orders would otherwise never reach the
+// activity fallback or the finally that clears the spinner/refresh state.
+const fetchWithDeadline = (url: string, init: RequestInit, ms = 12000): Promise<Response> => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(t));
+};
+
 const OrdersTab: React.FC = () => {
   const { currentOrg } = useOrg();
   const [orders, setOrders] = useState<OrderEvent[]>([]);
@@ -68,9 +96,24 @@ const OrdersTab: React.FC = () => {
     try {
       const token = await ensureSupabaseJwt();
       if (!API_BASE_URL || !token) { setOrders([]); return; }
-      const res = await fetch(`${API_BASE_URL}/api/activity?limit=100`, {
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      });
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+      // 1) Real orders from the Orders table.
+      try {
+        const res = await fetchWithDeadline(`${API_BASE_URL}/api/orders?limit=100`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          const rows: any[] = Array.isArray(data) ? data : Array.isArray(data?.orders) ? data.orders : [];
+          const realOrders = rows.map(mapOrderRow);
+          if (realOrders.length > 0) { setOrders(realOrders); return; }
+        }
+      } catch {
+        // fall through to the activity-based fallback
+      }
+
+      // 2) Fallback: order-shaped entries from the activity feed (pre-wiring
+      //    history), so users with past orders aren't shown an empty tab.
+      const res = await fetchWithDeadline(`${API_BASE_URL}/api/activity?limit=100`, { headers });
       if (!res.ok) { setOrders([]); return; }
       const data = await res.json();
       const events: any[] = Array.isArray(data?.events) ? data.events : [];
@@ -133,6 +176,7 @@ const OrdersTab: React.FC = () => {
               <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
               <Text style={styles.rowSub} numberOfLines={1}>
                 {relativeDate(item.timestamp)}{item.platformType ? ` · ${item.platformType}` : ''}
+                {typeof item.itemCount === 'number' ? ` · ${item.itemCount} item${item.itemCount === 1 ? '' : 's'}` : ''}
               </Text>
             </View>
             <View style={{ alignItems: 'flex-end', gap: 6 }}>

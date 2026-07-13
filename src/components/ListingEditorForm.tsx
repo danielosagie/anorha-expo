@@ -336,7 +336,6 @@ type PlatformState = {
   estimatedWeight?: { value: number; unit: string };
   shippingTier?: string;
   shippingTierReason?: string;
-  shippingOptions?: Record<string, string>;
 };
 
 type TaxonomyOption = {
@@ -507,6 +506,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [editableDimensions, setEditableDimensions] = useState<{ length: string; width: string; height: string }>({ length: '', width: '', height: '' });
   const [editableWeight, setEditableWeight] = useState('');
   const [editableWeightUnit, setEditableWeightUnit] = useState('lb');
+  // Shipping speed drives the estimate query (standard→Ground, expedited→Expedited).
+  const [shippingSpeed, setShippingSpeed] = useState<'standard' | 'expedited'>('standard');
   const preventTaxonomyAutoFetchRef = useRef<Set<string>>(new Set());
   const [variantImagePicker, setVariantImagePicker] = useState<{ variantId: string; open: boolean } | null>(null);
   const [localGeneratingPlatforms, setGeneratingPlatforms] = useState<Set<string>>(new Set());
@@ -1088,6 +1089,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         if (dims?.length != null) params.set('length', String(dims.length));
         if (dims?.width != null) params.set('width', String(dims.width));
         if (dims?.height != null) params.set('height', String(dims.height));
+        // Speed maps to the backend ShippingRateMatrix Speed rows (Standard→Ground, Expedited→Expedited).
+        params.set('speed', shippingSpeed === 'expedited' ? 'Expedited' : 'Ground');
         const res = await fetch(`${API_BASE_URL}/api/shipping/estimate?${params.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -1114,7 +1117,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         setShippingEstimateLoading(false);
       }
     },
-    [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, (activeData as any).estimatedWeight],
+    [activeData.weight, activeData.weightUnit, (activeData as any).estimatedDimensions, (activeData as any).estimatedWeight, shippingSpeed],
   );
 
   useEffect(() => {
@@ -1944,7 +1947,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     'category', 'categoryId', 'productCategoryId', 'productCategory', 'categoryPath', 'taxonomyConfidence',
     'taxonomySource', 'itemSpecifics', 'brand', 'vendor', 'compareAtPrice', 'productType', 'seoTitle',
     'seoDescription', 'seo', 'aiPriceRecommendation', 'aiRecommendedPrice', 'pickupLocation', 'deliveryMethod',
-    'shippingCost', 'shippingOptions', 'shippingTier', 'estimatedDimensions', 'estimatedWeight', 'imageUrls',
+    'shippingCost', 'shippingTier', 'estimatedDimensions', 'estimatedWeight', 'imageUrls',
     '__refilled', '__variantSuggestions', '_rawResponse', '_parseError', '_extractedJson',
   ]);
 
@@ -3219,8 +3222,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             onClose={() => setDeliverySheetVisible(false)}
             platformKeys={platformKeys}
             platforms={platforms}
-            patchField={patchField}
-            patchPlatform={patchPlatform}
             onChangePlatforms={onChangePlatforms}
             activePlatformKey={activePlatformKey}
             shippingEstimateResult={shippingEstimateResult}
@@ -3232,6 +3233,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             setEditableWeight={setEditableWeight}
             editableWeightUnit={editableWeightUnit}
             setEditableWeightUnit={setEditableWeightUnit}
+            speed={shippingSpeed}
+            onChangeSpeed={setShippingSpeed}
             onOpenLocationPicker={() => setLocationPickerVisible(true)}
             getActiveData={(pk: string) => (platforms[pk] || {})}
           />

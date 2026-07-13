@@ -8,20 +8,30 @@ const log = createLogger('SafeErrorBoundary');
 interface Props {
   children: React.ReactNode;
   fallback?: React.ReactNode;
+  /**
+   * Escape hatch for a deterministic throw. A plain "Try Again" just re-renders the same
+   * tree, so a throw that reproduces on every render traps the user in an infinite loop.
+   * After 2 failed resets the button becomes "Go home" and calls this (e.g. reset
+   * navigation to the root tab navigator) to break out of the offending subtree.
+   */
+  onGoHome?: () => void;
 }
 
 interface State {
   hasError: boolean;
   error?: Error;
+  /** Failed "Try Again" resets so far. After 2, the button switches to "Go home". */
+  resetCount: number;
 }
 
 export class SafeErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, resetCount: 0 };
   }
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
+    // Merge — leaves resetCount intact so repeated throws count toward the "Go home" swap.
     return { hasError: true, error };
   }
 
@@ -36,12 +46,29 @@ export class SafeErrorBoundary extends React.Component<Props, State> {
     }
   }
 
+  handleTryAgain = () => {
+    this.setState((s) => ({ hasError: false, error: undefined, resetCount: s.resetCount + 1 }));
+  };
+
+  handleGoHome = () => {
+    try {
+      this.props.onGoHome?.();
+    } catch {
+      // navigation may be unavailable (e.g. a provider threw before the nav tree mounted);
+      // clearing state below is still a better outcome than a frozen fallback.
+    }
+    this.setState({ hasError: false, error: undefined, resetCount: 0 });
+  };
+
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) {
         return this.props.fallback;
       }
 
+      // Only offer "Go home" when a handler exists — without one the button would just
+      // clear state, re-render the same throwing tree, and loop the user forever.
+      const goHome = this.state.resetCount >= 2 && !!this.props.onGoHome;
       return (
         <View style={styles.container}>
           <Text style={styles.title}>Something went wrong</Text>
@@ -50,9 +77,9 @@ export class SafeErrorBoundary extends React.Component<Props, State> {
           </Text>
           <TouchableOpacity
             style={styles.button}
-            onPress={() => this.setState({ hasError: false, error: undefined })}
+            onPress={goHome ? this.handleGoHome : this.handleTryAgain}
           >
-            <Text style={styles.buttonText}>Try Again</Text>
+            <Text style={styles.buttonText}>{goHome ? 'Go home' : 'Try Again'}</Text>
           </TouchableOpacity>
         </View>
       );

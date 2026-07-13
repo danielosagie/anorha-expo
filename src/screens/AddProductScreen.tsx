@@ -63,7 +63,49 @@ const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as 
 
 // Active generation jobs, module-level so they SURVIVE AddProductScreen unmount (navigate-away):
 // the in-place poller re-attaches and resumes on remount instead of orphaning in-flight jobs.
-const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>>([]);
+// `startedAt` (ms) bounds how long we poll a job before giving up — a deploy-killed job would
+// otherwise never reach a terminal status and pin the item on "Generating…" forever.
+const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[]; startedAt?: number }>>([]);
+// Give up polling a single generate/match job after this long without a terminal status.
+const GEN_GIVE_UP_MS = 4 * 60 * 1000;
+
+// A job can report status 'completed' while some (or all) of its payload is empty
+// (backend partial failure). Validate PER ITEM so a partial response can't mark the
+// missing items as generated — those go to the retry lane, not a blank card.
+const nonEmptyStr = (v: any) => typeof v === 'string' && v.trim().length > 0;
+const generateResultHasContent = (r: any): boolean => {
+  if (!r || r.error) return false;
+  // Top-level title/description counts even when a platforms object exists but is empty.
+  const topLevel =
+    nonEmptyStr(r?.title) || nonEmptyStr(r?.Title) || nonEmptyStr(r?.description) || nonEmptyStr(r?.Description);
+  const platforms = r?.platforms && typeof r.platforms === 'object' ? r.platforms : null;
+  if (!platforms || Object.keys(platforms).length === 0) return topLevel;
+  return (
+    topLevel ||
+    Object.values(platforms).some(
+      (pv: any) =>
+        pv &&
+        typeof pv === 'object' &&
+        (nonEmptyStr(pv.title) || nonEmptyStr(pv.Title) || nonEmptyStr(pv.name) ||
+          nonEmptyStr(pv.description) || nonEmptyStr(pv.Description)),
+    )
+  );
+};
+// Results are emitted by the backend in product order (each carries productIndex), which
+// matches the order itemIds were queued — so correlation is positional. If the counts
+// don't line up (older backend, truncated payload), degrade to all-or-nothing on ANY
+// content rather than guessing which item got which result.
+function splitItemsByGeneratedContent(itemIds: string[], results: any[]): { ok: string[]; empty: string[] } {
+  if (!Array.isArray(results) || results.length === 0) return { ok: [], empty: [...itemIds] };
+  if (results.length === itemIds.length) {
+    const ok: string[] = [];
+    const empty: string[] = [];
+    itemIds.forEach((id, i) => (generateResultHasContent(results[i]) ? ok : empty).push(id));
+    return { ok, empty };
+  }
+  const any = results.some(generateResultHasContent);
+  return any ? { ok: [...itemIds], empty: [] } : { ok: [], empty: [...itemIds] };
+}
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -943,10 +985,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         itemJobs.forEach(({ itemId }) => { next[itemId] = { isLoading: true, stage: 'Queued…' }; });
         return next;
       });
-      const byJob = new Map<string, { jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>();
+      const byJob = new Map<string, { jobId: string; processType: 'generate' | 'match'; itemIds: string[]; startedAt: number }>();
       for (const { itemId, jobId, processType } of itemJobs) {
         const key = `${processType}:${jobId}`;
-        if (!byJob.has(key)) byJob.set(key, { jobId, processType, itemIds: [] });
+        if (!byJob.has(key)) byJob.set(key, { jobId, processType, itemIds: [], startedAt: Date.now() });
         byJob.get(key)!.itemIds.push(itemId);
         // Durable per-item job id for the click → GenerateDetailsScreen handoff (match items get the generate id on chain).
         setItemGenerate(itemId, processType === 'generate' ? { generateJobId: jobId } : { generateMatchJobId: jobId });
@@ -970,6 +1012,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const token = await ensureSupabaseJwt();
       if (!token || cancelled) return;
       for (const job of genJobs) {
+        // Age-based give-up: a job (e.g. killed by a backend deploy) can poll forever
+        // without a terminal status. Applied only AFTER a status check — polling pauses
+        // while backgrounded, so an old startedAt alone doesn't mean the job didn't
+        // complete while the app was suspended; a terminal status always wins.
+        const expired = !!job.startedAt && Date.now() - job.startedAt > GEN_GIVE_UP_MS;
+        const giveUp = () => {
+          const msg = 'Generation is taking too long — retry';
+          job.itemIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
+          setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Timed out', error: msg }; }); return n; });
+          genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+        };
         try {
           const base = job.processType === 'generate'
             ? `${API_BASE_URL}/api/products/generate/jobs/`
@@ -977,7 +1030,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           const res = await fetch(`${base}${encodeURIComponent(job.jobId)}/status`, {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           });
-          if (!res.ok || cancelled) continue;
+          if (cancelled) continue;
+          if (!res.ok) { if (expired) giveUp(); continue; }
           const snap: any = await res.json();
           const status = snap?.status;
           if (status === 'completed') {
@@ -997,18 +1051,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage: 'Generating…' }; }); return n; });
               genQueue$.set(genQueue$.get().map((j) =>
                 j.jobId === job.jobId && j.processType === 'match'
-                  ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds }
+                  ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds, startedAt: Date.now() }
                   : j));
             } else {
-              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => delete n[id]); return n; });
-              setItemStageById((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = 'generated'; }); return n; });
-              // State machine: draft generated → awaiting per-item finalize.
-              job.itemIds.forEach((id) => transitionItem(id, 'ready_to_list'));
-              // Listing(s) ready — if the seller has left this screen (other tab) or the app
-              // isn't active, fire a local "ready" notification. (Fully backgrounded/killed
-              // delivery needs a backend push; the poll is paused while suspended.)
-              if (!isFocusedRef.current || AppState.currentState !== 'active') {
-                void notifyListingReady(job.itemIds.length);
+              // Per-item verdicts: a partially-empty payload sends only the missing
+              // items to the retry lane instead of blank "generated" cards (or, worse,
+              // failing the items that DID generate).
+              const { ok, empty } = splitItemsByGeneratedContent(job.itemIds, results);
+              if (empty.length > 0) {
+                const msg = 'Couldn’t generate details';
+                empty.forEach((id) => transitionItem(id, 'error', { error: msg }));
+                setItemLoadingStates((prev) => { const n = { ...prev }; empty.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: msg }; }); return n; });
+              }
+              if (ok.length > 0) {
+                setItemLoadingStates((prev) => { const n = { ...prev }; ok.forEach((id) => delete n[id]); return n; });
+                setItemStageById((prev) => { const n = { ...prev }; ok.forEach((id) => { n[id] = 'generated'; }); return n; });
+                // State machine: draft generated → awaiting per-item finalize.
+                ok.forEach((id) => transitionItem(id, 'ready_to_list'));
+                // Listing(s) ready — if the seller has left this screen (other tab) or the app
+                // isn't active, fire a local "ready" notification. (Fully backgrounded/killed
+                // delivery needs a backend push; the poll is paused while suspended.)
+                if (!isFocusedRef.current || AppState.currentState !== 'active') {
+                  void notifyListingReady(ok.length);
+                }
               }
               genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
             }
@@ -1016,12 +1081,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; }); return n; });
             job.itemIds.forEach((id) => transitionItem(id, 'error', { error: snap?.error || 'Generation failed' }));
             genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+          } else if (expired) {
+            // Still non-terminal past the deadline — NOW the give-up is justified.
+            giveUp();
           } else {
             const stage = snap?.currentStage || 'Generating…';
             setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage }; }); return n; });
           }
         } catch {
-          /* transient — keep polling */
+          // Transient fetch error — keep polling, unless the job is already past the
+          // deadline and its status is unknowable; then stop spinning.
+          if (expired) giveUp();
         }
       }
       } finally {
@@ -3245,7 +3315,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
-        // to populate price range and shipping data from real market data. SKIP when the comps are
+        // to populate the price range from real market data. SKIP when the comps are
         // already SIMILAR-item comps (the exact product isn't listed) — researching the identity
         // title returns nothing and would clobber the ballpark similar comps the backend supplied.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
@@ -3278,7 +3348,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 if (!current?.matchData?.rankedCandidates?.length) return prev;
                 const firstCand = current.matchData.rankedCandidates[0];
                 const updatedCandidates = [...current.matchData.rankedCandidates];
-                // Use pricing research price range as shipping proxy:
+                // Use the pricing-research price range (not a shipping figure):
                 // low = fast sale price, high = max profit price
                 const priceLow = Number(priceData?.low ?? 0);
                 const priceHigh = Number(priceData?.high ?? 0);
@@ -3313,7 +3383,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       } else {
         log.debug('[QUICK SCAN] No matches found');
-        showNotificationMessage('No quick matches found. Added to review.', 3000);
+        // Distinguish an AI/image-service OUTAGE from a genuine "couldn't identify it" so we don't
+        // blame the user's photo when the provider hiccuped. Backend tags the abstain reasonCode
+        // 'provider_error' (LLM/search tool threw) — tell them to retry the same photo, not chase a
+        // sharper one.
+        const providerHiccup = streamResult.reasonCode === 'provider_error';
+        showNotificationMessage(
+          providerHiccup
+            ? 'Our image service hiccuped — try again in a moment.'
+            : 'No quick matches found. Added to review.',
+          3000,
+        );
         setConfirmedQuickMatchByItemId(prev => {
           if (!prev[itemId]) return prev;
           const next = { ...prev };
@@ -3325,7 +3405,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     } catch (error) {
       log.error('[QUICK SCAN] scan failed:', error);
-      showNotificationMessage('Quick scan failed. Retrying in background...', 3000);
+      // Reality: there is no background retry — the item drops to an error state below
+      // (its card shows the failure) and the seller retries it by hand. Say so honestly.
+      showNotificationMessage('Quick scan failed. Tap the item to try again.', 3000);
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
       // Make sure the SSE connection is torn down on every exit (success, error, or early

@@ -65,6 +65,45 @@ function newIdempotencyKey(): string {
   }
 }
 
+// Every request gets an abort-based timeout so a stalled fetch throws instead of hanging
+// forever (the money-path screens all have try/catch/finally that already recover from a
+// throw — an unbounded await is what wedged them into permanent spinners). Overridable
+// per-call via `timeoutMs`; pass <= 0 to disable for a legitimately long-running endpoint.
+const DEFAULT_TIMEOUT_MS = 18000;
+
+/**
+ * Build an AbortSignal that trips after `timeoutMs`, chained to any caller-supplied signal
+ * so an external abort still propagates. `didTimeout()` distinguishes our timeout from a
+ * caller abort so only the former is normalized to a "Request timed out" ApiError.
+ */
+function createTimeoutSignal(
+  timeoutMs: number,
+  external?: AbortSignal | null,
+): { signal: AbortSignal; cleanup: () => void; didTimeout: () => boolean } {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : null;
+  const onExternalAbort = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener('abort', onExternalAbort);
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+      if (external) external.removeEventListener('abort', onExternalAbort);
+    },
+    didTimeout: () => timedOut,
+  };
+}
+
 // ───────────────────────── Typed helpers (api.*) ─────────────────────────
 
 export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'method'> {
@@ -74,6 +113,8 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'method'> 
   auth?: boolean;
   /** Query params appended to the URL (undefined/null values are dropped). */
   query?: Record<string, QueryValue>;
+  /** Abort-based timeout in ms (default 18s). Pass <= 0 to disable. */
+  timeoutMs?: number;
 }
 
 async function request<T>(
@@ -81,7 +122,7 @@ async function request<T>(
   path: string,
   options: ApiRequestOptions = {},
 ): Promise<T> {
-  const { auth = true, body, query, headers, ...rest } = options;
+  const { auth = true, body, query, headers, timeoutMs = DEFAULT_TIMEOUT_MS, signal, ...rest } = options;
 
   const hasBody = body !== undefined && body !== null;
   const finalHeaders = new Headers(headers as HeadersInit | undefined);
@@ -93,12 +134,24 @@ async function request<T>(
     if (token) finalHeaders.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(buildUrl(path, query), {
-    ...rest,
-    method,
-    headers: finalHeaders,
-    body: hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
-  });
+  const timeout = createTimeoutSignal(timeoutMs, signal);
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path, query), {
+      ...rest,
+      method,
+      headers: finalHeaders,
+      body: hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
+      signal: timeout.signal,
+    });
+  } catch (err: any) {
+    // Normalize our own timeout into the client's error shape; a caller-supplied abort
+    // (didTimeout() false) rethrows unchanged so its own logic still recognizes it.
+    if (timeout.didTimeout()) throw new ApiError(0, 'Request timed out');
+    throw err;
+  } finally {
+    timeout.cleanup();
+  }
 
   const data = parseBody(await response.text());
 
@@ -144,6 +197,8 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
    * Pass an explicit value to dedupe across attempts, or `false` to omit.
    */
   idempotencyKey?: string | false;
+  /** Abort-based timeout in ms (default 18s). Pass <= 0 to disable. */
+  timeoutMs?: number;
 }
 
 /**
@@ -151,7 +206,7 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'body'> {
  * Retries once on a 401 after forcing a token refresh.
  */
 export async function apiFetch(path: string, options: ApiFetchOptions = {}): Promise<Response> {
-  const { auth = true, idempotencyKey, body, headers, method, ...rest } = options;
+  const { auth = true, idempotencyKey, body, headers, method, timeoutMs = DEFAULT_TIMEOUT_MS, signal, ...rest } = options;
   const url = buildUrl(path);
   const verb = (method || 'GET').toUpperCase();
   const isMutation = verb !== 'GET' && verb !== 'HEAD';
@@ -178,15 +233,25 @@ export async function apiFetch(path: string, options: ApiFetchOptions = {}): Pro
     return h;
   };
 
+  // One timeout budget for the whole call (both the initial fetch and the 401-refresh
+  // retry), so a stall can't outlive `timeoutMs`. Callers get a normalized ApiError.
+  const timeout = createTimeoutSignal(timeoutMs, signal);
   const doFetch = async () =>
-    fetch(url, { ...rest, method: verb, headers: await buildHeaders(), body: serializedBody as any });
+    fetch(url, { ...rest, method: verb, headers: await buildHeaders(), body: serializedBody as any, signal: timeout.signal });
 
-  let res = await doFetch();
-  if (res.status === 401 && auth) {
-    const refreshed = await forceRefreshSupabaseJwt();
-    if (refreshed) res = await doFetch();
+  try {
+    let res = await doFetch();
+    if (res.status === 401 && auth) {
+      const refreshed = await forceRefreshSupabaseJwt();
+      if (refreshed) res = await doFetch();
+    }
+    return res;
+  } catch (err: any) {
+    if (timeout.didTimeout()) throw new ApiError(0, 'Request timed out');
+    throw err;
+  } finally {
+    timeout.cleanup();
   }
-  return res;
 }
 
 /**

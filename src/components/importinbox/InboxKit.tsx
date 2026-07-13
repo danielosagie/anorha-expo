@@ -227,6 +227,53 @@ export function SectionCaption({ children }: { children: React.ReactNode }) {
   return <Text style={s.sectionCaption}>{children}</Text>;
 }
 
+// ── SheetGrabber — the centered pill handle at the top of a bottom sheet ────────
+// Rendered as the first child inside a BaseModal(position="bottom"). Kept here so
+// every InboxKit-styled sheet shares the same hairline grabber.
+export function SheetGrabber() {
+  return <View style={s.grabber} />;
+}
+
+// ── OptionRow — a calm, single-select row (sync-direction presets in the sheet) ─
+// Selected → whiter surface + a hairline accent border + a plain accent check on
+// the right. Unselected → the soft card face. No pill chips, no radio dots — the
+// border/check carries the selection, matching the Avec numbered-card language.
+// The transparent 1px border on the base keeps selection from nudging layout.
+export function OptionRow({
+  title,
+  sub,
+  selected = false,
+  onPress,
+}: {
+  title: string;
+  sub?: string;
+  selected?: boolean;
+  onPress?: () => void;
+}) {
+  const Comp: any = onPress ? TouchableOpacity : View;
+  return (
+    <Comp
+      activeOpacity={0.85}
+      onPress={onPress}
+      style={[s.optionRow, selected && s.optionRowSelected]}
+      accessibilityLabel={title}
+      accessibilityState={{ selected }}
+    >
+      <View style={s.optionBody}>
+        <Text style={s.optionTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        {!!sub && (
+          <Text style={s.optionSub} numberOfLines={2}>
+            {sub}
+          </Text>
+        )}
+      </View>
+      {selected ? <MaterialCommunityIcons name="check" size={20} color={IC.accent} /> : null}
+    </Comp>
+  );
+}
+
 // ── NumberedCard — Avec's numbered step: "N." · bold title · muted sub · N › ────
 // Done → the number becomes a plain accent check; active → a whiter surface with a
 // hairline accent border. The count renders as a bare muted "N ›" (no pill/icons).
@@ -290,6 +337,7 @@ export function AccountRow({
   rightLabel,
   highlighted = false,
   onPress,
+  onLongPress,
 }: {
   logoType?: string;
   name: string;
@@ -298,14 +346,19 @@ export function AccountRow({
   rightLabel?: string;
   highlighted?: boolean;
   onPress?: () => void;
+  /** Optional secondary gesture (the hub uses it to open the preferences sheet
+   *  from an attention row without stealing the primary tap into the deck). */
+  onLongPress?: () => void;
 }) {
-  const Comp: any = onPress ? TouchableOpacity : View;
+  const Comp: any = onPress || onLongPress ? TouchableOpacity : View;
   const showCount = typeof count === 'number' && count > 0;
   const initial = (name || '?').trim().charAt(0).toUpperCase() || '?';
   return (
     <Comp
       activeOpacity={0.85}
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={280}
       style={[s.accountRow, highlighted && s.accountRowHighlighted]}
     >
       <View style={s.accountAvatar}>
@@ -499,6 +552,16 @@ const s = StyleSheet.create({
 
   // Section caption ("Your stores")
   sectionCaption: { fontSize: 13, color: IC.muted, letterSpacing: 0.1, marginBottom: 12, marginLeft: 4 },
+
+  // Sheet grabber
+  grabber: { alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: IC.hairline, marginTop: 8, marginBottom: 6 },
+
+  // Option row (single-select preset)
+  optionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: IC.card, borderRadius: 16, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10, borderWidth: 1, borderColor: 'transparent' },
+  optionRowSelected: { backgroundColor: IC.cardActive, borderColor: IC.accent },
+  optionBody: { flex: 1, minWidth: 0 },
+  optionTitle: { fontSize: 16, fontWeight: '700', color: IC.ink, letterSpacing: -0.2 },
+  optionSub: { fontSize: 14, color: IC.muted, marginTop: 2, lineHeight: 19 },
 
   // Numbered card
   card: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: IC.card, borderRadius: 20, paddingVertical: 18, paddingHorizontal: 18, marginBottom: 12 },

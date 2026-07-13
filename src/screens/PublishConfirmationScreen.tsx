@@ -1,11 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Pressable, ScrollView, Linking } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, ActivityIndicator } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PlatformLogo from '../components/PlatformLogo';
 import PlatformBrandChip from '../components/PlatformBrandChip';
-import PrintingComplete from '../components/import/PrintingComplete';
 import { normalizeDisplayName } from '../config/platforms';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import LinkComputerSheet from '../components/LinkComputerSheet';
@@ -13,12 +11,12 @@ import ConnectFlowSheet from '../components/ConnectFlowSheet';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
-import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { apiFetch, ApiError } from '../lib/apiClient';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
-import { InboxHeader, SuccessBlock, PillButton } from '../components/importinbox/InboxKit';
+import { IC, InboxHeader, SuccessBlock, PillButton, SectionCaption } from '../components/importinbox/InboxKit';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationScreen');
 
@@ -84,22 +82,34 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     !fbDispatch.degraded &&
     !fbAlreadyMoving;
 
-  // Representative quantity for the receipt (the largest per-channel inventory, ≥1).
-  const receiptQty = (() => {
+  // Representative quantity for the summary line (the largest per-channel inventory, ≥1).
+  const summaryQty = (() => {
     const vals = Object.values(quantityByPlatform || {}).map((v: any) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
     return vals.length ? Math.max(...vals) : 1;
   })();
 
   // ── Publish phase ──────────────────────────────────────────────────────────
-  // When we arrive in 'publishing' mode this screen OWNS the POST: the receipt prints
-  // while it runs, then morphs to "Published!" only on a real 2xx. On failure it shows an
-  // inline error + Retry — never a false success, never an abrupt pop-back.
+  // When we arrive in 'publishing' mode this screen OWNS the POST: a calm "Publishing…"
+  // state shows while it runs, then resolves to "Published!" only on a real 2xx. On failure
+  // it shows an inline error + Retry — never a false success, never an abrupt pop-back.
   const [phase, setPhase] = useState<'publishing' | 'done' | 'error'>(mode === 'publishing' ? 'publishing' : 'done');
   const [errorMsg, setErrorMsg] = useState('');
   // Per-platform "open the live listing" URLs. Seeded from params (for non-owning callers),
   // then filled from the publish response so channel rows deep-link to the real marketplace page.
   const [liveUrls, setLiveUrls] = useState<Record<string, any>>(params.liveUrls || {});
+  // Per-platform outcome from the publish response's `results` array (keyed lowercase).
+  // Absent for older backends / non-owning callers — rows then read as before.
+  const [publishResults, setPublishResults] = useState<Record<string, { success: boolean; error?: string }>>({});
   const ranRef = useRef(false);
+  // ONE idempotency key per publish intent. This screen is mounted fresh per publish (new
+  // route params), so a per-instance key is the intent's identity — and "Try again" reuses
+  // it. That's the whole point: a POST that stalled but actually succeeded on the server
+  // must not create a DUPLICATE live listing when the user retries. The apiFetch layer
+  // sends it as the Idempotency-Key header so the backend dedupes the retry.
+  const publishIdemKeyRef = useRef<string>('');
+  if (!publishIdemKeyRef.current) {
+    publishIdemKeyRef.current = `publish-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
 
   const runPublish = useCallback(async () => {
     if (!publishPayload) { setPhase('done'); return; }
@@ -108,10 +118,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     try {
       const token = await ensureSupabaseJwt();
       if (!token) { setErrorMsg('Your session expired — sign in again.'); setPhase('error'); return; }
-      const res = await fetch(`${API_BASE_URL}/api/products/publish`, {
+      // Route through apiFetch (auth + Idempotency-Key + the client's default 18s timeout)
+      // so a stalled POST throws instead of pinning "Publishing…" forever, and a retry is
+      // deduped by the stable key above.
+      const res = await apiFetch('/api/products/publish', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(publishPayload),
+        body: publishPayload,
+        idempotencyKey: publishIdemKeyRef.current,
       });
       if (!res.ok) {
         const text = await res.text();
@@ -133,10 +146,32 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
       if (body?.listings && typeof body.listings === 'object') {
         setLiveUrls((prev) => ({ ...prev, ...body.listings }));
       }
-      setPhase('done'); // success → the receipt tears off + morphs
+      // The endpoint returns 202 even when platforms fail — the truth is in `results`.
+      // Every platform failed → this is an error, not a "Published!"; partial failures
+      // stay on the summary but mark their rows honestly.
+      if (Array.isArray(body?.results) && body.results.length) {
+        const map: Record<string, { success: boolean; error?: string }> = {};
+        for (const r of body.results) {
+          if (r?.platform) map[String(r.platform).toLowerCase()] = { success: r.success !== false, error: r.error };
+        }
+        setPublishResults(map);
+        const entries = Object.values(map);
+        if (entries.length && entries.every((r) => !r.success)) {
+          setErrorMsg(entries.find((r) => r.error)?.error || 'None of your channels accepted the listing.');
+          setPhase('error');
+          return;
+        }
+      }
+      setPhase('done'); // success → resolves to the calm "Published!" summary
     } catch (e: any) {
       log.error('[PublishConfirmation] Publish error:', e);
-      setErrorMsg('Something went wrong while publishing. Please try again.');
+      // A client timeout (ApiError status 0, "Request timed out") reads calmer as a
+      // "taking too long" nudge; the same stable idempotency key makes "Try again" safe.
+      const msg =
+        e instanceof ApiError && e.status === 0
+          ? 'This is taking longer than expected — please try again.'
+          : 'Something went wrong while publishing. Please try again.';
+      setErrorMsg(msg);
       setPhase('error');
     }
   }, [publishPayload]);
@@ -196,158 +231,146 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     );
   };
 
-  // Import / Optimize stages share this completion — the printing-receipt
-  // animation that morphs into the result card, now with the session tally and a
-  // next-step CTA (into the optimizer, or back to the inbox). Extracted so its
-  // useOptimizerQueues() only runs on the import path, never single-publish.
+  // Import / Optimize stages share this completion — the calm Avec SuccessBlock
+  // composition, with the session tally and a next-step CTA (into the optimizer, or
+  // back to the inbox). Extracted so its useOptimizerQueues() only runs on the import
+  // path, never single-publish.
   if (origin === 'import') {
     return <ImportCompleteView params={params} navigation={navigation} />;
   }
 
-  // Single-product publish — the receipt prints while the POST runs, then morphs into the
-  // rich "Published!" card (1ABT-0): cover, status, per-channel live rows, actions.
+  // Single-product publish — a calm "Publishing…" state runs while the POST is in flight,
+  // then resolves into the Avec "Published!" summary: green check, a muted summary line,
+  // and per-channel calm rows (live deep-links + every dispatch nuance preserved).
   const goBack = () => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); };
+
+  const doneTitle = savedToInventory ? 'Saved to inventory' : 'Published!';
+  const summaryLine = [
+    title ? String(title) : null,
+    platforms.length ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : null,
+    `Qty ${summaryQty}`,
+  ].filter(Boolean).join(' · ');
+  const channelKeys: string[] = platforms.length ? platforms : ['shopify'];
 
   return (
     <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: insets.top + 6 }}>
-      <View style={styles.headerRow}>
-        <TouchableOpacity onPress={goBack} style={styles.backCircle} activeOpacity={0.8} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Icon name="chevron-left" size={22} color="#18181B" />
-        </TouchableOpacity>
-      </View>
+      <InboxHeader onBack={goBack} />
 
       {phase === 'error' ? (
-        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
-          <View style={{ alignItems: 'center', gap: 14 }}>
-            <View style={{ width: 70, height: 70, borderRadius: 35, backgroundColor: '#FDECEC', alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name="alert-circle-outline" size={38} color="#D9534F" />
-            </View>
-            <Text style={{ fontSize: 22, fontWeight: '700', color: '#18181B', letterSpacing: -0.4 }}>Couldn’t publish</Text>
-            <Text style={{ fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20 }}>{errorMsg}</Text>
-            <View style={{ alignSelf: 'stretch', gap: 9, marginTop: 6 }}>
-              <TouchableOpacity onPress={runPublish} style={[styles.primaryBtn, { marginTop: 0 }]}>
-                <Text style={styles.primaryText}>Try again</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={goBack} style={[styles.secondaryBtn, { marginTop: 0 }]}>
-                <Text style={styles.secondaryText}>Back to editor</Text>
-              </TouchableOpacity>
+        <>
+          <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24 }}>
+            <View style={{ alignItems: 'center' }}>
+              <View style={styles.errorCircle}>
+                <Icon name="alert-circle-outline" size={34} color="#D9534F" />
+              </View>
+              <Text style={styles.errorTitle}>Couldn’t publish</Text>
+              <Text style={styles.errorLine}>{errorMsg}</Text>
             </View>
           </View>
-        </View>
+          <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
+            <PillButton label="Back to editor" variant="secondary" onPress={goBack} />
+            <PillButton label="Try again" onPress={runPublish} />
+          </View>
+        </>
       ) : phase === 'publishing' ? (
-        <View style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8 }}>
-          {/* Prints the receipt from a static top slot and HOLDS (ready=false) until the POST returns. */}
-          <PrintingComplete
-            title={savedToInventory ? 'Saving' : 'Going live'}
-            subtitle={platforms.length > 0 ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : ''}
-            platforms={platforms}
-            productTitle={title}
-            sku={sku}
-            price={Number(price) || undefined}
-            qty={receiptQty}
-            stamp={savedToInventory ? '· SAVED' : '· LIVE'}
-            syncingLabel={savedToInventory ? 'Saving…' : 'Going live…'}
-            primaryLabel="View listing"
-            onPrimary={handleReviewInInventory}
-            secondaryLabel="List another"
-            onSecondary={handleCreateAnother}
-            ready={false}
-          />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24, gap: 16 }}>
+          <ActivityIndicator color={IC.accent} />
+          <Text style={styles.publishingText}>{savedToInventory ? 'Saving…' : 'Publishing…'}</Text>
+          {!!summaryLine && <Text style={styles.publishingSub}>{summaryLine}</Text>}
         </View>
       ) : (
-        <View style={{ flex: 1, alignContent: "space-between" }}>
-        
-          <View style={styles.heroBlock}>
-            {imageUrl ? (
-              <Image source={{ uri: imageUrl }} style={styles.cover} />
-            ) : (
-              <View style={[styles.cover, styles.coverPlaceholder]} />
-            )}
-            <View style={styles.publishedRow}>
-              <View style={styles.checkCircle}>
-                <Icon name="check" size={15} color="#FFFFFF" />
-              </View>
-              <Text style={styles.publishedTitle}>{savedToInventory ? 'Saved!' : 'Published!'}</Text>
+        <>
+          <ScrollView contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
+            <View style={{ paddingTop: 28, paddingBottom: 14 }}>
+              <SuccessBlock title={doneTitle} lines={[summaryLine]} />
             </View>
-          </View>
 
-          <Text style={styles.liveOn}>{savedToInventory ? 'IN INVENTORY' : 'LIVE ON'}</Text>
+            <View style={{ paddingHorizontal: 20 }}>
+              <SectionCaption>{savedToInventory ? 'In inventory' : 'Live on'}</SectionCaption>
 
-          <View style={{ paddingHorizontal: 16 }}>
-            <View style={styles.channelsCard}>
-              {(platforms.length ? platforms : ['shopify']).map((p: string, i: number) => {
+              {channelKeys.map((p: string, i: number) => {
                 const lower = String(p).toLowerCase();
                 const isFb = lower === 'facebook';
                 // Live URL may arrive as a {url,id} object (new) or a bare string (legacy param).
                 const live: any = (liveUrls || {})[lower];
                 const url: string | undefined = typeof live === 'string' ? live : live?.url;
                 const hasLink = !!url;
-                const st = isFb
-                  ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
-                  : { dotColor: '#93C822', color: '#93C822', label: hasLink ? (lower === 'shopify' ? 'Live · view in store' : 'Live · view') : 'Live' };
+                // A per-platform failure from the publish response overrides everything —
+                // that row must not read "Live". Otherwise FB keeps its full dispatch
+                // vocabulary (queued / posting / waiting-for-computer / needs-a-check /
+                // couldn't-post); everything else without a link reads a quiet "Live" —
+                // unless this was an inventory-only save, where nothing is live yet.
+                const failed = publishResults[lower]?.success === false;
+                const st = failed
+                  ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish — tap to manage' }
+                  : isFb
+                    ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
+                    : savedToInventory
+                      ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
+                      : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
                 // A real listing link → open the marketplace page. Otherwise the row still
-                // opens the in-app product (where they can manage/retry); FB without a link is inert.
-                const tappable = hasLink || !isFb;
+                // opens the in-app product (where they can manage/retry); FB without a link
+                // is inert — unless its publish failed, which must stay actionable.
+                const tappable = hasLink || !isFb || failed;
                 return (
-                  <View key={`${p}-${i}`}>
-                    {i > 0 && <View style={styles.rowDivider} />}
-                    <TouchableOpacity disabled={!tappable} activeOpacity={0.7} onPress={() => { if (url) Linking.openURL(url).catch(() => undefined); else handleReviewInInventory(); }} style={styles.channelRow}>
-                      <PlatformBrandChip platform={lower} size={32} />
-                      <View style={{ flex: 1, gap: 2 }}>
-                        <Text style={styles.channelName}>{platformLabel(lower)}</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                          <View style={[styles.statusDot, { backgroundColor: st.dotColor }]} />
-                          <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
+                  <TouchableOpacity
+                    key={`${p}-${i}`}
+                    disabled={!tappable}
+                    activeOpacity={0.85}
+                    onPress={() => { if (url) Linking.openURL(url).catch(() => undefined); else handleReviewInInventory(); }}
+                    style={styles.channelRow}
+                  >
+                    <PlatformBrandChip platform={lower} size={34} />
+                    <Text style={styles.channelName} numberOfLines={1}>{platformLabel(lower)}</Text>
+                    <View style={styles.channelRight}>
+                      {hasLink ? (
+                        <View style={styles.liveLink}>
+                          <Text style={styles.liveLinkText}>Live</Text>
+                          <Icon name="arrow-top-right" size={15} color={IC.accent} />
                         </View>
-                      </View>
-                      {hasLink ? <Icon name="open-in-new" size={16} color="#6B7280" /> : null}
-                      {tappable ? <Icon name="chevron-right" size={18} color="#C4C8CE" /> : null}
-                    </TouchableOpacity>
-                  </View>
+                      ) : (
+                        <>
+                          <View style={[styles.statusDot, { backgroundColor: st.dotColor }]} />
+                          <Text style={[styles.statusText, { color: st.color }]} numberOfLines={2}>{st.label}</Text>
+                        </>
+                      )}
+                      {tappable && !hasLink ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
+                    </View>
+                  </TouchableOpacity>
                 );
               })}
+
+              <Text style={styles.channelHint}>{anyLiveLink ? 'Tap a channel to open the live listing.' : 'Tap a channel to manage it.'}</Text>
+
+              {showConnectFacebook ? (
+                <TouchableOpacity activeOpacity={0.7} onPress={() => setConnectFlowOpen(true)} style={[styles.preflightCard, { marginTop: 6 }]}>
+                  <Icon name="facebook" size={20} color="#BA7517" />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.preflightTitle}>Connect Facebook first</Text>
+                    <Text style={styles.preflightBody}>Link your Facebook account to post here. It only takes a moment.</Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color="#C4C8CE" />
+                </TouchableOpacity>
+              ) : null}
+
+              {showComputerPreflight ? (
+                <TouchableOpacity activeOpacity={0.7} onPress={() => setLinkComputerOpen(true)} style={[styles.preflightCard, { marginTop: 6 }]}>
+                  <Icon name="laptop" size={20} color="#BA7517" />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.preflightTitle}>Posts when your computer’s on</Text>
+                    <Text style={styles.preflightBody}>Facebook goes live through your Mac. It’ll post automatically once Anorha is open, or link a computer now.</Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color="#C4C8CE" />
+                </TouchableOpacity>
+              ) : null}
             </View>
+          </ScrollView>
+
+          <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
+            <PillButton label="View in inventory" variant="secondary" onPress={handleReviewInInventory} />
+            <PillButton label="Create another listing" onPress={handleCreateAnother} />
           </View>
-
-          <Text style={styles.hint}>{anyLiveLink ? 'Tap a channel to open the live listing.' : 'Tap a channel to manage it.'}</Text>
-
-          {showConnectFacebook ? (
-            <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
-              <TouchableOpacity activeOpacity={0.7} onPress={() => setConnectFlowOpen(true)} style={styles.preflightCard}>
-                <Icon name="facebook" size={20} color="#BA7517" />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={styles.preflightTitle}>Connect Facebook first</Text>
-                  <Text style={styles.preflightBody}>Link your Facebook account to post here. It only takes a moment.</Text>
-                </View>
-                <Icon name="chevron-right" size={18} color="#C4C8CE" />
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {showComputerPreflight ? (
-            <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
-              <TouchableOpacity activeOpacity={0.7} onPress={() => setLinkComputerOpen(true)} style={styles.preflightCard}>
-                <Icon name="laptop" size={20} color="#BA7517" />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={styles.preflightTitle}>Posts when your computer’s on</Text>
-                  <Text style={styles.preflightBody}>Facebook goes live through your Mac. It’ll post automatically once Anorha is open, or link a computer now.</Text>
-                </View>
-                <Icon name="chevron-right" size={18} color="#C4C8CE" />
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          <View style={{ flex: 1 }} />
-
-          <View style={{ gap: 10, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 16 }}>
-            <Pressable onPress={handleCreateAnother} style={({ pressed }) => [styles.createBtn, pressed && styles.pressed]}>
-              <Text style={styles.createText}>Create another listing</Text>
-            </Pressable>
-            <Pressable onPress={handleReviewInInventory} style={({ pressed }) => [styles.viewBtn, pressed && styles.pressed]}>
-              <Text style={styles.viewText}>View in inventory</Text>
-            </Pressable>
-          </View>
-        </View>
+        </>
       )}
 
       <LinkComputerSheet
@@ -374,7 +397,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params, navigation }) => {
   const insets = useSafeAreaInsets();
   // Cheap gap check — same catalog-wide counts the hub/optimizer use.
-  const { counts: optCounts, loading: optLoading } = useOptimizerQueues();
+  const { counts: optCounts, loading: optLoading, error: optError, refresh: optRefresh } = useOptimizerQueues();
 
   const {
     platforms = [],
@@ -445,6 +468,15 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
           title={savedToInventory ? 'Saved to inventory' : 'Import complete'}
           lines={[subtitle, nextLine]}
         />
+        {/* The gap check failed — say so quietly rather than defaulting the CTA to a false
+            "Done" (which would hide items that still need photos/details). Calm, no red. */}
+        {optError && !optLoading ? (
+          <TouchableOpacity onPress={optRefresh} activeOpacity={0.7} style={{ marginTop: 16, alignSelf: 'center' }}>
+            <Text style={{ fontSize: 14, color: IC.muted, textAlign: 'center' }}>
+              Couldn’t check what’s left — <Text style={{ color: IC.accent, fontWeight: '700' }}>Retry</Text>
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       <View style={{ gap: 10, paddingHorizontal: 20, paddingBottom: insets.bottom + 16 }}>
         <PillButton label="Review listings" variant="secondary" onPress={goReview} />
@@ -475,44 +507,35 @@ function renderPlatformSvg(key: string, size: number = 16) {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, paddingTop: 60, paddingBottom: 40 },
-  pressed: { transform: [{ scale: 0.96 }], opacity: 0.96 },
-  imageWrap: { alignSelf: 'center', width: 200, height: 200, borderRadius: 14, overflow: 'hidden', borderWidth: 2, borderColor: '#E5E5E5', backgroundColor: '#F3F4F6' },
+  // Logo square used by the legacy renderLogoSquare helper.
   image: { width: '100%', height: '100%' },
-  card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 16 },
-  label: { color: '#71717A', fontWeight: '600', marginBottom: 6, fontSize: 12, textTransform: 'uppercase' },
-  value: { color: '#000', fontWeight: '500' },
-  chip: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#fff' },
-  platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },
-  primaryBtn: { marginTop: 18, backgroundColor: BRAND_PRIMARY, borderRadius: 12, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, borderWidth: 0, borderColor: '#7EB12D' },
-  primaryText: { color: '#FFF', fontWeight: '800' },
-  secondaryBtn: { marginTop: 12, backgroundColor: '#F3F4F6', borderRadius: 12, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
-  secondaryText: { color: '#71717A', fontWeight: '700' },
 
-  // ── 1ABT-0 "Published!" card ──────────────────────────────────────────────
-  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 6, paddingBottom: 6 },
-  backCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: '#000000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  heroBlock: { marginTop: "20%", alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 6, paddingBottom: 18 },
-  cover: { width: 140, height: 140, borderRadius: 16, borderWidth: 2, borderColor: '#E5E7EB' },
-  coverPlaceholder: { backgroundColor: '#E7E1D6' },
-  publishedRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  checkCircle: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center' },
-  publishedTitle: { color: '#18181B', fontSize: 20, fontWeight: '800', letterSpacing: -0.2 },
-  liveOn: { color: '#9CA3AF', fontSize: 10, fontWeight: '700', letterSpacing: 0.6, paddingHorizontal: 20, paddingBottom: 9 },
-  channelsCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, overflow: 'hidden' },
-  rowDivider: { height: 1, backgroundColor: '#F1F2F4' },
-  channelRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 13 },
-  channelName: { color: '#18181B', fontSize: 15, fontWeight: '700' },
+  // Footer — the pinned primary/secondary pill stack.
+  footer: { gap: 10, paddingHorizontal: 20, paddingTop: 12 },
+
+  // Error state — inline "Couldn't publish" + Retry (never a false success).
+  errorCircle: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#FDECEC', alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  errorTitle: { fontSize: 24, fontWeight: '700', color: IC.ink, letterSpacing: -0.5, textAlign: 'center' },
+  errorLine: { fontSize: 15, color: IC.muted, textAlign: 'center', lineHeight: 21, marginTop: 8 },
+
+  // Publishing (in-flight) state — spinner + "Publishing…".
+  publishingText: { fontSize: 18, fontWeight: '600', color: IC.ink, letterSpacing: -0.3 },
+  publishingSub: { fontSize: 14, color: IC.muted, textAlign: 'center', lineHeight: 20 },
+
+  // Channel rows — calm Avec soft-card rows: logo · name · right-side link/status.
+  channelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: IC.card, borderRadius: 16, paddingVertical: 13, paddingHorizontal: 14, marginBottom: 10 },
+  channelName: { fontSize: 16, fontWeight: '700', color: IC.ink, letterSpacing: -0.2 },
+  channelRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { fontSize: 12, fontWeight: '600' },
-  hint: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', paddingHorizontal: 20, paddingTop: 9 },
+  statusText: { fontSize: 13, fontWeight: '600', textAlign: 'right', flexShrink: 1 },
+  liveLink: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  liveLinkText: { fontSize: 14, fontWeight: '700', color: IC.accent, letterSpacing: -0.1 },
+  channelHint: { fontSize: 13, color: IC.muted, marginTop: 8, marginBottom: 2, marginLeft: 4 },
+
+  // Facebook pre-flight prompts (connect / computer-offline) — warm attention cards.
   preflightCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FDF6EC', borderColor: '#F0E2CC', borderWidth: 1, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14 },
   preflightTitle: { color: '#7A5210', fontSize: 14, fontWeight: '700', letterSpacing: -0.2 },
   preflightBody: { color: '#9A7A45', fontSize: 12, lineHeight: 17 },
-  createBtn: { backgroundColor: '#93C822', borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
-  createText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-  viewBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
-  viewText: { color: '#3F3F46', fontSize: 16, fontWeight: '600' },
 });
 
 export default PublishConfirmationScreen;

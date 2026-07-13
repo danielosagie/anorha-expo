@@ -95,6 +95,10 @@ const VARIANT_SELECT = `
 export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
   const { connectionId, limit = 20000 } = options;
   const [loading, setLoading] = useState(true);
+  // A load failure used to zero the counts silently, which made "Details: Done" (and a
+  // blank optimizer lobby) LIE — indistinguishable from a genuinely all-clear catalog.
+  // Surface the failure so callers can offer a quiet retry instead of a false "done".
+  const [error, setError] = useState<string | null>(null);
   const [products, setProducts] = useState<ClassifiedProduct[]>([]);
   const [counts, setCounts] = useState<OptimizerQueueCounts>({
     photoNeeded: 0,
@@ -106,6 +110,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       await ensureSupabaseJwt();
 
@@ -167,6 +172,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
       log.error('[useOptimizerQueues] Error:', e);
       setProducts([]);
       setCounts({ photoNeeded: 0, dataNeeded: 0, manualQueue: 0, attention: 0, total: 0 });
+      setError(e instanceof Error ? e.message : 'Failed to load items');
     } finally {
       setLoading(false);
     }
@@ -186,6 +192,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
 
   return {
     loading,
+    error,
     products,
     counts,
     photoNeededItems,

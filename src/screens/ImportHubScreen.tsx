@@ -18,6 +18,7 @@ import {
   SectionCaption,
   AccountRow,
 } from '../components/importinbox/InboxKit';
+import SyncPreferencesSheet from '../components/importinbox/SyncPreferencesSheet';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportHub'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportHub'>;
@@ -39,6 +40,19 @@ export default function ImportHubScreen() {
   const { loading, error, refresh, totalNeedsYou, scanning, lanes, connections } = useImportHub();
 
   const [refreshing, setRefreshing] = useState(false);
+
+  // Store-preferences bottom sheet — the essentials-only tune for one connection,
+  // opened from a "Your stores" row (tap on a synced row, long-press on any row).
+  // Data is RETAINED across close (matching CompareSheet's always-mounted +
+  // visible-toggle convention) so the slide-out animation still has content; a
+  // separate `prefsVisible` flag drives open/close.
+  const [prefsConn, setPrefsConn] = useState<{
+    connectionId: string;
+    platformName: string;
+    platformType?: string;
+    needsAttention: number;
+  } | null>(null);
+  const [prefsVisible, setPrefsVisible] = useState(false);
 
   // CSVColumnMappingScreen finishes with navigation.replace('ImportHub',
   // { connectionId }). The per-connection match sub-rows are gone (the "Your
@@ -109,27 +123,54 @@ export default function ImportHubScreen() {
     navigation.navigate('BackfillOptimizer', { source: 'hub-details' });
   }, [navigation]);
 
-  // "Your stores" row tap: attention → the review deck for that connection;
-  // otherwise → SyncRules (management). Both carry { connectionId, platformName }
-  // — prefer the friendly display name (falling back to the raw PlatformType) so
-  // the destination header reads "My Shopify Store", not the bare "shopify" slug,
-  // matching the friendly name the matches lane already passes.
+  // Open the essentials preferences sheet for a store (its logo/name/attention
+  // come straight off the hub row — no extra fetch here; the sheet loads the rules).
+  const openStorePrefs = useCallback((conn: HubConnection) => {
+    setPrefsConn({
+      connectionId: conn.connectionId,
+      platformName: conn.platformName || conn.platformType || '',
+      platformType: conn.platformType,
+      needsAttention: conn.needsAttention,
+    });
+    setPrefsVisible(true);
+  }, []);
+
+  // "Your stores" row TAP:
+  //   • attention row (needsAttention > 0) → straight into the review deck, as before.
+  //   • synced row (needsAttention === 0) → the preferences sheet (was: push SyncRules).
+  // Every row also responds to a LONG-PRESS → the preferences sheet (the secondary
+  // path for attention rows, whose tap is reserved for the deck). Long-press is used
+  // over a trailing gear so nothing shrinks the tap target or misfires against the
+  // count/chevron. Both paths prefer the friendly display name over the raw slug.
   const openStore = useCallback(
     (conn: HubConnection) => {
-      const platformName = conn.platformName || conn.platformType || '';
       if (conn.needsAttention > 0) {
+        const platformName = conn.platformName || conn.platformType || '';
         navigation.navigate('SyncInbox', { connectionId: conn.connectionId, platformName });
         return;
       }
-      // SyncRules only types { connectionId }; ConnectionsScreen passes the extra
-      // platformName too (SyncRulesScreen reads it to avoid a header flash). Route
-      // it through a variable so the extra prop rides along without an excess-
-      // property error against the narrower param type.
-      const params = { connectionId: conn.connectionId, platformName };
-      navigation.navigate('SyncRules', params);
+      openStorePrefs(conn);
     },
-    [navigation],
+    [navigation, openStorePrefs],
   );
+
+  // Sheet → "N need you" row: close, then dive into this connection's deck.
+  const openPrefsInbox = useCallback(() => {
+    const c = prefsConn;
+    setPrefsVisible(false);
+    if (c) navigation.navigate('SyncInbox', { connectionId: c.connectionId, platformName: c.platformName });
+  }, [prefsConn, navigation]);
+
+  // Sheet → "All settings": close, then open the full SyncRules management screen.
+  // SyncRules only types { connectionId }; the extra platformName rides along via a
+  // variable so it doesn't trip the excess-property check (SyncRulesScreen reads it).
+  const openPrefsAllSettings = useCallback(() => {
+    const c = prefsConn;
+    setPrefsVisible(false);
+    if (!c) return;
+    const params = { connectionId: c.connectionId, platformName: c.platformName };
+    navigation.navigate('SyncRules', params);
+  }, [prefsConn, navigation]);
 
   // Continue → dive into the first non-empty lane (matches → photos → details).
   const onContinue = useCallback(() => {
@@ -282,6 +323,7 @@ export default function ImportHubScreen() {
                 rightLabel={conn.needsAttention > 0 ? undefined : 'Synced'}
                 highlighted={!!handoffConnectionId && conn.connectionId === handoffConnectionId}
                 onPress={() => openStore(conn)}
+                onLongPress={() => openStorePrefs(conn)}
               />
             ))}
           </View>
@@ -300,6 +342,21 @@ export default function ImportHubScreen() {
             )}
           </View>
         </>
+      )}
+
+      {/* Store preferences — essentials-only bottom sheet (synced-row tap /
+          any-row long-press). Full management stays on SyncRules via "All settings". */}
+      {prefsConn && (
+        <SyncPreferencesSheet
+          visible={prefsVisible}
+          onClose={() => setPrefsVisible(false)}
+          connectionId={prefsConn.connectionId}
+          platformName={prefsConn.platformName}
+          platformType={prefsConn.platformType}
+          needsAttention={prefsConn.needsAttention}
+          onOpenInbox={openPrefsInbox}
+          onOpenAllSettings={openPrefsAllSettings}
+        />
       )}
     </View>
   );
