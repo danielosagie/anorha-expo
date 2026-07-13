@@ -12,7 +12,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import type { SyncItem, ResolveChoice } from '../../types/syncItem';
-import { TinderShell, DeckChrome, ResolveBadge, RC } from '../resolve/ResolveKit';
+import { TinderShell, DeckChrome, RC } from '../resolve/ResolveKit';
 import DecisionCard from './DecisionCard';
 
 export default function MatchReviewDeck({
@@ -27,7 +27,9 @@ export default function MatchReviewDeck({
   platformName?: string;
   resolve: (platformId: string, choice: ResolveChoice, canonicalId?: string) => Promise<unknown>;
   resolving: string | null;
-  onDone?: () => void;
+  // Optional session tally so the caller can show a real ending ("X linked ·
+  // Y added · Z ignored"). Called with no arg when the user backs out mid-deck.
+  onDone?: (sessionCounts?: { linked: number; created: number; ignored: number }) => void;
   topInset?: number;
 }) {
   // Snapshot the queue ONCE so the resolver optimistically removing items
@@ -47,19 +49,31 @@ export default function MatchReviewDeck({
     }
     return m;
   });
-  const introShownRef = useRef(true);
+  // Latest decision per item (keyed by platformId) so re-deciding after an undo
+  // OVERWRITES rather than double-counts. Tallied once on done.
+  const decisionsRef = useRef<Record<string, ResolveChoice>>({});
 
   const cur = deck[pos];
 
   const commit = useCallback(
     (choice: ResolveChoice, canonicalId?: string) => {
       if (!cur) return;
-      introShownRef.current = false;
+      decisionsRef.current[cur.platformId] = choice;
       void resolve(cur.platformId, choice, canonicalId);
       setPos((p) => p + 1);
     },
     [cur, resolve],
   );
+
+  const tallyCounts = useCallback(() => {
+    const c = { linked: 0, created: 0, ignored: 0 };
+    for (const v of Object.values(decisionsRef.current)) {
+      if (v === 'link') c.linked += 1;
+      else if (v === 'create') c.created += 1;
+      else if (v === 'ignore') c.ignored += 1;
+    }
+    return c;
+  }, []);
 
   const undo = useCallback(() => setPos((p) => Math.max(0, p - 1)), []);
 
@@ -70,9 +84,8 @@ export default function MatchReviewDeck({
       onRedo: undefined,
       canRedo: false,
       onIgnore: () => commit('ignore'),
-      intro: introShownRef.current && total > 0 ? { cameIn: total, needYou: total } : null,
     }),
-    [undo, pos, total, commit],
+    [undo, pos, commit],
   );
 
   // Deck exhausted → hand back to the parent (its "all set" state).
@@ -81,7 +94,7 @@ export default function MatchReviewDeck({
       <View style={[styles.done, { paddingTop: topInset + 40 }]}>
         <Text style={styles.doneTitle}>All caught up</Text>
         <Text style={styles.doneSub}>Every flagged item is sorted. Everything else matched on its own.</Text>
-        <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={onDone}>
+        <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={() => onDone?.(tallyCounts())}>
           <Text style={styles.doneBtnText}>Done</Text>
         </TouchableOpacity>
       </View>
@@ -92,11 +105,6 @@ export default function MatchReviewDeck({
   const hasCandidates = candidates.length > 0;
   const picked = picks[cur.platformId] ?? null;
 
-  // Badge — one calm status per card.
-  const badge = hasCandidates
-    ? { label: candidates.length > 1 ? `${candidates.length} could match` : 'Check this match', color: RC.warn }
-    : { label: 'New item', color: RC.green };
-
   // Bar labels/actions, adapted from the item's shape.
   const primaryLabel = hasCandidates ? (candidates.length > 1 ? 'Link this one' : 'Link') : 'Add as new';
   const onPrimary = () => (hasCandidates && picked ? commit('link', picked) : commit('create'));
@@ -105,29 +113,27 @@ export default function MatchReviewDeck({
 
   return (
     <DeckChrome.Provider value={chrome}>
-      <ResolveBadge.Provider value={badge}>
-        <TinderShell
-          idx={pos + 1}
-          total={total}
-          title={cur.title}
-          onBack={onDone}
-          primary={primaryLabel}
-          primaryReady={resolving !== cur.platformId}
-          alt={altLabel}
-          onPrimary={onPrimary}
-          onAlt={onAlt}
-          onIgnore={() => commit('ignore')}
-          topInset={topInset}
-          scroll
-        >
-          <DecisionCard
-            item={cur}
-            platformName={platformName}
-            selectedId={picked}
-            onSelect={(id) => setPicks((m) => ({ ...m, [cur.platformId]: id }))}
-          />
-        </TinderShell>
-      </ResolveBadge.Provider>
+      <TinderShell
+        idx={pos + 1}
+        total={total}
+        title={cur.title}
+        onBack={() => onDone?.()}
+        primary={primaryLabel}
+        primaryReady={resolving !== cur.platformId}
+        alt={altLabel}
+        onPrimary={onPrimary}
+        onAlt={onAlt}
+        onIgnore={() => commit('ignore')}
+        topInset={topInset}
+        scroll
+      >
+        <DecisionCard
+          item={cur}
+          platformName={platformName}
+          selectedId={picked}
+          onSelect={(id) => setPicks((m) => ({ ...m, [cur.platformId]: id }))}
+        />
+      </TinderShell>
     </DeckChrome.Provider>
   );
 }

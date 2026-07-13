@@ -21,8 +21,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CommonActions } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Clipboard from 'expo-clipboard';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import { pickAndParseCsv } from '../utils/csvImport';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import * as Crypto from 'expo-crypto'; // For generating random string
 import { showMessage } from 'react-native-flash-message';
@@ -723,64 +722,29 @@ const ProfileScreen = () => {
         try {
           log.debug('[ProfileScreen] Starting document picker via InteractionManager...');
 
-          const result = await DocumentPicker.getDocumentAsync({
-            type: ['text/csv', 'text/comma-separated-values', 'application/csv', '*/*'],
-            copyToCacheDirectory: true,
-          });
-
-          if (result.canceled || !result.assets?.[0]) {
+          // Shared RFC-4180 picker/parser — replaces the old naive split() parser
+          // that mangled quoted commas / CRLF / BOM exports.
+          const picked = await pickAndParseCsv();
+          if (!picked) {
             log.debug('[ProfileScreen] CSV picking cancelled');
             return;
           }
 
-          const file = result.assets[0];
-          log.debug('[ProfileScreen] CSV selected:', file.name);
+          log.debug('[ProfileScreen] Parsed CSV:', { headers: picked.headers, rowCount: picked.data.length });
 
-          // Check for null uri
-          if (!file.uri) {
-            Alert.alert('Error', 'Could not access the file URI.');
-            return;
-          }
-
-          // Read file contents using legacy FileSystem API
-          const fileContent = await FileSystem.readAsStringAsync(file.uri);
-
-          // Simple CSV parsing (just enough to validate headers/rows before full mapping)
-          const lines = fileContent.split('\n').filter((line: string) => line.trim());
-          if (lines.length < 2) {
-            Alert.alert('Invalid CSV', 'The file must have headers and at least one data row.');
-            return;
-          }
-
-          // Parse headers (first line)
-          const headers = lines[0].split(',').map((h: string) => h.trim().replace(/^"|"$/g, ''));
-
-          // Parse data rows
-          const csvData = lines.slice(1).map((line: string) => {
-            const values = line.split(',').map((v: string) => v.trim().replace(/^"|"$/g, ''));
-            const row: Record<string, string> = {};
-            headers.forEach((header: string, i: number) => {
-              row[header] = values[i] || '';
-            });
-            return row;
-          });
-
-          const sampleRow = csvData[0] || {};
-          log.debug('[ProfileScreen] Parsed CSV:', { headers, rowCount: csvData.length });
-
-          capture(AnalyticsEvents.INVENTORY_IMPORT_STARTED, { source: 'csv', row_count: csvData.length });
+          capture(AnalyticsEvents.INVENTORY_IMPORT_STARTED, { source: 'csv', row_count: picked.data.length });
 
           // Navigate to column mapping screen with connectionName
           navigation.navigate('CSVColumnMapping' as any, {
-            csvHeaders: headers,
-            csvData,
-            sampleRow,
+            csvHeaders: picked.headers,
+            csvData: picked.data,
+            sampleRow: picked.sampleRow,
             connectionName: csvConnectionName.trim(), // Pass name
           });
 
         } catch (error: any) {
           log.error('[ProfileScreen] CSV import error:', error);
-          Alert.alert('Import Error', `Failed to read the CSV file: ${error.message}`);
+          setErrorModal({ visible: true, title: 'Import Error', message: error?.message || 'Failed to read the CSV file.', type: 'error' });
         }
       });
     }, 600); // 600ms delay + InteractionManager to be extremely safe on iOS
@@ -1118,17 +1082,9 @@ const ProfileScreen = () => {
     log.debug(`[ProfileScreen] Attempting to start scan for connection ID: ${connectionId} (${platformName})`);
     setIsEditMode(false); // Exit edit mode
 
-    // ✅ NAVIGATE IMMEDIATELY - Don't wait for API response
-    // Land straight on the async sync inbox; it polls the resolver a bounded
-    // number of times (see useResolution) so the buckets fill in on their own as
-    // the background scan below produces suggestions — no passive lobby, and no
-    // stranding on an empty list.
-    navigation.navigate('SyncInbox', {
-      connectionId,
-      platformName,
-    });
-
-    // Start the scan in the background (non-blocking)
+    // Fire the scan/reconcile in the background (non-blocking) FIRST, then land on
+    // the Import Hub — no forced swipe deck. New/leftover items surface as passive
+    // counts in the hub; the user opens the deck on their own time.
     (async () => {
       try {
         const token = await getApiToken();
@@ -1158,10 +1114,13 @@ const ProfileScreen = () => {
       } catch (error: unknown) {
         log.error(`[ProfileScreen] Error starting scan for ${platformName}:`, error);
         const message = error instanceof Error ? error.message : String(error);
-        // Show error notification - user is already on MappingReviewScreen
+        // Show error notification - user is already on the Import Hub
         showStatusNotification('Scan Error', `Could not start scan for ${platformName}: ${message}`, 'danger');
       }
     })();
+
+    // Land on the Import Hub (email-inbox model), not the swipe deck.
+    navigation.navigate('ImportHub');
   };
   // --- END Function to start platform scan ---
 
@@ -1959,45 +1918,7 @@ const ProfileScreen = () => {
         </Card>
       </Animated.View>
 
-
-
-      {/* Optimize Listings Card - between Locations and Settings 
-      <Animated.View entering={FadeInUp.delay(320).duration(500)}>
-        <TouchableOpacity
-          style={styles.optimizeCard}
-          onPress={() => navigation.navigate('BackfillOptimizer' as any)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.optimizeHeader}>
-            <LinearGradient
-              colors={['#8cc63f', '#70a826']}
-              style={styles.optimizeIconBadge}
-            >
-              <Icon name="tune" size={20} color="#fff" />
-            </LinearGradient>
-            <View style={styles.optimizeTextContainer}>
-              <Text style={styles.optimizeTitle}>Optimize Listings</Text>
-              <Text style={styles.optimizeSubtitle}>Fill missing data for platforms</Text>
-            </View>
-            <Icon name="chevron-right" size={24} color="#9ca3af" />
-          </View>
-          <View style={styles.streakBarContainer}>
-            <View style={styles.streakBar}>
-              <View style={[styles.streakFill, {
-                width: `${optimizationSummary && optimizationSummary.total > 0
-                  ? Math.round((optimizationSummary.fullyReady / optimizationSummary.total) * 100)
-                  : 0}%`
-              }]} />
-            </View>
-            <Text style={styles.streakText}>
-              {optimizationSummary && optimizationSummary.total > 0
-                ? Math.round((optimizationSummary.fullyReady / optimizationSummary.total) * 100)
-                : 0}% complete
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </Animated.View>
-      */}
+      {/* Optimize Listings card removed — the Import Hub owns the optimize entry now. */}
 
       {/* Locations & Pools Card (v2) - render unconditionally; component resolves orgId */}
       <Animated.View entering={FadeInUp.delay(250).duration(500)}>

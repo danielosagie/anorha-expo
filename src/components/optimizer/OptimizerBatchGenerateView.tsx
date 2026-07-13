@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
@@ -7,30 +7,21 @@ import {
     FlatList,
     Image,
     ActivityIndicator,
-    Alert,
     Dimensions,
-    Animated,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useAuth } from '@clerk/expo';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
 import { createLogger } from '../../utils/logger';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RC } from '../resolve/ResolveKit';
+import ErrorModal from '../ErrorModal';
+import { useBatchGenerate, BatchItemStatus, BatchGenerateInput } from '../../hooks/useBatchGenerate';
 const log = createLogger('OptimizerBatchGenerateView');
 
 
 const { width } = Dimensions.get('window');
-
-const COLORS = {
-    primary: '#8cc63f',
-    primaryDark: '#70a826',
-    surface: '#ffffff',
-    background: '#f8f9fa',
-    text: '#1a1a1a',
-    textLight: '#6c757d',
-    border: '#e5e5e5',
-};
 
 interface OptimizerBatchGenerateViewProps {
     onBack: () => void;
@@ -40,14 +31,18 @@ interface OptimizerBatchGenerateViewProps {
 }
 
 export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }: OptimizerBatchGenerateViewProps) {
-    const { getToken } = useAuth();
+    const insets = useSafeAreaInsets();
     const [products, setProducts] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-    const [isGenerating, setIsGenerating] = useState(false);
+    const [modal, setModal] = useState<{ visible: boolean; type: 'error' | 'warning'; title: string; message: string }>(
+        { visible: false, type: 'warning', title: '', message: '' },
+    );
 
-    // Animation for success state
-    const successAnim = useRef(new Animated.Value(0)).current;
+    // Real bulk generation: submit → poll job → persist to ProductVariants.
+    const batch = useBatchGenerate();
+    const isGenerating = batch.phase === 'running';
+    const isSettled = batch.phase === 'settled';
 
     useEffect(() => {
         if (queueProducts && queueProducts.length > 0) {
@@ -67,7 +62,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
             const { data, error } = await supabase
                 .from('ProductVariants')
                 .select(`
-                    Id, Title, Sku, Price,
+                    Id, Title, Description, Sku, Price,
                     ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
                 `)
                 .limit(100);
@@ -80,13 +75,18 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
             setSelectedIds(initialSelection);
         } catch (err) {
             log.error('[BatchMode] Error loading', err);
-            Alert.alert('Error', 'Failed to load products for batch generation.');
+            setModal({ visible: true, type: 'error', title: 'Couldn’t load items', message: 'Failed to load products for batch generation.' });
         } finally {
             setLoading(false);
         }
     };
 
+    // Selection is locked once generation starts (and while a partial-failure
+    // result is on screen) — the user acts via Retry / Continue instead.
+    const selectionLocked = isGenerating || isSettled;
+
     const toggleSelection = (id: string) => {
+        if (selectionLocked) return;
         // Haptic feedback for selection
         Haptics.selectionAsync();
 
@@ -100,6 +100,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
     };
 
     const toggleSelectAll = () => {
+        if (selectionLocked) return;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         if (selectedIds.size === products.length) {
             setSelectedIds(new Set());
@@ -109,38 +110,87 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
         }
     };
 
-    const handleGenerate = async () => {
-        if (selectedIds.size === 0) return;
+    const buildInputs = (ids: string[]): BatchGenerateInput[] =>
+        ids
+            .map((id) => products.find((p) => p.Id === id))
+            .filter(Boolean)
+            .map((p: any) => ({
+                variantId: p.Id,
+                imageUrls: ((p.ProductImages as any[]) || [])
+                    .map((img) => img?.ImageUrl)
+                    .filter((u: any) => typeof u === 'string'),
+                existingTitle: p.Title || '',
+                existingDescription: p.Description || '',
+            }));
 
+    const handleGenerate = () => {
+        if (selectedIds.size === 0 || isGenerating) return;
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setIsGenerating(true);
-
-        const idsToMark = Array.from(selectedIds);
-
-        // Simulate async generation process start
-        setTimeout(() => {
-            setIsGenerating(false);
-            onComplete(idsToMark);
-        }, 1500);
+        setModal((m) => ({ ...m, visible: false }));
+        void batch.run(buildInputs(Array.from(selectedIds)));
     };
+
+    const handleRetryFailed = () => {
+        if (isGenerating || batch.failedIds.length === 0) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        setModal((m) => ({ ...m, visible: false }));
+        void batch.run(buildInputs(batch.failedIds));
+    };
+
+    // When the batch settles: all-success → hand the done ids up (advances to the
+    // review step). Any failures → surface ONE summary and keep the failed items
+    // here (unmarked) so the user can retry or continue with what worked.
+    useEffect(() => {
+        if (batch.phase !== 'settled') return;
+        if (batch.failedIds.length === 0 && batch.doneIds.length > 0) {
+            onComplete(batch.doneIds);
+        } else if (batch.failedIds.length > 0) {
+            setModal({
+                visible: true,
+                type: 'warning',
+                title: 'Some items need another try',
+                message: batch.errorSummary || 'A few items couldn’t be generated.',
+            });
+        }
+        // onComplete intentionally omitted: it navigates away, so re-firing on its
+        // identity change would double-advance.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [batch.phase, batch.failedIds.length, batch.doneIds.length, batch.errorSummary]);
 
     const renderItem = ({ item }: { item: any }) => {
         const isSelected = selectedIds.has(item.Id);
         const image = item.ProductImages?.[0]?.ImageUrl;
+        const status: BatchItemStatus | undefined = batch.statuses[item.Id];
+        const locked = selectionLocked;
 
         return (
             <TouchableOpacity
                 style={[
                     styles.itemCard,
-                    isSelected && styles.itemCardSelected
+                    isSelected && !status && styles.itemCardSelected,
+                    status === 'done' && styles.itemCardDone,
+                    status === 'failed' && styles.itemCardFailed,
                 ]}
                 onPress={() => toggleSelection(item.Id)}
-                activeOpacity={0.7}
+                activeOpacity={locked ? 1 : 0.7}
+                disabled={locked}
             >
                 <View style={styles.checkboxContainer}>
-                    <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
-                        {isSelected && <MaterialCommunityIcons name="check" size={16} color="#fff" />}
-                    </View>
+                    {status === 'done' ? (
+                        <View style={styles.statusDoneDot}>
+                            <MaterialCommunityIcons name="check" size={16} color="#fff" />
+                        </View>
+                    ) : status === 'failed' ? (
+                        <View style={styles.statusFailedDot}>
+                            <MaterialCommunityIcons name="alert" size={14} color="#fff" />
+                        </View>
+                    ) : status === 'generating' || status === 'queued' ? (
+                        <ActivityIndicator size="small" color={RC.green} />
+                    ) : (
+                        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                            {isSelected && <MaterialCommunityIcons name="check" size={16} color="#fff" />}
+                        </View>
+                    )}
                 </View>
 
                 {image ? (
@@ -152,20 +202,28 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
                 )}
 
                 <View style={styles.itemInfo}>
-                    <Text style={styles.itemTitle} numberOfLines={1}>{item.Title}</Text>
+                    <Text style={styles.itemTitle} numberOfLines={1}>{item.Title || 'Untitled item'}</Text>
                     <Text style={styles.itemSku}>{item.Sku || 'No SKU'}</Text>
 
-                    {/* Tags showing what will be generated */}
-                    <View style={styles.tagsRow}>
-                        <View style={styles.tag}>
-                            <MaterialCommunityIcons name="format-title" size={12} color={COLORS.primary} />
-                            <Text style={styles.tagText}>Title</Text>
+                    {status === 'failed' ? (
+                        <Text style={styles.statusFailedText}>Couldn’t generate — retry</Text>
+                    ) : status === 'done' ? (
+                        <Text style={styles.statusDoneText}>Details generated</Text>
+                    ) : status === 'generating' || status === 'queued' ? (
+                        <Text style={styles.statusGenText}>Generating…</Text>
+                    ) : (
+                        /* Tags showing what will be generated */
+                        <View style={styles.tagsRow}>
+                            <View style={styles.tag}>
+                                <MaterialCommunityIcons name="format-title" size={12} color={RC.green} />
+                                <Text style={styles.tagText}>Title</Text>
+                            </View>
+                            <View style={styles.tag}>
+                                <MaterialCommunityIcons name="text-short" size={12} color={RC.green} />
+                                <Text style={styles.tagText}>Desc</Text>
+                            </View>
                         </View>
-                        <View style={styles.tag}>
-                            <MaterialCommunityIcons name="text-short" size={12} color={COLORS.primary} />
-                            <Text style={styles.tagText}>Desc</Text>
-                        </View>
-                    </View>
+                    )}
                 </View>
             </TouchableOpacity>
         );
@@ -174,8 +232,8 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={COLORS.primary} />
-                <Text style={{ marginTop: 10, color: COLORS.textLight }}>Loading candidates...</Text>
+                <ActivityIndicator size="large" color={RC.green} />
+                <Text style={{ marginTop: 10, color: RC.muted }}>Loading candidates...</Text>
             </View>
         );
     }
@@ -183,9 +241,9 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                    <MaterialCommunityIcons name="close" size={24} color={COLORS.text} />
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+                <TouchableOpacity onPress={onBack} style={styles.backButton} disabled={isGenerating}>
+                    <MaterialCommunityIcons name="close" size={24} color={isGenerating ? RC.faint : RC.ink} />
                 </TouchableOpacity>
                 <View>
                     <Text style={styles.headerTitle}>Batch Magic</Text>
@@ -218,40 +276,79 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
 
             {/* Bottom Action Footer */}
             <View style={styles.footer}>
-                <TouchableOpacity
-                    style={[
-                        styles.generateButton,
-                        selectedIds.size === 0 && styles.generateButtonDisabled
-                    ]}
-                    onPress={handleGenerate}
-                    disabled={selectedIds.size === 0 || isGenerating}
-                >
-                    <LinearGradient
-                        colors={selectedIds.size > 0 ? [COLORS.primary, COLORS.primaryDark] : ['#e9ecef', '#ced4da']}
-                        style={styles.gradientBtn}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                    >
-                        {isGenerating ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <>
-                                <MaterialCommunityIcons
-                                    name="auto-fix"
-                                    size={24}
-                                    color={selectedIds.size > 0 ? "#fff" : "#adb5bd"}
-                                />
-                                <Text style={[
-                                    styles.generateBtnText,
-                                    selectedIds.size === 0 && styles.textDisabled
-                                ]}>
-                                    Generate for {selectedIds.size} Items
-                                </Text>
-                            </>
+                {isSettled && batch.failedIds.length > 0 ? (
+                    <>
+                        <TouchableOpacity
+                            style={styles.generateButton}
+                            onPress={handleRetryFailed}
+                            disabled={isGenerating}
+                        >
+                            <LinearGradient
+                                colors={[RC.green, RC.greenDark]}
+                                style={styles.gradientBtn}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
+                            >
+                                <MaterialCommunityIcons name="refresh" size={22} color="#fff" />
+                                <Text style={styles.generateBtnText}>Retry {batch.failedIds.length} failed</Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+                        {batch.doneIds.length > 0 && (
+                            <TouchableOpacity style={styles.continueBtn} onPress={() => onComplete(batch.doneIds)}>
+                                <Text style={styles.continueBtnText}>Continue with {batch.doneIds.length} done</Text>
+                            </TouchableOpacity>
                         )}
-                    </LinearGradient>
-                </TouchableOpacity>
+                    </>
+                ) : (
+                    <TouchableOpacity
+                        style={[
+                            styles.generateButton,
+                            (selectedIds.size === 0 || isGenerating) && styles.generateButtonDisabled
+                        ]}
+                        onPress={handleGenerate}
+                        disabled={selectedIds.size === 0 || isGenerating}
+                    >
+                        <LinearGradient
+                            colors={selectedIds.size > 0 || isGenerating ? [RC.green, RC.greenDark] : ['#e9ecef', '#ced4da']}
+                            style={styles.gradientBtn}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                        >
+                            {isGenerating ? (
+                                <>
+                                    <ActivityIndicator color="#fff" />
+                                    <Text style={styles.generateBtnText}>
+                                        Generating{batch.totalCount > 0 ? ` ${Math.min(batch.progressCount, batch.totalCount)}/${batch.totalCount}` : ''}…
+                                    </Text>
+                                </>
+                            ) : (
+                                <>
+                                    <MaterialCommunityIcons
+                                        name="auto-fix"
+                                        size={24}
+                                        color={selectedIds.size > 0 ? "#fff" : "#adb5bd"}
+                                    />
+                                    <Text style={[
+                                        styles.generateBtnText,
+                                        selectedIds.size === 0 && styles.textDisabled
+                                    ]}>
+                                        Generate for {selectedIds.size} Items
+                                    </Text>
+                                </>
+                            )}
+                        </LinearGradient>
+                    </TouchableOpacity>
+                )}
             </View>
+
+            <ErrorModal
+                visible={modal.visible}
+                type={modal.type}
+                title={modal.title}
+                message={modal.message}
+                buttonText="OK"
+                onClose={() => setModal((m) => ({ ...m, visible: false }))}
+            />
         </View>
     );
 }
@@ -259,7 +356,7 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: COLORS.background,
+        backgroundColor: RC.surface,
     },
     loadingContainer: {
         flex: 1,
@@ -270,12 +367,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingTop: 60,
         paddingHorizontal: 20,
         paddingBottom: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: RC.line,
     },
     backButton: {
         width: 40,
@@ -288,12 +384,12 @@ const styles = StyleSheet.create({
     headerTitle: {
         fontSize: 18,
         fontWeight: 'bold',
-        color: COLORS.text,
+        color: RC.ink,
         textAlign: 'center',
     },
     headerSubtitle: {
         fontSize: 12,
-        color: COLORS.textLight,
+        color: RC.muted,
         textAlign: 'center',
     },
     toolbar: {
@@ -302,9 +398,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 20,
         paddingVertical: 12,
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: RC.line,
     },
     selectAllBtn: {
         flexDirection: 'row',
@@ -314,11 +410,11 @@ const styles = StyleSheet.create({
     selectText: {
         fontSize: 14,
         fontWeight: '600',
-        color: COLORS.text,
+        color: RC.ink,
     },
     countText: {
         fontSize: 14,
-        color: COLORS.textLight,
+        color: RC.muted,
     },
     checkbox: {
         width: 20,
@@ -331,8 +427,8 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
     },
     checkboxChecked: {
-        backgroundColor: COLORS.primary,
-        borderColor: COLORS.primary,
+        backgroundColor: RC.green,
+        borderColor: RC.green,
     },
     checkboxContainer: {
         marginRight: 12,
@@ -344,7 +440,7 @@ const styles = StyleSheet.create({
     itemCard: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         padding: 12,
         borderRadius: 12,
         marginBottom: 10,
@@ -357,8 +453,47 @@ const styles = StyleSheet.create({
         borderColor: 'transparent',
     },
     itemCardSelected: {
-        borderColor: COLORS.primary,
+        borderColor: RC.green,
         backgroundColor: '#fbfdf8',
+    },
+    itemCardDone: {
+        borderColor: RC.greenLine,
+        backgroundColor: RC.greenSoft,
+    },
+    itemCardFailed: {
+        borderColor: RC.dangerLine,
+        backgroundColor: RC.dangerSoft,
+    },
+    statusDoneDot: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: RC.green,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    statusFailedDot: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: RC.danger,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    statusDoneText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: RC.greenDark,
+    },
+    statusFailedText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: RC.dangerInk,
+    },
+    statusGenText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: RC.muted,
     },
     itemImage: {
         width: 50,
@@ -382,12 +517,12 @@ const styles = StyleSheet.create({
     itemTitle: {
         fontSize: 15,
         fontWeight: '600',
-        color: COLORS.text,
+        color: RC.ink,
         marginBottom: 2,
     },
     itemSku: {
         fontSize: 12,
-        color: COLORS.textLight,
+        color: RC.muted,
         marginBottom: 6,
     },
     tagsRow: {
@@ -414,16 +549,16 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         padding: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: RC.bg,
         borderTopWidth: 1,
-        borderTopColor: COLORS.border,
+        borderTopColor: RC.line,
         paddingBottom: 40,
     },
     generateButton: {
         borderRadius: 16,
         overflow: 'hidden',
         height: 56,
-        shadowColor: COLORS.primary,
+        shadowColor: RC.green,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
@@ -447,5 +582,16 @@ const styles = StyleSheet.create({
     },
     textDisabled: {
         color: '#868e96',
+    },
+    continueBtn: {
+        height: 48,
+        marginTop: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    continueBtnText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: RC.muted,
     },
 });

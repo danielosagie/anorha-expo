@@ -3,19 +3,13 @@
  * and returns demo JSON so data-driven screens (Billing, Team, Notifications) render
  * populated instead of "no auth"/empty. Imported for its side effect by App.web.tsx.
  */
-import { supabase } from '../../lib/supabase';
+// IMPORTANT: do NOT import supabase at the top of this file. supabase-js captures
+// the global fetch BY VALUE at client construction, so the client must be created
+// only after window.fetch below is swapped — else the /rest/v1/* mocks never hit.
 
 if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(window as any).__sssyncFetchMocked) {
   (window as any).__sssyncFetchMocked = true;
   const orig = window.fetch.bind(window);
-
-  // Make screens that gate on a Supabase session (e.g. Team, Past scans) proceed on web.
-  try {
-    const mockUser: any = { id: 'user_mock', email: 'demo@sssync.app' };
-    const mockSession: any = { user: mockUser, access_token: 'mock_jwt_token', token_type: 'bearer', expires_at: Date.now() / 1000 + 3600 };
-    (supabase as any).auth.getUser = async () => ({ data: { user: mockUser }, error: null });
-    (supabase as any).auth.getSession = async () => ({ data: { session: mockSession }, error: null });
-  } catch {}
 
   const json = (data: any) =>
     new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -73,7 +67,90 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     marketingUpdates: false,
   };
 
-  const routes: Array<[RegExp, any]> = [
+  // ---- Import Hub / SyncInbox demo data ----
+  const inboxSummary = {
+    totalNeedsAttention: 7,
+    byReason: { multiple_candidates: 4, weak_match: 3 },
+    connections: [
+      { connectionId: 'conn_shopify', platformType: 'shopify', displayName: 'My Shopify Store', state: 'needs-attention', needsAttention: 4 },
+      { connectionId: 'conn_square', platformType: 'square', displayName: 'Square POS', state: 'needs-attention', needsAttention: 3 },
+      { connectionId: 'conn_ebay', platformType: 'ebay', displayName: 'eBay Seller Hub', state: 'scanning', needsAttention: 0 },
+    ],
+    recentImports: [
+      { importId: 'imp_1', connectionId: 'conn_shopify', source: 'platform_scan', status: 'complete', itemsTotal: 182, itemsCommitted: 178, itemsFailed: 0, createdAt: new Date(now - 86400000).toISOString(), completedAt: new Date(now - 86000000).toISOString() },
+      { importId: 'imp_2', connectionId: 'conn_csv', source: 'csv_upload', status: 'in_progress', itemsTotal: 120, itemsCommitted: 64, itemsFailed: 0, createdAt: new Date(now - 600000).toISOString(), completedAt: null },
+    ],
+  };
+
+  const mkItem = (i: number, reason: string, candidates: number) => ({
+    platformId: `plat_${i}`,
+    sku: `SKU-10${i}`,
+    barcode: null,
+    title: ['Ceramic Pour-Over Coffee Dripper', 'Linen Table Runner 72"', 'Walnut Serving Board', 'Stoneware Mug — Sage'][i % 4],
+    price: [24.99, 38.0, 54.5, 18.0][i % 4],
+    imageUrl: `https://picsum.photos/seed/inbox${i}/300/300`,
+    parentId: null,
+    direction: 'both',
+    resolution: candidates > 0
+      ? { kind: 'link', canonical: { id: `can_${i}`, sku: `SKU-10${i}`, title: 'Existing: Pour-Over Dripper', imageUrl: `https://picsum.photos/seed/can${i}/200/200` }, confidence: 0.82, via: 'title' }
+      : { kind: 'create' },
+    attention: reason,
+    candidates: Array.from({ length: candidates }, (_, k) => ({
+      id: `can_${i}_${k}`, sku: `SKU-10${i}${k}`, title: k === 0 ? 'Pour-Over Coffee Dripper (existing)' : 'Coffee Dripper V2', imageUrl: `https://picsum.photos/seed/cand${i}${k}/200/200`,
+    })),
+    recommended: candidates > 0 ? 'primary' : null,
+    reason: reason === 'multiple_candidates' ? 'Two close matches in your catalog' : 'Title similar but price differs',
+  });
+
+  const resolution = {
+    autoLink: [],
+    autoCreate: [],
+    needsAttention: [mkItem(0, 'multiple_candidates', 2), mkItem(1, 'weak_match', 1), mkItem(2, 'multiple_candidates', 2), mkItem(3, 'weak_match', 0)],
+    summary: { total: 182, autoLinked: 121, autoCreated: 57, needsAttention: 4, skipped: 0, pushSide: 0, clean: false, byReason: { multiple_candidates: 2, weak_match: 2 } },
+  };
+
+  const connStatus = {
+    state: 'needs-attention',
+    counts: { total: 182, autoLinked: 121, autoCreated: 57, needsAttention: 4 },
+    attention: resolution.needsAttention,
+  };
+
+  // Demo catalog for the optimizer queues (supabase REST). Thresholds in
+  // useOptimizerQueues: <2 images → needsPhotos; short/missing title/description
+  // → needsContent; missing Sku → manual. Keep the array <1000 so paging stops.
+  const img = (seed: string) => ({ ImageUrl: `https://picsum.photos/seed/${seed}/400/400` });
+  const demoVariants = [
+    { Id: 'v1', Title: 'Ceramic Pour-Over Coffee Dripper', Description: 'Hand-thrown stoneware dripper for slow mornings. Fits standard #2 filters and pours clean.', Sku: 'POUR-01', ProductImages: [img('v1a')] },
+    { Id: 'v2', Title: 'Walnut Serving Board', Description: 'Solid walnut, food-safe oil finish, juice groove on the flip side. 18 by 12 inches.', Sku: 'WAL-18', ProductImages: [] },
+    { Id: 'v3', Title: 'Linen Table Runner 72"', Description: 'Stonewashed European flax in sage. Machine washable, gets softer every cycle.', Sku: 'LIN-72', ProductImages: [img('v3a')] },
+    { Id: 'v4', Title: 'Stoneware Mug — Sage', Description: 'Short desc', Sku: 'MUG-SG', ProductImages: [img('v4a'), img('v4b')] },
+    { Id: 'v5', Title: 'Brass Plant Mister', Description: '', Sku: 'BRS-MST', ProductImages: [img('v5a'), img('v5b')] },
+    { Id: 'v6', Title: 'Oak', Description: 'Solid oak bookend pair with cork base, holds a full shelf of hardcovers without sliding.', Sku: 'OAK-BE', ProductImages: [img('v6a'), img('v6b')] },
+    { Id: 'v7', Title: 'Recycled Glass Carafe', Description: 'Mouth-blown recycled glass carafe with cork stopper, one liter, dishwasher safe.', Sku: null, ProductImages: [img('v7a'), img('v7b')] },
+    { Id: 'v8', Title: 'Hemp Market Tote', Description: '', Sku: null, ProductImages: [img('v8a')] },
+  ];
+
+  // CompareSheet fetches ONE variant with `.eq('Id', x).maybeSingle()`, which
+  // PostgREST encodes as `?...&Id=eq.<value>`. Honor that filter so maybeSingle
+  // gets exactly the matching row instead of all 8 (which makes it error/return
+  // null and the sheet fall back). Unfiltered calls (the optimizer queues page
+  // the whole table) still get the full array. Matching `[?&]Id=eq.` avoids the
+  // `select=Id,...` projection, which never carries the `Id=eq.` shape.
+  const productVariantsRoute = (url: string) => {
+    const m = /[?&]Id=eq\.([^&]+)/.exec(url);
+    if (!m) return demoVariants;
+    const id = decodeURIComponent(m[1]);
+    return demoVariants.filter((v) => v.Id === id);
+  };
+
+  // A route's value is either static data or a (url) => data function (the latter
+  // lets ProductVariants honor PostgREST query filters); everything else stays static.
+  const routes: Array<[RegExp, any | ((url: string) => any)]> = [
+    [/\/rest\/v1\/ProductVariants/, productVariantsRoute],
+    [/\/rest\/v1\/PlatformProductMappings/, demoVariants.map((v) => ({ ProductVariantId: v.Id }))],
+    [/\/sync\/inbox\/summary/, inboxSummary],
+    [/\/sync\/connections\/[^/]+\/resolution/, resolution],
+    [/\/sync\/connections\/[^/]+\/status/, connStatus],
     [/\/billing\/summary/, billingSummary],
     [/\/billing\/invoices/, invoices],
     [/\/billing\/upcoming/, upcoming],
@@ -87,10 +164,23 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
   window.fetch = ((input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input?.url || '';
     for (const [re, data] of routes) {
-      if (re.test(url)) return Promise.resolve(json(data));
+      if (re.test(url)) {
+        const body = typeof data === 'function' ? data(url) : data;
+        return Promise.resolve(json(body));
+      }
     }
     return orig(input, init);
   }) as typeof window.fetch;
+
+  // Only now create the supabase client (captures the mocked fetch above), and
+  // make screens that gate on a session (Team, Past scans, optimizer) proceed.
+  try {
+    const { supabase } = require('../../lib/supabase');
+    const mockUser: any = { id: 'user_mock', email: 'demo@sssync.app' };
+    const mockSession: any = { user: mockUser, access_token: 'mock_jwt_token', token_type: 'bearer', expires_at: Date.now() / 1000 + 3600 };
+    (supabase as any).auth.getUser = async () => ({ data: { user: mockUser }, error: null });
+    (supabase as any).auth.getSession = async () => ({ data: { session: mockSession }, error: null });
+  } catch {}
 }
 
 export {};

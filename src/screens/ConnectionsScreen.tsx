@@ -3,11 +3,11 @@
 // partners share through — managed here now, not buried in the legacy profile),
 // and apps (Slack/Gmail via Composio, placeholders until it's configured).
 
-import React, { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, InteractionManager, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
+import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor, Inbox } from 'lucide-react-native';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
@@ -22,6 +22,9 @@ import CreatePoolSheet from '../components/pools/CreatePoolSheet';
 import { PageHeader } from '../components/ui/PageHeader';
 import { getPlatform, normalizeDisplayName } from '../config/platforms';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
+import { useImportHub } from '../hooks/useImportHub';
+import { pickAndParseCsv } from '../utils/csvImport';
+import ErrorModal from '../components/ErrorModal';
 
 const statusOf = (raw?: string): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -61,8 +64,36 @@ const ConnectionsScreen = () => {
   const overlay = usePlatformPickerOverlay();
   const { currentOrg } = useOrg();
 
+  // Import inbox aggregate — drives the top "Import inbox" row badge and the
+  // per-connection "N need you" pills (no forced deck routing).
+  const hub = useImportHub();
+  const attentionByConn = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const b of hub.lanes.matches.byConnection) m[b.connectionId] = b.count;
+    return m;
+  }, [hub.lanes.matches.byConnection]);
+
   const [pools, setPools] = useState<Pool[]>([]);
   const [managing, setManaging] = useState(false);
+  // CSV pick/parse failures surface in an ErrorModal (native Alert stays for the
+  // pre-existing platform flows).
+  const [importError, setImportError] = useState<{ title: string; message: string } | null>(null);
+
+  // Pick + parse a CSV, then hand off to the column-mapping screen via the shared
+  // util's documented contract. Replaces the old "CSV lives under Profile" alert.
+  const runCsvImport = useCallback(async () => {
+    try {
+      const picked = await pickAndParseCsv();
+      if (!picked) return; // user cancelled the picker
+      navigation.navigate('CSVColumnMapping', {
+        csvHeaders: picked.headers,
+        csvData: picked.data,
+        sampleRow: picked.sampleRow,
+      });
+    } catch (e: any) {
+      setImportError({ title: 'Import failed', message: e?.message || 'Could not read that CSV file.' });
+    }
+  }, [navigation]);
 
   // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
   const { computers } = useFacebookJobStatus();
@@ -82,7 +113,9 @@ const ConnectionsScreen = () => {
     (platform: string) => {
       overlay.hide();
       if (platform === 'csv') {
-        Alert.alert('Import from CSV', 'CSV import lives under Profile → Import Inventory for now.');
+        // Run the CSV picker after the overlay dismisses (iOS won't present two
+        // modals at once), then hand off to CSVColumnMapping.
+        InteractionManager.runAfterInteractions(() => { void runCsvImport(); });
         return;
       }
       const def = getPlatform(platform);
@@ -94,7 +127,7 @@ const ConnectionsScreen = () => {
       setConnectError(null);
       setConsentPlatform(def.key);
     },
-    [overlay],
+    [overlay, runCsvImport],
   );
 
   // "Continue to <Platform>" on the consent page → run the OAuth webview.
@@ -199,6 +232,33 @@ const ConnectionsScreen = () => {
       >
         <PageHeader title="Connections" onBack={() => navigation.goBack()} />
 
+        {/* Import inbox — the one discoverable place imports live now. Passive:
+            a count you visit on your own time, never a forced deck. */}
+        <TouchableOpacity
+          style={styles.inboxRow}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('ImportHub')}
+        >
+          <View style={styles.inboxIcon}>
+            <Inbox size={22} color="#43631A" />
+          </View>
+          <View style={styles.rowInfo}>
+            <Text style={styles.rowTitle}>Import inbox</Text>
+            <Text style={[styles.rowSub, hub.totalNeedsYou === 0 && styles.inboxSubMuted]} numberOfLines={1}>
+              {hub.totalNeedsYou > 0
+                ? `${hub.totalNeedsYou} ${hub.totalNeedsYou === 1 ? 'item needs' : 'items need'} you`
+                : 'All caught up'}
+            </Text>
+          </View>
+          {hub.totalNeedsYou > 0 ? (
+            <View style={styles.inboxBadge}>
+              <Text style={styles.inboxBadgeText}>{hub.totalNeedsYou}</Text>
+            </View>
+          ) : (
+            <ChevronRight size={20} color="#D4D4D8" />
+          )}
+        </TouchableOpacity>
+
         {/* Selling platforms — Manage flips rows into refresh/remove */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Selling platforms</Text>
@@ -222,13 +282,14 @@ const ConnectionsScreen = () => {
           ) : (
             liveConnections.map((c: any, i: number) => {
               const st = statusOf(c.Status);
+              const attn = attentionByConn[c.Id] || 0;
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.row, i > 0 && styles.rowBorder]}
                   activeOpacity={0.7}
                   onPress={() =>
-                    navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType })
+                    navigation.navigate('SyncRules', { connectionId: c.Id, platformName: c.PlatformType })
                   }
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
@@ -257,7 +318,23 @@ const ConnectionsScreen = () => {
                       </TouchableOpacity>
                     </View>
                   ) : (
-                    <ChevronRight size={20} color="#D4D4D8" />
+                    <View style={styles.rowRight}>
+                      {attn > 0 && (
+                        // Passive attention pill — the ONE explicit deep-link into
+                        // the review deck for this connection.
+                        <TouchableOpacity
+                          style={styles.attnPill}
+                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                          onPress={(e: any) => {
+                            e.stopPropagation?.();
+                            navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType });
+                          }}
+                        >
+                          <Text style={styles.attnPillText}>{attn} need you</Text>
+                        </TouchableOpacity>
+                      )}
+                      <ChevronRight size={20} color="#D4D4D8" />
+                    </View>
                   )}
                 </TouchableOpacity>
               );
@@ -431,6 +508,14 @@ const ConnectionsScreen = () => {
         visible={scanOpen}
         onClose={() => setScanOpen(false)}
       />
+
+      <ErrorModal
+        visible={!!importError}
+        type="error"
+        title={importError?.title || 'Import failed'}
+        message={importError?.message || ''}
+        onClose={() => setImportError(null)}
+      />
     </View>
   );
 };
@@ -444,9 +529,22 @@ const styles = StyleSheet.create({
   loadingRow: { paddingVertical: 26, alignItems: 'center' },
   empty: { paddingVertical: 22, textAlign: 'center', color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingHorizontal: 8, lineHeight: 19 },
 
+  inboxRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: '#FFFFFF', borderRadius: 20, borderWidth: 1, borderColor: '#ECEBE6',
+    paddingHorizontal: 16, paddingVertical: 15, marginTop: 4, marginBottom: 4,
+  },
+  inboxIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
+  inboxSubMuted: { color: '#9CA3AF' },
+  inboxBadge: { minWidth: 26, height: 26, borderRadius: 13, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  inboxBadgeText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
+
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
   rowBorder: { borderTopWidth: 1, borderTopColor: '#F1F1EE' },
   rowInfo: { flex: 1 },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  attnPill: { backgroundColor: 'rgba(162,97,26,0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  attnPillText: { color: '#A2611A', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   rowTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   rowSub: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular', marginTop: 2 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },

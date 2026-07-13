@@ -5,7 +5,6 @@ import { configureClerkSupabaseBridge, forceRefreshSupabaseJwt, getUserLike, sto
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
-import { ProcessPersistence } from '../utils/ProcessPersistence';
 import { createLogger } from '../utils/logger';
 const log = createLogger('EnhancedSessionProvider');
 
@@ -40,7 +39,6 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const userRef = useRef<SessionUser>(null);
   const authPersistence = useRef(AuthPersistence.getInstance());
   const appStateManager = useRef(AppStateManager.getInstance());
-  const processPersistence = useRef(ProcessPersistence.getInstance());
 
   useEffect(() => {
     userRef.current = user;
@@ -234,11 +232,6 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setUser(resolvedUser);
       setEntitlements(ents);
       await persistEntitlements(ents);
-
-      if (resolvedUser?.id) {
-        await processPersistence.current.initialize(resolvedUser.id);
-        log.debug('[EnhancedSessionProvider] Process persistence initialized');
-      }
 
       setReady(true);
       setBridgeReady(true);

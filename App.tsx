@@ -20,9 +20,6 @@ import { tokenCache as clerkTokenCache } from '@clerk/expo/token-cache';
 import * as SecureStore from 'expo-secure-store';
 import { EnhancedSessionProvider } from './src/context/EnhancedSessionProvider';
 import { SessionContext } from './src/context/SessionContext';
-import ProcessResumptionModal from './src/components/ProcessResumptionModal';
-import { useProcessResumption } from './src/hooks/useProcessState';
-import { ProcessState, ProcessType } from './src/utils/ProcessPersistence';
 import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
 import { OrgProvider } from './src/context/OrgContext';
 import { JobsProvider } from './src/context/JobsContext';
@@ -68,8 +65,6 @@ WebBrowser.maybeCompleteAuthSession();
 // Initialize mobile flow logger (sessionId) early
 initFlowLogger().catch(() => { });
 
-// Feature flag to disable new functionality during debugging
-const ENABLE_PROCESS_FEATURES = false;
 const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
 
 
@@ -91,7 +86,6 @@ const App: React.FC = () => {
   // Authed app content (without NavigationContainer)
   const AuthedAppContent: React.FC<{ navigationRef: React.RefObject<NavigationContainerRef<any> | null> }> = ({ navigationRef }) => {
     const [legendStateModules, setLegendStateModules] = useState<LegendStateObservables | null>(null);
-    const [showProcessModal, setShowProcessModal] = useState(false);
     const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
     const session = useContext(SessionContext);
 
@@ -132,10 +126,6 @@ const App: React.FC = () => {
       }
     }, [clerkSignOut]);
 
-    // Call the hook unconditionally (rules-of-hooks); it has no side effects
-    // until initializeProcessSystem() is invoked, so gating the *result* is safe.
-    const processResumptionApi = useProcessResumption();
-    const processResumption = ENABLE_PROCESS_FEATURES ? processResumptionApi : null;
     const hasAttemptedAutoResumeRef = useRef(false);
 
     const buildFallbackCompleteRoute = useCallback((processType: 'match' | 'generate' | 'match-and-generate', jobId: string) => {
@@ -353,21 +343,6 @@ const App: React.FC = () => {
           }
           setLegendStateModules(initialized);
           console.log('[App] Legend State ready');
-
-          // Check for resumable processes after everything is ready
-          if (ENABLE_PROCESS_FEATURES) {
-            setTimeout(() => {
-              try {
-                const resumableProcesses = processResumption?.getResumableProcesses() || [];
-                if (resumableProcesses.length > 0) {
-                  console.log(`[App] Found ${resumableProcesses.length} resumable processes`);
-                  setShowProcessModal(true);
-                }
-              } catch (error) {
-                console.error('[App] Error checking resumable processes:', error);
-              }
-            }, 1000); // Small delay to ensure everything is initialized
-          }
         } catch (e) {
           console.error('[App] Legend State init failed:', e);
           if (fallbackTimer) {
@@ -525,32 +500,6 @@ const App: React.FC = () => {
       }
     };
 
-    const handleResumeProcess = (process: ProcessState) => {
-      try {
-        console.log('[App] Resuming process:', process.type, process.id);
-
-        // Navigate to appropriate screen based on process type
-        switch (process.type) {
-          case ProcessType.AI_GENERATION:
-            navigationRef.current?.navigate('AppStack', {
-              screen: 'GenerateDetailsScreen',
-              params: { resumeProcessId: process.id },
-            });
-            break;
-          case ProcessType.LISTING_CREATION:
-            navigationRef.current?.navigate('AppStack', {
-              screen: 'AddListingScreen',
-              params: { resumeProcessId: process.id },
-            });
-            break;
-          default:
-            console.warn('[App] Unknown process type for resumption:', process.type);
-        }
-      } catch (error) {
-        console.error('[App] Error resuming process:', error);
-      }
-    };
-
     const GlobalPlatformPickerOverlay: React.FC = () => {
       const overlay = usePlatformPickerOverlay();
       const { connections } = usePlatformConnections();
@@ -653,17 +602,6 @@ const App: React.FC = () => {
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
-
-            {/* Only show process modal if everything is ready and features enabled */}
-            {ENABLE_PROCESS_FEATURES && session?.ready && (
-              <SafeErrorBoundary>
-                <ProcessResumptionModal
-                  visible={showProcessModal}
-                  onClose={() => setShowProcessModal(false)}
-                  onResumeProcess={handleResumeProcess}
-                />
-              </SafeErrorBoundary>
-            )}
           </ThemeProvider>
         </LegendStateContext.Provider>
       </LegendStateControlContext.Provider>
