@@ -126,6 +126,22 @@ const App: React.FC = () => {
       }
     }, [clerkSignOut]);
 
+    // "Go home" escape for SafeErrorBoundary: after 2 failed "Try Again" resets on the
+    // signed-in navigator, hard-reset the nav tree to the tab navigator so a screen that
+    // throws deterministically on mount can't trap the user in an infinite reset loop.
+    const goHomeReset = useCallback(() => {
+      try {
+        navigationRef.current?.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: 'AppStack', state: { index: 0, routes: [{ name: 'TabNavigator' }] } }],
+          }),
+        );
+      } catch {
+        // nav not ready — the boundary still clears its own error state as a fallback.
+      }
+    }, [navigationRef]);
+
     const hasAttemptedAutoResumeRef = useRef(false);
 
     const buildFallbackCompleteRoute = useCallback((processType: 'match' | 'generate' | 'match-and-generate', jobId: string) => {
@@ -598,7 +614,7 @@ const App: React.FC = () => {
                 message="Reconnecting shared app state and restoring your last workspace."
               />
             ) : (
-              <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
+              <SafeErrorBoundary onGoHome={goHomeReset}><AppNavigator /></SafeErrorBoundary>
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
@@ -722,7 +738,14 @@ const App: React.FC = () => {
         <PostHogProvider>
           <SafeAreaProvider>
             <SystemNotificationProvider>
-              <DebugClerkState />
+              {/* Backstop boundary around the WHOLE provider stack (PlatformConnections,
+                  Session, Org, AppData, LiveActivity, Jobs, the navigator). The inner
+                  boundary only wraps <AppNavigator/>, so a throw in any of these providers
+                  used to escape it and white-screen the app. Placed inside SafeAreaProvider
+                  so the fallback still has safe-area context. */}
+              <SafeErrorBoundary>
+                <DebugClerkState />
+              </SafeErrorBoundary>
             </SystemNotificationProvider>
           </SafeAreaProvider>
         </PostHogProvider>

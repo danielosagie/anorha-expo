@@ -23,22 +23,36 @@ export function useResolution(connectionId: string | null | undefined) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  // Guards against the 3s poll (below) stacking overlapping refreshes: a slow/stalled load
+  // must not spawn a second in-flight fetch every tick. The poll only reschedules when
+  // `result` changes, so an in-flight refresh naturally paces the next tick to after it lands.
+  const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!connectionId) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    // Without a timeout the inbox fetch could hang forever → permanent SyncInbox spinner.
+    // Abort at 12s so it lands in the error state the screen already renders (with Retry).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
     try {
       setLoading(true);
       setError(null);
       const token = await ensureSupabaseJwt();
       const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolution`, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Failed to load inbox: ${res.status}`);
       setResult((await res.json()) as ResolveResult);
     } catch (err: any) {
-      log.warn('refresh failed', err?.message);
-      setError(err?.message ?? 'Failed to load inbox');
+      const msg = err?.name === 'AbortError' ? 'Loading the inbox timed out — pull to retry.' : (err?.message ?? 'Failed to load inbox');
+      log.warn('refresh failed', msg);
+      setError(msg);
     } finally {
+      clearTimeout(timer);
+      inFlightRef.current = false;
       setLoading(false);
     }
   }, [connectionId]);

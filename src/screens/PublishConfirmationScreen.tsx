@@ -11,8 +11,8 @@ import ConnectFlowSheet from '../components/ConnectFlowSheet';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
-import { API_BASE_URL } from '../config/env';
 import { ensureSupabaseJwt } from '../lib/supabase';
+import { apiFetch, ApiError } from '../lib/apiClient';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
@@ -97,7 +97,19 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // Per-platform "open the live listing" URLs. Seeded from params (for non-owning callers),
   // then filled from the publish response so channel rows deep-link to the real marketplace page.
   const [liveUrls, setLiveUrls] = useState<Record<string, any>>(params.liveUrls || {});
+  // Per-platform outcome from the publish response's `results` array (keyed lowercase).
+  // Absent for older backends / non-owning callers — rows then read as before.
+  const [publishResults, setPublishResults] = useState<Record<string, { success: boolean; error?: string }>>({});
   const ranRef = useRef(false);
+  // ONE idempotency key per publish intent. This screen is mounted fresh per publish (new
+  // route params), so a per-instance key is the intent's identity — and "Try again" reuses
+  // it. That's the whole point: a POST that stalled but actually succeeded on the server
+  // must not create a DUPLICATE live listing when the user retries. The apiFetch layer
+  // sends it as the Idempotency-Key header so the backend dedupes the retry.
+  const publishIdemKeyRef = useRef<string>('');
+  if (!publishIdemKeyRef.current) {
+    publishIdemKeyRef.current = `publish-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
 
   const runPublish = useCallback(async () => {
     if (!publishPayload) { setPhase('done'); return; }
@@ -106,10 +118,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     try {
       const token = await ensureSupabaseJwt();
       if (!token) { setErrorMsg('Your session expired — sign in again.'); setPhase('error'); return; }
-      const res = await fetch(`${API_BASE_URL}/api/products/publish`, {
+      // Route through apiFetch (auth + Idempotency-Key + the client's default 18s timeout)
+      // so a stalled POST throws instead of pinning "Publishing…" forever, and a retry is
+      // deduped by the stable key above.
+      const res = await apiFetch('/api/products/publish', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(publishPayload),
+        body: publishPayload,
+        idempotencyKey: publishIdemKeyRef.current,
       });
       if (!res.ok) {
         const text = await res.text();
@@ -131,10 +146,32 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
       if (body?.listings && typeof body.listings === 'object') {
         setLiveUrls((prev) => ({ ...prev, ...body.listings }));
       }
+      // The endpoint returns 202 even when platforms fail — the truth is in `results`.
+      // Every platform failed → this is an error, not a "Published!"; partial failures
+      // stay on the summary but mark their rows honestly.
+      if (Array.isArray(body?.results) && body.results.length) {
+        const map: Record<string, { success: boolean; error?: string }> = {};
+        for (const r of body.results) {
+          if (r?.platform) map[String(r.platform).toLowerCase()] = { success: r.success !== false, error: r.error };
+        }
+        setPublishResults(map);
+        const entries = Object.values(map);
+        if (entries.length && entries.every((r) => !r.success)) {
+          setErrorMsg(entries.find((r) => r.error)?.error || 'None of your channels accepted the listing.');
+          setPhase('error');
+          return;
+        }
+      }
       setPhase('done'); // success → resolves to the calm "Published!" summary
     } catch (e: any) {
       log.error('[PublishConfirmation] Publish error:', e);
-      setErrorMsg('Something went wrong while publishing. Please try again.');
+      // A client timeout (ApiError status 0, "Request timed out") reads calmer as a
+      // "taking too long" nudge; the same stable idempotency key makes "Try again" safe.
+      const msg =
+        e instanceof ApiError && e.status === 0
+          ? 'This is taking longer than expected — please try again.'
+          : 'Something went wrong while publishing. Please try again.';
+      setErrorMsg(msg);
       setPhase('error');
     }
   }, [publishPayload]);
@@ -258,17 +295,23 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 const live: any = (liveUrls || {})[lower];
                 const url: string | undefined = typeof live === 'string' ? live : live?.url;
                 const hasLink = !!url;
-                // FB keeps its full dispatch vocabulary (queued / posting / waiting-for-computer /
-                // needs-a-check / couldn't-post); everything else without a link reads a quiet
-                // "Live" — unless this was an inventory-only save, where nothing is live yet.
-                const st = isFb
-                  ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
-                  : savedToInventory
-                    ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
-                    : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
+                // A per-platform failure from the publish response overrides everything —
+                // that row must not read "Live". Otherwise FB keeps its full dispatch
+                // vocabulary (queued / posting / waiting-for-computer / needs-a-check /
+                // couldn't-post); everything else without a link reads a quiet "Live" —
+                // unless this was an inventory-only save, where nothing is live yet.
+                const failed = publishResults[lower]?.success === false;
+                const st = failed
+                  ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish — tap to manage' }
+                  : isFb
+                    ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
+                    : savedToInventory
+                      ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
+                      : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
                 // A real listing link → open the marketplace page. Otherwise the row still
-                // opens the in-app product (where they can manage/retry); FB without a link is inert.
-                const tappable = hasLink || !isFb;
+                // opens the in-app product (where they can manage/retry); FB without a link
+                // is inert — unless its publish failed, which must stay actionable.
+                const tappable = hasLink || !isFb || failed;
                 return (
                   <TouchableOpacity
                     key={`${p}-${i}`}
@@ -354,7 +397,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params, navigation }) => {
   const insets = useSafeAreaInsets();
   // Cheap gap check — same catalog-wide counts the hub/optimizer use.
-  const { counts: optCounts, loading: optLoading } = useOptimizerQueues();
+  const { counts: optCounts, loading: optLoading, error: optError, refresh: optRefresh } = useOptimizerQueues();
 
   const {
     platforms = [],
@@ -425,6 +468,15 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
           title={savedToInventory ? 'Saved to inventory' : 'Import complete'}
           lines={[subtitle, nextLine]}
         />
+        {/* The gap check failed — say so quietly rather than defaulting the CTA to a false
+            "Done" (which would hide items that still need photos/details). Calm, no red. */}
+        {optError && !optLoading ? (
+          <TouchableOpacity onPress={optRefresh} activeOpacity={0.7} style={{ marginTop: 16, alignSelf: 'center' }}>
+            <Text style={{ fontSize: 14, color: IC.muted, textAlign: 'center' }}>
+              Couldn’t check what’s left — <Text style={{ color: IC.accent, fontWeight: '700' }}>Retry</Text>
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       <View style={{ gap: 10, paddingHorizontal: 20, paddingBottom: insets.bottom + 16 }}>
         <PillButton label="Review listings" variant="secondary" onPress={goReview} />

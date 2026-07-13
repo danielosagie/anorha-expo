@@ -63,7 +63,33 @@ const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as 
 
 // Active generation jobs, module-level so they SURVIVE AddProductScreen unmount (navigate-away):
 // the in-place poller re-attaches and resumes on remount instead of orphaning in-flight jobs.
-const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>>([]);
+// `startedAt` (ms) bounds how long we poll a job before giving up — a deploy-killed job would
+// otherwise never reach a terminal status and pin the item on "Generating…" forever.
+const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[]; startedAt?: number }>>([]);
+// Give up polling a single generate/match job after this long without a terminal status.
+const GEN_GIVE_UP_MS = 4 * 60 * 1000;
+
+// A job can report status 'completed' while its payload is actually empty (backend
+// partial failure). Treat that as a failure so the item lands in the retry lane instead
+// of a blank "generated" card. True only if SOME platform (or the top-level payload)
+// carries a non-empty title or description.
+const nonEmptyStr = (v: any) => typeof v === 'string' && v.trim().length > 0;
+function generateResultsHaveContent(results: any[]): boolean {
+  if (!Array.isArray(results) || results.length === 0) return false;
+  return results.some((r: any) => {
+    const platforms = r?.platforms && typeof r.platforms === 'object' ? r.platforms : null;
+    if (!platforms) {
+      return nonEmptyStr(r?.title) || nonEmptyStr(r?.Title) || nonEmptyStr(r?.description) || nonEmptyStr(r?.Description);
+    }
+    return Object.values(platforms).some(
+      (pv: any) =>
+        pv &&
+        typeof pv === 'object' &&
+        (nonEmptyStr(pv.title) || nonEmptyStr(pv.Title) || nonEmptyStr(pv.name) ||
+          nonEmptyStr(pv.description) || nonEmptyStr(pv.Description)),
+    );
+  });
+}
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -943,10 +969,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         itemJobs.forEach(({ itemId }) => { next[itemId] = { isLoading: true, stage: 'Queued…' }; });
         return next;
       });
-      const byJob = new Map<string, { jobId: string; processType: 'generate' | 'match'; itemIds: string[] }>();
+      const byJob = new Map<string, { jobId: string; processType: 'generate' | 'match'; itemIds: string[]; startedAt: number }>();
       for (const { itemId, jobId, processType } of itemJobs) {
         const key = `${processType}:${jobId}`;
-        if (!byJob.has(key)) byJob.set(key, { jobId, processType, itemIds: [] });
+        if (!byJob.has(key)) byJob.set(key, { jobId, processType, itemIds: [], startedAt: Date.now() });
         byJob.get(key)!.itemIds.push(itemId);
         // Durable per-item job id for the click → GenerateDetailsScreen handoff (match items get the generate id on chain).
         setItemGenerate(itemId, processType === 'generate' ? { generateJobId: jobId } : { generateMatchJobId: jobId });
@@ -970,6 +996,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const token = await ensureSupabaseJwt();
       if (!token || cancelled) return;
       for (const job of genJobs) {
+        // Age-based give-up: a job (e.g. killed by a backend deploy) can poll forever
+        // without a terminal status. After GEN_GIVE_UP_MS, stop and move its items to the
+        // error/retry lane rather than spinning "Generating…" indefinitely.
+        if (job.startedAt && Date.now() - job.startedAt > GEN_GIVE_UP_MS) {
+          const msg = 'Generation is taking too long — retry';
+          job.itemIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
+          setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Timed out', error: msg }; }); return n; });
+          genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
+          continue;
+        }
         try {
           const base = job.processType === 'generate'
             ? `${API_BASE_URL}/api/products/generate/jobs/`
@@ -997,8 +1033,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage: 'Generating…' }; }); return n; });
               genQueue$.set(genQueue$.get().map((j) =>
                 j.jobId === job.jobId && j.processType === 'match'
-                  ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds }
+                  ? { jobId: autoGenId, processType: 'generate' as const, itemIds: job.itemIds, startedAt: Date.now() }
                   : j));
+            } else if (!generateResultsHaveContent(results)) {
+              // 'completed' but the payload has no usable title/description — a silent
+              // backend miss. Route to the retry lane instead of a blank "generated" card.
+              const msg = 'Couldn’t generate details';
+              job.itemIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
+              setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: msg }; }); return n; });
+              genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
             } else {
               setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => delete n[id]); return n; });
               setItemStageById((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = 'generated'; }); return n; });
@@ -3245,7 +3288,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
-        // to populate price range and shipping data from real market data. SKIP when the comps are
+        // to populate the price range from real market data. SKIP when the comps are
         // already SIMILAR-item comps (the exact product isn't listed) — researching the identity
         // title returns nothing and would clobber the ballpark similar comps the backend supplied.
         const topTitle = nextMatchData.rankedCandidates?.[0]?.title;
@@ -3278,7 +3321,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 if (!current?.matchData?.rankedCandidates?.length) return prev;
                 const firstCand = current.matchData.rankedCandidates[0];
                 const updatedCandidates = [...current.matchData.rankedCandidates];
-                // Use pricing research price range as shipping proxy:
+                // Use the pricing-research price range (not a shipping figure):
                 // low = fast sale price, high = max profit price
                 const priceLow = Number(priceData?.low ?? 0);
                 const priceHigh = Number(priceData?.high ?? 0);
@@ -3325,7 +3368,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     } catch (error) {
       log.error('[QUICK SCAN] scan failed:', error);
-      showNotificationMessage('Quick scan failed. Retrying in background...', 3000);
+      // Reality: there is no background retry — the item drops to an error state below
+      // (its card shows the failure) and the seller retries it by hand. Say so honestly.
+      showNotificationMessage('Quick scan failed. Tap the item to try again.', 3000);
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
       // Make sure the SSE connection is torn down on every exit (success, error, or early

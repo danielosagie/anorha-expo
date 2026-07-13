@@ -1,17 +1,23 @@
 /**
  * DeliveryShippingSheet – A unified bottom sheet for Delivery & Shipping configuration.
  *
- * Merges two previously separate UIs:
- *   1. Shipping estimation modal (dimensions, weight, USPS/carrier rate cards)
- *   2. Fulfillment BaseModal (delivery method selector, pickup location, flat rate cost)
+ * Layout: platform tabs at the top, a live cost-estimate preview, then an Options
+ * card with three tappable rows (Fulfillment, Package, Speed) that each expand an
+ * inline picker.
  *
- * Features:
- * - Platform tabs to switch between connected shipping-capable platforms
- * - Delivery method selector (Pickup / Shipping / Both) per platform
- * - Collapsible accordion sections for flat rate, dimensions/weight, and rate estimates
- * - Facebook pickup location trigger
- * - eBay flat rate cost input
- * - Preferences persist via AsyncStorage across new items
+ * Features (scoped to the selected platform tab):
+ * - Delivery method selector (Pickup / Ship / Both).
+ * - eBay "Who pays shipping?" — Free shipping (default) vs Buyer pays a flat rate.
+ *   The rate is written to the platform's `shippingCost`; it flows through the publish
+ *   payload (GenerateDetailsScreen → platformDetails.ebay) into the eBay adapter's
+ *   dynamic fulfillment policy. Free shipping leaves shippingCost empty (ships free).
+ * - Facebook pickup-location trigger (Facebook tab, when pickup is enabled).
+ * - Package dimensions/weight inputs. These are shared physical values, so edits are
+ *   written to every platform so the canonical Weight/WeightUnit the publish payload
+ *   carries stays in sync (Shopify/eBay both read them).
+ * - USPS rate-matrix estimate preview whose wording adapts to who pays; the Standard /
+ *   Expedited speed toggle feeds the estimate query (`speed` param).
+ * - Preferences (delivery method + eBay shipping cost) persist via AsyncStorage.
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
@@ -141,9 +147,7 @@ export interface DeliveryShippingSheetProps {
     platformKeys: string[];
     /** Full platforms data object */
     platforms: Record<string, any>;
-    /** Mutators */
-    patchField: (key: string, value: any) => void;
-    patchPlatform: (updater: (prev: any) => any) => void;
+    /** Mutator: replace the whole platforms map */
     onChangePlatforms: (platforms: Record<string, any>) => void;
     /** The currently active platform key in the parent ListingEditorForm */
     activePlatformKey: string;
@@ -169,6 +173,9 @@ export interface DeliveryShippingSheetProps {
     setEditableWeight: React.Dispatch<React.SetStateAction<string>>;
     editableWeightUnit: string;
     setEditableWeightUnit: React.Dispatch<React.SetStateAction<string>>;
+    /** Shipping speed (controlled by parent so it can feed the estimate query) */
+    speed: 'standard' | 'expedited';
+    onChangeSpeed: (speed: 'standard' | 'expedited') => void;
     /** Location picker */
     onOpenLocationPicker: () => void;
     /** Active data for the currently selected platform in this sheet */
@@ -181,8 +188,6 @@ export default function DeliveryShippingSheet({
     onClose,
     platformKeys,
     platforms,
-    patchField,
-    patchPlatform,
     onChangePlatforms,
     activePlatformKey,
     shippingEstimateResult,
@@ -194,6 +199,8 @@ export default function DeliveryShippingSheet({
     setEditableWeight,
     editableWeightUnit,
     setEditableWeightUnit,
+    speed,
+    onChangeSpeed,
     onOpenLocationPicker,
     getActiveData,
 }: DeliveryShippingSheetProps) {
@@ -212,8 +219,8 @@ export default function DeliveryShippingSheet({
 
     // Single-sheet layout: which OPTIONS row's inline picker is open (one at a time).
     const [expandedRow, setExpandedRow] = useState<null | 'fulfillment' | 'package' | 'speed'>(null);
-    // Speed is presentational only — no backend service-tier field exists yet.
-    const [speed, setSpeed] = useState<'standard' | 'expedited'>('standard');
+    // Who pays eBay shipping: 'free' (ships free — the default) or 'buyer' (flat rate).
+    const [shippingPayer, setShippingPayer] = useState<'free' | 'buyer'>('free');
 
     // Sync selectedTab + reset to first step when the sheet opens
     useEffect(() => {
@@ -225,6 +232,15 @@ export default function DeliveryShippingSheet({
             setExpandedRow(null);
         }
     }, [visible, activePlatformKey, shippingCapablePlatforms]);
+
+    // Initialize the "who pays" toggle from the selected tab's persisted shipping cost
+    // whenever the tab changes or the sheet (re)opens. Keyed on tab/visibility only —
+    // NOT on the live cost value — so clearing the input doesn't kick you out of "Buyer pays".
+    useEffect(() => {
+        const cost = Number(getActiveData(selectedTab)?.shippingCost);
+        setShippingPayer(Number.isFinite(cost) && cost > 0 ? 'buyer' : 'free');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedTab, visible]);
 
     /* ── Preference persistence ────────────────────────────────── */
     // Load persisted shipping prefs on mount
@@ -250,8 +266,13 @@ export default function DeliveryShippingSheet({
                             changed = true;
                         }
                     } else {
-                        if (!data.deliveryMethod && pref.deliveryMethod) {
-                            nextPlatforms[pk] = { ...data, deliveryMethod: pref.deliveryMethod };
+                        // Restore persisted delivery method + flat-rate shipping cost when the
+                        // item doesn't already carry its own (completes the shippingCost round-trip).
+                        const patch: Record<string, any> = {};
+                        if (!data.deliveryMethod && pref.deliveryMethod) patch.deliveryMethod = pref.deliveryMethod;
+                        if ((data.shippingCost == null || data.shippingCost === '') && pref.shippingCost) patch.shippingCost = pref.shippingCost;
+                        if (Object.keys(patch).length > 0) {
+                            nextPlatforms[pk] = { ...data, ...patch };
                             changed = true;
                         }
                     }
@@ -335,6 +356,31 @@ export default function DeliveryShippingSheet({
         setTimeout(() => persistPrefs(), 100);
     };
 
+    /* ── Who-pays-shipping change (eBay flat rate, per-platform) ─ */
+    // Writes to the selected tab's `shippingCost`. The publish payload spreads this into
+    // platformDetails.ebay, and the eBay adapter turns a positive value into a flat-rate
+    // fulfillment policy (0/empty ⇒ ships free — the prior default behaviour).
+    const setTabShippingCost = (value: string) => {
+        const next = { ...platforms };
+        const data = { ...(next[selectedTab] || {}) };
+        data.shippingCost = value;
+        next[selectedTab] = data;
+        onChangePlatforms(next);
+        setTimeout(() => persistPrefs(), 100);
+    };
+
+    const handlePayerChange = (payer: 'free' | 'buyer') => {
+        setShippingPayer(payer);
+        // Free shipping clears the cost so the adapter falls back to freeShipping=true.
+        if (payer === 'free') setTabShippingCost('');
+    };
+
+    const handleShippingCostChange = (text: string) => {
+        // Numeric, single decimal point.
+        const cleaned = text.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
+        setTabShippingCost(cleaned);
+    };
+
     /* ── Recalculate handler ──────────────────────────────────── */
     const handleRecalculate = () => {
         const w = parseFloat(editableWeight);
@@ -342,18 +388,30 @@ export default function DeliveryShippingSheet({
         const wd = parseFloat(editableDimensions.width);
         const h = parseFloat(editableDimensions.height);
         const hasValidDims = Number.isFinite(l) && Number.isFinite(wd) && Number.isFinite(h);
-        if (Number.isFinite(w) && w > 0) {
-            patchField('weight', editableWeight);
-            patchField('weightUnit', editableWeightUnit);
+        const hasValidWeight = Number.isFinite(w) && w > 0;
+
+        // Weight & dimensions are physical properties of the item, shared across every
+        // platform. Write them to ALL platform data objects (not just the active one) so
+        // the canonical Weight/WeightUnit the publish payload reads — displayedPlatforms
+        // [shopify].weight — stays in sync no matter which tab is selected.
+        if (hasValidWeight || hasValidDims) {
+            const next = { ...platforms };
+            for (const pk of Object.keys(next)) {
+                const data = { ...(next[pk] || {}) };
+                if (hasValidWeight) {
+                    data.weight = editableWeight;
+                    data.weightUnit = editableWeightUnit;
+                }
+                if (hasValidDims) {
+                    data.estimatedDimensions = { length: l, width: wd, height: h, unit: 'in' };
+                }
+                next[pk] = data;
+            }
+            onChangePlatforms(next);
         }
-        if (hasValidDims) {
-            patchPlatform((prev: any) => ({
-                ...prev,
-                estimatedDimensions: { length: l, width: wd, height: h, unit: 'in' },
-            }));
-        }
+
         // Immediate fetch with editable values so user sees result in sheet without waiting for debounce
-        if (Number.isFinite(w) && w > 0) {
+        if (hasValidWeight) {
             fetchShippingEstimate({
                 weight: editableWeight,
                 weightUnit: editableWeightUnit,
@@ -427,27 +485,39 @@ export default function DeliveryShippingSheet({
                             </View>
                         ) : (shippingEstimateResult && typeof shippingEstimateResult.estimatedMin === 'number' && !shippingEstimateResult.error) ? (() => {
                             const r = shippingEstimateResult;
-                            const hero = typeof r.expectedCost === 'number' ? r.expectedCost : (typeof r.midpoint === 'number' ? r.midpoint : (r.estimatedMin + r.estimatedMax) / 2);
+                            // Seller's estimated cost, from the USPS rate matrix. The bar + labels
+                            // always reflect this (it's the seller's real cost distribution).
+                            const estimate = typeof r.expectedCost === 'number' ? r.expectedCost : (typeof r.midpoint === 'number' ? r.midpoint : (r.estimatedMin + r.estimatedMax) / 2);
                             const span = r.estimatedMax - r.estimatedMin;
-                            const markerPct = span > 0 ? Math.max(0, Math.min(100, ((hero - r.estimatedMin) / span) * 100)) : 50;
+                            const markerPct = span > 0 ? Math.max(0, Math.min(100, ((estimate - r.estimatedMin) / span) * 100)) : 50;
+                            // eBay is the only platform that charges the buyer a flat shipping rate.
+                            const buyerCost = tabKeyLower === 'ebay' ? Number(tabData?.shippingCost) : NaN;
+                            const buyerPays = Number.isFinite(buyerCost) && buyerCost > 0;
+                            // Hero shows the number that matters most: the buyer's flat charge if set,
+                            // otherwise the seller's estimated cost.
+                            const hero = buyerPays ? buyerCost : estimate;
                             return (
                                 <View style={s.previewCard}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                        <Text style={s.heroPrice}>~${hero.toFixed(2)}</Text>
+                                        <Text style={s.heroPrice}>{buyerPays ? `$${hero.toFixed(2)}` : `~$${hero.toFixed(2)}`}</Text>
                                         <View style={{ flex: 1 }} />
                                         <View style={s.carrierPill}>
                                             <Truck size={14} color="#6B7280" />
-                                            <Text style={s.carrierPillText}>USPS Ground</Text>
+                                            <Text style={s.carrierPillText}>{buyerPays ? 'Buyer pays' : 'USPS Ground'}</Text>
                                         </View>
                                     </View>
-                                    <Text style={s.previewSub}>buyer pays · ${r.estimatedMin.toFixed(0)}–${r.estimatedMax.toFixed(0)} by destination</Text>
+                                    <Text style={s.previewSub}>
+                                        {buyerPays
+                                            ? `Buyer pays this flat rate · ships for ~$${estimate.toFixed(2)} to you`
+                                            : `Ships free to buyer · costs you about $${r.estimatedMin.toFixed(0)}–$${r.estimatedMax.toFixed(0)} by destination`}
+                                    </Text>
                                     <View style={s.rateBar}>
                                         <View style={[s.rateBarFill, { width: `${markerPct}%` }]} />
                                         <View style={[s.rateBarMarker, { left: `${markerPct}%` }]} />
                                     </View>
                                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                         <Text style={s.rateBarLabel}>${r.estimatedMin.toFixed(0)} low</Text>
-                                        <Text style={[s.rateBarLabel, { color: '#5D7E16', fontWeight: '700' }]}>${hero.toFixed(2)} typical</Text>
+                                        <Text style={[s.rateBarLabel, { color: '#5D7E16', fontWeight: '700' }]}>${estimate.toFixed(2)} your cost</Text>
                                         <Text style={s.rateBarLabel}>${r.estimatedMax.toFixed(0)} high</Text>
                                     </View>
                                 </View>
@@ -494,6 +564,39 @@ export default function DeliveryShippingSheet({
                                             <Icon name="chevron-right" size={20} color="#9CA3AF" />
                                         </TouchableOpacity>
                                     )}
+                                    {/* eBay: who pays shipping? Free (ships free — default) vs Buyer pays a flat rate. */}
+                                    {tabKeyLower === 'ebay' && showsShipping && (
+                                        <View style={{ marginTop: 14 }}>
+                                            <Text style={s.dimLabel}>Who pays shipping?</Text>
+                                            <View style={[s.methodRow, { marginTop: 6 }]}>
+                                                {(['free', 'buyer'] as const).map((payer) => {
+                                                    const isActive = shippingPayer === payer;
+                                                    return (
+                                                        <TouchableOpacity key={payer} activeOpacity={0.8} style={[s.methodCard, { paddingVertical: 12 }, isActive && s.methodCardActive]} onPress={() => handlePayerChange(payer)}>
+                                                            <Text style={[s.methodLabel, { marginTop: 0 }, isActive && s.methodLabelActive]}>{payer === 'free' ? 'Free shipping' : 'Buyer pays'}</Text>
+                                                        </TouchableOpacity>
+                                                    );
+                                                })}
+                                            </View>
+                                            {shippingPayer === 'buyer' && (
+                                                <View style={{ marginTop: 12 }}>
+                                                    <Text style={[s.dimLabel, { marginBottom: 6 }]}>Flat shipping charge</Text>
+                                                    <View style={s.costInputRow}>
+                                                        <Text style={s.costPrefix}>$</Text>
+                                                        <TextInput
+                                                            style={s.costInput}
+                                                            value={tabData?.shippingCost != null ? String(tabData.shippingCost) : ''}
+                                                            onChangeText={handleShippingCostChange}
+                                                            keyboardType="decimal-pad"
+                                                            placeholder="0.00"
+                                                            placeholderTextColor="#C0C0C0"
+                                                        />
+                                                    </View>
+                                                    <Text style={s.costHint}>Buyers are charged this flat rate at checkout.</Text>
+                                                </View>
+                                            )}
+                                        </View>
+                                    )}
                                 </View>
                             )}
                             <View style={s.optionDivider} />
@@ -535,7 +638,7 @@ export default function DeliveryShippingSheet({
                                 </View>
                             )}
                             <View style={s.optionDivider} />
-                            {/* Speed (presentational) */}
+                            {/* Speed — feeds the estimate query (Standard→Ground, Expedited→Expedited) */}
                             <TouchableOpacity style={s.optionRow} activeOpacity={0.7} onPress={() => setExpandedRow((rr) => rr === 'speed' ? null : 'speed')}>
                                 <Text style={s.optionLabel}>Speed</Text>
                                 <View style={{ flex: 1 }} />
@@ -548,7 +651,7 @@ export default function DeliveryShippingSheet({
                                         {(['standard', 'expedited'] as const).map((sp) => {
                                             const isActive = speed === sp;
                                             return (
-                                                <TouchableOpacity key={sp} activeOpacity={0.8} style={[s.methodCard, { paddingVertical: 12 }, isActive && s.methodCardActive]} onPress={() => setSpeed(sp)}>
+                                                <TouchableOpacity key={sp} activeOpacity={0.8} style={[s.methodCard, { paddingVertical: 12 }, isActive && s.methodCardActive]} onPress={() => onChangeSpeed(sp)}>
                                                     <Text style={[s.methodLabel, { marginTop: 0 }, isActive && s.methodLabelActive]}>{sp === 'standard' ? 'Standard (2–5 days)' : 'Expedited (1–2 days)'}</Text>
                                                 </TouchableOpacity>
                                             );
@@ -726,44 +829,22 @@ const s = StyleSheet.create({
     /* Weight */
     weightRow: { flexDirection: 'row', gap: 8 },
 
-    /* Loading */
-    loadingRow: {
+    /* eBay flat shipping charge input */
+    costInputRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 16,
-    },
-
-    /* Rate cards */
-    ratesContainer: {
-        borderRadius: 12,
-    },
-    rateCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: '#fff',
-        borderRadius: 10,
-        padding: 14,
         borderWidth: 1,
-        marginBottom: 8,
-    },
-    rateCardActive: {
-        borderColor: BRAND_PRIMARY,
-    },
-    rateCardDisabled: {
         borderColor: '#E5E7EB',
-        opacity: 0.55,
+        borderRadius: 10,
+        backgroundColor: '#fff',
+        paddingHorizontal: 12,
+        height: 44,
     },
-    rateCarrier: { fontSize: 14, fontWeight: '600', color: '#111827' },
-    rateSpeed: { fontSize: 11, color: '#6B7280', marginTop: 1 },
-    ratePrice: { fontSize: 16, fontWeight: '700', color: '#111827' },
+    costPrefix: { fontSize: 15, fontWeight: '700', color: '#6B7280', marginRight: 4 },
+    costInput: { flex: 1, fontSize: 15, color: '#111827', height: 44 },
+    costHint: { fontSize: 11, color: '#9CA3AF', marginTop: 6 },
 
     /* Action buttons */
-    actionRow: {
-        marginTop: 24,
-    },
     recalcBtn: {
         backgroundColor: '#F3F4F6',
         borderRadius: 10,

@@ -325,6 +325,9 @@ const ProductDetailScreen = observer(
     const [connections, setConnections] = useState<PlatformConnection[]>([]);
     const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(!passedItem);
+    // Inline error + retry for the by-productId Supabase load (fetch failure / timeout).
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [reloadNonce, setReloadNonce] = useState(0);
 
     // Modal states
     const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
@@ -882,7 +885,7 @@ const ProductDetailScreen = observer(
         // Load platform mappings for ALL variants
         const { data: mappingsData, error: mappingsError } = await supabase
           .from('PlatformProductMappings')
-          .select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt')
+          .select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, SyncErrorMessage, IsEnabled, LastSyncedAt, UpdatedAt')
           .in('ProductVariantId', allVariantIds);
 
         if (mappingsError) {
@@ -1630,15 +1633,39 @@ const ProductDetailScreen = observer(
           body: JSON.stringify(updateData),
         });
 
+        // Read the body once — the PUT /:id endpoint runs the platform sync
+        // synchronously and returns the real per-platform outcome in the body
+        // (syncStatus.platforms + a warnings[] of failures), not just a status code.
+        const saveResult = await response.json().catch(() => null);
+
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-          throw new Error(errorData.message || `Failed to update product. Status: ${response.status}`);
+          throw new Error(saveResult?.message || `Failed to update product. Status: ${response.status}`);
         }
 
-        // ✅ Platform syncing is handled automatically by the backend via syncCoordinatorService
-        // The PUT /api/products/:id endpoint automatically enqueues platform sync jobs
-        // No manual platform push needed - backend handles it in the background
-        log.debug('[ProductDetail] Product updated successfully. Platform sync will happen automatically in the background.');
+        // The canonical save succeeded (response.ok). If a platform PUSH failed the
+        // backend still returns 200 with warnings[] — keep the saved state (the save
+        // DID succeed) but surface a calm, non-blocking notice and refresh the mappings
+        // so the Active Channels dot (which reads SyncStatus) reflects the failure.
+        const failedPlatforms: any[] = Array.isArray(saveResult?.warnings)
+          ? saveResult.warnings
+          : (saveResult?.syncStatus?.platforms || []).filter(
+              (p: any) => p?.status === 'error' || (Array.isArray(p?.errors) && p.errors.length > 0),
+            );
+        if (failedPlatforms.length > 0) {
+          const names = failedPlatforms
+            .map((p: any) => {
+              const name = (p?.platform || '').toString();
+              return name ? name.charAt(0).toUpperCase() + name.slice(1) : 'a channel';
+            })
+            .filter((v, i, arr) => arr.indexOf(v) === i);
+          const label = names.length <= 1
+            ? (names[0] || 'a channel')
+            : `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+          showBanner(`Saved — didn’t reach ${label}`, true);
+          loadPlatformData().catch(() => {});
+        } else {
+          log.debug('[ProductDetail] Product updated successfully; all platform pushes reported success.');
+        }
 
         // Do NOT update Supabase directly - the real-time subscription will handle it
         // The backend automatically triggers updates via database triggers
@@ -1693,7 +1720,7 @@ const ProductDetailScreen = observer(
       } finally {
         setIsSaving(false);
       }
-    }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms]);
+    }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms, showBanner, loadPlatformData]);
 
     useEffect(() => {
       if (!ENABLE_AUTOSAVE) return;
@@ -2167,23 +2194,54 @@ const ProductDetailScreen = observer(
         // loadPlatformData() below refreshes the row, which shows the live dispatch
         // status (useFacebookJobStatus).
 
-        // Check if any platforms need reauth
-        if (responseData.reauthRequired && responseData.reauthRequired.length > 0) {
-          const reauthPlatform = responseData.reauthRequired[0];
+        // The backend returns results[] with the true per-platform outcome. Old
+        // backends omit it, so when results[] is absent we fall back to the previous
+        // "response.ok means success" behavior.
+        const platformResults: any[] = Array.isArray(responseData?.results) ? responseData.results : [];
+        const thisResult = platformResults.find(
+          (r: any) => (r?.platform || '').toString().toLowerCase() === platformKey.toLowerCase(),
+        );
+        const resultErrorText = (thisResult?.error || '').toString();
+
+        // Reauth: honor the per-result reauthRequired flag and the legacy top-level
+        // reauthRequired[] list. As a safety net also treat an auth-shaped error string
+        // as a reauth trigger even when the flag is missing (mirrors the catch block).
+        const looksLikeAuthError = /token|auth|unauthorized|expired/i.test(resultErrorText);
+        const legacyReauth = Array.isArray(responseData?.reauthRequired) && responseData.reauthRequired.length > 0
+          ? responseData.reauthRequired[0]
+          : null;
+        const needsReauth =
+          (thisResult && (thisResult.reauthRequired === true || (thisResult.success === false && looksLikeAuthError))) ||
+          !!legacyReauth;
+
+        if (needsReauth) {
+          const reauthConnectionId = legacyReauth?.connectionId ?? targetConnection?.Id;
+          const reauthName = legacyReauth?.connectionDisplayName || legacyReauth?.platform || targetConnection?.DisplayName || platformKey;
           Alert.alert(
             'Re-authentication Required',
-            `Your ${reauthPlatform.connectionDisplayName || reauthPlatform.platform} connection needs to be re-authenticated to continue publishing.`,
+            `Your ${reauthName} connection needs to be re-authenticated to continue publishing.`,
             [
               { text: 'Later', style: 'cancel' },
               {
                 text: 'Re-authenticate',
                 onPress: () => {
                   // Navigate to profile to trigger reauth
-                  navigation.navigate('Profile' as never, { openReauth: reauthPlatform.connectionId } as never);
+                  navigation.navigate('Profile' as never, (reauthConnectionId ? { openReauth: reauthConnectionId } : {}) as never);
                 }
               },
             ]
           );
+          return;
+        }
+
+        // When results[] reports this platform failed, surface the error and DO NOT
+        // show the success banner — the listing never went live.
+        if (thisResult && thisResult.success === false) {
+          Alert.alert(
+            'Publish Failed',
+            resultErrorText || `Could not publish to ${platformKey}. Please try again.`,
+          );
+          await loadPlatformData();
           return;
         }
 
@@ -2638,6 +2696,7 @@ const ProductDetailScreen = observer(
           return;
         }
         setIsLoading(true);
+        setLoadError(null);
         // Ignore responses that land after productId/passedItem changed, so a
         // stale lookup can't overwrite the newer product's state.
         let canceled = false;
@@ -2658,49 +2717,72 @@ const ProductDetailScreen = observer(
             TaxCode: data.TaxCode || '',
           });
         };
-        supabase
-          .from('ProductVariants')
-          .select(VARIANT_COLS)
-          .eq('Id', productId)
-          .maybeSingle()  // Use maybeSingle to avoid error when product doesn't exist
-          .then(({ data, error }) => {
+        // The PostgREST client can hang on a dropped connection without ever
+        // rejecting, which used to leave the screen stuck on the spinner. Race each
+        // query against a 15s timeout and route every failure (query error, thrown
+        // rejection, or timeout) into a single retryable inline error state.
+        const LOAD_TIMEOUT_MS = 15000;
+        const withTimeout = <T,>(p: PromiseLike<T>): Promise<T> =>
+          Promise.race([
+            Promise.resolve(p),
+            new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), LOAD_TIMEOUT_MS)),
+          ]);
+        (async () => {
+          try {
+            const { data, error } = await withTimeout(
+              supabase
+                .from('ProductVariants')
+                .select(VARIANT_COLS)
+                .eq('Id', productId)
+                .maybeSingle(),  // maybeSingle avoids an error when the product doesn't exist
+            );
             if (canceled) return;
+            if (error) throw error;
             if (data) {
               log.debug('[ProductDetail] Fetched item from Supabase:', data.Id);
               applyVariant(data);
               setIsLoading(false);
-            } else if (error) {
-              log.error('[ProductDetail] Database error fetching item:', error);
-              setDetailedItem(null);
-              setIsLoading(false);
-              Alert.alert('Error', 'Failed to load product details. Please try again.');
-            } else {
-              // Not a variant id. Some callers (chat activity cards) pass a
-              // parent Products.Id — resolve its first variant before giving up.
+              return;
+            }
+            // Not a variant id. Some callers (chat activity cards) pass a
+            // parent Products.Id — resolve its first variant before giving up.
+            const { data: byProduct, error: byProductError } = await withTimeout(
               supabase
                 .from('ProductVariants')
                 .select(VARIANT_COLS)
                 .eq('ProductId', productId)
                 .order('CreatedAt', { ascending: true })
                 .limit(1)
-                .maybeSingle()
-                .then(({ data: byProduct }) => {
-                  if (canceled) return;
-                  if (byProduct) {
-                    log.debug('[ProductDetail] Resolved variant via ProductId:', byProduct.Id);
-                    applyVariant(byProduct);
-                  } else {
-                    log.warn('[ProductDetail] Product not found with ID:', productId);
-                    setDetailedItem(null);
-                    Alert.alert('Product Not Found', 'This product may still be syncing or no longer exists.');
-                  }
-                  setIsLoading(false);
-                });
+                .maybeSingle(),
+            );
+            if (canceled) return;
+            if (byProductError) throw byProductError;
+            if (byProduct) {
+              log.debug('[ProductDetail] Resolved variant via ProductId:', byProduct.Id);
+              applyVariant(byProduct);
+            } else {
+              // A genuinely-missing product (not a fetch failure) — keep the honest
+              // "not found" empty state rather than the retryable error.
+              log.warn('[ProductDetail] Product not found with ID:', productId);
+              setDetailedItem(null);
+              Alert.alert('Product Not Found', 'This product may still be syncing or no longer exists.');
             }
-          });
+            setIsLoading(false);
+          } catch (err: any) {
+            if (canceled) return;
+            log.error('[ProductDetail] Failed to load product:', err);
+            setDetailedItem(null);
+            setIsLoading(false);
+            setLoadError(
+              err?.message === 'timeout'
+                ? 'This is taking longer than usual. Check your connection and try again.'
+                : 'We couldn’t load this product. Please try again.',
+            );
+          }
+        })();
         return () => { canceled = true; };
       }
-    }, [productId, passedItem]);
+    }, [productId, passedItem, reloadNonce]);
 
     // Load platform data when product is available - ONLY ONCE
     // Load platform data when product is available - Handle case where ProductId might be missing initially
@@ -3878,8 +3960,15 @@ const ProductDetailScreen = observer(
     if (!detailedItem) {
       return (
         <View style={[styles.container, styles.centered, { backgroundColor: theme.colors.background }]}>
-          <Text style={[styles.errorText, { color: theme.colors.error }]}>Product not found</Text>
-          <Button title="Go Back" onPress={navigation.goBack} />
+          <Text style={[styles.errorText, { color: theme.colors.error }]}>{loadError || 'Product not found'}</Text>
+          {loadError ? (
+            <Button
+              title="Try Again"
+              onPress={() => { setLoadError(null); setIsLoading(true); setReloadNonce(n => n + 1); }}
+            />
+          ) : (
+            <Button title="Go Back" onPress={navigation.goBack} />
+          )}
         </View>
       );
     }
@@ -4239,10 +4328,31 @@ const ProductDetailScreen = observer(
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
                     const parsedSyncMs = mapping.LastSyncedAt ? new Date(mapping.LastSyncedAt).getTime() : 0;
                     const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
-                    const statusColor = isStale ? '#BA7517' : '#16A34A';
-                    const statusText = isStale
-                      ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
-                      : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
+                    // The backend stamps LastSyncedAt even on a FAILED push (writing
+                    // SyncStatus:'Error' + SyncErrorMessage alongside), so recency alone
+                    // would paint a failed sync green. Drive the dot from SyncStatus first;
+                    // only fall back to the recency Live/stale logic when the last sync
+                    // actually succeeded (or no status was recorded).
+                    const syncState = (mapping.SyncStatus || '').toLowerCase();
+                    let statusColor: string;
+                    let statusText: string;
+                    if (syncState === 'error' || syncState === 'failed') {
+                      statusColor = '#DC2626';
+                      const reason = (mapping.SyncErrorMessage || '').trim();
+                      const shortReason = reason.length > 48 ? `${reason.slice(0, 45)}\u2026` : reason;
+                      statusText = shortReason ? `Didn\u2019t reach ${typeLabel} \u00b7 ${shortReason}` : `Didn\u2019t reach ${typeLabel}`;
+                    } else if (syncState === 'conflict') {
+                      statusColor = '#BA7517';
+                      statusText = 'Needs review';
+                    } else if (syncState === 'pending' || syncState === 'syncing' || syncState === 'queued' || syncState === 'processing') {
+                      statusColor = '#9CA3AF';
+                      statusText = 'Syncing\u2026';
+                    } else {
+                      statusColor = isStale ? '#BA7517' : '#16A34A';
+                      statusText = isStale
+                        ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
+                        : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
+                    }
                     // Facebook posts through the user's computer (async). When a
                     // dispatch job is in flight / waiting / paused / failed, show its
                     // realtime status instead of the sync status \u2014 same dot+label idiom.

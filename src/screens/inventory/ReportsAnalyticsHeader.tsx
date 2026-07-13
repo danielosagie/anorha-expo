@@ -99,66 +99,110 @@ export function useInventoryAnalytics(): AnalyticsState {
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+
+    // 'YYYY-MM-DD' → 'M/D' (timezone-safe: parse the parts, don't new Date()).
+    const dayLabel = (isoDate: string): string => {
+      const parts = String(isoDate).split('-');
+      return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : String(isoDate);
+    };
+
+    // Legacy path: derive the numbers by scraping order-shaped /api/activity
+    // entries. Kept ONLY as a degraded fallback for when the real orders summary
+    // endpoint is unavailable, so the header still shows something.
+    const computeFromActivity = async (): Promise<AnalyticsState> => {
+      const data = await fetchJsonAuthed('/api/activity?limit=200', controller);
+      const events: any[] = Array.isArray(data?.events) ? data.events : [];
+      const now = Date.now();
+      const cutoff30 = now - 30 * 86400000;
+      const cutoff14 = now - 14 * 86400000;
+
+      let sales = 0;
+      let revenue = 0;
+      const byDay = new Map<string, number>();
+      const byPlatform = new Map<string, { revenue: number; sales: number }>();
+      for (const e of events) {
+        if (!isOrderEvent(e.EventType)) continue;
+        const t = Date.parse(e.Timestamp);
+        if (!Number.isFinite(t) || t < cutoff30) continue;
+        const amount = pickAmount(e.Details || {});
+        sales += 1;
+        revenue += amount;
+        const platform = String(e.PlatformType || 'other').toLowerCase();
+        const p = byPlatform.get(platform) || { revenue: 0, sales: 0 };
+        p.revenue += amount;
+        p.sales += 1;
+        byPlatform.set(platform, p);
+        if (t >= cutoff14) {
+          const day = new Date(t).toISOString().slice(0, 10);
+          byDay.set(day, (byDay.get(day) || 0) + amount);
+        }
+      }
+      const platforms: PlatformRow[] = [...byPlatform.entries()]
+        .map(([name, p]) => ({ name, revenue: p.revenue, sales: p.sales }))
+        .sort((a, b) => b.revenue - a.revenue || b.sales - a.sales)
+        .slice(0, 5);
+
+      // Continuous last-14-days series (zero-filled) so the line reads as a
+      // timeline, not a scatter of only the days that had sales.
+      const series: DayPoint[] = [];
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(now - i * 86400000);
+        const key = d.toISOString().slice(0, 10);
+        series.push({
+          label: `${d.getMonth() + 1}/${d.getDate()}`,
+          revenue: Math.round((byDay.get(key) || 0) * 100) / 100,
+        });
+      }
+
+      return {
+        loading: false,
+        sales30d: sales,
+        revenue30d: revenue,
+        avgSale: sales > 0 ? revenue / sales : 0,
+        series,
+        platforms,
+      };
+    };
+
     (async () => {
       try {
-        const data = await fetchJsonAuthed('/api/activity?limit=200', controller);
-        const events: any[] = Array.isArray(data?.events) ? data.events : [];
-        const now = Date.now();
-        const cutoff30 = now - 30 * 86400000;
-        const cutoff14 = now - 14 * 86400000;
-
-        let sales = 0;
-        let revenue = 0;
-        const byDay = new Map<string, number>();
-        const byPlatform = new Map<string, { revenue: number; sales: number }>();
-        for (const e of events) {
-          if (!isOrderEvent(e.EventType)) continue;
-          const t = Date.parse(e.Timestamp);
-          if (!Number.isFinite(t) || t < cutoff30) continue;
-          const amount = pickAmount(e.Details || {});
-          sales += 1;
-          revenue += amount;
-          const platform = String(e.PlatformType || 'other').toLowerCase();
-          const p = byPlatform.get(platform) || { revenue: 0, sales: 0 };
-          p.revenue += amount;
-          p.sales += 1;
-          byPlatform.set(platform, p);
-          if (t >= cutoff14) {
-            const day = new Date(t).toISOString().slice(0, 10);
-            byDay.set(day, (byDay.get(day) || 0) + amount);
+        // Preferred: real order metrics computed server-side from the Orders
+        // table (GET /api/orders/summary). Feed the tiles/chart the real numbers.
+        const summary = await fetchJsonAuthed('/api/orders/summary', controller);
+        if (summary && typeof summary === 'object' && Array.isArray(summary.revenueByDay)) {
+          const series: DayPoint[] = summary.revenueByDay.map((d: any) => ({
+            label: dayLabel(d.date),
+            revenue: Math.round((Number(d.amount) || 0) * 100) / 100,
+          }));
+          // The summary's revenueByPlatform carries revenue only (no per-platform
+          // count); sales stays 0 and the breakdown row hides the count when 0.
+          const platforms: PlatformRow[] = (Array.isArray(summary.revenueByPlatform) ? summary.revenueByPlatform : [])
+            .map((p: any) => ({ name: String(p.platform || 'other'), revenue: Number(p.amount) || 0, sales: 0 }))
+            .slice(0, 5);
+          if (!cancelled) {
+            setState({
+              loading: false,
+              sales30d: Number(summary.orderCount30d) || 0,
+              revenue30d: Number(summary.totalRevenue30d) || 0,
+              avgSale: Number(summary.avgOrderValue30d) || 0,
+              series,
+              platforms,
+            });
           }
+          return;
         }
-        const platforms: PlatformRow[] = [...byPlatform.entries()]
-          .map(([name, p]) => ({ name, revenue: p.revenue, sales: p.sales }))
-          .sort((a, b) => b.revenue - a.revenue || b.sales - a.sales)
-          .slice(0, 5);
-
-        // Continuous last-14-days series (zero-filled) so the line reads as a
-        // timeline, not a scatter of only the days that had sales.
-        const series: DayPoint[] = [];
-        for (let i = 13; i >= 0; i--) {
-          const d = new Date(now - i * 86400000);
-          const key = d.toISOString().slice(0, 10);
-          series.push({
-            label: `${d.getMonth() + 1}/${d.getDate()}`,
-            revenue: Math.round((byDay.get(key) || 0) * 100) / 100,
-          });
-        }
-
-        if (!cancelled) {
-          setState({
-            loading: false,
-            sales30d: sales,
-            revenue30d: revenue,
-            avgSale: sales > 0 ? revenue / sales : 0,
-            series,
-            platforms,
-          });
-        }
+        throw new Error('unexpected summary shape');
       } catch (e) {
+        // Degrade to the activity-based numbers rather than crashing/blanking.
         if (cancelled) return;
-        log.warn('[analytics] fetch failed:', e instanceof Error ? e.message : e);
-        setState((s) => ({ ...s, loading: false }));
+        try {
+          const fallback = await computeFromActivity();
+          if (!cancelled) setState(fallback);
+        } catch (e2) {
+          if (cancelled) return;
+          log.warn('[analytics] fetch failed:', e2 instanceof Error ? e2.message : e2);
+          setState((s) => ({ ...s, loading: false }));
+        }
       }
     })();
     return () => { cancelled = true; controller.abort(); };
@@ -389,7 +433,7 @@ const ReportsAnalyticsHeader: React.FC = () => {
                   <View style={[styles.paceFill, { width: `${Math.max(4, Math.round((p.revenue / maxPlatformRevenue) * 100))}%` }]} />
                 </View>
               </View>
-              <Text style={styles.breakdownValue}>{money(p.revenue)} · {p.sales}</Text>
+              <Text style={styles.breakdownValue}>{money(p.revenue)}{p.sales > 0 ? ` · ${p.sales}` : ''}</Text>
             </View>
           ))}
         </View>

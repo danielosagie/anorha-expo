@@ -765,6 +765,17 @@ const AppNavigator = () => {
   }, [devExpireSession]);
 
   const checkOnboardingAndNavigate = async () => {
+    // Never let a slow token / me-view / DB lookup strand the boot on the startup shell.
+    // If the whole check hasn't resolved in 8s, land on the default TabNavigator — the
+    // same fallback the bridge-wait above uses (~line 727). The real work still finishes
+    // and self-corrects the landing if it resolves to a different screen.
+    let done = false;
+    const landingTimeout = setTimeout(() => {
+      if (done) return;
+      log.warn('[Onboarding Check] Timed out (8s) — landing on TabNavigator.');
+      setInitialAppScreen((prev) => prev ?? 'TabNavigator');
+      setIsLoading(false);
+    }, 8000);
     try {
       let token: string | null = null;
       // Fresh sign-in: the Clerk→Supabase bridge can take a moment to mint the JWT.
@@ -830,6 +841,8 @@ const AppNavigator = () => {
       log.error("Error during onboarding check:", error);
       setInitialAppScreen('AccountSyncIssueScreen');
     } finally {
+      done = true;
+      clearTimeout(landingTimeout);
       setIsLoading(false);
     }
   };

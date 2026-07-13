@@ -321,10 +321,16 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       validateAuthIfNeeded(false).catch(log.error);
     } else {
       log.debug('[EnhancedSessionProvider] No valid persisted state found');
-      // Force validation for new sessions
-      await validateAuthIfNeeded(true);
+      // Force validation for new sessions — but never block the boot forever. A stalled
+      // token exchange here used to strand the app on "Restoring your workspace". Cap the
+      // wait at 12s and proceed; validateAuthIfNeeded keeps running in the background and
+      // flips bridgeReady when it lands, and the app degrades to its reconnect/retry path.
+      await Promise.race([
+        validateAuthIfNeeded(true),
+        new Promise<void>((resolve) => setTimeout(resolve, 12000)),
+      ]).catch(log.error);
     }
-    
+
     setInitializing(false);
   }, [loadCachedEntitlements, validateAuthIfNeeded]);
 
