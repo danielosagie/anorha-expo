@@ -35,6 +35,10 @@ import { useIsNight } from '../hooks/useIsNight';
 import { useOrgNudges } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
+import ActivityTraySheet from '../features/liquidationConversation/components/activity/ActivityTraySheet';
+import { useActivityTray } from '../features/liquidationConversation/components/activity/useActivityTray';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../config/env';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -708,18 +712,78 @@ const SproutHomeScreen: React.FC = () => {
     return 'Evening Report';
   }, []);
 
-  // Review → hand the full report to Sprout: opens the thread and fires one
-  // create_report-shaped task; the document card comes back openable/shareable.
-  const openReport = useCallback(() => {
+  // Report bottom sheet — the same viewer the chat uses, mounted here so the
+  // home screen can open a report directly (no detour through a chat prompt).
+  const { openTray, trayProps } = useActivityTray();
+
+  const openReportDocument = useCallback((doc: { documentId: string; title: string; summary: string; sections: any[] }) => {
+    openTray({
+      kind: 'document',
+      id: doc.documentId,
+      title: doc.title,
+      document: { ...doc, format: 'report' as const },
+    });
+  }, [openTray]);
+
+  // Resolve the insight's own report: the embedded document when present,
+  // else fetch it by its persisted reportId. Returns true when a report opened.
+  const openInsightReport = useCallback(async (): Promise<boolean> => {
+    if (insight?.report?.sections?.length) {
+      openReportDocument(insight.report);
+      return true;
+    }
+    if (insight?.reportId) {
+      try {
+        const token = await ensureSupabaseJwt();
+        if (token) {
+          const res = await fetch(`${API_BASE_URL}/api/agent/reports/${encodeURIComponent(insight.reportId)}`, {
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const doc = data?.report?.document;
+            if (doc && Array.isArray(doc.sections) && doc.sections.length) {
+              openReportDocument(doc);
+              return true;
+            }
+          }
+        }
+      } catch { /* fall through */ }
+    }
+    return false;
+  }, [insight?.report, insight?.reportId, openReportDocument]);
+
+  // Review → open the actual report. Priority: the insight's own report
+  // (embedded, else by reportId), else the newest persisted report from the
+  // org-wide list, and only when none exists fall back to asking Sprout to
+  // write one in the thread.
+  const openReport = useCallback(async () => {
+    tap();
+    if (await openInsightReport()) return;
+    try {
+      const token = await ensureSupabaseJwt();
+      if (token) {
+        const res = await fetch(`${API_BASE_URL}/api/agent/reports?limit=1`, {
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const doc = data?.reports?.[0]?.document;
+          if (doc && Array.isArray(doc.sections) && doc.sections.length) {
+            openReportDocument(doc);
+            return;
+          }
+        }
+      }
+    } catch { /* fall through to the chat handoff */ }
     const campaignId = handoffTarget?.campaignId || controller.campaigns[0]?.id;
     if (!campaignId) return;
-    tap();
     navigation.navigate('CampaignThreadScreen', {
       campaignId,
       initialPrompt:
         'Give me the full report: everything that happened since I last checked, what it means, and the next moves — as a report document.',
     });
-  }, [handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
+  }, [openInsightReport, openReportDocument, handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
 
   return (
     <View style={[styles.screen, { backgroundColor: THEME.bodyBg }]}>
@@ -816,11 +880,26 @@ const SproutHomeScreen: React.FC = () => {
               {!controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
               )}
+              {/* The insight's backing report — opens the report sheet right here,
+                  no chat detour. Shown whether the document rides embedded on the
+                  insight or only as a persisted reportId (resolved on tap). */}
+              {!controller.loading && (insight?.report?.sections?.length || insight?.reportId) ? (
+                <HeroActionCard
+                  title={insight?.report?.title || insightHeadline || 'Sprout wrote a report'}
+                  subtitle={insight?.report?.summary || undefined}
+                  chip="Open report"
+                  borderColor={THEME.cardBorder}
+                  onPress={() => {
+                    tap();
+                    void openInsightReport();
+                  }}
+                />
+              ) : null}
               {/* Handoff: the insight ships a ready-to-send task for Sprout — one tap
                   opens the campaign thread and fires it as a normal message. */}
               {!controller.loading && handoffTarget && (
                 <HeroActionCard
-                  title={insightHeadline || 'Sprout has a move'}
+                  title={(insight?.report?.sections?.length || insight?.reportId) ? handoffTarget.label : (insightHeadline || 'Sprout has a move')}
                   chip={handoffTarget.label}
                   borderColor={THEME.cardBorder}
                   onPress={() => {
@@ -1141,6 +1220,10 @@ const SproutHomeScreen: React.FC = () => {
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreate}
       />
+
+      {/* Report viewer — the same document sheet the chat uses, so the home
+          report cards open a real, shareable report in place. */}
+      <ActivityTraySheet {...trayProps} />
 
       {/* Selection action pill — floats in the navigator's spot on long-press
           (the tab bar hides while selecting). Bulk pause / delete. */}

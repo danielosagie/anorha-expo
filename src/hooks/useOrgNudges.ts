@@ -75,6 +75,11 @@ export interface DashboardInsight {
     campaignId?: string;
     label?: string;
   };
+  // Full report document backing this insight (same shape the chat's report
+  // bottom sheet renders) plus its id in the org-wide reports list. When
+  // present, the home card opens the report sheet directly — no chat handoff.
+  report?: import('../features/liquidationConversation/types').ReportDocument;
+  reportId?: string;
   dataQuality?: {
     queriesRun?: number;
     searchesRun?: number;
@@ -216,6 +221,17 @@ const normalizeSingleInsight = (raw: any): DashboardInsight | null => {
           label: coerceText(raw?.handoff?.label) || undefined,
         }
       : undefined,
+    report:
+      raw?.report && typeof raw.report === 'object' && Array.isArray(raw.report.sections) && raw.report.sections.length
+        ? {
+            documentId: coerceText(raw.report.documentId) || `report_insight_${Date.now()}`,
+            title: coerceText(raw.report.title, headline),
+            summary: coerceText(raw.report.summary),
+            format: 'report' as const,
+            sections: raw.report.sections,
+          }
+        : undefined,
+    reportId: coerceText(raw?.reportId) || undefined,
   };
 };
 

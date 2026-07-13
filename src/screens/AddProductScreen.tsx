@@ -649,7 +649,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const res = await fetch(`${API_BASE}/api/products/quick-scan-sessions/${sessionIdParam}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok || cancelled) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          // Never dead-end silently: the seller tapped a cart card and got
+          // NOTHING, which reads as "the cart is broken". Say what happened.
+          log.warn(`[AddProduct] Hydrate draft ${sessionIdParam} failed: ${res.status}`);
+          Alert.alert(
+            res.status === 404 ? 'Cart not found' : 'Could not open cart',
+            res.status === 404
+              ? 'This cart was deleted or already converted to inventory. Start a new scan to research more items.'
+              : 'The cart could not load. Check your connection and try again.',
+          );
+          return;
+        }
         const session = await res.json();
         const items = session.ScannedItems ?? session.scannedItems ?? [];
         const rawMatchCtx = (session.MatchContext ?? session.matchContext ?? {}) as Record<string, any>;
@@ -676,6 +688,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           sessionIdRef.current = session.Id ?? session.id ?? sessionIdParam;
           if (sessionIdRef.current) void setActiveDraftSessionId(sessionIdRef.current);
           if (shelfUri) shelfPhotoUriForDraftRef.current = shelfUri;
+        } else if (!cancelled) {
+          // The session row exists but carries no items (items were dropped on
+          // save, or the draft was emptied). Tell the seller instead of doing
+          // nothing — the silent version of this was the "dead cart" bug.
+          log.warn(`[AddProduct] Hydrated draft ${sessionIdParam} has no items`);
+          Alert.alert(
+            'Cart is empty',
+            'This saved cart has no items in it anymore. Scan or snap the items again to rebuild it.',
+          );
         }
       } catch (e) {
         log.error('[AddProduct] Hydrate draft failed:', e);
@@ -4720,6 +4741,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   closeBarcodeSheet();
                   (navigation as any).navigate('ProductDetail', {
                     productId: variantId,  // This is the ProductVariant.Id that ProductDetail expects
+                    // Forward what we already have so the detail renders
+                    // instantly instead of dead-ending on a fetch miss.
+                    item: barcodeSearchResult?.variant,
                   });
                 } else {
                   log.error('[QUICK DETAIL] No variant Id found for navigation');

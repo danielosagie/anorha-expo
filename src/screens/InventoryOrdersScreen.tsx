@@ -39,6 +39,7 @@ import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import SearchBarWithScanner from '../components/SearchBarWithScanner';
 import { AppMenu } from '../components/ui/AppMenu';
 import OrdersTab from './inventory/OrdersTab';
+import ReportsTab from './inventory/ReportsTab';
 import PlatformFilterChips from '../components/PlatformFilterChips';
 import InventoryListCard from '../components/InventoryListCard';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
@@ -1522,7 +1523,7 @@ const InventoryOrdersScreen = observer(() => {
       {/* Tappable header title → AppMenu (Inventory / Orders / Scan inventory). */}
       <View style={[styles.titleBar, { top: insets.top + 6 }]} pointerEvents="box-none">
         <TouchableOpacity style={styles.titleTap} onPress={() => setHeaderMenuOpen(true)} activeOpacity={0.7}>
-          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : 'Orders'}</Text>
+          <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : activeTab === 'orders' ? 'Orders' : 'Reports'}</Text>
           <ChevronsUpDownIcon color="#2c2c2c" fontWeight={500}/>
         </TouchableOpacity>
       </View>
@@ -1683,6 +1684,12 @@ const InventoryOrdersScreen = observer(() => {
             <OrdersTab />
           </Animated.View>
         )}
+
+        {activeTab === 'reports' && (
+          <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
+            <ReportsTab />
+          </Animated.View>
+        )}
       </View>
 
       {/* Header dropdown — reusable Linear-like menu, used for all app dropdowns. */}
@@ -1694,6 +1701,7 @@ const InventoryOrdersScreen = observer(() => {
           [
             { key: 'inventory', label: 'Inventory', icon: 'package-variant', active: activeTab === 'inventory', onPress: () => { setActiveTab('inventory'); setHeaderMenuOpen(false); } },
             { key: 'orders', label: 'Orders', icon: 'receipt-text-outline', active: activeTab === 'orders', onPress: () => { setActiveTab('orders'); setHeaderMenuOpen(false); } },
+            { key: 'reports', label: 'Reports', icon: 'file-document-outline', active: activeTab === 'reports', onPress: () => { setActiveTab('reports'); setHeaderMenuOpen(false); } },
           ],
           [
             { key: 'scan', label: 'Scan inventory', icon: 'barcode-scan', onPress: () => { setHeaderMenuOpen(false); openScanner((code: string) => { handleBarcodeScan(code); closeScanner(); }, 'header_menu'); } },
