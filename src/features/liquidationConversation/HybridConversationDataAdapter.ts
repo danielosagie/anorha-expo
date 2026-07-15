@@ -780,74 +780,58 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     });
   }
 
-  // The newest unanswered ask_seller_question pending action for this thread,
-  // hydrated into a QuestionPrompt. Null when Sprout isn't waiting on a choice.
-  async getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null> {
-    const pick = (actions: any[] | undefined): QuestionPrompt | null => {
-      const open = (actions || [])
-        .filter((a) => a?.toolName === 'ask_seller_question' && a?.status !== 'completed' && a?.status !== 'rejected')
-        .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
-      const action = open[0];
-      const questions = action?.input?.questions;
-      if (!action || !Array.isArray(questions) || questions.length === 0) return null;
-      return { pendingActionId: action.id, threadId: action.threadId, questions };
-    };
-    // Thread-scoped first: the open ask for the thread the seller is viewing.
-    const scoped = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
-      `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
-    ).catch(() => null);
-    const fromThread = pick(scoped?.pendingActions);
-    if (fromThread) return fromThread;
-    // Fallback: campaign-wide. The "Needs you" badge is campaign-wide (overview.needsInput),
-    // so an ask sitting on a different/primary thread must still surface as a card here —
-    // otherwise the badge shows with no question to answer. answerQuestion is keyed by
-    // pendingActionId (not threadId), so answering an off-thread ask still works. If the
-    // un-scoped query isn't supported it just rejects → null (same as before, no phantom card).
-    const all = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+  // Load questions and plans together. The previous implementation fetched the
+  // same endpoint up to four times per message: scoped + campaign-wide for each
+  // prompt type. A single campaign-wide read can preserve the same behavior by
+  // ranking actions from the visible thread first, then newest campaign-wide.
+  async getPendingPrompts(
+    campaignId: string,
+    threadId: string,
+  ): Promise<{ question: QuestionPrompt | null; plan: DecisionPrompt | null }> {
+    const response = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
       `/api/agent/sessions/${campaignId}/pending-actions`,
     ).catch(() => null);
-    return pick(all?.pendingActions);
-  }
+    const actions = (response?.pendingActions || [])
+      .filter((action) => action?.status !== 'completed' && action?.status !== 'rejected')
+      .sort((a, b) => {
+        const threadPriority = Number(b?.threadId === threadId) - Number(a?.threadId === threadId);
+        if (threadPriority !== 0) return threadPriority;
+        return String(b?.createdAt || '').localeCompare(String(a?.createdAt || ''));
+      });
 
-  // The open propose_plan pending action (if any) → a DecisionPrompt for the plan card.
-  // Mirrors getPendingQuestion: thread-scoped first, then campaign-wide. planId is the
-  // pending-action id that approval/reject hit.
-  async getPendingPlan(campaignId: string, threadId: string): Promise<DecisionPrompt | null> {
-    const pick = (actions: any[] | undefined): DecisionPrompt | null => {
-      const open = (actions || [])
-        .filter((a) => a?.toolName === 'propose_plan' && a?.status !== 'completed' && a?.status !== 'rejected')
-        .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
-      const action = open[0];
-      const input = action?.input;
-      if (!action || !input?.title) return null;
-      return {
-        id: action.id,
-        kind: 'approve',
-        planId: action.id,
-        title: String(input.title),
-        summary: typeof input.summary === 'string' ? input.summary : undefined,
-        description: typeof input.summary === 'string' ? input.summary : undefined,
-        planType: typeof input.planType === 'string' ? input.planType : undefined,
-        steps: Array.isArray(input.steps)
-          ? input.steps
-              .filter((s: any) => s && typeof s.title === 'string')
-              .map((s: any) => ({ title: String(s.title), detail: typeof s.detail === 'string' ? s.detail : undefined }))
-          : undefined,
-        strategyId: typeof input.strategyId === 'string' ? input.strategyId : undefined,
-        approveLabel: 'Approve',
-        reviseLabel: 'Revise',
-        followUpLabel: 'Follow-up',
-      };
-    };
-    const scoped = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
-      `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
-    ).catch(() => null);
-    const fromThread = pick(scoped?.pendingActions);
-    if (fromThread) return fromThread;
-    const all = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
-      `/api/agent/sessions/${campaignId}/pending-actions`,
-    ).catch(() => null);
-    return pick(all?.pendingActions);
+    const questionAction = actions.find((action) => action?.toolName === 'ask_seller_question');
+    const questions = questionAction?.input?.questions;
+    const question = questionAction && Array.isArray(questions) && questions.length > 0
+      ? { pendingActionId: questionAction.id, threadId: questionAction.threadId, questions }
+      : null;
+
+    const planAction = actions.find((action) => action?.toolName === 'propose_plan' && action?.input?.title);
+    const input = planAction?.input;
+    const plan: DecisionPrompt | null = planAction
+      ? {
+          id: planAction.id,
+          kind: 'approve',
+          planId: planAction.id,
+          title: String(input.title),
+          summary: typeof input.summary === 'string' ? input.summary : undefined,
+          description: typeof input.summary === 'string' ? input.summary : undefined,
+          planType: typeof input.planType === 'string' ? input.planType : undefined,
+          steps: Array.isArray(input.steps)
+            ? input.steps
+                .filter((step: any) => step && typeof step.title === 'string')
+                .map((step: any) => ({
+                  title: String(step.title),
+                  detail: typeof step.detail === 'string' ? step.detail : undefined,
+                }))
+            : undefined,
+          strategyId: typeof input.strategyId === 'string' ? input.strategyId : undefined,
+          approveLabel: 'Approve',
+          reviseLabel: 'Revise',
+          followUpLabel: 'Follow-up',
+        }
+      : null;
+
+    return { question, plan };
   }
 
   // Record a thumbs up/down on an assistant reply (null clears it). Fire-and-forget

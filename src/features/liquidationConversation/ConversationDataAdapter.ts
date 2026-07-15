@@ -33,8 +33,10 @@ export interface ConversationDataAdapter {
   renameThread(campaignId: string, threadId: string, title: string): Promise<CampaignThreadSummary>;
   deleteThread(campaignId: string, threadId: string): Promise<void>;
   submitDecision(campaignId: string, threadId: string, decision: DecisionSubmission): Promise<void>;
-  getPendingQuestion(campaignId: string, threadId: string): Promise<QuestionPrompt | null>;
-  getPendingPlan(campaignId: string, threadId: string): Promise<DecisionPrompt | null>;
+  getPendingPrompts(
+    campaignId: string,
+    threadId: string,
+  ): Promise<{ question: QuestionPrompt | null; plan: DecisionPrompt | null }>;
   answerQuestion(campaignId: string, pendingActionId: string, answer: { answers?: Record<string, string[]>; other?: string; text?: string }): Promise<void>;
   submitMessageFeedback(campaignId: string, messageId: string, vote: 'up' | 'down' | null, threadId?: string): Promise<void>;
   getCampaignConfig(campaignId: string): Promise<CampaignConfig>;

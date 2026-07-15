@@ -949,24 +949,16 @@ export const useLiquidationConversationController = ({
     await queueTextMessage(sentText, undefined, undefined, content);
   }, [composerText, queueTextMessage, setComposerValue]);
 
-  // Pull the open ask_seller_question (if any) for the active thread. Sprout sets
-  // one when it needs a choice; cleared once answered.
-  const refreshPendingQuestion = useCallback(async (campaignId: string, threadId: string) => {
+  // Pull both pending prompt types in one request. This runs only on thread/message
+  // events, not on an interval.
+  const refreshPendingPrompts = useCallback(async (campaignId: string, threadId: string) => {
     if (!campaignId || !threadId) return;
     try {
-      setPendingQuestion(await adapter.getPendingQuestion(campaignId, threadId));
+      const prompts = await adapter.getPendingPrompts(campaignId, threadId);
+      setPendingQuestion(prompts.question);
+      setPendingPlan(prompts.plan);
     } catch {
-      /* non-fatal — the card just won't show */
-    }
-  }, [adapter]);
-
-  // The open propose_plan proposal (if any) → the Accept/Revise plan card.
-  const refreshPendingPlan = useCallback(async (campaignId: string, threadId: string) => {
-    if (!campaignId || !threadId) return;
-    try {
-      setPendingPlan(await adapter.getPendingPlan(campaignId, threadId));
-    } catch {
-      /* non-fatal — the plan card just won't show */
+      /* non-fatal: the cards simply remain unchanged */
     }
   }, [adapter]);
 
@@ -980,9 +972,8 @@ export const useLiquidationConversationController = ({
   useEffect(() => {
     const cid = activeCampaignIdRef.current;
     if (!cid || !activeThreadId || isStreaming) return;
-    void refreshPendingQuestion(cid, activeThreadId);
-    void refreshPendingPlan(cid, activeThreadId);
-  }, [activeThreadId, isStreaming, lastMessageId, refreshPendingQuestion, refreshPendingPlan]);
+    void refreshPendingPrompts(cid, activeThreadId);
+  }, [activeThreadId, isStreaming, lastMessageId, refreshPendingPrompts]);
 
   // ── Sprout opens a brand-new clearout thread itself: greeting first, a product
   //    question if genuinely needed, and the opening plan draft — instead of a blank
