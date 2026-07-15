@@ -6,23 +6,22 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, withTiming } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StreamingMessageBubble } from './StreamingMessageBubble';
-import { SproutDisclaimer } from './SproutDisclaimer';
 import { TimestampRevealContext } from './timestampReveal';
 import ActivityTraySheet from './activity/ActivityTraySheet';
 import { useActivityTray } from './activity/useActivityTray';
-import type { ActivityPayload, ConversationMessage, DecisionPrompt, ValueChange } from '../types';
+import type { ActivityPayload, CampaignItem, ConversationMessage, DecisionPrompt, PlanPayload, ValueChange } from '../types';
+import { useMessageNarration } from '../useMessageNarration';
 
 type MessageWithTime = ConversationMessage & { time: string };
 
 type Props = {
   messages: MessageWithTime[];
+  planItems?: CampaignItem[];
   loading: boolean;
   onDecision: (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => void;
   onRetry: (clientMessageId: string) => void;
   onOpenCart?: (sessionId: string) => void;
   onCancelQueued?: (clientMessageId: string) => void;
-  /** Regenerate a finished assistant reply (re-ask its preceding user turn). */
-  onRegenerate?: (messageId: string) => void;
   /** Record a thumbs up/down on an assistant reply. */
   onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
   /** Jump from an activity card / tray to the product it touched. */
@@ -35,6 +34,10 @@ type Props = {
   onReviseDocument?: (documentId: string, title: string, note: string) => void;
   /** Approve / Revise / Follow-up a proposed plan from its tray. */
   onApprovePlan?: (planId: string, action: 'approve' | 'revise' | 'follow_up') => void;
+  /** Move an open plan into the composer so the seller can describe a revision. */
+  onEditPlan?: (plan: PlanPayload) => void;
+  /** Pending plan mutation; disables repeat approval taps until it settles. */
+  submittingDecisionId?: string | null;
   ListHeaderComponent?: React.ReactElement | null;
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
@@ -43,18 +46,20 @@ type Props = {
 
 export const ConversationList = ({
   messages,
+  planItems,
   loading,
   onDecision,
   onRetry,
   onOpenCart,
   onCancelQueued,
-  onRegenerate,
   onFeedback,
   onOpenItem,
   onUndo,
   onRoutineAction,
   onReviseDocument,
   onApprovePlan,
+  onEditPlan,
+  submittingDecisionId,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
@@ -65,14 +70,35 @@ export const ConversationList = ({
   const listRef = useRef<any>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canJump = useMemo(() => messages.length > 2, [messages.length]);
+  const { toggleNarration, playingMessageId, loadedMessageId, loadingMessageId } = useMessageNarration();
+  const latestAssistantId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === 'assistant' && message.deliveryState !== 'streaming' && message.deliveryState !== 'failed') {
+        return message.id;
+      }
+    }
+    return null;
+  }, [messages]);
+  const nearBottomRef = useRef(true);
+  const userDraggingRef = useRef(false);
+  const scrollFrameRef = useRef<number | null>(null);
+  const prevLenRef = useRef(0);
+  const prevBottomRef = useRef(contentBottomInset ?? 0);
+  const prevTailRef = useRef(0);
 
-  // FlashList can need a couple frames after content lands before scrollToEnd settles
-  // on the true bottom; nudge it across a few frames so the chat always OPENS at the
-  // latest message instead of the top.
+  // Coalesce all automatic pins into one frame. The old implementation forced three
+  // scrolls per update, which visibly fought a seller dragging through history.
   const scrollToBottom = useCallback((animated: boolean) => {
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
-    setTimeout(() => listRef.current?.scrollToEnd({ animated }), 120);
-    setTimeout(() => listRef.current?.scrollToEnd({ animated }), 320);
+    if (scrollFrameRef.current != null) return;
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current != null) cancelAnimationFrame(scrollFrameRef.current);
   }, []);
 
   // Land at the bottom on first open AND whenever the thread switches (the list stays
@@ -87,11 +113,13 @@ export const ConversationList = ({
       didInitialScrollRef.current = false;
     }
   }, [threadKey]);
-  useEffect(() => {
+
+  const finishInitialScroll = useCallback(() => {
     if (didInitialScrollRef.current) return;
     if (loading || !messages.length) return;
     didInitialScrollRef.current = true;
     prevLenRef.current = messages.length;
+    nearBottomRef.current = true;
     setShowJumpToLatest(false);
     scrollToBottom(false);
   }, [loading, messages.length, scrollToBottom]);
@@ -119,9 +147,6 @@ export const ConversationList = ({
   // Also re-pin when the bottom inset grows (the keyboard opening pushes the feed up
   // via contentBottomInset) so the latest message stays visible above the lifted
   // composer — unless the seller has scrolled up to read history (showJumpToLatest).
-  const prevLenRef = useRef(0);
-  const prevBottomRef = useRef(contentBottomInset ?? 0);
-  const prevTailRef = useRef(0);
   // A signal that grows as the LAST bubble streams in (text tokens, reasoning, tool steps)
   // even though messages.length stays the same — without this we never re-pin during a
   // response and its bottom scrolls out of view as it grows past the viewport.
@@ -134,7 +159,7 @@ export const ConversationList = ({
     return (last.content?.length ?? 0) + reasoningLen + steps * 40;
   })();
   useEffect(() => {
-    if (showJumpToLatest) {
+    if (!nearBottomRef.current || userDraggingRef.current) {
       prevLenRef.current = messages.length;
       prevBottomRef.current = contentBottomInset ?? 0;
       prevTailRef.current = tailGrowth;
@@ -148,9 +173,9 @@ export const ConversationList = ({
     prevTailRef.current = tailGrowth;
     if (grew || insetGrew || tailGrew) {
       // New message → gentle animated scroll; streaming growth → instant pin (no jank).
-      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: grew }));
+      scrollToBottom(grew);
     }
-  }, [messages, showJumpToLatest, contentBottomInset, tailGrowth]);
+  }, [messages, contentBottomInset, tailGrowth, scrollToBottom]);
 
   if (loading) {
     return (
@@ -168,19 +193,15 @@ export const ConversationList = ({
       <FlashList
         ref={listRef}
         data={messages}
-        keyExtractor={item => item.clientMessageId || item.serverMessageId || item.id}
+        keyExtractor={item => item.id}
         contentContainerStyle={{
           paddingHorizontal: 12,
           paddingTop: contentTopInset ?? 10,
           paddingBottom: contentBottomInset ?? 18,
         }}
         ListHeaderComponent={ListHeaderComponent}
-        ListFooterComponent={messages.length ? <SproutDisclaimer /> : null}
-        onLoad={() => {
-          // FlashList finished its first real layout — make sure we're pinned to the
-          // newest message (this fires after content is measured, so scrollToEnd lands).
-          if (messages.length && !showJumpToLatest) scrollToBottom(false);
-        }}
+        onLoad={finishInitialScroll}
+        onContentSizeChange={finishInitialScroll}
         renderItem={({ item }) => (
           <StreamingMessageBubble
             message={item}
@@ -190,8 +211,19 @@ export const ConversationList = ({
             onCancelQueued={onCancelQueued}
             onOpenTray={openTray}
             onOpenItem={onOpenItem}
-            onRegenerate={onRegenerate}
             onFeedback={onFeedback}
+            planItems={planItems}
+            showDisclaimer={item.id === latestAssistantId}
+            narrationState={
+              loadingMessageId === item.id
+                ? 'loading'
+                : playingMessageId === item.id
+                  ? 'playing'
+                  : loadedMessageId === item.id
+                    ? 'paused'
+                    : 'idle'
+            }
+            onToggleNarration={(messageId, text) => toggleNarration({ messageId, text })}
           />
         )}
         ListEmptyComponent={(
@@ -206,8 +238,13 @@ export const ConversationList = ({
           const offsetY = nativeEvent.contentOffset.y;
           const contentHeight = nativeEvent.contentSize.height;
           const nearBottom = contentHeight - (layoutHeight + offsetY) < 120;
-          setShowJumpToLatest(!nearBottom);
+          nearBottomRef.current = nearBottom;
+          setShowJumpToLatest((current) => current === !nearBottom ? current : !nearBottom);
         }}
+        onScrollBeginDrag={() => { userDraggingRef.current = true; }}
+        onScrollEndDrag={() => { userDraggingRef.current = false; }}
+        onMomentumScrollEnd={() => { userDraggingRef.current = false; }}
+        scrollEventThrottle={32}
       />
       </GestureDetector>
       </TimestampRevealContext.Provider>
@@ -215,7 +252,11 @@ export const ConversationList = ({
       {showJumpToLatest && canJump ? (
         <TouchableOpacity
           style={styles.jumpButton}
-          onPress={() => { setShowJumpToLatest(false); scrollToBottom(true); }}
+          onPress={() => {
+            nearBottomRef.current = true;
+            setShowJumpToLatest(false);
+            scrollToBottom(true);
+          }}
           activeOpacity={0.85}
           accessibilityLabel="Jump to latest"
         >
@@ -226,11 +267,14 @@ export const ConversationList = ({
       {/* The single review tray for the whole feed — opened by any activity card. */}
       <ActivityTraySheet
         {...trayProps}
+        planItems={planItems}
         onOpenItem={onOpenItem}
         onUndo={onUndo}
         onRoutineAction={onRoutineAction}
         onReviseDocument={onReviseDocument}
         onApprovePlan={onApprovePlan}
+        onEditPlan={onEditPlan}
+        submittingPlanId={submittingDecisionId}
       />
     </View>
   );

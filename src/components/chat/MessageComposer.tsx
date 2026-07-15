@@ -4,7 +4,7 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { AudioModule, RecordingPresets, useAudioRecorder } from 'expo-audio';
-import { Plus, ArrowRight, Mic, X, Check, Clock } from 'lucide-react-native';
+import { Plus, ArrowRight, Mic, X, Check, Clock, Pencil } from 'lucide-react-native';
 import { API_BASE_URL } from '../../config/env';
 import { persistPendingVoice, getPendingVoice, clearPendingVoice, fileExists } from '../../features/liquidationConversation/pendingVoice';
 
@@ -27,6 +27,11 @@ type Props = {
   maxImages?: number;
   /** Focus the input on mount (e.g. when revealed from a collapsed button). */
   autoFocus?: boolean;
+  /** Compact non-file context carried with the next message. */
+  contextAttachment?: { label: string } | null;
+  onRemoveContextAttachment?: () => void;
+  /** Increment to focus an already-mounted composer. */
+  focusRequestKey?: number;
 };
 
 const BRAND = '#93C822';
@@ -60,6 +65,9 @@ export const MessageComposer = ({
   transcriptionPath = '/api/audio/transcribe',
   maxImages = 8,
   autoFocus = false,
+  contextAttachment,
+  onRemoveContextAttachment,
+  focusRequestKey = 0,
 }: Props) => {
   // Metering on, so the waveform reacts to the seller's actual voice level (Claude-style)
   // instead of a canned pulse.
@@ -86,6 +94,7 @@ export const MessageComposer = ({
   onChangeRef.current = onChangeText;
   const resumedRef = useRef(false);
   const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
+  const inputRef = useRef<TextInput>(null);
 
   const hasText = value.trim().length > 0;
   const canSend = hasText || imageUris.length > 0;
@@ -97,6 +106,12 @@ export const MessageComposer = ({
     if (timerRef.current) clearInterval(timerRef.current);
     if (meterRef.current) clearInterval(meterRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!focusRequestKey) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequestKey]);
 
   // Clear a transient voice error a few seconds after it shows.
   useEffect(() => {
@@ -264,7 +279,7 @@ export const MessageComposer = ({
       setVoiceError('Microphone access is off. Turn it on in Settings to record.');
       setVoiceErrorSettings(true);
     } else {
-      setVoiceError('Couldn’t start recording — please try again.');
+      setVoiceError('Couldn’t start recording. Please try again.');
     }
   }, [beginCapture, recording, transcribing]);
 
@@ -295,7 +310,7 @@ export const MessageComposer = ({
       }
       const token = getAuthToken ? await getAuthToken() : null;
       if (!token) {
-        setVoiceError('Sign-in expired — couldn’t transcribe. Try again.');
+        setVoiceError('Sign-in expired. Couldn’t transcribe. Try again.');
         return; // keep pending; retry once auth is available
       }
       const form = new FormData();
@@ -306,7 +321,7 @@ export const MessageComposer = ({
         body: form,
       });
       if (!resp.ok) {
-        setVoiceError('Couldn’t transcribe that — please try again.');
+        setVoiceError('Couldn’t transcribe that. Please try again.');
         return; // keep pending for retry
       }
       const json = await resp.json();
@@ -316,11 +331,11 @@ export const MessageComposer = ({
         onChangeRef.current(prev ? `${prev} ${text}` : text);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       } else {
-        setVoiceError('Didn’t catch that — try recording again.');
+        setVoiceError('Didn’t catch that. Try recording again.');
       }
       await clearPendingVoice(uri); // transcribed (or empty) → safe to delete
     } catch {
-      setVoiceError('Couldn’t transcribe that — please try again.');
+      setVoiceError('Couldn’t transcribe that. Please try again.');
     } finally {
       setTranscribing(false);
     }
@@ -341,7 +356,7 @@ export const MessageComposer = ({
     const src = recorder.uri;
     if (!src) {
       setTranscribing(false);
-      setVoiceError('Nothing was recorded — try again.');
+      setVoiceError('Nothing was recorded. Try again.');
       return;
     }
     const pending = await persistPendingVoice(src);
@@ -418,6 +433,24 @@ export const MessageComposer = ({
           </TouchableOpacity>
 
           <View style={styles.card}>
+            {contextAttachment ? (
+              <View style={styles.contextRow}>
+                <View style={styles.contextChip}>
+                  <Pencil size={13} color="#5D7E16" />
+                  <Text style={styles.contextText}>{contextAttachment.label}</Text>
+                  {onRemoveContextAttachment ? (
+                    <TouchableOpacity
+                      style={styles.contextRemove}
+                      onPress={onRemoveContextAttachment}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove ${contextAttachment.label}`}
+                    >
+                      <X size={13} color="#5D7E16" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
             {imageUris.length ? (
               <View style={styles.previewRow}>
                 {imageUris.map((uri, i) => (
@@ -435,6 +468,7 @@ export const MessageComposer = ({
             ) : null}
             <View style={styles.inputRow}>
               <TextInput
+                ref={inputRef}
                 style={styles.input}
                 placeholder={placeholder}
                 placeholderTextColor="#9CA3AF"
@@ -556,6 +590,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  contextRow: { flexDirection: 'row', paddingTop: 2, paddingBottom: 6 },
+  contextChip: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingLeft: 10,
+    paddingRight: 4,
+    borderRadius: 16,
+    backgroundColor: 'rgba(147,200,34,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(147,200,34,0.28)',
+  },
+  contextText: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 12.5 },
+  contextRemove: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   input: {
     flex: 1,

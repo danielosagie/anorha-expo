@@ -4,7 +4,6 @@ import {
     Text,
     StyleSheet,
     Dimensions,
-    TouchableOpacity,
     Platform,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -12,13 +11,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
-    withSpring,
     withTiming,
     runOnJS,
+    Easing,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 const { width } = Dimensions.get('window');
 
@@ -38,20 +36,22 @@ interface SystemToastProps {
 
 const SystemToast: React.FC<SystemToastProps> = ({ visible, options, onClose }) => {
     const insets = useSafeAreaInsets();
-    const translateY = useSharedValue(-100);
+    const translateY = useSharedValue(-8);
     const opacity = useSharedValue(0);
 
     const hide = useCallback(() => {
-        translateY.value = withTiming(-100, { duration: 300 }, () => {
+        translateY.value = withTiming(-5, { duration: 140, easing: Easing.in(Easing.cubic) }, () => {
             runOnJS(onClose)();
         });
-        opacity.value = withTiming(0, { duration: 300 });
-    }, [onClose]);
+        opacity.value = withTiming(0, { duration: 140 });
+    }, [onClose, opacity, translateY]);
 
     useEffect(() => {
         if (visible) {
-            translateY.value = withSpring(insets.top + 10, { damping: 12, stiffness: 100 });
-            opacity.value = withTiming(1, { duration: 200 });
+            translateY.value = -8;
+            opacity.value = 0;
+            translateY.value = withTiming(0, { duration: 180, easing: Easing.out(Easing.cubic) });
+            opacity.value = withTiming(1, { duration: 150 });
 
             Haptics.selectionAsync();
 
@@ -61,7 +61,7 @@ const SystemToast: React.FC<SystemToastProps> = ({ visible, options, onClose }) 
 
             return () => clearTimeout(timer);
         }
-    }, [visible, insets.top, options.duration, hide]);
+    }, [visible, insets.top, options.duration, hide, opacity, translateY]);
 
     const animatedStyle = useAnimatedStyle(() => ({
         transform: [{ translateY: translateY.value }],
@@ -71,44 +71,28 @@ const SystemToast: React.FC<SystemToastProps> = ({ visible, options, onClose }) 
     const panGesture = Gesture.Pan()
         .onUpdate((event) => {
             if (event.translationY < 0) {
-                translateY.value = insets.top + 10 + event.translationY;
+                translateY.value = event.translationY;
             }
         })
         .onEnd((event) => {
             if (event.translationY < -20) {
                 runOnJS(hide)();
             } else {
-                translateY.value = withSpring(insets.top + 10);
+                translateY.value = withTiming(0, { duration: 150, easing: Easing.out(Easing.cubic) });
             }
         });
 
     if (!visible) return null;
 
-    const getIconInfo = () => {
-        if (options.icon) return { name: options.icon, color: '#FFFFFF' };
-        switch (options.type) {
-            case 'success': return { name: 'check-circle', color: '#34C759' };
-            case 'error': return { name: 'alert-circle', color: '#FF3B30' };
-            case 'warning': return { name: 'alert', color: '#FF9500' };
-            case 'info': return { name: 'information', color: '#007AFF' };
-            default: return { name: 'bell', color: '#FFFFFF' };
-        }
-    };
-
-    const iconInfo = getIconInfo();
-
     return (
         <GestureDetector gesture={panGesture}>
-            <Animated.View style={[styles.container, animatedStyle, { top: 0 }]}>
-                <BlurView intensity={80} tint="dark" style={styles.blurContainer}>
+            <Animated.View style={[styles.container, animatedStyle, { top: insets.top + 8 }]}>
+                <BlurView intensity={72} tint="light" style={styles.blurContainer}>
                     <View style={styles.content}>
-                        <View style={styles.iconWrapper}>
-                            <Icon name={iconInfo.name} size={24} color={iconInfo.color} />
-                        </View>
                         <View style={styles.textContainer}>
-                            <Text style={styles.title} numberOfLines={1}>{options.title}</Text>
+                            <Text style={styles.title} numberOfLines={2}>{options.title}</Text>
                             {options.message && (
-                                <Text style={styles.message} numberOfLines={1}>{options.message}</Text>
+                                <Text style={styles.message} numberOfLines={2}>{options.message}</Text>
                             )}
                         </View>
                     </View>
@@ -121,15 +105,16 @@ const SystemToast: React.FC<SystemToastProps> = ({ visible, options, onClose }) 
 const styles = StyleSheet.create({
     container: {
         position: 'absolute',
-        width: width - 32,
+        minWidth: 176,
+        maxWidth: Math.min(width - 48, 340),
         alignSelf: 'center',
         zIndex: 9999,
         ...Platform.select({
             ios: {
                 shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 3 },
+                shadowOpacity: 0.1,
+                shadowRadius: 12,
             },
             android: {
                 elevation: 10,
@@ -137,31 +122,34 @@ const styles = StyleSheet.create({
         }),
     },
     blurContainer: {
-        borderRadius: 20,
+        borderRadius: 22,
         overflow: 'hidden',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(228,228,231,0.9)',
     },
     content: {
-        flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        backgroundColor: Platform.OS === 'ios' ? 'transparent' : 'rgba(40, 40, 40, 0.95)',
-    },
-    iconWrapper: {
-        marginRight: 12,
+        justifyContent: 'center',
+        paddingVertical: 10,
+        paddingHorizontal: 18,
+        backgroundColor: Platform.OS === 'ios' ? 'rgba(255,255,255,0.68)' : 'rgba(250,250,248,0.97)',
     },
     textContainer: {
-        flex: 1,
+        alignItems: 'center',
     },
     title: {
         fontSize: 15,
-        fontWeight: '600',
-        color: '#FFFFFF',
+        fontFamily: 'Inter_700Bold',
+        color: '#18181B',
+        textAlign: 'center',
     },
     message: {
-        fontSize: 13,
-        color: 'rgba(255, 255, 255, 0.8)',
+        fontSize: 12,
+        lineHeight: 16,
+        fontFamily: 'Inter_500Medium',
+        color: '#71717A',
         marginTop: 1,
+        textAlign: 'center',
     },
 });
 

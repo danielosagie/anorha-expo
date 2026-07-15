@@ -60,6 +60,7 @@ export const useLiquidationConversationController = ({
   const [pendingQuestion, setPendingQuestion] = useState<QuestionPrompt | null>(null);
   const [pendingPlan, setPendingPlan] = useState<DecisionPrompt | null>(null);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
+  const [submittingDecisionId, setSubmittingDecisionId] = useState<string | null>(null);
   const [campaignOverview, setCampaignOverview] = useState<CampaignOverview | null>(null);
   const [campaignConfig, setCampaignConfig] = useState<CampaignConfig | null>(null);
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(initialCampaignId || null);
@@ -80,6 +81,8 @@ export const useLiquidationConversationController = ({
   const surfaceStateRef = useRef<ConversationSurfaceState>(surfaceState);
   const threadStatesRef = useRef<ThreadStateMap>(threadStates);
   const processingByThreadRef = useRef<Record<string, boolean>>({});
+  const decisionsInFlightRef = useRef<Set<string>>(new Set());
+  const resolvedDecisionIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     surfaceStateRef.current = surfaceState;
@@ -675,7 +678,12 @@ export const useLiquidationConversationController = ({
     void processQueue(threadId);
   }, [processQueue, setThreadStateFor]);
 
-  const queueTextMessage = useCallback(async (content: string, imageUrls?: string[], pendingImageUris?: string[]) => {
+  const queueTextMessage = useCallback(async (
+    content: string,
+    imageUrls?: string[],
+    pendingImageUris?: string[],
+    displayContent?: string,
+  ) => {
     const campaignId = activeCampaignIdRef.current;
     if (!campaignId) {
       throw new Error('Select a campaign first');
@@ -686,17 +694,20 @@ export const useLiquidationConversationController = ({
     const clientMessageId = createClientId('msg');
     const pending = (pendingImageUris || []).filter(Boolean).slice(0, 8);
     const hasPending = pending.length > 0;
-    const message = createTextMessage({
+    const baseMessage = createTextMessage({
       campaignId,
       threadId,
       clientMessageId,
       role: 'user',
-      content,
+      content: displayContent || content,
       deliveryState: hasPending ? 'sending' : (isStreaming ? 'queued' : 'sending'),
       // Photos ride the bubble instantly from their local uris; uploadAndSendPhotos swaps
       // in the public urls once uploaded, so the seller never watches an "uploading" box.
       imageUrls: hasPending ? pending : imageUrls,
     });
+    const message = displayContent && displayContent !== content
+      ? { ...baseMessage, metadata: { ...(baseMessage.metadata || {}), agentContent: content } }
+      : baseMessage;
 
     const clearDraft = async () => {
       if (fromHome) {
@@ -782,7 +793,8 @@ export const useLiquidationConversationController = ({
         current => updateMessage(current, clientMessageId, m => ({ ...m, deliveryState: 'sending', metadata: { ...(m.metadata || {}), errorMessage: undefined } })),
         { immediate: true },
       );
-      await uploadAndSendPhotos(campaignId, threadId, clientMessageId, failed?.content || '', pending);
+      const agentContent = (failed?.metadata as any)?.agentContent as string | undefined;
+      await uploadAndSendPhotos(campaignId, threadId, clientMessageId, agentContent || failed?.content || '', pending);
       return;
     }
 
@@ -919,7 +931,7 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter, loadCampaigns]);
 
-  const sendComposer = useCallback(async (photos?: string[]) => {
+  const sendComposer = useCallback(async (photos?: string[], contextPrefix?: string) => {
     const content = composerText.trim();
     if (photos && photos.length) {
       // The photos are already sitting in the composer as thumbnails — send the message
@@ -928,11 +940,13 @@ export const useLiquidationConversationController = ({
       setComposerValue('');
       const count = Math.min(photos.length, 8);
       const displayText = content || `added ${count} photo${count === 1 ? '' : 's'}`;
-      await queueTextMessage(displayText, undefined, photos);
+      const sentText = contextPrefix ? `${contextPrefix}\n\n${displayText}` : displayText;
+      await queueTextMessage(sentText, undefined, photos, displayText);
       return;
     }
     if (!content) return;
-    await queueTextMessage(content);
+    const sentText = contextPrefix ? `${contextPrefix}\n\n${content}` : content;
+    await queueTextMessage(sentText, undefined, undefined, content);
   }, [composerText, queueTextMessage, setComposerValue]);
 
   // Pull the open ask_seller_question (if any) for the active thread. Sprout sets
@@ -1024,7 +1038,7 @@ export const useLiquidationConversationController = ({
       setPendingQuestion(null);
       // Resume Sprout by sending the chosen option(s) as a normal user message.
       const picked = Object.values(answers).flat();
-      const text = [picked.join(', '), other?.trim()].filter(Boolean).join(' — ');
+      const text = [picked.join(', '), other?.trim()].filter(Boolean).join('. ');
       if (text) await queueTextMessage(text);
     } catch (e: any) {
       setError(e?.message || 'Failed to send your answer');
@@ -1037,34 +1051,68 @@ export const useLiquidationConversationController = ({
     const campaignId = activeCampaignIdRef.current;
     const threadId = activeThreadIdRef.current;
     if (!campaignId || !threadId) return;
-    // Local photo-ingest decision card → send a follow-up instruction to Sprout.
-    if (prompt.id.startsWith('photo-')) {
-      const instr =
-        action === 'approve'
-          ? 'Research current resale pricing for the items I just added from photos and suggest a start and floor price for each.'
-          : action === 'revise'
-            ? 'List the items I just added from photos aggressively to move them fast — set competitive prices and a tight deadline.'
-            : 'Hold the items I just added from photos in this clearout for now; I will decide later.';
-      await queueTextMessage(instr);
+    const decisionId = prompt.planId || prompt.strategyId || prompt.id;
+    if (decisionsInFlightRef.current.has(decisionId)) return;
+    if (resolvedDecisionIdsRef.current.has(decisionId)) {
+      setNotice('This plan has already been handled.');
       return;
     }
+
+    decisionsInFlightRef.current.add(decisionId);
+    setSubmittingDecisionId(decisionId);
+    setError(null);
     try {
+      // Local photo-ingest decision card → send a follow-up instruction to Sprout.
+      if (prompt.id.startsWith('photo-')) {
+        const instr =
+          action === 'approve'
+            ? 'Research current resale pricing for the items I just added from photos and suggest a start and floor price for each.'
+            : action === 'revise'
+              ? 'List the items I just added from photos aggressively to move them fast. Set competitive prices and a tight deadline.'
+              : 'Hold the items I just added from photos in this clearout for now; I will decide later.';
+        await queueTextMessage(instr);
+        resolvedDecisionIdsRef.current.add(decisionId);
+        return;
+      }
+
       await adapter.submitDecision(campaignId, threadId, {
         decisionId: prompt.id,
         action,
         strategyId: prompt.strategyId,
         planId: prompt.planId,
       });
+      // The mutation succeeded. Mark it resolved before any follow-up refresh so a
+      // dropped connection cannot make a second tap execute the same plan again.
+      resolvedDecisionIdsRef.current.add(decisionId);
       // A plan decision resolves the card right away (approve runs it; revise/follow_up drop it).
       if (prompt.planId) setPendingPlan(null);
-      const remoteMessages = await adapter.getMessages(campaignId, threadId);
-      setThreadStateFor(threadId, current => ({
-        ...current,
-        messages: remoteMessages,
-      }), { immediate: true });
-      await loadCampaignDetails(campaignId);
+      setNotice(
+        action === 'approve'
+          ? 'Plan approved. Sprout is applying it.'
+          : action === 'revise'
+            ? 'Revision requested.'
+            : 'Follow-up sent.',
+      );
+
+      // Refreshing the history/summary is secondary to the mutation. If the network
+      // drops here, do not report the already-applied plan as failed or unlock it.
+      const remoteMessages = await adapter.getMessages(campaignId, threadId).catch(() => null);
+      if (remoteMessages) {
+        setThreadStateFor(threadId, current => ({
+          ...current,
+          messages: remoteMessages,
+        }), { immediate: true });
+      }
+      await loadCampaignDetails(campaignId).catch(() => undefined);
     } catch (decisionError: any) {
-      setError(decisionError?.message || 'Failed to submit decision');
+      setError(
+        action === 'approve'
+          ? decisionError?.message || 'The plan was not applied. Please try again.'
+          : decisionError?.message || 'Failed to submit decision',
+      );
+    } finally {
+      decisionsInFlightRef.current.delete(decisionId);
+      setSubmittingDecisionId(current => current === decisionId ? null : current);
     }
   }, [adapter, loadCampaignDetails, setThreadStateFor, queueTextMessage]);
 
@@ -1189,6 +1237,7 @@ export const useLiquidationConversationController = ({
     pendingQuestion,
     pendingPlan,
     answeringQuestion,
+    submittingDecisionId,
     submitAnswer,
     ingestLiveMessages,
   };

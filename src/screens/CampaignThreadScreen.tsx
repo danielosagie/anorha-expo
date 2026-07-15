@@ -18,7 +18,7 @@ import Animated, { interpolate, runOnJS, useAnimatedKeyboard, useAnimatedStyle, 
 import { LinearGradient } from 'expo-linear-gradient';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
-import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { setActiveThread } from '../lib/activeThread';
 import { useAuth } from '@clerk/expo';
 import { ChevronLeft, Menu, MessageCircle, Package, Search, Settings, AlertCircle, CheckCircle2, X, Plus } from 'lucide-react-native';
@@ -30,7 +30,10 @@ import { ConvexLiveMessages } from '../features/liquidationConversation/ConvexLi
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import QuestionCard from '../features/liquidationConversation/components/QuestionCard';
 import PlanCard from '../features/liquidationConversation/components/PlanCard';
-import type { CampaignThreadSummary } from '../features/liquidationConversation/types';
+import type { CampaignItem, CampaignThreadSummary, PlanPayload } from '../features/liquidationConversation/types';
+import { useLegendState } from '../context/LegendStateContext';
+import { loadInventoryCatalog } from '../lib/inventoryCatalog';
+import { NarrationPlayerHost } from '../context/NarrationContext';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -129,7 +132,7 @@ const DrawerContent = React.memo(({
       <ScrollView contentContainerStyle={{ paddingBottom: bottomInset + 92 }} showsVerticalScrollIndicator={false}>
         {visibleThreads.length === 0 ? (
           <Text style={s.drawerEmpty}>
-            {threadSearch.trim() ? 'No threads match your search.' : 'No threads yet — start one below.'}
+            {threadSearch.trim() ? 'No threads match your search.' : 'No threads yet. Start one below.'}
           </Text>
         ) : (
           visibleThreads.map(t => {
@@ -168,7 +171,9 @@ DrawerContent.displayName = 'DrawerContent';
 const CampaignThreadScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
+  const isFocused = useIsFocused();
   const { getToken } = useAuth();
+  const legendState: any = useLegendState();
   const campaignId = route.params?.campaignId as string;
   const passedTitle = route.params?.title as string;
 
@@ -184,6 +189,56 @@ const CampaignThreadScreen = () => {
 
   const controller = useLiquidationConversationController({ adapter, initialCampaignId: campaignId });
   const controllerRef = useRef(controller);
+  const [campaignItems, setCampaignItems] = useState<CampaignItem[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<CampaignItem[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    if (!campaignId) {
+      setCampaignItems([]);
+      return () => { active = false; };
+    }
+    adapter.getCampaignItems(campaignId)
+      .then((items) => {
+        if (active) setCampaignItems(items);
+      })
+      .catch(() => {
+        if (active) setCampaignItems([]);
+      });
+    return () => { active = false; };
+  }, [adapter, campaignId]);
+
+  useEffect(() => {
+    const userId = legendState?.userId;
+    if (!userId) return;
+    let active = true;
+    loadInventoryCatalog(userId).then((catalog) => {
+      if (!active) return;
+      const mapped: CampaignItem[] = catalog.map((item) => ({
+        id: item.id,
+        productId: item.id,
+        name: item.title,
+        channels: '',
+        currentPrice: item.price,
+        status: 'listed',
+        imageUrl: item.imageUrl,
+      }));
+      setInventoryItems(mapped);
+    }).catch(() => {
+      if (active) setInventoryItems([]);
+    });
+    return () => { active = false; };
+  }, [legendState?.userId]);
+
+  const planItems = useMemo(() => {
+    const catalogById = new Map(inventoryItems.map(item => [item.productId, item]));
+    const mergedCampaignItems = campaignItems.map((item) => {
+      const catalogItem = catalogById.get(item.productId);
+      return catalogItem ? { ...catalogItem, ...item, imageUrl: item.imageUrl || catalogItem.imageUrl } : item;
+    });
+    const campaignIds = new Set(mergedCampaignItems.map(item => item.productId));
+    return [...mergedCampaignItems, ...inventoryItems.filter(item => !campaignIds.has(item.productId))];
+  }, [campaignItems, inventoryItems]);
 
   // Mark this thread foregrounded so a reply push for THIS campaign is suppressed
   // in-app (the seller is already watching it); cleared on blur so it pings elsewhere.
@@ -209,6 +264,8 @@ const CampaignThreadScreen = () => {
   }, [initialPrompt, controller.isLoadingMessages, controller.activeThreadId]);
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<PlanPayload | null>(null);
+  const [composerFocusKey, setComposerFocusKey] = useState(0);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
   const [footerH, setFooterH] = useState(150);
@@ -433,10 +490,10 @@ const CampaignThreadScreen = () => {
       {/* ── Feed scrolls full-bleed under both floating glass bars ── */}
       <ConversationList
         messages={controller.activeMessages}
+        planItems={planItems}
         loading={controller.isLoadingMessages}
         onDecision={controller.submitDecision}
         onRetry={controller.retryMessage}
-        onRegenerate={controller.regenerateMessage}
         onFeedback={controller.submitMessageFeedback}
         onCancelQueued={controller.cancelQueuedMessage}
         onOpenCart={(sessionId: string) => {
@@ -472,6 +529,12 @@ const CampaignThreadScreen = () => {
         onApprovePlan={(planId, action) =>
           controller.submitDecision({ id: planId, kind: 'approve', title: 'Plan', planId }, action)
         }
+        onEditPlan={(plan) => {
+          setEditingPlan(plan);
+          setComposerFocusKey(key => key + 1);
+          controller.setNotice(null);
+        }}
+        submittingDecisionId={controller.submittingDecisionId}
         contentTopInset={headerH + 8}
         contentBottomInset={footerH + 8 + feedKeyboardInset}
       />
@@ -500,6 +563,7 @@ const CampaignThreadScreen = () => {
             <PlanCard
               prompt={controller.pendingPlan}
               onDecision={controller.submitDecision}
+              submitting={!!controller.submittingDecisionId}
             />
           </View>
         )}
@@ -567,10 +631,19 @@ const CampaignThreadScreen = () => {
             value={controller.composerText}
             placeholder={composerPlaceholder}
             onChangeText={controller.setComposerText}
-            onSend={(photos) => controller.sendComposer(photos)}
+            onSend={(photos) => {
+              const contextPrefix = editingPlan
+                ? `Revise the pending plan "${editingPlan.title}"${editingPlan.pendingActionId ? ` (${editingPlan.pendingActionId})` : ''} based on this request:`
+                : undefined;
+              void controller.sendComposer(photos, contextPrefix);
+              setEditingPlan(null);
+            }}
             queuedCount={controller.queuedCount}
             isStreaming={controller.isStreaming}
             getAuthToken={ensureSupabaseJwt}
+            contextAttachment={editingPlan ? { label: 'Revising plan' } : null}
+            onRemoveContextAttachment={() => setEditingPlan(null)}
+            focusRequestKey={composerFocusKey}
           />
         </View>
         </View>
@@ -676,6 +749,8 @@ const CampaignThreadScreen = () => {
           bottomInset={insets.bottom}
         />
       </Animated.View>
+
+      {isFocused ? <NarrationPlayerHost /> : null}
     </View>
   );
 };
@@ -689,8 +764,13 @@ const s = StyleSheet.create({
   // Dim scrim shown behind a pending question/plan card.
   cardScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,17,17,0.28)' },
 
-  // Floating glass header — white at the top, fading to transparent, content scrolls under
-  header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
+  // Keep the navigation legible while history scrolls beneath it. The prior transparent
+  // fade left table cells and message text visibly colliding with the title controls.
+  header: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    paddingHorizontal: 14, paddingBottom: 10,
+    backgroundColor: 'transparent',
+  },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   navCircle: {

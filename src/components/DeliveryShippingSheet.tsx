@@ -663,7 +663,7 @@ export default function DeliveryShippingSheet({
 
                         {/* ── Done ──────────────────────────────────────────── */}
                         <TouchableOpacity style={[s.doneBtn, { marginTop: 18 }]} onPress={() => { handleRecalculate(); onClose(); }}>
-                            <Text style={s.doneText}>Looks good — done</Text>
+                            <Text style={s.doneText}>Done</Text>
                         </TouchableOpacity>
                     </ScrollView>
                 </Pressable>

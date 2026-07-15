@@ -17,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth, useUser } from '@clerk/expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Notifications from 'expo-notifications';
 import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -27,7 +28,7 @@ import { StreamingText } from '../components/StreamingText';
 import { UpNextRow, type IconName } from '../components/quest/LobbyKit';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
-import type { CampaignSummary } from '../features/liquidationConversation/types';
+import type { CampaignSummary, ReportDocument } from '../features/liquidationConversation/types';
 import { NewClearoutSheet, NewClearoutInput } from '../components/liquidation/NewClearoutSheet';
 import { DateRangeSheet, DateRange, todayRange } from '../components/liquidation/DateRangeSheet';
 import { useOrg } from '../context/OrgContext';
@@ -39,6 +40,7 @@ import ActivityTraySheet from '../features/liquidationConversation/components/ac
 import { useActivityTray } from '../features/liquidationConversation/components/activity/useActivityTray';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import { compactDisplayText, sanitizeDisplayText } from '../features/liquidationConversation/displayText';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -128,56 +130,6 @@ const NIGHT_THEME: Palette = {
   blur: 'dark',
 };
 
-// Connector/structure words rendered dim, so the facts pop (iMessage-summary look)
-const DIM_TOKENS = new Set([
-  'on','the','for','a','an','to','of','in','at','and','&','that','came','is','with','your',
-  'from','by','were','was','are','then','as','its','it',
-]);
-
-type Seg = { text: string; strong: boolean };
-
-const briefingToSegments = (rows: BriefingRowData[]): Seg[] => {
-  const out: Seg[] = [];
-  rows.forEach((row, i) => {
-    if (i > 0) out.push({ text: i === rows.length - 1 ? ', and ' : ', ', strong: false });
-    row.label.split(/(\s+)/).forEach(tok => {
-      if (/^\s*$/.test(tok)) { out.push({ text: tok, strong: false }); return; }
-      const clean = tok.replace(/[^A-Za-z&']/g, '').toLowerCase();
-      out.push({ text: tok, strong: !DIM_TOKENS.has(clean) });
-    });
-  });
-  if (out.length) out.push({ text: '.', strong: false });
-  return out;
-};
-
-// Render briefing prose with numeric VALUES lifted into inline pill-chips (the
-// nutrition-summary look). Everything else flows as normal text; chips + words
-// share one flex-wrap row so they stay inline. Punctuation glues to its word.
-const isBriefingValue = (t: string) => /\d/.test(t);
-
-type BriefingToken = { kind: 'text' | 'chip'; text: string };
-const briefingDisplay = (segments: Seg[]): BriefingToken[] => {
-  const out: BriefingToken[] = [];
-  const pushText = (raw: string) => {
-    const t = raw.trim();
-    if (!t) return;
-    const last = out[out.length - 1];
-    if (last && last.kind === 'text' && /^[,.;:!?]+$/.test(t)) {
-      last.text = last.text.replace(/\s+$/, '') + t + ' ';
-    } else {
-      out.push({ kind: 'text', text: t + ' ' });
-    }
-  };
-  segments.forEach((s) => {
-    s.text.split(/(\s+)/).forEach((tok) => {
-      if (/^\s*$/.test(tok)) return;
-      if (isBriefingValue(tok)) out.push({ kind: 'chip', text: tok.trim() });
-      else pushText(tok);
-    });
-  });
-  return out;
-};
-
 // ── Demo mode ──────────────────────────────────────────────────────────────
 // Flip to false for production. When true the home renders a FULL, ACTIVE state
 // (mock campaigns + a Sprout message) so the design can be reviewed without real
@@ -206,13 +158,13 @@ const DEMO_EVENTS = [
 
 // ── Sprout's proactive message: morning recap, evening recap, or a midday
 //    check-in. This is what makes the home feel like Sprout is talking to you.
+type Seg = { text: string; strong: boolean };
 type SproutMessage = { time: string; lead: string; body: Seg[] };
 
 const seg = (text: string, strong = true): Seg => ({ text, strong });
 
-// ── Hero action card (Figma 4746:3753) — the one strong action under the ledger.
-//    Doc-chip tilted -7°, translucent black card, white Review-style pill on the right.
-const HeroActionCard = ({
+// A report preview is the only home affordance. The report itself owns the next action.
+const ReportPreviewCard = ({
   title,
   subtitle,
   chip,
@@ -227,10 +179,11 @@ const HeroActionCard = ({
   // hardcoded black border vanished on the dark hero).
   borderColor?: string;
 }) => (
-  <TouchableOpacity
+  <Pressable
     style={[styles.reportCard, borderColor ? { borderColor } : null]}
-    activeOpacity={0.85}
     onPress={onPress}
+    accessibilityRole="button"
+    accessibilityLabel={`${chip}: ${title}`}
   >
     <View style={styles.reportIconWrap}>
       <LinearGradient
@@ -241,13 +194,13 @@ const HeroActionCard = ({
       </LinearGradient>
     </View>
     <View style={styles.reportTextCol}>
-      <Text style={styles.reportTitle} numberOfLines={2}>{title}</Text>
-      {!!subtitle && <Text style={styles.reportSub} numberOfLines={1}>{subtitle}</Text>}
+      <Text style={styles.reportTitle} numberOfLines={2}>{sanitizeDisplayText(title)}</Text>
+      {!!subtitle && <Text style={styles.reportSub} numberOfLines={3}>{sanitizeDisplayText(subtitle)}</Text>}
     </View>
     <View style={[styles.reportChip, borderColor ? { borderColor } : null]}>
       <Text style={styles.reportChipText}>{chip}</Text>
     </View>
-  </TouchableOpacity>
+  </Pressable>
 );
 
 // Demo ledger matching the mockup exactly.
@@ -264,7 +217,7 @@ const sproutMessageForHour = (hour: number, _name: string): SproutMessage => {
       time: '6:40 PM',
       lead: "Here's your evening recap",
       body: [
-        seg('Good day — we '), seg('sold 9 items'), seg(' for '), seg('$500'),
+        seg('Good day. We '), seg('sold 9 items'), seg(' for '), seg('$500'),
         seg('. I '), seg('repriced 4'), seg(' slow movers and '), seg('views are up 18%'),
         seg('. '), seg('2 offers', true), seg(' are waiting on your call.'),
       ],
@@ -278,7 +231,7 @@ const sproutMessageForHour = (hour: number, _name: string): SproutMessage => {
       body: [
         seg('I '), seg('closed 2 negotiations'), seg(' on electronics and '),
         seg('scheduled a pickup'), seg(' for '), seg('6:15 PM'), seg('. An '), seg('offer of $1,140'),
-        seg(' came in — '), seg('about 86%'), seg(' of market.'),
+        seg(' came in at '), seg('about 86%'), seg(' of market.'),
       ],
     };
   }
@@ -298,7 +251,7 @@ const sproutMessageForHour = (hour: number, _name: string): SproutMessage => {
     time: '1:20 PM',
     lead: 'A quick midday check-in',
     body: [
-      seg("Steady so far — "), seg('5 sales'), seg(' and '), seg('$310'),
+      seg('Steady so far. '), seg('5 sales'), seg(' and '), seg('$310'),
       seg(' today. I '), seg('relisted 2 items'), seg(' that stalled. Nothing needs you right now.'),
     ],
   };
@@ -337,6 +290,22 @@ const SproutHomeScreen: React.FC = () => {
   );
 
   const controller = useLiquidationConversationController({ adapter });
+  const refreshCampaignsRef = useRef(controller.onRefresh);
+  useEffect(() => {
+    refreshCampaignsRef.current = controller.onRefresh;
+  }, [controller.onRefresh]);
+
+  // A foreground push means a campaign just changed. Refresh the summaries so its
+  // server timestamp can move it to the top without waiting for a screen remount.
+  useEffect(() => {
+    const refresh = () => { void refreshCampaignsRef.current(); };
+    const received = Notifications.addNotificationReceivedListener(refresh);
+    const responded = Notifications.addNotificationResponseReceivedListener(refresh);
+    return () => {
+      received.remove();
+      responded.remove();
+    };
+  }, []);
 
   const [activeRange, setActiveRange] = useState<Range>('1W');
   const [activeFilter, setActiveFilter] = useState<Filter>('All');
@@ -411,6 +380,15 @@ const SproutHomeScreen: React.FC = () => {
     !(pastSetup && isOnboardingNudge)
       ? rawHeadline
       : undefined;
+  const insightSolution = useMemo(() => {
+    const candidates = [
+      insight?.suggestionText,
+      insight?.bottomDIN?.description,
+      insight?.handoff?.prompt,
+      insight?.reasoning,
+    ];
+    return candidates.find((value) => typeof value === 'string' && value.trim())?.trim();
+  }, [insight?.suggestionText, insight?.bottomDIN?.description, insight?.handoff?.prompt, insight?.reasoning]);
 
   // Insight handoff → chat. The backend scopes by StrategyId; mobile threads key on
   // session ids, so match against the loaded campaigns and fall back to the newest —
@@ -453,9 +431,9 @@ const SproutHomeScreen: React.FC = () => {
   //    back it renders instantly and never replays — exactly like a normal chat app.
   const heroMessage = useMemo<{ id: string; text: string } | null>(() => {
     if (DEMO) return null; // demo has its own scripted body
-    if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: latestDigest.text };
+    if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: compactDisplayText(latestDigest.text, { maxChars: 230, maxSentences: 2 }) };
     if (controller.loading) return null; // don't stream the transient "Catching you up…"
-    if (insightHeadline) return { id: `insight:${insightHeadline}`, text: insightHeadline };
+    if (insightHeadline) return { id: `insight:${insightHeadline}`, text: sanitizeDisplayText(insightHeadline) };
     return {
       id: isNight ? 'quiet:night' : 'quiet:day',
       text: isNight ? 'All quiet while you slept. Sprout is watching.' : 'All quiet so far. Sprout is watching.',
@@ -548,7 +526,11 @@ const SproutHomeScreen: React.FC = () => {
   // Demo mode swaps in mock campaigns so the full/active home is reviewable.
   const baseCampaigns: CardCampaign[] = DEMO ? DEMO_CAMPAIGNS : controller.campaigns;
   const filteredCampaigns = useMemo(() => {
-    let out = baseCampaigns;
+    let out = [...baseCampaigns].sort((a, b) => {
+      const aTime = Date.parse(a.updatedAt || a.createdAt) || 0;
+      const bTime = Date.parse(b.updatedAt || b.createdAt) || 0;
+      return bTime - aTime;
+    });
     if (activeFilter === 'Running') {
       out = out.filter(c => c.status === 'active' || c.status === 'waiting_user');
     } else if (activeFilter === 'Completed') {
@@ -691,7 +673,6 @@ const SproutHomeScreen: React.FC = () => {
 
   const chartWidth = Dimensions.get('window').width;
   const THEME = isNight ? NIGHT_THEME : DAY_THEME;
-  const briefingSegments = useMemo(() => briefingToSegments(briefingRows), [briefingRows]);
 
   // Sprout's proactive message (morning/evening recap or midday check-in).
   const sproutMsg = useMemo(() => sproutMessageForHour(new Date().getHours(), firstName), [firstName]);
@@ -711,12 +692,24 @@ const SproutHomeScreen: React.FC = () => {
     if (h < 17) return 'Midday Report';
     return 'Evening Report';
   }, []);
+  const insightReportTitle = useMemo(() => {
+    const source = sanitizeDisplayText(insight?.report?.title || insightHeadline || 'Report');
+    return compactDisplayText(source, { maxChars: 42, maxSentences: 1 }) || 'Report';
+  }, [insight?.report?.title, insightHeadline]);
+  const insightReportSubtitle = useMemo(() => {
+    const source = sanitizeDisplayText(
+      insight?.report?.summary || insightSolution || 'See the recommended next move.',
+    );
+    return compactDisplayText(source, { maxChars: 78, maxSentences: 1 });
+  }, [insight?.report?.summary, insightSolution]);
 
   // Report bottom sheet — the same viewer the chat uses, mounted here so the
   // home screen can open a report directly (no detour through a chat prompt).
   const { openTray, trayProps } = useActivityTray();
+  const [reportHasHandoff, setReportHasHandoff] = useState(false);
 
-  const openReportDocument = useCallback((doc: { documentId: string; title: string; summary: string; sections: any[] }) => {
+  const openReportDocument = useCallback((doc: ReportDocument, withHandoff = false) => {
+    setReportHasHandoff(withHandoff);
     openTray({
       kind: 'document',
       id: doc.documentId,
@@ -725,11 +718,28 @@ const SproutHomeScreen: React.FC = () => {
     });
   }, [openTray]);
 
+  // Some older insight reports jump straight from the problem into a table. Use
+  // the recommendation already shipped with that same insight to preserve a
+  // readable problem -> solution -> evidence sequence without inventing copy.
+  const prepareInsightReport = useCallback((doc: ReportDocument): ReportDocument => {
+    const hasSolution = doc.sections.some(
+      (section) => section.kind === 'prose' && /solution|recommend|next move|next step|what to do|plan|approach|how to fix|action|honest take/i.test(section.heading || ''),
+    );
+    if (hasSolution || !insightSolution) return doc;
+    return {
+      ...doc,
+      sections: [
+        ...doc.sections,
+        { kind: 'prose', heading: 'The solution', text: insightSolution },
+      ],
+    };
+  }, [insightSolution]);
+
   // Resolve the insight's own report: the embedded document when present,
   // else fetch it by its persisted reportId. Returns true when a report opened.
   const openInsightReport = useCallback(async (): Promise<boolean> => {
     if (insight?.report?.sections?.length) {
-      openReportDocument(insight.report);
+      openReportDocument(prepareInsightReport(insight.report), true);
       return true;
     }
     if (insight?.reportId) {
@@ -743,7 +753,7 @@ const SproutHomeScreen: React.FC = () => {
             const data = await res.json();
             const doc = data?.report?.document;
             if (doc && Array.isArray(doc.sections) && doc.sections.length) {
-              openReportDocument(doc);
+              openReportDocument(prepareInsightReport(doc), true);
               return true;
             }
           }
@@ -751,7 +761,7 @@ const SproutHomeScreen: React.FC = () => {
       } catch { /* fall through */ }
     }
     return false;
-  }, [insight?.report, insight?.reportId, openReportDocument]);
+  }, [insight?.report, insight?.reportId, openReportDocument, prepareInsightReport]);
 
   // Review → open the actual report. Priority: the insight's own report
   // (embedded, else by reportId), else the newest persisted report from the
@@ -781,7 +791,7 @@ const SproutHomeScreen: React.FC = () => {
     navigation.navigate('CampaignThreadScreen', {
       campaignId,
       initialPrompt:
-        'Give me the full report: everything that happened since I last checked, what it means, and the next moves — as a report document.',
+        'Give me the full report: everything that happened since I last checked, what it means, and the next moves as a report document.',
     });
   }, [openInsightReport, openReportDocument, handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
 
@@ -839,18 +849,18 @@ const SproutHomeScreen: React.FC = () => {
               ) : latestDigest && !DEMO && seenLoaded ? (
                 // No ledger rows — the scheduled digest stands in, typed only when new.
                 <StreamingText
-                  text={latestDigest.text}
+                  text={compactDisplayText(latestDigest.text, { maxChars: 230, maxSentences: 2 })}
                   shouldStream={shouldStreamHero}
                   onComplete={markHeroSeen}
                   speed={42}
-                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                  style={[styles.briefingProse, { color: THEME.strong }]}
                 />
               ) : null}
               {(DEMO || controller.campaigns.length > 0) && (
-                <HeroActionCard
+                <ReportPreviewCard
                   title={reportTitle}
-                  subtitle="Here's what you missed"
-                  chip="Review"
+                  subtitle="Changes and next steps."
+                  chip="Report"
                   onPress={openReport}
                   borderColor={THEME.cardBorder}
                 />
@@ -874,8 +884,13 @@ const SproutHomeScreen: React.FC = () => {
                   shouldStream={shouldStreamHero}
                   onComplete={markHeroSeen}
                   speed={42}
-                  style={[styles.briefingProse, { color: THEME.strong, fontFamily: FONT.regular }]}
+                  style={[styles.briefingProse, { color: THEME.strong }]}
                 />
+              ) : null}
+              {!controller.loading && insightHeadline && insightSolution ? (
+                <Text style={[styles.briefingSupport, { color: THEME.faint }]}>
+                  {compactDisplayText(insightSolution, { maxChars: 150, maxSentences: 1 })}
+                </Text>
               ) : null}
               {!controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
@@ -884,10 +899,10 @@ const SproutHomeScreen: React.FC = () => {
                   no chat detour. Shown whether the document rides embedded on the
                   insight or only as a persisted reportId (resolved on tap). */}
               {!controller.loading && (insight?.report?.sections?.length || insight?.reportId) ? (
-                <HeroActionCard
-                  title={insight?.report?.title || insightHeadline || 'Sprout wrote a report'}
-                  subtitle={insight?.report?.summary || undefined}
-                  chip="Open report"
+                <ReportPreviewCard
+                  title={insightReportTitle}
+                  subtitle={insightReportSubtitle}
+                  chip="Report"
                   borderColor={THEME.cardBorder}
                   onPress={() => {
                     tap();
@@ -895,22 +910,6 @@ const SproutHomeScreen: React.FC = () => {
                   }}
                 />
               ) : null}
-              {/* Handoff: the insight ships a ready-to-send task for Sprout — one tap
-                  opens the campaign thread and fires it as a normal message. */}
-              {!controller.loading && handoffTarget && (
-                <HeroActionCard
-                  title={(insight?.report?.sections?.length || insight?.reportId) ? handoffTarget.label : (insightHeadline || 'Sprout has a move')}
-                  chip={handoffTarget.label}
-                  borderColor={THEME.cardBorder}
-                  onPress={() => {
-                    tap();
-                    navigation.navigate('CampaignThreadScreen', {
-                      campaignId: handoffTarget.campaignId,
-                      initialPrompt: handoffTarget.prompt,
-                    });
-                  }}
-                />
-              )}
             </>
           )}
 
@@ -1223,7 +1222,16 @@ const SproutHomeScreen: React.FC = () => {
 
       {/* Report viewer — the same document sheet the chat uses, so the home
           report cards open a real, shareable report in place. */}
-      <ActivityTraySheet {...trayProps} />
+      <ActivityTraySheet
+        {...trayProps}
+        documentAction={reportHasHandoff && handoffTarget ? {
+          label: 'Make changes',
+          onPress: () => navigation.navigate('CampaignThreadScreen', {
+            campaignId: handoffTarget.campaignId,
+            initialPrompt: handoffTarget.prompt,
+          }),
+        } : undefined}
+      />
 
       {/* Selection action pill — floats in the navigator's spot on long-press
           (the tab bar hides while selecting). Bulk pause / delete. */}
@@ -1370,7 +1378,7 @@ const CampaignCard: React.FC<{
         </View>
         <View style={styles.cardHeaderText}>
           <Text style={[styles.cardTitle, { color: titleColor }]} numberOfLines={1}>
-            {campaign.title}
+            {sanitizeDisplayText(campaign.title)}
           </Text>
           <View style={styles.cardMetaRow}>
             {isCompleted ? (
@@ -1611,7 +1619,8 @@ const styles = StyleSheet.create({
   sproutLead: { fontFamily: FONT.semibold, fontSize: 17, lineHeight: 24, marginBottom: 4 },
 
   briefingHeadline: { fontFamily: FONT.semibold, fontSize: 17, marginBottom: 10, lineHeight: 25 },
-  briefingProse: { fontSize: 17, lineHeight: 25, marginTop: 1 },
+  briefingProse: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, marginTop: 1 },
+  briefingSupport: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, marginTop: 7 },
   // Nutrition-summary style: values become inline pill-chips in a flowing row.
   briefingWrap: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 2 },
   briefingWord: { fontSize: 17, lineHeight: 28, fontFamily: FONT.regular },
@@ -1656,9 +1665,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 9,
   },
-  reportTextCol: { flex: 1, gap: 3 },
-  reportTitle: { fontFamily: FONT.medium, fontSize: 16, lineHeight: 18, color: '#FFFFFF' },
-  reportSub: { fontFamily: FONT.medium, fontSize: 14, lineHeight: 16, color: '#F4F4F5' },
+  reportTextCol: { flex: 1, gap: 4 },
+  // Match the finding and explanation directly above the card. The document
+  // preview is part of that same thought, not a smaller metadata treatment.
+  reportTitle: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, color: '#FFFFFF' },
+  reportSub: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, color: 'rgba(255,255,255,0.78)' },
   reportChip: {
     backgroundColor: 'rgba(244,244,245,0.2)',
     borderWidth: 1,

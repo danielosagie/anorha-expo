@@ -39,11 +39,22 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
-import type { ActivityPayload, ConversationToolStep, ReportDocument, ValueChange } from '../../types';
+import type { ActivityPayload, CampaignItem, ConversationToolStep, PlanPayload, PlanStep, ReportDocument, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import { activityGlyph, humanizeCadence, humanizeChannel, toolDoneLabel, toolStepIcon } from './humanizers';
-import { copyMarkdown, documentHasTabularData, documentToMarkdown, saveCsvFile, saveMarkdownFile, shareMarkdown } from './documentExport';
+import {
+  copyMarkdown,
+  documentHasTabularData,
+  documentToMarkdown,
+  organizeReportDocument,
+  reportSectionHeading,
+  saveCsvFile,
+  savePdfFile,
+  shareMarkdown,
+} from './documentExport';
 import { HorizontalFadeScroll } from '../HorizontalFadeScroll';
+import { compactDisplayText, sanitizeDisplayText } from '../../displayText';
+import { campaignItemPrice, getPlanDisplayTitle, matchPlanItem } from '../../planPresentation';
 
 const SCREEN_H = Dimensions.get('window').height;
 const DEFAULT_H = Math.round(SCREEN_H * 0.62);
@@ -58,6 +69,7 @@ type TrayPage =
 export interface ActivityTraySheetProps {
   visible: boolean;
   payload: ActivityPayload | null;
+  planItems?: CampaignItem[];
   onClose: () => void;
   onOpenItem?: (productId: string) => void;
   onUndo?: (payload: ActivityPayload, change?: ValueChange) => Promise<void> | void;
@@ -66,17 +78,26 @@ export interface ActivityTraySheetProps {
   onReviseDocument?: (documentId: string, title: string, note: string) => void;
   /** Approve / Revise / Follow-up a proposed plan (hits the pending-action endpoint). */
   onApprovePlan?: (planId: string, action: 'approve' | 'revise' | 'follow_up') => void;
+  /** Close the tray and move this plan into the chat composer for revision. */
+  onEditPlan?: (plan: PlanPayload) => void;
+  submittingPlanId?: string | null;
+  /** One report-specific next step. It renders after the evidence, never on Home. */
+  documentAction?: { label: string; description?: string; onPress: () => void };
 }
 
 export default function ActivityTraySheet({
   visible,
   payload,
+  planItems,
   onClose,
   onOpenItem,
   onUndo,
   onRoutineAction,
   onReviseDocument,
   onApprovePlan,
+  onEditPlan,
+  submittingPlanId,
+  documentAction,
 }: ActivityTraySheetProps) {
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
@@ -90,7 +111,7 @@ export default function ActivityTraySheet({
   const [docDraft, setDocDraft] = useState('');
   const height = useSharedValue(0);
 
-  const rootTitle = payload?.title || 'Details';
+  const rootTitle = sanitizeDisplayText(payload?.title || 'Details');
 
   // Mount on open; collapse then unmount on close.
   useEffect(() => {
@@ -113,9 +134,10 @@ export default function ActivityTraySheet({
       setNavForward(true);
       setMenuOpen(false);
       const doc = payload && payload.kind === 'document' ? payload.document : null;
+      const isLongForm = payload?.kind === 'document' || payload?.kind === 'plan';
       setDocMode('preview');
       setDocDraft(doc ? documentToMarkdown(doc) : '');
-      height.value = withSpring(doc ? EXPANDED_H : DEFAULT_H, { damping: 24, stiffness: 240, mass: 0.7 });
+      height.value = withSpring(isLongForm ? EXPANDED_H : DEFAULT_H, { damping: 24, stiffness: 240, mass: 0.7 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, payload?.id]);
@@ -198,12 +220,35 @@ export default function ActivityTraySheet({
             {payload.kind === 'document' && depth === 1 ? (
               <View style={styles.docHeader}>
                 <TouchableOpacity style={styles.circleBtn} onPress={onClose} hitSlop={HIT} accessibilityLabel="Close">
-                  <Icon name="close" size={18} color={CHAT_COLORS.dim} />
+                  <Icon name="close" size={21} color={CHAT_COLORS.dim} />
                 </TouchableOpacity>
-                <Text style={styles.docHeaderTitle} numberOfLines={1}>{payload.document.title || payload.title}</Text>
+                <Text style={styles.docHeaderTitle} numberOfLines={1}>{sanitizeDisplayText(payload.document.title || payload.title)}</Text>
                 <TouchableOpacity style={styles.circleBtn} onPress={() => { Haptics.selectionAsync().catch(() => undefined); setMenuOpen(o => !o); }} hitSlop={HIT} accessibilityLabel="Document options">
                   <Icon name="dots-horizontal" size={20} color={CHAT_COLORS.dim} />
                 </TouchableOpacity>
+              </View>
+            ) : payload.kind === 'plan' && depth === 1 ? (
+              <View style={styles.planHeader}>
+                <Text style={styles.planHeaderTitle}>Review plan</Text>
+                <View style={styles.planHeaderActions}>
+                  {onEditPlan ? (
+                    <Pressable
+                      style={styles.circleBtn}
+                      accessibilityRole="button"
+                      accessibilityLabel="Edit plan in chat"
+                      onPress={() => {
+                        Haptics.selectionAsync().catch(() => undefined);
+                        onClose();
+                        setTimeout(() => onEditPlan(payload.plan), 220);
+                      }}
+                    >
+                      <Icon name="pencil-outline" size={20} color={CHAT_COLORS.inkSoft} />
+                    </Pressable>
+                  ) : null}
+                  <Pressable style={styles.circleBtn} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close plan">
+                    <Icon name="close" size={21} color={CHAT_COLORS.dim} />
+                  </Pressable>
+                </View>
               </View>
             ) : (
               <View style={styles.header}>
@@ -226,7 +271,7 @@ export default function ActivityTraySheet({
                   </Animated.Text>
                 </View>
                 <TouchableOpacity style={styles.circleBtn} onPress={onClose} hitSlop={HIT}>
-                  <Icon name="close" size={18} color={CHAT_COLORS.dim} />
+                  <Icon name="close" size={21} color={CHAT_COLORS.dim} />
                 </TouchableOpacity>
               </View>
             )}
@@ -240,7 +285,7 @@ export default function ActivityTraySheet({
                   <DocMenuItem icon="text-box-edit-outline" label="Edit text" active={docMode === 'code'} onPress={() => { setDocMode('code'); setMenuOpen(false); }} />
                   <View style={styles.menuDivider} />
                   <DocMenuItem icon="content-copy" label="Copy" onPress={() => { setMenuOpen(false); Haptics.selectionAsync().catch(() => undefined); void copyMarkdown(docDraft); }} />
-                  <DocMenuItem icon="tray-arrow-down" label="Save as file" onPress={() => { setMenuOpen(false); void saveMarkdownFile(payload.document.title, docDraft); }} />
+                  <DocMenuItem icon="file-pdf-box" label="Save as PDF" onPress={() => { setMenuOpen(false); void savePdfFile(payload.document.title, docDraft); }} />
                   {documentHasTabularData(payload.document) ? (
                     <DocMenuItem icon="table-arrow-down" label="Export CSV" onPress={() => { setMenuOpen(false); void saveCsvFile(payload.document.title, payload.document); }} />
                   ) : null}
@@ -259,11 +304,13 @@ export default function ActivityTraySheet({
               <ScrollView
                 style={styles.flex}
                 contentContainerStyle={styles.content}
+                contentInsetAdjustmentBehavior="automatic"
                 showsVerticalScrollIndicator={false}
               >
                 <PageBody
                   page={top}
                   payload={payload}
+                  planItems={planItems}
                   onPushChange={(c) => push({ kind: 'change-detail', title: c.itemName || c.label, change: c })}
                   onPushStep={(step) => push({ kind: 'step-detail', title: toolDoneLabel(step.tool, step.label), step })}
                   onPushEvidence={() => push({ kind: 'evidence', title: "What it's based on" })}
@@ -273,6 +320,13 @@ export default function ActivityTraySheet({
                   docMode={docMode}
                   docDraft={docDraft}
                   onChangeDocDraft={setDocDraft}
+                  documentAction={documentAction ? {
+                    ...documentAction,
+                    onPress: () => {
+                      onClose();
+                      documentAction.onPress();
+                    },
+                  } : undefined}
                 />
               </ScrollView>
             </Animated.View>
@@ -283,11 +337,17 @@ export default function ActivityTraySheet({
               insetBottom={Math.max(insets.bottom, 16)}
               confirmUndo={confirmUndo}
               onApprovePlan={(action) => {
+                if (submittingPlanId) return;
                 if (payload.kind === 'plan' && payload.plan.pendingActionId) {
                   onApprovePlan?.(payload.plan.pendingActionId, action);
                 }
                 onClose();
               }}
+              planSubmitting={
+                payload.kind === 'plan' &&
+                !!payload.plan.pendingActionId &&
+                submittingPlanId === payload.plan.pendingActionId
+              }
               onAskUndo={() => setConfirmUndo(true)}
               onCancelUndo={() => setConfirmUndo(false)}
               onConfirmUndo={async (change) => {
@@ -315,6 +375,7 @@ const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
 function PageBody({
   page,
   payload,
+  planItems,
   onPushChange,
   onPushStep,
   onPushEvidence,
@@ -324,9 +385,11 @@ function PageBody({
   docMode,
   docDraft,
   onChangeDocDraft,
+  documentAction,
 }: {
   page: TrayPage;
   payload: ActivityPayload;
+  planItems?: CampaignItem[];
   onPushChange: (c: ValueChange) => void;
   onPushStep: (step: ConversationToolStep) => void;
   onPushEvidence: () => void;
@@ -336,6 +399,7 @@ function PageBody({
   docMode: 'preview' | 'code';
   docDraft: string;
   onChangeDocDraft: (v: string) => void;
+  documentAction?: { label: string; description?: string; onPress: () => void };
 }) {
   if (page.kind === 'evidence') {
     const evidence = 'evidence' in payload ? payload.evidence : undefined;
@@ -449,27 +513,7 @@ function PageBody({
 
   // root
   if (payload.kind === 'plan') {
-    const plan = payload.plan;
-    return (
-      <View style={{ gap: 14 }}>
-        {plan.summary ? <Text style={styles.docSummary}>{plan.summary}</Text> : null}
-        {plan.steps?.length ? (
-          <View style={{ gap: 10 }}>
-            {plan.steps.map((step, i) => (
-              <View key={i} style={styles.planStepRow}>
-                <Text style={styles.planStepNum}>{i + 1}</Text>
-                <View style={styles.flex}>
-                  <Text style={styles.planStepTitle}>{step.title}</Text>
-                  {step.detail ? <Text style={styles.planStepDetail}>{step.detail}</Text> : null}
-                </View>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <EmptyNote text="Sprout will run this once you approve." />
-        )}
-      </View>
-    );
+    return <PlanPage plan={payload.plan} items={planItems ?? []} onOpenItem={onOpenItem} />;
   }
 
   if (payload.kind === 'document') {
@@ -481,6 +525,7 @@ function PageBody({
         onChangeDraft={onChangeDocDraft}
         onRevise={onRevise}
         onRequestClose={onRequestClose}
+        documentAction={documentAction}
       />
     );
   }
@@ -664,10 +709,159 @@ function ChangeDetailBody({
   );
 }
 
-// ── Document page: the full report as a business sheet. Preview renders prose
-// (markdown), tables, and metric tiles; "Edit text" (from the header menu) swaps to a
-// raw-markdown editor. Copy / Save / Share live in the header menu; "Ask Sprout to
-// revise" sends your note back to Sprout. ──
+// ── Plan page: an approval report, with structured evidence instead of a step list.
+
+const PRICE_ROW = /(?:^|,\s*)([^,]+?)\s*(?:→|->)\s*(\$[\d,.]+)(?:\s*\(([^)]*)\))?(?=,\s*[^,]+?\s*(?:→|->)|[.]?$)/g;
+const ITEM_AT_PRICE = /^(.+?)\s+(?:at|to)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
+const BEFORE_PRICE = /\b(?:was|from|currently(?:\s+at)?|already\s+at)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
+const APPROACH = /\b(conservative|balanced|aggressive)(?:\s+sell-off)?\b/i;
+
+function pricingRowsFromPlanDetail(detail: string): PlanPriceChange[] {
+  const clean = sanitizeDisplayText(detail);
+  return [...clean.matchAll(PRICE_ROW)].map((match) => ({
+    name: sanitizeDisplayText(match[1]),
+    after: sanitizeDisplayText(match[2]),
+    approach: sanitizeDisplayText(match[3] || 'Market-based'),
+  }));
+}
+
+type PlanPriceChange = {
+  name: string;
+  before?: string;
+  after: string;
+  approach: string;
+};
+
+type PlanContent = {
+  prices: PlanPriceChange[];
+  supporting: PlanStep[];
+};
+
+function priceChangeFromPlanStep(title: string, detail: string): PlanPriceChange | null {
+  const cleanTitle = sanitizeDisplayText(title);
+  const cleanDetail = sanitizeDisplayText(detail);
+  const itemMatch = cleanDetail.match(ITEM_AT_PRICE);
+  if (!itemMatch) return null;
+
+  const after = itemMatch[2];
+  const beforeMatch = cleanDetail.match(BEFORE_PRICE);
+  const before = beforeMatch?.[1] || (/^keep\b/i.test(cleanTitle) ? after : 'Not shown');
+
+  const approach = cleanDetail.match(APPROACH)?.[1];
+  return {
+    name: sanitizeDisplayText(itemMatch[1]),
+    before,
+    after,
+    approach: approach ? `${approach[0].toUpperCase()}${approach.slice(1).toLowerCase()}` : 'Set price',
+  };
+}
+
+function planContent(plan: PlanPayload): PlanContent {
+  const prices: PlanPriceChange[] = [];
+  const supporting: PlanStep[] = [];
+
+  for (const step of plan.steps ?? []) {
+    const heading = sanitizeDisplayText(step.title);
+    const detail = sanitizeDisplayText(step.detail);
+    const priceChange = priceChangeFromPlanStep(heading, detail);
+    if (priceChange) {
+      prices.push(priceChange);
+      continue;
+    }
+
+    const priceRows = /price|pricing|reprice/i.test(heading)
+      ? pricingRowsFromPlanDetail(detail)
+      : [];
+
+    if (priceRows.length >= 2) {
+      prices.push(...priceRows);
+      continue;
+    }
+
+    supporting.push(step);
+  }
+
+  return { prices, supporting };
+}
+
+function PlanPage({
+  plan,
+  items,
+  onOpenItem,
+}: {
+  plan: PlanPayload;
+  items: CampaignItem[];
+  onOpenItem: (productId?: string | null) => void;
+}) {
+  const overview = compactDisplayText(plan.summary, { maxChars: 150, maxSentences: 1 });
+  const title = getPlanDisplayTitle(plan);
+  const content = useMemo(() => planContent(plan), [plan]);
+  const priceRows = useMemo(() => content.prices.map((change) => {
+    const item = matchPlanItem(change.name, items);
+    return {
+      ...change,
+      item,
+      before: change.before && change.before !== 'Not shown' ? change.before : (campaignItemPrice(item) || 'Not shown'),
+    };
+  }), [content.prices, items]);
+
+  if (!overview && !priceRows.length && !content.supporting.length) {
+    return <EmptyNote text="Sprout will run this once you approve." />;
+  }
+
+  return (
+    <View style={styles.docPage}>
+      {overview ? (
+        <View style={styles.docIntro}>
+          <Text style={styles.docIntroTitle}>{title || 'Proposed changes'}</Text>
+          <Text style={styles.docIntroText}>{overview}</Text>
+        </View>
+      ) : null}
+      {priceRows.length ? (
+        <View style={styles.planChangesSection}>
+          <Text style={styles.docHeading}>Changes</Text>
+          <View style={styles.planChangesSurface}>
+            {priceRows.length ? (
+              <>
+                <View style={styles.planTableHeader}>
+                  <Text style={[styles.planColumnLabel, styles.flex]}>PRODUCT</Text>
+                  <Text style={styles.planPriceColumnLabel}>BEFORE</Text>
+                  <Text style={styles.planPriceColumnLabel}>AFTER</Text>
+                </View>
+                {priceRows.map((change, index) => (
+                  <Pressable
+                    key={`${change.name}-${index}`}
+                    style={[styles.planProductRow, index > 0 && styles.planRowDivider]}
+                    disabled={!change.item?.productId}
+                    onPress={() => onOpenItem(change.item?.productId)}
+                    accessibilityRole={change.item?.productId ? 'button' : undefined}
+                    accessibilityLabel={change.item?.productId ? `Open ${change.name}` : undefined}
+                  >
+                    {change.item?.imageUrl ? (
+                      <Image source={{ uri: change.item.imageUrl }} style={styles.planProductImage} resizeMode="cover" />
+                    ) : (
+                      <View style={styles.planProductImageFallback}>
+                        <Icon name="package-variant-closed" size={20} color={CHAT_COLORS.faint} />
+                      </View>
+                    )}
+                    <View style={styles.planProductIdentity}>
+                      <Text style={styles.planProductName} numberOfLines={2}>{change.name}</Text>
+                      <Text style={styles.planProductApproach} numberOfLines={1}>{change.approach}</Text>
+                    </View>
+                    <Text style={styles.planBeforePrice}>{change.before}</Text>
+                    <Text style={styles.planAfterPrice}>{change.after}</Text>
+                  </Pressable>
+                ))}
+              </>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ── Document page: the report reads as a narrative, then ends with one next step.
 
 function DocumentPage({
   document,
@@ -676,6 +870,7 @@ function DocumentPage({
   onChangeDraft,
   onRevise,
   onRequestClose,
+  documentAction,
 }: {
   document: ReportDocument;
   mode: 'preview' | 'code';
@@ -683,6 +878,7 @@ function DocumentPage({
   onChangeDraft: (v: string) => void;
   onRevise?: (documentId: string, title: string, note: string) => void;
   onRequestClose?: () => void;
+  documentAction?: { label: string; description?: string; onPress: () => void };
 }) {
   const [reviseOpen, setReviseOpen] = useState(false);
   const [note, setNote] = useState('');
@@ -696,11 +892,21 @@ function DocumentPage({
     onRequestClose?.();
   };
 
-  const sections = document.sections || [];
+  const reading = useMemo(() => organizeReportDocument(document), [document]);
+  const actionLabel = useMemo(() => {
+    const label = sanitizeDisplayText(documentAction?.label);
+    return label.length <= 20 && label.split(/\s+/).length <= 3 ? label : 'Open chat';
+  }, [documentAction?.label]);
 
   return (
-    <View style={{ gap: 14 }}>
-      {mode === 'preview' && document.summary ? <Text style={styles.docSummary}>{document.summary}</Text> : null}
+    <View style={styles.docPage}>
+      {mode === 'preview' && reading.overview ? (
+        <View style={styles.docIntro}>
+          <Text style={styles.docKicker}>IN SHORT</Text>
+          <Text style={styles.docIntroTitle}>What this means</Text>
+          <Markdown style={{ body: styles.docIntroText as any }}>{reading.overview}</Markdown>
+        </View>
+      ) : null}
 
       {mode === 'code' ? (
         <TextInput
@@ -713,11 +919,11 @@ function DocumentPage({
           placeholderTextColor={CHAT_COLORS.faint}
         />
       ) : (
-        <View style={{ gap: 16 }}>
-          {sections.map((s, i) => (
-            <DocumentSectionView key={i} section={s} />
+        <View style={styles.docSections}>
+          {reading.sections.map((section, index) => (
+            <DocumentSectionView key={index} section={section} />
           ))}
-          {!sections.length ? <EmptyNote text="This report has no sections yet." /> : null}
+          {!reading.sections.length && !reading.overview ? <EmptyNote text="This report has no sections yet." /> : null}
         </View>
       )}
 
@@ -749,10 +955,32 @@ function DocumentPage({
           </View>
         ) : (
           <TouchableOpacity style={styles.docReviseCta} onPress={() => setReviseOpen(true)} activeOpacity={0.85}>
-            <Icon name="creation" size={16} color={CHAT_COLORS.white} />
+            <Icon name="creation" size={16} color={CHAT_COLORS.brandDeep} />
             <Text style={styles.docReviseCtaText}>Ask Sprout to revise</Text>
           </TouchableOpacity>
         )
+      ) : null}
+
+      {documentAction ? (
+        <View style={styles.docActionBlock}>
+          {documentAction.description ? (
+            <Text style={styles.docActionDescription}>
+              {compactDisplayText(documentAction.description, { maxChars: 130, maxSentences: 1 })}
+            </Text>
+          ) : null}
+          <Pressable
+            style={styles.docActionButton}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+              documentAction.onPress();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={sanitizeDisplayText(documentAction.label)}
+          >
+            <Text style={styles.docActionButtonText}>{actionLabel}</Text>
+            <Icon name="arrow-right" size={18} color={CHAT_COLORS.white} />
+          </Pressable>
+        </View>
       ) : null}
     </View>
   );
@@ -770,9 +998,10 @@ function DocMenuItem({ icon, label, active, onPress }: { icon: string; label: st
 }
 
 function DocumentSectionView({ section }: { section: ReportDocument['sections'][number] }) {
+  const heading = reportSectionHeading(section);
   return (
-    <View style={{ gap: 8 }}>
-      {section.heading ? <Text style={styles.docHeading}>{section.heading}</Text> : null}
+    <View style={styles.docSection}>
+      {heading ? <Text style={styles.docHeading}>{heading}</Text> : null}
       {section.kind === 'prose' ? (
         <Markdown style={{ body: styles.docProse as any }}>{section.text || ''}</Markdown>
       ) : null}
@@ -795,14 +1024,37 @@ function DocumentSectionView({ section }: { section: ReportDocument['sections'][
             {section.columns.length ? (
               <View style={[styles.docTableRow, styles.docTableHead]}>
                 {section.columns.map((c, i) => (
-                  <Text key={i} style={[styles.docTableCell, i === 0 && styles.docTableCellFirst, styles.docTableHeadCell]} numberOfLines={2}>{c}</Text>
+                  <Text
+                    key={i}
+                    style={[
+                      styles.docTableCell,
+                      i === 0 && styles.docTableCellFirst,
+                      /basis|why|strategy|reason|notes?/i.test(c) && styles.docTableCellWide,
+                      styles.docTableHeadCell,
+                    ]}
+                    numberOfLines={2}
+                  >
+                    {c}
+                  </Text>
                 ))}
               </View>
             ) : null}
             {section.rows.map((row, ri) => (
               <View key={ri} style={[styles.docTableRow, ri % 2 === 1 && styles.docTableRowAlt]}>
                 {row.map((cell, ci) => (
-                  <Text key={ci} style={[styles.docTableCell, ci === 0 && styles.docTableCellFirst]} numberOfLines={3}>{cell}</Text>
+                  <Text
+                    key={ci}
+                    style={[
+                      styles.docTableCell,
+                      ci === 0 && styles.docTableCellFirst,
+                      /basis|why|strategy|reason|notes?/i.test(section.columns[ci] || '') && styles.docTableCellWide,
+                      /before|current/i.test(section.columns[ci] || '') && styles.docTableBeforeCell,
+                      /after|new price/i.test(section.columns[ci] || '') && styles.docTableAfterCell,
+                    ]}
+                    numberOfLines={3}
+                  >
+                    {cell}
+                  </Text>
                 ))}
               </View>
             ))}
@@ -826,6 +1078,7 @@ function Footer({
   onOpenItem,
   onRoutineAction,
   onApprovePlan,
+  planSubmitting,
 }: {
   page: TrayPage;
   payload: ActivityPayload;
@@ -837,26 +1090,24 @@ function Footer({
   onOpenItem: (productId?: string | null) => void;
   onRoutineAction: (action: 'pause' | 'resume' | 'edit' | 'delete' | 'cancel') => void;
   onApprovePlan: (action: 'approve' | 'revise' | 'follow_up') => void;
+  planSubmitting: boolean;
 }) {
   // The document's actions live in its header "···" menu + inline "Ask Sprout to revise".
   if (payload.kind === 'document') return null;
   const pad = { paddingBottom: insetBottom };
 
-  // Plan approval: the seller runs it, sends it back to revise, or asks a follow-up.
+  // Plan approval stays singular. Editing lives in the header and returns to chat.
   if (payload.kind === 'plan') {
     return (
       <View style={[styles.footer, pad]}>
-        <TouchableOpacity style={styles.planApprove} onPress={() => onApprovePlan('approve')} activeOpacity={0.85}>
-          <Text style={styles.planApproveText}>Approve</Text>
+        <TouchableOpacity
+          style={[styles.planApprove, planSubmitting && styles.planButtonDisabled]}
+          onPress={() => onApprovePlan('approve')}
+          activeOpacity={0.85}
+          disabled={planSubmitting}
+        >
+          <Text style={styles.planApproveText}>{planSubmitting ? 'Applying…' : 'Apply changes'}</Text>
         </TouchableOpacity>
-        <View style={styles.footerRow}>
-          <TouchableOpacity style={styles.ghostBtn} onPress={() => onApprovePlan('revise')} activeOpacity={0.85}>
-            <Text style={styles.ghostBtnText}>Revise</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.ghostBtn} onPress={() => onApprovePlan('follow_up')} activeOpacity={0.85}>
-            <Text style={styles.ghostBtnText}>Follow-up</Text>
-          </TouchableOpacity>
-        </View>
       </View>
     );
   }
@@ -1011,6 +1262,17 @@ const styles = StyleSheet.create({
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, marginRight: 8 },
   headerTitle: { fontSize: 18, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink, flexShrink: 1 },
+  planHeader: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 2,
+    paddingBottom: 8,
+  },
+  planHeaderTitle: { fontSize: 18, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink },
+  planHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   tile: {
     width: 32,
     height: 32,
@@ -1022,9 +1284,9 @@ const styles = StyleSheet.create({
   tileFail: { backgroundColor: CHAT_COLORS.errorSurface },
   tileSync: { backgroundColor: 'rgba(245,158,11,0.14)' },
   circleBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: CHAT_COLORS.bubble,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1169,14 +1431,7 @@ const styles = StyleSheet.create({
   emptyNote: { paddingVertical: 28, alignItems: 'center' },
   emptyNoteText: { fontSize: 13.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, textAlign: 'center' },
 
-  // plan detail (numbered steps) + approve footer
-  planStepRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
-  planStepNum: {
-    width: 22, height: 22, borderRadius: 11, backgroundColor: '#EFF7E0', color: '#5C8A0E',
-    fontSize: 12, fontFamily: CHAT_FONT.bold, textAlign: 'center', lineHeight: 22, overflow: 'hidden',
-  },
-  planStepTitle: { fontSize: 14, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold },
-  planStepDetail: { fontSize: 12.5, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular, lineHeight: 18, marginTop: 2 },
+  // plan approval footer
   planApprove: {
     height: 52,
     borderRadius: 999,
@@ -1185,6 +1440,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   planApproveText: { color: '#FFFFFF', fontSize: 15, fontFamily: CHAT_FONT.bold },
+  planButtonDisabled: { opacity: 0.5 },
 
   // footer
   footer: {
@@ -1198,7 +1454,105 @@ const styles = StyleSheet.create({
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 
   // ── Document page ──
-  docSummary: { fontSize: 14.5, lineHeight: 21, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular },
+  docPage: { gap: 14 },
+  docIntro: {
+    gap: 6,
+    paddingHorizontal: 0,
+    paddingVertical: 6,
+  },
+  docKicker: { fontSize: 10.5, letterSpacing: 0.8, color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.bold },
+  docIntroTitle: { fontSize: 18, lineHeight: 23, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold },
+  docIntroText: { fontSize: 15, lineHeight: 22, color: CHAT_COLORS.inkSoft, fontFamily: CHAT_FONT.regular },
+  docSections: { gap: 14 },
+  planChangesSection: { gap: 10 },
+  planChangesSurface: {
+    overflow: 'hidden',
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: CHAT_COLORS.border,
+    backgroundColor: CHAT_COLORS.white,
+  },
+  planTableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: CHAT_COLORS.surface,
+  },
+  planColumnLabel: {
+    fontSize: 10,
+    letterSpacing: 0.55,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.bold,
+  },
+  planPriceColumnLabel: {
+    width: 54,
+    textAlign: 'right',
+    fontSize: 10,
+    letterSpacing: 0.4,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.bold,
+  },
+  planProductRow: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  planRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: CHAT_COLORS.divider,
+  },
+  planProductImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: CHAT_COLORS.surface,
+  },
+  planProductImageFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: CHAT_COLORS.surface,
+  },
+  planProductIdentity: { flex: 1, minWidth: 70, gap: 2 },
+  planProductName: {
+    fontSize: 13,
+    lineHeight: 17,
+    color: CHAT_COLORS.ink,
+    fontFamily: CHAT_FONT.semibold,
+  },
+  planProductApproach: {
+    fontSize: 11.5,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.regular,
+  },
+  planBeforePrice: {
+    width: 54,
+    textAlign: 'right',
+    fontSize: 12.5,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.medium,
+  },
+  planAfterPrice: {
+    width: 54,
+    textAlign: 'right',
+    fontSize: 13.5,
+    color: CHAT_COLORS.brandDeep,
+    fontFamily: CHAT_FONT.bold,
+  },
+  docSection: {
+    gap: 10,
+    paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: CHAT_COLORS.border,
+  },
   docEditor: {
     minHeight: 240,
     fontSize: 13.5,
@@ -1211,7 +1565,7 @@ const styles = StyleSheet.create({
     borderColor: '#ECEBE6',
     padding: 12,
   },
-  docHeading: { fontSize: 15, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+  docHeading: { fontSize: 17, lineHeight: 22, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink },
   docProse: { fontSize: 14.5, lineHeight: 22, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.regular },
   // Document-viewer header (close · centered title · "···") + its dropdown menu.
   docHeader: {
@@ -1264,12 +1618,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: CHAT_COLORS.brandDeep,
+    backgroundColor: CHAT_COLORS.white,
     borderRadius: 12,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: CHAT_COLORS.border,
     paddingVertical: 12,
     marginTop: 2,
   },
-  docReviseCtaText: { fontSize: 14, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.white },
+  docReviseCtaText: { fontSize: 14, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+  docActionBlock: {
+    gap: 6,
+    paddingTop: 2,
+    paddingBottom: 8,
+  },
+  docActionKicker: { fontSize: 10.5, letterSpacing: 0.8, color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.bold },
+  docActionTitle: { fontSize: 19, lineHeight: 24, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold },
+  docActionDescription: { fontSize: 14, lineHeight: 20, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular },
+  docActionButton: {
+    minHeight: 52,
+    marginTop: 8,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: CHAT_COLORS.brand,
+    borderRadius: 26,
+    borderCurve: 'continuous',
+  },
+  docActionButtonText: { fontSize: 15, color: CHAT_COLORS.white, fontFamily: CHAT_FONT.bold },
   docMetrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   docMetricTile: {
     flexGrow: 1,
@@ -1301,7 +1679,10 @@ const styles = StyleSheet.create({
     borderRightColor: '#ECEBE6',
   },
   docTableCellFirst: { width: 148 },
+  docTableCellWide: { width: 190 },
   docTableHeadCell: { fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
+  docTableBeforeCell: { color: CHAT_COLORS.dim },
+  docTableAfterCell: { color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.bold },
   primaryBtn: {
     flex: 1,
     height: 52,

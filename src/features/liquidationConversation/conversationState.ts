@@ -22,8 +22,42 @@ export const createEmptyThreadState = (campaignId: string, threadId: string): Co
   updatedAt: new Date().toISOString(),
 });
 
-export const sortMessages = (messages: ConversationMessage[]) =>
-  messages.slice().sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+const PLAN_DECISION_COPY = new Set([
+  'please revise the strategy with a more conservative execution path.',
+  'can you provide a quick risk/reward comparison before we proceed?',
+  'approved. proceed with the strategy.',
+]);
+
+/** Keep retry/reconnect copies from becoming separate chat bubbles. The backend echoes
+ * clientMessageId when it has one; older plan-decision rows are also collapsed when the
+ * same canned decision was posted twice in quick succession. */
+export const sortMessages = (messages: ConversationMessage[]) => {
+  const sorted = messages.slice().sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+  const seenClientIds = new Set<string>();
+  return sorted.reduce<ConversationMessage[]>((out, message) => {
+    if (message.clientMessageId) {
+      const key = `${message.role}:${message.clientMessageId}`;
+      if (seenClientIds.has(key)) return out;
+      seenClientIds.add(key);
+    }
+
+    const previous = out[out.length - 1];
+    const normalized = (message.content || '').trim().toLowerCase();
+    if (
+      previous?.role === 'user' && message.role === 'user' &&
+      PLAN_DECISION_COPY.has(normalized) &&
+      (previous.content || '').trim().toLowerCase() === normalized &&
+      Math.abs(new Date(message.createdAt).getTime() - new Date(previous.createdAt).getTime()) <= 120_000
+    ) {
+      return out;
+    }
+
+    out.push(message);
+    return out;
+  }, []);
+};
 
 const withUpdatedAt = (state: ConversationThreadState): ConversationThreadState => ({
   ...state,

@@ -773,7 +773,9 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       body: JSON.stringify({
         content: decision.content || fallbackContent,
         threadId,
-        clientMessageId: createClientId('decision'),
+        // Stable across a retry/double-tap so the backend and the local merge can
+        // recognize this as one decision instead of creating duplicate user turns.
+        clientMessageId: `decision:${decision.decisionId}:${decision.action}`.slice(0, 180),
       }),
     });
   }
@@ -1214,6 +1216,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     return {
       id: message.id,
       serverMessageId: message.id,
+      clientMessageId: readString(metadata.clientMessageId) || readString(metadata.client_message_id),
       campaignId,
       threadId: typeof metadata.threadId === 'string' ? metadata.threadId : threadId,
       role,

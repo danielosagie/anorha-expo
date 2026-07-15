@@ -1,6 +1,4 @@
-// The calm AI disclaimer that sits at the end of the conversation, under the last
-// message and above the composer — the anorha equivalent of Claude's "AI can make
-// mistakes" footer. Brand leaf mark + one short line, faint so it never competes.
+// The calm AI disclaimer that sits directly under the latest response controls.
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AnorhaFace } from '../../../components/brand/AnorhaFace';
@@ -18,16 +16,16 @@ const styles = StyleSheet.create({
   wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     gap: 7,
-    paddingTop: 16,
-    paddingBottom: 4,
-    paddingHorizontal: 16,
+    paddingTop: 0,
+    paddingBottom: 6,
+    paddingHorizontal: 0,
   },
   mark: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(147,200,34,0.14)',
@@ -35,8 +33,8 @@ const styles = StyleSheet.create({
   text: {
     color: '#9CA3AF',
     fontFamily: 'Inter_400Regular',
-    fontSize: 11.5,
-    textAlign: 'center',
+    fontSize: 11,
+    textAlign: 'left',
   },
 });
 

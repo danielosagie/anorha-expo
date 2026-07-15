@@ -1,5 +1,5 @@
 import React, { useContext, useMemo, useState } from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { BRAND_PRIMARY } from '../../../design/tokens';
@@ -8,10 +8,13 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { AnorhaFace } from '../../../components/brand/AnorhaFace';
 import Markdown from 'react-native-markdown-display';
 import { HorizontalFadeScroll } from './HorizontalFadeScroll';
-import type { ActivityPayload, ChatJobCardMeta, ConversationMessage, DecisionPrompt } from '../types';
+import type { ActivityPayload, CampaignItem, ChatJobCardMeta, ConversationMessage, DecisionPrompt } from '../types';
 import { TimestampRevealContext } from './timestampReveal';
 import ActivityCard from './activity/ActivityCard';
 import { deriveActivities } from './activity/deriveActivities';
+import { sanitizeDisplayText } from '../displayText';
+import { useSystemNotifications } from '../../../context/SystemNotificationContext';
+import { SproutDisclaimer } from './SproutDisclaimer';
 
 // A tappable cart card the agent drops in after turning photos into draft listings.
 // Tapping it opens the AddProduct cart hydrated from the quick-scan session.
@@ -69,14 +72,17 @@ const ACTION_HITSLOP = { top: 10, bottom: 10, left: 10, right: 10 };
 const MessageActions = ({
   text,
   messageId,
-  onRegenerate,
   onFeedback,
+  narrationState,
+  onToggleNarration,
 }: {
   text: string;
   messageId: string;
-  onRegenerate?: (messageId: string) => void;
   onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
+  narrationState: 'idle' | 'loading' | 'playing' | 'paused';
+  onToggleNarration?: (messageId: string, text: string, title?: string) => void;
 }) => {
+  const { showToast } = useSystemNotifications();
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<null | 'up' | 'down'>(null);
   const tap = () => Haptics.selectionAsync().catch(() => undefined);
@@ -85,50 +91,66 @@ const MessageActions = ({
       await Clipboard.setStringAsync(text);
       setCopied(true);
       tap();
+      showToast({ title: 'Response copied', type: 'success', icon: 'check-circle-outline', duration: 1600 });
       setTimeout(() => setCopied(false), 1400);
     } catch {
-      /* clipboard can fail silently */
+      showToast({ title: 'Could not copy response', type: 'error', icon: 'alert-circle-outline', duration: 2000 });
     }
   };
   const castVote = (next: 'up' | 'down') => {
     tap();
-    setVote((prev) => {
-      const resolved = prev === next ? null : next;
-      onFeedback?.(messageId, resolved);
-      return resolved;
+    const resolved = vote === next ? null : next;
+    setVote(resolved);
+    onFeedback?.(messageId, resolved);
+    showToast({
+      title: resolved ? 'Feedback saved' : 'Feedback cleared',
+      message: resolved === 'down' ? 'Thanks, this helps Sprout improve.' : undefined,
+      type: 'success',
+      icon: resolved ? 'check-circle-outline' : 'close-circle-outline',
+      duration: 1700,
     });
   };
   return (
     <View style={styles.actionsRow}>
-      <TouchableOpacity style={styles.actionIcon} onPress={copy} hitSlop={ACTION_HITSLOP} accessibilityLabel="Copy">
+      <Pressable style={styles.actionIcon} onPress={copy} hitSlop={ACTION_HITSLOP} accessibilityRole="button" accessibilityLabel="Copy response">
         <Icon name={copied ? 'check' : 'content-copy'} size={18} color={copied ? '#5D7E16' : '#9CA3AF'} />
-      </TouchableOpacity>
-      {onRegenerate ? (
-        <TouchableOpacity
-          style={styles.actionIcon}
-          onPress={() => { tap(); onRegenerate(messageId); }}
-          hitSlop={ACTION_HITSLOP}
-          accessibilityLabel="Retry"
-        >
-          <Icon name="refresh" size={18} color="#9CA3AF" />
-        </TouchableOpacity>
-      ) : null}
-      <TouchableOpacity
+      </Pressable>
+      <Pressable
+        style={[styles.actionIcon, narrationState === 'playing' && styles.actionIconActive]}
+        onPress={() => { tap(); onToggleNarration?.(messageId, text, 'Sprout response'); }}
+        disabled={narrationState === 'loading' || !onToggleNarration}
+        hitSlop={ACTION_HITSLOP}
+        accessibilityRole="button"
+        accessibilityLabel={narrationState === 'playing' ? 'Pause reading response' : 'Read response aloud'}
+      >
+        {narrationState === 'loading' ? (
+          <ActivityIndicator size="small" color="#5D7E16" />
+        ) : (
+          <Icon
+            name={narrationState === 'playing' ? 'pause' : 'volume-high'}
+            size={19}
+            color={narrationState === 'playing' || narrationState === 'paused' ? '#5D7E16' : '#9CA3AF'}
+          />
+        )}
+      </Pressable>
+      <Pressable
         style={styles.actionIcon}
         onPress={() => castVote('up')}
         hitSlop={ACTION_HITSLOP}
-        accessibilityLabel="Good response"
+        accessibilityRole="button"
+        accessibilityLabel="Helpful response"
       >
         <Icon name={vote === 'up' ? 'thumb-up' : 'thumb-up-outline'} size={18} color={vote === 'up' ? '#5D7E16' : '#9CA3AF'} />
-      </TouchableOpacity>
-      <TouchableOpacity
+      </Pressable>
+      <Pressable
         style={styles.actionIcon}
         onPress={() => castVote('down')}
         hitSlop={ACTION_HITSLOP}
-        accessibilityLabel="Bad response"
+        accessibilityRole="button"
+        accessibilityLabel="Unhelpful response"
       >
         <Icon name={vote === 'down' ? 'thumb-down' : 'thumb-down-outline'} size={18} color={vote === 'down' ? '#52525B' : '#9CA3AF'} />
-      </TouchableOpacity>
+      </Pressable>
     </View>
   );
 };
@@ -136,11 +158,26 @@ const MessageActions = ({
 // Markdown tables can be wider than the bubble (many columns). Wrap them in the same
 // horizontal fade-scroller the document viewer uses so they extend right and hint "more →"
 // instead of squishing every column to fit.
+const TABLE_COLUMN_WIDTHS = [156, 90, 112, 220];
+const tableColumnWidth = (index?: number) => TABLE_COLUMN_WIDTHS[index ?? 0] ?? 148;
+
 const markdownRules = {
   table: (node: any, children: React.ReactNode) => (
     <HorizontalFadeScroll key={node.key} fadeColor="#FFFFFF" style={styles.mdTableScroll}>
       <View style={styles.mdTable}>{children}</View>
     </HorizontalFadeScroll>
+  ),
+  // Mobile tables need semantic column widths. Equal 108px cells forced long item
+  // names and explanations into narrow vertical stacks, making every row enormous.
+  th: (node: any, children: React.ReactNode) => (
+    <View key={node.key} style={[styles.mdTableCell, styles.mdTableHeadCell, { width: tableColumnWidth(node.index) }]}>
+      {children}
+    </View>
+  ),
+  td: (node: any, children: React.ReactNode) => (
+    <View key={node.key} style={[styles.mdTableCell, { width: tableColumnWidth(node.index) }]}>
+      {children}
+    </View>
   ),
   // Make the reply's text long-press selectable so the seller can grab part of a
   // message (not only the whole-message Copy button). textgroup wraps the text of
@@ -177,11 +214,6 @@ class MarkdownBoundary extends React.Component<
     return this.props.children as React.ReactElement;
   }
 }
-
-// Safety net: the seller wants no em dashes in chat. Strip them from a segment of
-// assistant text in case the model slips one in. Applied per text block (offsets are
-// computed against the raw reply, so stripping here never shifts a card's anchor).
-const stripEmDash = (s: string): string => s.replace(/\s*[—]\s*/g, ', ').replace(/[–]/g, '-');
 
 type AssistantBlock =
   | { type: 'text'; key: string; text: string }
@@ -221,7 +253,7 @@ const buildBlocks = (raw: string, activities: ActivityPayload[]): AssistantBlock
 
 // One markdown text segment of an assistant reply (em-dashes stripped at render).
 const TextBlock = ({ text }: { text: string }) => {
-  const md = stripEmDash(text);
+  const md = sanitizeDisplayText(text);
   if (!md.trim()) return null;
   return (
     <MarkdownBoundary content={md}>
@@ -237,12 +269,14 @@ const AssistantBody = ({
   isStreaming,
   onOpenTray,
   onOpenItem,
+  planItems,
 }: {
   raw: string;
   activities: ActivityPayload[];
   isStreaming: boolean;
   onOpenTray?: (payload: ActivityPayload) => void;
   onOpenItem?: (productId: string) => void;
+  planItems?: CampaignItem[];
 }) => {
   const blocks = useMemo(() => buildBlocks(raw, activities), [raw, activities]);
   return (
@@ -255,6 +289,7 @@ const AssistantBody = ({
             streaming={isStreaming}
             onOpenTray={onOpenTray}
             onOpenItem={onOpenItem}
+            planItems={planItems}
           />
         ) : (
           <TextBlock key={b.key} text={b.text} />
@@ -276,13 +311,15 @@ type Props = {
   onOpenTray?: (payload: ActivityPayload) => void;
   /** Jump from an activity to the product it touched. */
   onOpenItem?: (productId: string) => void;
-  /** Regenerate this finished reply (re-ask the preceding user turn). */
-  onRegenerate?: (messageId: string) => void;
   /** Record a thumbs up/down on this reply (null clears it). */
   onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
+  planItems?: CampaignItem[];
+  showDisclaimer?: boolean;
+  narrationState?: 'idle' | 'loading' | 'playing' | 'paused';
+  onToggleNarration?: (messageId: string, text: string, title?: string) => void;
 };
 
-const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onRegenerate, onFeedback }: Props) => {
+const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onFeedback, planItems, showDisclaimer = false, narrationState = 'idle', onToggleNarration }: Props) => {
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -308,11 +345,10 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
     return null;
   }, [message.actionMeta?.status, message.deliveryState, message.kind]);
 
-  // Assistant text is kept RAW for interleaving (card anchors are offsets into it);
-  // em-dashes are stripped per text block at render (stripEmDash in TextBlock). The
-  // stripped `content` here is only for the whole-message Copy action + the markdown gate.
+  // Assistant text is kept raw for interleaving because card anchors are offsets into it.
+  // Display punctuation is normalized after blocks are placed.
   const assistantRaw = isUser ? '' : (message.content || '');
-  const content = isUser ? message.content : stripEmDash(assistantRaw);
+  const content = sanitizeDisplayText(isUser ? message.content : assistantRaw);
   // Render assistant text as markdown the WHOLE time, including mid-stream, so it
   // never shows raw ** ## - syntax. (Previously markdown only rendered once the
   // turn finished, so the seller watched raw markdown the entire response.)
@@ -382,6 +418,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
             isStreaming={isStreaming}
             onOpenTray={onOpenTray}
             onOpenItem={onOpenItem}
+            planItems={planItems}
           />
         )}
 
@@ -462,10 +499,12 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
           <MessageActions
             text={content}
             messageId={message.serverMessageId || message.id}
-            onRegenerate={onRegenerate}
             onFeedback={onFeedback}
+            narrationState={narrationState}
+            onToggleNarration={onToggleNarration}
           />
         ) : null}
+        {!isUser && !isStreaming && !isFailed && renderMarkdown && showDisclaimer ? <SproutDisclaimer /> : null}
       </View>
     </Animated.View>
   );
@@ -497,6 +536,9 @@ export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (pr
     activitySignature(a.metadata) === activitySignature(b.metadata) &&
     ((a.metadata as any)?.jobCard?.sessionId || '') === ((b.metadata as any)?.jobCard?.sessionId || '') &&
     (a.imageUrls?.join('|') || '') === (b.imageUrls?.join('|') || '')
+    && prev.planItems === next.planItems
+    && prev.showDisclaimer === next.showDisclaimer
+    && prev.narrationState === next.narrationState
   );
 });
 
@@ -599,6 +641,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   assistantCard: {
+    width: '96%',
     maxWidth: '96%',
     backgroundColor: 'transparent',
     paddingHorizontal: 2,
@@ -884,8 +927,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  actionIconActive: { backgroundColor: 'rgba(147,200,34,0.12)' },
   // Wide markdown tables — scroller wrapper + the bordered table container.
   mdTableScroll: {
+    width: '100%',
+    maxWidth: '100%',
     marginBottom: 8,
   },
   mdTable: {
@@ -894,5 +940,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     overflow: 'hidden',
     alignSelf: 'flex-start',
+  },
+  mdTableCell: {
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderRightWidth: 1,
+    borderRightColor: '#E5E7EB',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  mdTableHeadCell: {
+    backgroundColor: '#F9FAFB',
   },
 });

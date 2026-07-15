@@ -11,37 +11,41 @@
 // Every finished activity is tappable and opens ONE review tray. Calm law: the
 // normal finished turn stays quiet; only failed / out-of-sync goes loud.
 import React, { useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
-import type { ActivityPayload, ValueChange } from '../../types';
+import type { ActivityPayload, CampaignItem, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import RoutineCard from './RoutineCard';
 import { TypingIndicator } from './Typing';
 import { activityGlyph, changeKindGlyph, humanizeChannel, toolActivePhrase } from './humanizers';
+import { compactDisplayText, sanitizeDisplayText } from '../../displayText';
+import { campaignItemPrice, getPlanDisplayTitle, getPlanPricePreviews, matchPlanItem } from '../../planPresentation';
+import { DiaTextReveal } from '../../../../components/DiaTextReveal';
 
 export interface ActivityCardProps {
   payload: ActivityPayload;
   streaming: boolean;
   onOpenTray?: (payload: ActivityPayload) => void;
   onOpenItem?: (productId: string) => void;
+  planItems?: CampaignItem[];
 }
 
-export default function ActivityCard({ payload, streaming, onOpenTray }: ActivityCardProps) {
+export default function ActivityCard({ payload, streaming, onOpenTray, planItems = [] }: ActivityCardProps) {
   switch (payload.kind) {
     case 'routine':
     case 'reminder':
       return <RoutineCard payload={payload} onOpenTray={onOpenTray} />;
     case 'tool-run':
-      return <ToolRunCard payload={payload} streaming={streaming} onOpenTray={onOpenTray} />;
+      return <ToolRunCard payload={payload} streaming={streaming} />;
     case 'value-change':
     case 'publish':
       return <RichActivityCard payload={payload} onOpenTray={onOpenTray} />;
     case 'document':
       return <DocumentCard payload={payload} onOpenTray={onOpenTray} />;
     case 'plan':
-      return <PlanActivityCard payload={payload} onOpenTray={onOpenTray} />;
+      return <PlanActivityCard payload={payload} planItems={planItems} onOpenTray={onOpenTray} />;
     default:
       return null;
   }
@@ -53,35 +57,44 @@ export default function ActivityCard({ payload, streaming, onOpenTray }: Activit
 
 function PlanActivityCard({
   payload,
+  planItems,
   onOpenTray,
 }: {
   payload: Extract<ActivityPayload, { kind: 'plan' }>;
+  planItems: CampaignItem[];
   onOpenTray?: (payload: ActivityPayload) => void;
 }) {
   const plan = payload.plan;
-  const stepCount = plan.steps?.length ?? 0;
+  const title = getPlanDisplayTitle(plan);
+  const priceRows = getPlanPricePreviews(plan).slice(0, 2).map((change) => {
+    const item = matchPlanItem(change.name, planItems);
+    return { ...change, before: change.before || campaignItemPrice(item) };
+  });
   const press = () => {
     Haptics.selectionAsync().catch(() => undefined);
     onOpenTray?.(payload);
   };
   return (
     <TouchableOpacity style={styles.planCard} activeOpacity={0.85} onPress={press}>
-      <View style={styles.richHeader}>
-        <View style={styles.planTile}>
-          <Icon name="clipboard-check-outline" size={18} color={CHAT_COLORS.brandDeep} />
-        </View>
+      <View style={styles.planHeader}>
         <View style={styles.richTextCol}>
-          <Text style={styles.richTitle} numberOfLines={2}>{plan.title || payload.title}</Text>
-          {plan.summary ? <Text style={styles.richSub} numberOfLines={2}>{plan.summary}</Text> : null}
+          <Text style={styles.planTitle} numberOfLines={2}>{title}</Text>
+          {plan.summary ? <Text style={styles.planSummary} numberOfLines={2}>{compactDisplayText(plan.summary, { maxChars: 150, maxSentences: 1 })}</Text> : null}
         </View>
         <Icon name="chevron-right" size={18} color="#C4C4CC" />
       </View>
-      <View style={styles.planFooter}>
-        <Icon name="gesture-tap-button" size={13} color={CHAT_COLORS.brandDeep} />
-        <Text style={styles.planFooterText}>
-          Review and approve{stepCount ? ` · ${stepCount} step${stepCount === 1 ? '' : 's'}` : ''}
-        </Text>
-      </View>
+      {priceRows.length ? (
+        <View style={styles.planPricePreview}>
+          {priceRows.map((change, index) => (
+            <View key={`${change.name}-${index}`} style={styles.planPriceRow}>
+              <Text style={styles.planPriceName} numberOfLines={1}>{change.name}</Text>
+              {change.before ? <Text style={styles.planPriceBefore}>{change.before}</Text> : null}
+              {change.before ? <Icon name="arrow-right" size={13} color={CHAT_COLORS.faint} /> : null}
+              <Text style={styles.planPriceAfter}>{change.after}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -97,7 +110,6 @@ function DocumentCard({
   onOpenTray?: (payload: ActivityPayload) => void;
 }) {
   const doc = payload.document;
-  const sectionCount = doc.sections?.length ?? 0;
   const press = () => {
     Haptics.selectionAsync().catch(() => undefined);
     onOpenTray?.(payload);
@@ -109,16 +121,14 @@ function DocumentCard({
           <Icon name="file-document-outline" size={18} color={CHAT_COLORS.brandDeep} />
         </View>
         <View style={styles.richTextCol}>
-          <Text style={styles.richTitle} numberOfLines={1}>{doc.title || payload.title}</Text>
-          {doc.summary ? <Text style={styles.richSub} numberOfLines={2}>{doc.summary}</Text> : null}
+          <Text style={styles.richTitle} numberOfLines={1}>{sanitizeDisplayText(doc.title || payload.title)}</Text>
+          {doc.summary ? <Text style={styles.richSub} numberOfLines={2}>{compactDisplayText(doc.summary, { maxChars: 150, maxSentences: 1 })}</Text> : null}
         </View>
         <Icon name="chevron-right" size={18} color="#C4C4CC" />
       </View>
       <View style={styles.docFooter}>
         <Icon name="text-box-outline" size={13} color={CHAT_COLORS.dim} />
-        <Text style={styles.docFooterText}>
-          View report{sectionCount ? ` · ${sectionCount} section${sectionCount === 1 ? '' : 's'}` : ''}
-        </Text>
+        <Text style={styles.docFooterText}>Open report</Text>
       </View>
     </TouchableOpacity>
   );
@@ -209,11 +219,9 @@ function RichActivityCard({
 function ToolRunCard({
   payload,
   streaming,
-  onOpenTray,
 }: {
   payload: Extract<ActivityPayload, { kind: 'tool-run' }>;
   streaming: boolean;
-  onOpenTray?: (payload: ActivityPayload) => void;
 }) {
   const steps = payload.steps ?? [];
   const reasoning = payload.reasoning?.trim();
@@ -223,32 +231,25 @@ function ToolRunCard({
 
   if (!streaming && !count && !hasReasoning) return null;
 
-  const totalMs = steps.reduce((sum, s) => sum + (typeof s.durationMs === 'number' ? s.durationMs : 0), 0);
-  const totalSecs = totalMs > 0 ? (totalMs / 1000).toFixed(1) : null;
-
   const lastStep = count ? steps[count - 1] : null;
   const livePhrase = lastStep ? toolActivePhrase(lastStep.tool) : 'Working on it';
-  const doneSummary =
-    count > 0 ? `Done · ${count} step${count === 1 ? '' : 's'}${totalSecs ? ` · ${totalSecs}s` : ''}` : 'Thought it through';
-
-  const canOpen = !streaming && (count > 0 || hasReasoning);
-  const press = () => {
-    if (!canOpen) return;
-    Haptics.selectionAsync().catch(() => undefined);
-    onOpenTray?.(payload);
-  };
+  const doneSummary = sanitizeDisplayText(payload.title || 'Finished the checks');
 
   // The reasoning trace, shown inline (not buried in the tray): it streams live while
   // the model is still thinking, then collapses to a tappable "Thought it through" row.
   const thinkingLive = streaming && count === 0;
   const showReasoningBody = hasReasoning && (expanded || thinkingLive);
+  // Once tool steps have completed, the receipt already opens the tray containing
+  // the reasoning. Rendering a second "Thought it through" card beside "Done" made
+  // successful plan turns look like several unrelated operations.
+  const showReasoningCard = hasReasoning && (streaming || count === 0);
   // Suppress the "Working on it" pill during the pure-thinking phase so the reasoning
   // block stands alone; once steps land (or there's no reasoning) the receipt shows.
   const showStepsRow = count > 0 || (streaming && !hasReasoning);
 
   return (
     <View style={styles.toolRunWrap}>
-      {hasReasoning ? (
+      {showReasoningCard ? (
         <TouchableOpacity style={styles.reasoningCard} activeOpacity={0.7} onPress={() => setExpanded((e) => !e)}>
           <View style={styles.reasoningHead}>
             <Icon name="lightbulb-on-outline" size={13} color={CHAT_COLORS.brandDeep} />
@@ -264,28 +265,15 @@ function ToolRunCard({
       ) : null}
 
       {showStepsRow ? (
-        <TouchableOpacity
-          style={[styles.activityCard, streaming && styles.activityCardLive]}
-          activeOpacity={canOpen ? 0.7 : 1}
-          disabled={!canOpen}
-          onPress={press}
-        >
-          <View style={styles.activityHeader}>
-            {streaming ? (
-              <ActivityIndicator size="small" color="#8A95A3" style={styles.activitySpinner} />
-            ) : (
-              <View style={styles.activityDoneChip}>
-                <Icon name="check" size={11} color={CHAT_COLORS.brandDeep} />
-              </View>
-            )}
-            <Text style={[styles.activityHeaderText, streaming && styles.activityHeaderTextLive]} numberOfLines={1}>
-              {streaming ? livePhrase : doneSummary}
-            </Text>
-            {streaming ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
-            <View style={styles.activitySpacer} />
-            {canOpen ? <Icon name="chevron-right" size={15} color="#C4C4CC" /> : null}
-          </View>
-        </TouchableOpacity>
+        <View style={styles.activitySummary}>
+          <DiaTextReveal
+            key={streaming ? livePhrase : doneSummary}
+            text={streaming ? livePhrase : doneSummary}
+            style={styles.activitySummaryText}
+            revealFrom={CHAT_COLORS.white}
+            revealTo={streaming ? CHAT_COLORS.inkSoft : CHAT_COLORS.dim}
+          />
+        </View>
       ) : null}
     </View>
   );
@@ -295,6 +283,7 @@ const styles = StyleSheet.create({
   // ── Rich (value-change / publish) card ──
   richCard: {
     alignSelf: 'flex-start',
+    width: '100%',
     maxWidth: '100%',
     marginBottom: 10,
     borderRadius: 16,
@@ -330,36 +319,33 @@ const styles = StyleSheet.create({
   previewDiff: { marginLeft: 'auto' },
   moreLine: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.faint },
 
-  // ── Plan card (brand-tinted, opens the approve sheet) ──
+  // ── Plan card (neutral, opens the approve sheet) ──
   planCard: {
     alignSelf: 'flex-start',
+    width: '100%',
     maxWidth: '100%',
     marginBottom: 10,
     borderRadius: 16,
-    backgroundColor: '#F7FBEE',
+    backgroundColor: CHAT_COLORS.white,
     borderWidth: 1,
-    borderColor: '#E4EFC9',
-    paddingVertical: 12,
-    paddingHorizontal: 13,
+    borderColor: CHAT_COLORS.border,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
   },
-  planTile: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(147,200,34,0.20)',
-  },
-  planFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 11,
-    paddingTop: 10,
+  planHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  planTitle: { fontSize: 15, lineHeight: 20, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+  planSummary: { fontSize: 14, lineHeight: 19, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, marginTop: 2 },
+  planPricePreview: {
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E4EFC9',
+    borderTopColor: CHAT_COLORS.divider,
   },
-  planFooterText: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+  planPriceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  planPriceName: { flex: 1, fontSize: 13.5, lineHeight: 18, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },
+  planPriceBefore: { fontSize: 13.5, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },
+  planPriceAfter: { fontSize: 13.5, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold },
 
   // ── Document card footer ──
   docFooter: {
@@ -374,7 +360,7 @@ const styles = StyleSheet.create({
   docFooterText: { fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
 
   // ── Tool-run receipt (reasoning block + live pill / done summary) ──
-  toolRunWrap: { alignSelf: 'flex-start', maxWidth: '100%', gap: 6, marginBottom: 10 },
+  toolRunWrap: { alignSelf: 'flex-start', maxWidth: '100%', gap: 6, marginBottom: 6 },
   reasoningCard: {
     borderRadius: 14,
     backgroundColor: '#FAFAF7',
@@ -392,28 +378,11 @@ const styles = StyleSheet.create({
     color: CHAT_COLORS.dim,
     fontFamily: CHAT_FONT.regular,
   },
-  activityCard: {
-    borderRadius: 14,
-    backgroundColor: '#FAFAF7',
-    borderWidth: 1,
-    borderColor: '#ECEBE6',
-    overflow: 'hidden',
+  activitySummary: {
     alignSelf: 'flex-start',
     maxWidth: '100%',
+    paddingVertical: 3,
   },
-  activityCardLive: { backgroundColor: '#F1F2F0', borderWidth: 0, borderRadius: 16 },
-  activityDoneChip: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(147,200,34,0.16)',
-    marginRight: 1,
-  },
-  activityHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8 },
-  activityHeaderText: { fontSize: 12, color: CHAT_COLORS.faint, fontFamily: CHAT_FONT.medium, letterSpacing: 0.1 },
-  activityHeaderTextLive: { color: '#52525B', fontFamily: CHAT_FONT.medium, flexShrink: 1 },
+  activitySummaryText: { flexShrink: 1, fontSize: 14, lineHeight: 20, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },
   activitySpacer: { flex: 1 },
-  activitySpinner: { transform: [{ scale: 0.7 }], marginRight: 2 },
 });

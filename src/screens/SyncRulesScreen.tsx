@@ -1,22 +1,43 @@
-import React, { useState, useEffect } from 'react';
-import { API_BASE_URL } from '../config/env';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+// Per-store sync settings. Reached by tapping a store under Integrations
+// (SettingsScreen → SyncRules). This is the calm "all settings" surface — the
+// same list-card + autosave language as NotificationSettings, NOT the old 4-step
+// wizard. One scroll of grouped toggles; every change autosaves (quiet "Saved").
+//
+// Only the money-movers are surfaced: automation (auto-sync / add-new), what
+// syncs (inventory / prices), and direction. The fields this screen has no UI
+// for — sourceOfTruth, mode, schedule, destinations — are ROUND-TRIPPED from the
+// loaded rules so a calm edit here never clobbers what the engine had. Payload
+// shape stays identical to SyncPreferencesSheet / the engine contract.
+
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, ActivityIndicator, StatusBar,
+} from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  RefreshCw, PlusCircle, Package, Tag, ArrowLeftRight, ArrowUpFromLine, ArrowDownToLine,
+  AlertTriangle, ChevronRight, Link2Off, Check,
+} from 'lucide-react-native';
+
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
-import Button from '../components/Button';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Card from '../components/Card';
+import { API_BASE_URL } from '../config/env';
+import { normalizeDisplayName } from '../config/platforms';
 import { useImportHub } from '../hooks/useImportHub';
+import PageHeader from '../components/ui/PageHeader';
+import PlatformAvatar from '../components/PlatformAvatar';
+import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';
+
 const log = createLogger('SyncRulesScreen');
 
-// --- System-B palette (matches ConnectionsScreen) — this screen was revived out
-// of the legacy useTheme()/System-A look into the same hardcoded language. ---
+// System-B palette (matches ConnectionsScreen / NotificationSettings).
 const INK = '#18181B';
 const SUBTLE = '#71717A';
 const MUTED = '#9CA3AF';
+const FAINT = '#D4D4D8';
 const BG = '#F6F7F4';
 const SURFACE = '#FFFFFF';
 const BORDER = '#ECEBE6';
@@ -24,610 +45,372 @@ const HAIRLINE = '#F1F1EE';
 const GREEN = '#93C822';
 const GREEN_DARK = '#43631A';
 const GREEN_TINT = 'rgba(147,200,34,0.12)';
-const AMBER = '#A2611A';
-const AMBER_TINT = 'rgba(162,97,26,0.12)';
+const AMBER = '#BA7517';
+const AMBER_TINT = 'rgba(186,117,23,0.12)';
+const RED = '#DC2626';
 
-// Canonical backend enums (sync-rules.service.ts SyncRules) — keep these in
-// lockstep with the engine so saved directives are actually readable/enforced.
+// Canonical backend enums (sync-rules.service.ts) — keep in lockstep with the engine.
 type SyncDirection = 'bidirectional' | 'push_only' | 'pull_only';
 type SourceOfTruth = 'ANORHA' | 'PLATFORM';
 
-type SyncRulesScreenRouteProp = RouteProp<AppStackParamList, 'SyncRules'>;
-type SyncRulesScreenNavigationProp = StackNavigationProp<AppStackParamList, 'SyncRules'>;
+// The essentials this screen actually edits.
+interface Rules {
+  syncDirection: SyncDirection;
+  autoUpdate: boolean; // propagateUpdates
+  autoCreate: boolean; // createNew
+  syncInventory: boolean;
+  syncPricing: boolean;
+}
+
+// Fields with no UI here — round-tripped verbatim so an edit can't reset them.
+interface Preserved {
+  sourceOfTruth: SourceOfTruth;
+  mode: 'manual' | 'auto' | 'batch';
+  schedule: any;
+  destinations: any;
+}
+
+const DIRECTION_OPTIONS: { value: SyncDirection; title: string; sub: string; Icon: any }[] = [
+  { value: 'bidirectional', title: 'Two-way sync', sub: 'Changes flow in both directions', Icon: ArrowLeftRight },
+  { value: 'push_only', title: 'Push to platform', sub: 'Anorha updates your store only', Icon: ArrowUpFromLine },
+  { value: 'pull_only', title: 'Pull from platform', sub: 'Your store updates Anorha only', Icon: ArrowDownToLine },
+];
+
+const statusOf = (raw?: string): { label: string; color: string } => {
+  const s = (raw || '').toLowerCase();
+  if (s.includes('error') || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Needs reconnect', color: RED };
+  if (s.includes('scan') || s.includes('sync')) return { label: 'Syncing', color: AMBER };
+  return { label: 'Connected', color: GREEN_DARK };
+};
+
+type RouteType = RouteProp<AppStackParamList, 'SyncRules'>;
+type NavType = StackNavigationProp<AppStackParamList, 'SyncRules'>;
 
 const SyncRulesScreen = () => {
-  const route = useRoute<SyncRulesScreenRouteProp>();
-  const navigation = useNavigation<SyncRulesScreenNavigationProp>();
+  const route = useRoute<RouteType>();
+  const navigation = useNavigation<NavType>();
+  const insets = useSafeAreaInsets();
   const { connectionId } = route.params;
-  // Senders (ConnectionsScreen / ConnectedPlatformItem / SettingsScreen) pass an
-  // extra platformName so the header doesn't flash "Platform" before meta loads.
   const routeParams = route.params as any;
-  const [platformName, setPlatformName] = useState<string>(routeParams?.platformName || 'Platform');
-  const [displayName, setDisplayName] = useState<string>('');
-  const API_ROOT = API_BASE_URL;
 
-  // Passive "needs you" signal for this connection (email-inbox model): the deck
-  // is reachable only from the explicit row below, never forced.
+  const [platformType, setPlatformType] = useState<string>(routeParams?.platformName || '');
+  const [displayName, setDisplayName] = useState<string>('');
+  const [status, setStatus] = useState<string>('active');
+
+  const [loading, setLoading] = useState(true);
+  const [rulesReady, setRulesReady] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+
+  const [rules, setRules] = useState<Rules>({
+    syncDirection: 'bidirectional',
+    autoUpdate: true,
+    autoCreate: true,
+    syncInventory: true,
+    syncPricing: true,
+  });
+  const preserved = useRef<Preserved>({
+    sourceOfTruth: 'ANORHA',
+    mode: 'manual',
+    schedule: null,
+    destinations: { connectionIds: [connectionId] },
+  });
+
+  // Passive "needs you" signal — the ONE explicit deep-link into the review deck.
   const hub = useImportHub();
   const attn = hub.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
 
-  // Sync Rules State
-  const [syncDirection, setSyncDirection] = useState<SyncDirection>('bidirectional');
-  const [sourceOfTruth, setSourceOfTruth] = useState<SourceOfTruth>('ANORHA');
-  const [autoCreate, setAutoCreate] = useState(true);
-  const [autoUpdate, setAutoUpdate] = useState(true);
-  const [syncInventory, setSyncInventory] = useState(true);
-  const [syncPricing, setSyncPricing] = useState(true);
-  const [showAdvancedRules, setShowAdvancedRules] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [step, setStep] = useState<number>(1);
-  const [availableConnections, setAvailableConnections] = useState<Array<{ Id: string; DisplayName: string; PlatformType: string }>>([]);
-  const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
-  const [syncMode, setSyncMode] = useState<'manual' | 'auto' | 'batch'>('manual');
-  const [batchTime, setBatchTime] = useState<string>('02:00');
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current); }, []);
 
-  // Load existing sync rules
-  useEffect(() => {
-    loadConnectionMeta();
-    loadSyncRules();
-  }, [connectionId]);
+  const name = normalizeDisplayName(displayName || platformType || 'Platform');
+  const st = statusOf(status);
 
   useEffect(() => {
+    let alive = true;
     (async () => {
+      setLoading(true);
+      setRulesReady(false);
       try {
-        const { data: userRes } = await supabase.auth.getUser();
-        const userId = userRes?.user?.id;
-        if (!userId) return;
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('PlatformConnections')
-          .select('Id, DisplayName, PlatformType, IsEnabled')
-          .eq('UserId', userId)
-          .eq('IsEnabled', true);
-        const rows = (data || []).map((r: any) => ({ Id: r.Id, DisplayName: r.DisplayName, PlatformType: r.PlatformType }));
-        setAvailableConnections(rows);
-        setSelectedDestinations((prev) => (prev.length ? prev : [connectionId]));
-      } catch { }
+          .select('DisplayName, PlatformType, Status, SyncRules')
+          .eq('Id', connectionId)
+          .single();
+        if (!alive) return;
+        if (error) { log.error('load sync rules', error); return; }
+
+        setDisplayName(data?.DisplayName || '');
+        setPlatformType(data?.PlatformType || platformType);
+        setStatus(data?.Status || 'active');
+
+        const r = (data as any)?.SyncRules;
+        if (r) {
+          const legacyDir: Record<string, SyncDirection> = {
+            'two-way': 'bidirectional', 'push-only': 'push_only', 'pull-only': 'pull_only',
+          };
+          const dir = r.syncDirection;
+          const sot: SourceOfTruth | undefined =
+            r.productDetailsSoT || r.inventorySoT ||
+            (r.sourceOfTruth === 'platform' ? 'PLATFORM' : r.sourceOfTruth === 'sssync' ? 'ANORHA' : undefined);
+          setRules({
+            syncDirection: (dir && legacyDir[dir]) || (dir as SyncDirection) || 'bidirectional',
+            autoUpdate: r.propagateUpdates !== undefined ? r.propagateUpdates : r.autoUpdate !== undefined ? r.autoUpdate : true,
+            autoCreate: r.createNew !== undefined ? r.createNew : r.autoCreate !== undefined ? r.autoCreate : true,
+            syncInventory: r.syncInventory !== undefined ? r.syncInventory : true,
+            syncPricing: r.syncPricing !== undefined ? r.syncPricing : true,
+          });
+          preserved.current = {
+            sourceOfTruth: sot || 'ANORHA',
+            mode: (r.mode as Preserved['mode']) || 'manual',
+            schedule: r.schedule ?? null,
+            destinations: r.destinations ?? { connectionIds: [connectionId] },
+          };
+        }
+        setRulesReady(true);
+      } catch (err) {
+        log.error('load sync rules', err);
+      } finally {
+        if (alive) setLoading(false);
+      }
     })();
+    return () => { alive = false; };
   }, [connectionId]);
 
-  const loadConnectionMeta = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('PlatformConnections')
-        .select('DisplayName, PlatformType')
-        .eq('Id', connectionId)
-        .single();
-      if (!error && data) {
-        setDisplayName(data.DisplayName || '');
-        setPlatformName(data.PlatformType || 'Platform');
-      }
-    } catch { }
-  };
-
-  const loadSyncRules = async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('PlatformConnections')
-        .select('SyncRules')
-        .eq('Id', connectionId)
-        .single();
-
-      if (error) {
-        log.error('Error loading sync rules:', error);
-        return;
-      }
-
-      if (data?.SyncRules) {
-        const rules = data.SyncRules;
-        // Direction: canonical enum, with back-compat for any legacy hyphenated values.
-        const legacyDir: Record<string, SyncDirection> = {
-          'two-way': 'bidirectional',
-          'push-only': 'push_only',
-          'pull-only': 'pull_only',
-        };
-        const dir = rules.syncDirection;
-        setSyncDirection((dir && legacyDir[dir]) || (dir as SyncDirection) || 'bidirectional');
-        // Source of truth: backend stores productDetailsSoT/inventorySoT ('PLATFORM'|'ANORHA').
-        // Fall back to the legacy 'sssync'/'platform' shape if present.
-        const sot: SourceOfTruth | undefined =
-          rules.productDetailsSoT ||
-          rules.inventorySoT ||
-          (rules.sourceOfTruth === 'platform' ? 'PLATFORM' : rules.sourceOfTruth === 'sssync' ? 'ANORHA' : undefined);
-        setSourceOfTruth(sot || 'ANORHA');
-        // createNew is the canonical auto-create flag; keep legacy autoCreate as fallback.
-        setAutoCreate(rules.createNew !== undefined ? rules.createNew : rules.autoCreate !== undefined ? rules.autoCreate : true);
-        setAutoUpdate(rules.propagateUpdates !== undefined ? rules.propagateUpdates : rules.autoUpdate !== undefined ? rules.autoUpdate : true);
-        setSyncInventory(rules.syncInventory !== undefined ? rules.syncInventory : true);
-        setSyncPricing(rules.syncPricing !== undefined ? rules.syncPricing : true);
-      }
-    } catch (err) {
-      log.error('Error loading sync rules:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const saveSyncRules = async () => {
-    setSaving(true);
+  // Autosave — merge the change, PUT the full canonical payload, revert on failure.
+  const persist = async (next: Rules, prev: Rules) => {
+    setSaveState('saving');
     try {
       const { data: session } = await supabase.auth.getSession();
       const token = session?.session?.access_token;
       if (!token) throw new Error('Auth required');
-
-      // Route through the canonical sync-rules endpoint so the engine applies the
-      // direction preset (push/pull/propagate flags) and persists field names it
-      // actually reads. The server derives allowPush/allowPull/propagate* from
-      // syncDirection, so we send the canonical intent fields only.
-      const updates: Record<string, any> = {
-        syncDirection,
-        productDetailsSoT: sourceOfTruth,
-        inventorySoT: sourceOfTruth,
-        createNew: autoCreate,
-        propagateUpdates: autoUpdate,
-        syncInventory,
-        syncPricing,
-        // Additive UI-only scheduling/destination metadata (merged + persisted).
-        mode: syncMode,
-        schedule: syncMode === 'batch' ? { dailyTimeUtc: batchTime } : null,
-        destinations: { connectionIds: selectedDestinations },
+      const p = preserved.current;
+      const body = {
+        syncDirection: next.syncDirection,
+        productDetailsSoT: p.sourceOfTruth,
+        inventorySoT: p.sourceOfTruth,
+        createNew: next.autoCreate,
+        propagateUpdates: next.autoUpdate,
+        syncInventory: next.syncInventory,
+        syncPricing: next.syncPricing,
+        mode: p.mode,
+        schedule: p.mode === 'batch' ? p.schedule : null,
+        destinations: p.destinations,
       };
-
-      const res = await fetch(`${API_ROOT}/api/sync-rules/connections/${connectionId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/sync-rules/connections/${connectionId}`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`Failed (${res.status})`);
-
-      Alert.alert(
-        'Success',
-        'Sync rules have been saved successfully!',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
-    } catch (err: any) {
-      log.error('Error saving sync rules:', err);
-      Alert.alert('Error', 'Failed to save sync rules. Please try again.');
-    } finally {
-      setSaving(false);
+      setSaveState('saved');
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaveState('idle'), 1600);
+    } catch (err) {
+      log.error('save sync rules', err);
+      setRules(prev); // roll back the optimistic change
+      setSaveState('error');
     }
   };
 
-  const gotoReview = () => {
-    navigation.navigate('SyncInbox', { connectionId, platformName });
+  const update = (patch: Partial<Rules>) => {
+    if (!rulesReady) return;
+    setRules((prev) => {
+      const next = { ...prev, ...patch };
+      persist(next, prev);
+      return next;
+    });
   };
 
-  const disconnectPlatform = () => {
-    Alert.alert(
-      'Remove connection',
-      `Disconnect ${platformName}? Your products stay in Anorha.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Disconnect',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const { data: session } = await supabase.auth.getSession();
-              const token = session?.session?.access_token;
-              if (!token) throw new Error('Auth required');
-              // Non-destructive disconnect: keep all products/inventory (mirrors
-              // ConnectionsScreen). A hard DELETE would cull inventory, which the
-              // copy never warned about.
-              const res = await fetch(`${API_ROOT}/api/platform-connections/${connectionId}/disconnect`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cleanupStrategy: 'keep' }),
-              });
-              if (!res.ok) throw new Error(`Failed (${res.status})`);
-              Alert.alert('Disconnected', `${platformName} connection removed. Your products stay in Anorha.`);
-              navigation.goBack();
-            } catch (e: any) {
-              Alert.alert('Disconnect failed', e?.message || 'Please try again');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const renderSyncDirectionOption = (option: SyncDirection, title: string, subtitle: string, icon: string) => {
-    const selected = syncDirection === option;
-    return (
-      <TouchableOpacity
-        style={[styles.optionButton, selected && styles.optionButtonSelected]}
-        onPress={() => setSyncDirection(option)}
-      >
-        <Icon name={icon} size={24} color={selected ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{title}</Text>
-          <Text style={[styles.optionSubtitle, selected && styles.optionSubtitleSelected]}>{subtitle}</Text>
-        </View>
-        <Icon name={selected ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={selected ? GREEN_DARK : SUBTLE} />
-      </TouchableOpacity>
-    );
-  };
-
-  const renderSourceOption = (option: SourceOfTruth, title: string, subtitle: string, icon: string) => {
-    const selected = sourceOfTruth === option;
-    return (
-      <TouchableOpacity
-        style={[styles.optionButton, selected && styles.optionButtonSelected]}
-        onPress={() => setSourceOfTruth(option)}
-      >
-        <Icon name={icon} size={24} color={selected ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{title}</Text>
-          <Text style={[styles.optionSubtitle, selected && styles.optionSubtitleSelected]}>{subtitle}</Text>
-        </View>
-        <Icon name={selected ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={selected ? GREEN_DARK : SUBTLE} />
-      </TouchableOpacity>
-    );
-  };
-
-  const applyPreset = (preset: 'conservative' | 'balanced' | 'aggressive') => {
-    switch (preset) {
-      case 'conservative':
-        setSyncDirection('pull_only');
-        setSourceOfTruth('PLATFORM');
-        setAutoCreate(false);
-        setAutoUpdate(false);
-        setSyncInventory(true);
-        setSyncPricing(false);
-        break;
-      case 'balanced':
-        setSyncDirection('bidirectional');
-        setSourceOfTruth('ANORHA');
-        setAutoCreate(true);
-        setAutoUpdate(true);
-        setSyncInventory(true);
-        setSyncPricing(true);
-        break;
-      case 'aggressive':
-        setSyncDirection('push_only');
-        setSourceOfTruth('ANORHA');
-        setAutoCreate(true);
-        setAutoUpdate(true);
-        setSyncInventory(true);
-        setSyncPricing(true);
-        break;
+  const disconnect = async () => {
+    setDisconnectOpen(false);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) throw new Error('Auth required');
+      // Non-destructive: keep all products/inventory (mirrors ConnectionsScreen).
+      const res = await fetch(`${API_BASE_URL}/api/platform-connections/${connectionId}/disconnect`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cleanupStrategy: 'keep' }),
+      });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
+      navigation.goBack();
+    } catch (e: any) {
+      log.error('disconnect', e);
+      setSaveState('error');
     }
   };
 
-  if (loading) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Text style={{ color: INK, fontFamily: 'Inter_500Medium' }}>Loading sync rules...</Text>
+  const SaveBadge = () => {
+    if (saveState === 'saving') return <Text style={styles.badgeMuted}>Saving…</Text>;
+    if (saveState === 'saved') return (
+      <View style={styles.badgeSaved}><Check size={13} color={GREEN_DARK} /><Text style={styles.badgeSavedText}>Saved</Text></View>
+    );
+    if (saveState === 'error') return <Text style={styles.badgeError}>Couldn't save</Text>;
+    return null;
+  };
+
+  const ToggleRow = ({ Icon, label, description, value, onValueChange, first }: any) => (
+    <View style={[styles.row, !first && styles.rowDivider]}>
+      <View style={styles.rowIcon}><Icon size={22} color={INK} /></View>
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{label}</Text>
+        <Text style={styles.rowDescription}>{description}</Text>
       </View>
-    );
-  }
+      <Switch value={value} onValueChange={onValueChange} trackColor={{ false: FAINT, true: GREEN }} thumbColor="#FFFFFF" />
+    </View>
+  );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Icon name="arrow-left" size={24} color={INK} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>Sync Settings · {displayName || platformName}</Text>
-      </View>
+    <View style={styles.root}>
+      <StatusBar barStyle="dark-content" />
+      <ScrollView
+        contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <PageHeader title="Sync settings" onBack={() => navigation.goBack()} right={<SaveBadge />} />
 
-      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 8 }}>
-        {/* Needs you — passive attention row; the ONE explicit deep-link into the
-            review deck for this connection. */}
-        {attn > 0 && (
-          <TouchableOpacity activeOpacity={0.85} onPress={gotoReview} style={styles.needsRow}>
-            <View style={styles.needsIcon}>
-              <Icon name="sync-alert" size={20} color={AMBER} />
+        {loading ? (
+          <View style={styles.center}><ActivityIndicator size="large" color={GREEN} /></View>
+        ) : (
+          <>
+            {/* Store identity + live status */}
+            <View style={styles.storeCard}>
+              <PlatformAvatar platformType={(platformType || '').toLowerCase()} size="medium" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.storeName} numberOfLines={1}>{name}</Text>
+                <View style={styles.statusRow}>
+                  <View style={[styles.dot, { backgroundColor: st.color }]} />
+                  <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
+                </View>
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.needsTitle}>{attn} {attn === 1 ? 'item needs' : 'items need'} you</Text>
-              <Text style={styles.needsSub} numberOfLines={1}>Review matches for {displayName || platformName}</Text>
-            </View>
-            <Icon name="chevron-right" size={22} color={MUTED} />
-          </TouchableOpacity>
-        )}
 
-        {/* Stepper */}
-        <Card style={styles.ruleSection}>
-          <Text style={styles.sectionTitle}>Setup</Text>
-          <Text style={styles.sectionSubtitle}>Step {step} of 4</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {[1, 2, 3, 4].map((n) => (
-              <TouchableOpacity key={n} onPress={() => setStep(n)}>
-                <Icon name={step === n ? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={18} color={step === n ? GREEN_DARK : SUBTLE} />
+            {/* Status loud: the one deep-link into the review deck */}
+            {attn > 0 && (
+              <TouchableOpacity activeOpacity={0.85} onPress={() => navigation.navigate('SyncInbox', { connectionId, platformName: name })} style={styles.needsRow}>
+                <View style={styles.needsIcon}><AlertTriangle size={20} color={AMBER} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.needsTitle}>{attn} {attn === 1 ? 'item needs' : 'items need'} you</Text>
+                  <Text style={styles.needsSub}>Review matches</Text>
+                </View>
+                <ChevronRight size={20} color={MUTED} />
               </TouchableOpacity>
-            ))}
-          </View>
-        </Card>
-
-        {step === 1 && (
-          <Card style={styles.ruleSection}>
-            <Text style={styles.sectionTitle}>Pulling data</Text>
-            <Text style={styles.sectionSubtitle}>We fetch your latest products. You can reconcile now or continue.</Text>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <Button title="Reconcile now" onPress={gotoReview} icon="clipboard-list" />
-              <Button title="Continue" onPress={() => setStep(2)} icon="arrow-right" />
-            </View>
-          </Card>
-        )}
-
-        {step === 2 && (
-          <Card style={styles.ruleSection}>
-            <Text style={styles.sectionTitle}>Destinations</Text>
-            <Text style={styles.sectionSubtitle}>Choose platforms to sync this inventory to.</Text>
-            {availableConnections.map((c) => {
-              const selected = selectedDestinations.includes(c.Id);
-              return (
-                <TouchableOpacity key={c.Id} style={[styles.optionButton, selected && styles.optionButtonSelected]} onPress={() => setSelectedDestinations((prev) => selected ? prev.filter(id => id !== c.Id) : [...prev, c.Id])}>
-                  <Icon name={selected ? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} color={selected ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]}>{c.DisplayName}</Text>
-                    <Text style={styles.optionSubtitle}>{c.PlatformType}</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-            <View style={{ marginTop: 10 }}>
-              <Button title="Next" onPress={() => setStep(3)} icon="arrow-right" />
-            </View>
-          </Card>
-        )}
-
-        {step === 3 && (
-          <Card style={styles.ruleSection}>
-            <Text style={styles.sectionTitle}>Sync behavior</Text>
-            <Text style={styles.sectionSubtitle}>Pick how and when changes flow.</Text>
-            {/* Mode */}
-            <TouchableOpacity style={[styles.optionButton, syncMode === 'manual' && styles.optionButtonSelected]} onPress={() => setSyncMode('manual')}>
-              <Icon name={syncMode === 'manual' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'manual' ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.optionTitle, syncMode === 'manual' && styles.optionTitleSelected]}>Manual only</Text>
-                <Text style={styles.optionSubtitle}>You decide when to sync</Text>
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.optionButton, syncMode === 'auto' && styles.optionButtonSelected]} onPress={() => setSyncMode('auto')}>
-              <Icon name={syncMode === 'auto' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'auto' ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.optionTitle, syncMode === 'auto' && styles.optionTitleSelected]}>Automatic</Text>
-                <Text style={styles.optionSubtitle}>Sync as changes happen</Text>
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.optionButton, syncMode === 'batch' && styles.optionButtonSelected]} onPress={() => setSyncMode('batch')}>
-              <Icon name={syncMode === 'batch' ? 'radiobox-marked' : 'radiobox-blank'} size={20} color={syncMode === 'batch' ? GREEN_DARK : SUBTLE} style={styles.optionIcon} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.optionTitle, syncMode === 'batch' && styles.optionTitleSelected]}>Batched</Text>
-                <Text style={styles.optionSubtitle}>Run once daily</Text>
-              </View>
-            </TouchableOpacity>
-            {syncMode === 'batch' && (
-              <View style={{ marginTop: 8 }}>
-                <Text style={styles.optionSubtitle}>Time (UTC): {batchTime}</Text>
-              </View>
             )}
 
-            {/* Direction */}
-            <View style={{ height: 8 }} />
-            {renderSyncDirectionOption('bidirectional', 'Two-way sync', 'Changes flow in both directions', 'sync')}
-            {renderSyncDirectionOption('push_only', 'Push to platform', 'Anorha updates your platform only', 'upload')}
-            {renderSyncDirectionOption('pull_only', 'Pull from platform', 'Platform updates Anorha only', 'download')}
-
-            <View style={{ marginTop: 10 }}>
-              <Button title="Next" onPress={() => setStep(4)} icon="arrow-right" />
+            <Text style={styles.sectionLabel}>Automation</Text>
+            <View style={styles.listCard}>
+              <ToggleRow first Icon={RefreshCw} label="Auto-sync changes" description="Push updates as they happen." value={rules.autoUpdate} onValueChange={(v: boolean) => update({ autoUpdate: v })} />
+              <ToggleRow Icon={PlusCircle} label="Add new items automatically" description="Create listings for products it hasn't seen." value={rules.autoCreate} onValueChange={(v: boolean) => update({ autoCreate: v })} />
             </View>
-          </Card>
-        )}
 
-        {step === 4 && (
-          <Card style={styles.ruleSection}>
-            <Text style={styles.sectionTitle}>Confirm</Text>
-            <Text style={styles.sectionSubtitle}>Summary</Text>
-            <Text style={styles.optionTitle}>Destinations</Text>
-            {availableConnections.filter(c => selectedDestinations.includes(c.Id)).map(c => (
-              <Text key={c.Id} style={styles.optionSubtitle}>• {c.DisplayName} ({c.PlatformType})</Text>
-            ))}
-            <Text style={[styles.optionTitle, { marginTop: 8 }]}>Mode</Text>
-            <Text style={styles.optionSubtitle}>{syncMode}</Text>
-            <Text style={[styles.optionTitle, { marginTop: 8 }]}>Direction</Text>
-            <Text style={styles.optionSubtitle}>{syncDirection}</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-              <Button title="Back" onPress={() => setStep(3)} icon="arrow-left" />
-              <Button title="Save" onPress={saveSyncRules} loading={saving} icon="content-save" />
+            <Text style={styles.sectionLabel}>What syncs</Text>
+            <View style={styles.listCard}>
+              <ToggleRow first Icon={Package} label="Inventory" description="Keep stock counts in step." value={rules.syncInventory} onValueChange={(v: boolean) => update({ syncInventory: v })} />
+              <ToggleRow Icon={Tag} label="Prices" description="Keep prices in step." value={rules.syncPricing} onValueChange={(v: boolean) => update({ syncPricing: v })} />
             </View>
-          </Card>
+
+            <Text style={styles.sectionLabel}>Sync direction</Text>
+            <View style={styles.listCard}>
+              {DIRECTION_OPTIONS.map((opt, i) => {
+                const selected = rules.syncDirection === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value}
+                    activeOpacity={0.85}
+                    onPress={() => update({ syncDirection: opt.value })}
+                    style={[styles.row, i > 0 && styles.rowDivider]}
+                  >
+                    <View style={styles.rowIcon}><opt.Icon size={22} color={selected ? GREEN_DARK : SUBTLE} /></View>
+                    <View style={styles.rowText}>
+                      <Text style={[styles.rowTitle, selected && { color: GREEN_DARK }]}>{opt.title}</Text>
+                      <Text style={styles.rowDescription}>{opt.sub}</Text>
+                    </View>
+                    <View style={[styles.radio, selected && styles.radioOn]}>
+                      {selected && <Check size={14} color="#FFFFFF" />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Quiet destructive action */}
+            <TouchableOpacity activeOpacity={0.7} onPress={() => setDisconnectOpen(true)} style={styles.disconnectRow}>
+              <Link2Off size={19} color={RED} />
+              <Text style={styles.disconnectText}>Disconnect {name}</Text>
+            </TouchableOpacity>
+            <Text style={styles.disconnectHint}>Your products stay in Anorha.</Text>
+          </>
         )}
       </ScrollView>
 
-      <Button
-        title="Save Sync Rules"
-        onPress={saveSyncRules}
-        loading={saving}
-        style={styles.saveButton}
-        icon="content-save"
+      <ErrorModal
+        visible={disconnectOpen}
+        type="warning"
+        title={`Disconnect ${name}?`}
+        message="Your products stay in Anorha. You can reconnect anytime."
+        buttonText="Keep connected"
+        onClose={() => setDisconnectOpen(false)}
+        secondaryButtonText="Disconnect"
+        onSecondaryPress={disconnect}
       />
-
-      <View style={{ paddingHorizontal: 20, paddingBottom: 20 }}>
-        <Button title="Review & Sync" onPress={gotoReview} icon="playlist-check" />
-        <View style={{ height: 10 }} />
-        <Button title={`Disconnect ${platformName}`} onPress={disconnectPlatform} icon="link-off" outlined />
-      </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: BG,
+  root: { flex: 1, backgroundColor: BG },
+  center: { paddingVertical: 90, alignItems: 'center', justifyContent: 'center' },
+
+  // Save badge (in the header's right slot)
+  badgeMuted: { fontSize: 13, fontFamily: 'Inter_500Medium', color: MUTED },
+  badgeSaved: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: GREEN_TINT, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  badgeSavedText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: GREEN_DARK },
+  badgeError: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: AMBER },
+
+  // Store identity
+  storeCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: SURFACE,
+    borderRadius: 20, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 22,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: BORDER,
-    backgroundColor: SURFACE,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter_700Bold',
-    color: INK,
-    marginLeft: 15,
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-    padding: 20,
-  },
+  storeName: { fontSize: 18, fontFamily: 'Inter_700Bold', color: INK },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  dot: { width: 7, height: 7, borderRadius: 4 },
+  statusText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+
+  // Needs-you attention row
   needsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    backgroundColor: SURFACE,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: SURFACE,
+    borderRadius: 16, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 22,
   },
-  needsIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: AMBER_TINT,
+  needsIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: AMBER_TINT },
+  needsTitle: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: INK },
+  needsSub: { fontSize: 13, fontFamily: 'Inter_400Regular', color: SUBTLE, marginTop: 2 },
+
+  // Section
+  sectionLabel: {
+    fontSize: 13, fontFamily: 'Inter_600SemiBold', color: SUBTLE,
+    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginLeft: 4,
   },
-  needsTitle: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: INK,
-  },
-  needsSub: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: SUBTLE,
-    marginTop: 2,
-  },
-  ruleSection: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter_700Bold',
-    color: INK,
-    marginBottom: 5,
-  },
-  sectionSubtitle: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: SUBTLE,
-    marginBottom: 15,
-    lineHeight: 20,
-  },
-  optionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 15,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-    marginBottom: 10,
-    backgroundColor: SURFACE,
-  },
-  optionButtonSelected: {
-    borderColor: GREEN,
-    backgroundColor: GREEN_TINT,
-  },
-  optionIcon: {
-    marginRight: 12,
-  },
-  optionTitle: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: INK,
-  },
-  optionTitleSelected: {
-    color: GREEN_DARK,
-  },
-  optionSubtitle: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: SUBTLE,
-    marginTop: 2,
-  },
-  optionSubtitleSelected: {
-    color: GREEN_DARK,
-  },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: HAIRLINE,
-  },
-  switchLabelContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  switchLabel: {
-    fontSize: 16,
-    fontFamily: 'Inter_500Medium',
-    color: INK,
-    marginLeft: 12,
-  },
-  advancedToggle: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 15,
-  },
-  advancedText: {
-    fontSize: 16,
-    color: GREEN_DARK,
-    fontFamily: 'Inter_600SemiBold',
-    marginLeft: 8,
-  },
-  saveButton: {
-    marginHorizontal: 20,
-    marginVertical: 12,
-  },
-  presetCard: {
-    marginBottom: 15,
-    padding: 15,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  presetTitle: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: INK,
-    marginBottom: 5,
-  },
-  presetDescription: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: SUBTLE,
-    lineHeight: 18,
-  },
-  presetButton: {
-    marginTop: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: GREEN_TINT,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-  },
-  presetButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-    color: GREEN_DARK,
-  },
+  listCard: { backgroundColor: SURFACE, borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: BORDER, marginBottom: 24 },
+
+  // Row (toggle + option share this)
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
+  rowDivider: { borderTopWidth: 1, borderTopColor: HAIRLINE },
+  rowIcon: { width: 28, alignItems: 'center' },
+  rowText: { flex: 1 },
+  rowTitle: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: INK },
+  rowDescription: { fontSize: 13, fontFamily: 'Inter_400Regular', color: SUBTLE, marginTop: 2 },
+
+  // Direction radio
+  radio: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: FAINT, alignItems: 'center', justifyContent: 'center' },
+  radioOn: { borderColor: GREEN, backgroundColor: GREEN },
+
+  // Disconnect
+  disconnectRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, marginTop: 4 },
+  disconnectText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: RED },
+  disconnectHint: { fontSize: 13, fontFamily: 'Inter_400Regular', color: MUTED, textAlign: 'center', marginTop: -2 },
 });
 
 export default SyncRulesScreen;

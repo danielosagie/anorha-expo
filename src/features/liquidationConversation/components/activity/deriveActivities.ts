@@ -4,17 +4,35 @@
 // {kind:'tool-run'} payload that renders exactly like today's receipt. New
 // structured richness (value-change / publish / routine / reminder) lights up
 // kind-by-kind as the backend starts emitting metadata.activities.
-import type { ActivityPayload, ConversationMessage, ConversationToolStep, Routine } from '../../types';
+import type { ActivityPayload, ConversationMessage, ConversationToolStep, Routine, ValueChange } from '../../types';
 import { summarizeChangeTitle } from './humanizers';
+import { compactDisplayText, sanitizeDisplayText } from '../../displayText';
 
 const anyFailed = (steps: ConversationToolStep[]): boolean => steps.some((s) => s.status === 'failed');
 
 const toolRunTitle = (steps: ConversationToolStep[]): string => {
-  const count = steps.length;
-  if (!count) return 'Thought it through';
-  const totalMs = steps.reduce((sum, s) => sum + (typeof s.durationMs === 'number' ? s.durationMs : 0), 0);
-  const secs = totalMs > 0 ? ` · ${(totalMs / 1000).toFixed(1)}s` : '';
-  return `Done · ${count} step${count === 1 ? '' : 's'}${secs}`;
+  if (!steps.length) return 'Thought it through';
+  const priceChanges = steps.reduce((count, step) => count + (step.changes?.filter(change =>
+    change.kind === 'price' || change.field.toLowerCase().includes('price'),
+  ).length ?? 0), 0);
+  const preparedPlan = steps.some(step => !!step.plan);
+  const preparedReport = steps.some(step => !!step.document);
+  const tools = steps.map(step => `${step.tool} ${step.label || ''}`).join(' ').toLowerCase();
+  const checkedPrices = /price|pricing|market|comp|valuation|research/.test(tools);
+  const checkedInventory = /inventory|catalog|item|product|campaign/.test(tools);
+
+  if (priceChanges) return `Applied and verified ${priceChanges} price change${priceChanges === 1 ? '' : 's'}`;
+  if (preparedPlan && checkedPrices) return 'Checked market prices and prepared the plan';
+  if (preparedPlan) return 'Reviewed the campaign and prepared the plan';
+  if (preparedReport && checkedPrices) return 'Compared the options and prepared the report';
+  if (preparedReport) return 'Reviewed the campaign and prepared the report';
+  if (checkedPrices && checkedInventory) return 'Reviewed the inventory and checked market prices';
+  if (checkedPrices) return 'Checked prices against the market';
+  if (checkedInventory) return 'Reviewed the campaign inventory';
+
+  const result = steps.find(step => step.resultSummary)?.resultSummary;
+  if (result) return compactDisplayText(result, { maxChars: 90, maxSentences: 1 });
+  return sanitizeDisplayText(steps[steps.length - 1]?.label || 'Finished the background checks');
 };
 
 const hasText = (s?: string): boolean => !!(s && s.trim().length);
@@ -65,6 +83,11 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
   if (steps.length > 0 || hasText(reasoning)) {
     const out: ActivityPayload[] = [];
     const plain: ConversationToolStep[] = [];
+    const batchedChanges: ValueChange[] = [];
+    let firstChangeStep: ConversationToolStep | undefined;
+    let firstChangeIndex = -1;
+    let changeAnchor = textLen;
+    let changeFailed = false;
     steps.forEach((step, i) => {
       // Where this card sits. A report / plan / diff belongs BENEATH the reply (the
       // seller reads the answer, then the result to act on). This backend streams every
@@ -92,22 +115,41 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
           anchor,
         });
       } else if (Array.isArray(step.changes) && step.changes.length) {
-        out.push({
-          kind: 'value-change',
-          id: `${message.id}-step-${i}`,
-          title: summarizeChangeTitle(step.tool, step.changes),
-          status: step.status === 'failed' ? 'failed' : 'ok',
-          changes: step.changes,
-          reason: step.reason,
-          evidence: step.evidence,
-          itemRef: step.itemRef,
-          undo: step.undo,
-          anchor,
-        });
+        if (!firstChangeStep) {
+          firstChangeStep = step;
+          firstChangeIndex = i;
+        }
+        batchedChanges.push(...step.changes);
+        changeAnchor = Math.min(changeAnchor, anchor);
+        changeFailed = changeFailed || step.status === 'failed';
       } else {
         plain.push(step);
       }
     });
+    // A plan can touch many items. One card per tool call produced a long stack of
+    // nearly-identical price cards; combine them into one reviewable batch with a
+    // two-row preview and "+N more" disclosure.
+    if (firstChangeStep && batchedChanges.length) {
+      const allPrices = batchedChanges.every(
+        (change) => change.kind === 'price' || change.field.toLowerCase().includes('price'),
+      );
+      out.push({
+        kind: 'value-change',
+        id: `${message.id}-changes-${firstChangeIndex}`,
+        title: batchedChanges.length === 1
+          ? summarizeChangeTitle(firstChangeStep.tool, batchedChanges)
+          : allPrices
+            ? `Updated ${batchedChanges.length} prices`
+            : `Updated ${batchedChanges.length} values`,
+        status: changeFailed ? 'failed' : 'ok',
+        changes: batchedChanges,
+        reason: firstChangeStep.reason,
+        evidence: firstChangeStep.evidence,
+        itemRef: batchedChanges.length === 1 ? firstChangeStep.itemRef : undefined,
+        undo: batchedChanges.length === 1 ? firstChangeStep.undo : undefined,
+        anchor: changeAnchor,
+      });
+    }
     // The receipt for the remaining plain steps (+ reasoning). It anchors to the FIRST
     // plain step's position (queries/research usually run before the reply text), so it
     // leads the turn like the Claude-app reasoning header.
@@ -119,7 +161,7 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
       out.unshift({
         kind: 'tool-run',
         id: `${message.id}-toolrun`,
-        title: toolRunTitle(plain),
+        title: toolRunTitle(steps),
         status: anyFailed(plain) ? 'failed' : 'ok',
         steps: plain,
         reasoning,

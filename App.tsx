@@ -1,6 +1,7 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { NavigationContainer, NavigationContainerRef, CommonActions } from '@react-navigation/native';
 import { AppState, AppStateStatus, StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
@@ -24,6 +25,7 @@ import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
 import { OrgProvider } from './src/context/OrgContext';
 import { JobsProvider } from './src/context/JobsContext';
 import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
+import { NarrationProvider } from './src/context/NarrationContext';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import { ConvexProvider } from './src/providers/ConvexProvider';
@@ -731,26 +733,30 @@ const App: React.FC = () => {
   };
 
   return (
-    <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
-      {/* Convex (Clerk-authed) wraps the app so the chat can subscribe to live
-          messages via useQuery. Inside ClerkProvider so it can read the session. */}
-      <ConvexProvider>
-        <PostHogProvider>
-          <SafeAreaProvider>
-            <SystemNotificationProvider>
-              {/* Backstop boundary around the WHOLE provider stack (PlatformConnections,
-                  Session, Org, AppData, LiveActivity, Jobs, the navigator). The inner
-                  boundary only wraps <AppNavigator/>, so a throw in any of these providers
-                  used to escape it and white-screen the app. Placed inside SafeAreaProvider
-                  so the fallback still has safe-area context. */}
-              <SafeErrorBoundary>
-                <DebugClerkState />
-              </SafeErrorBoundary>
-            </SystemNotificationProvider>
-          </SafeAreaProvider>
-        </PostHogProvider>
-      </ConvexProvider>
-    </ClerkProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
+        {/* Convex (Clerk-authed) wraps the app so the chat can subscribe to live
+            messages via useQuery. Inside ClerkProvider so it can read the session. */}
+        <ConvexProvider>
+          <PostHogProvider>
+            <SafeAreaProvider>
+              <SystemNotificationProvider>
+                <NarrationProvider>
+                  {/* Backstop boundary around the WHOLE provider stack (PlatformConnections,
+                      Session, Org, AppData, LiveActivity, Jobs, the navigator). The inner
+                      boundary only wraps <AppNavigator/>, so a throw in any of these providers
+                      used to escape it and white-screen the app. Placed inside SafeAreaProvider
+                      so the fallback still has safe-area context. */}
+                  <SafeErrorBoundary>
+                    <DebugClerkState />
+                  </SafeErrorBoundary>
+                </NarrationProvider>
+              </SystemNotificationProvider>
+            </SafeAreaProvider>
+          </PostHogProvider>
+        </ConvexProvider>
+      </ClerkProvider>
+    </GestureHandlerRootView>
   );
 };
 
