@@ -25,6 +25,17 @@ type NavType = StackNavigationProp<AppStackParamList, 'ImportHub'>;
 
 type LaneKey = 'matches' | 'photos' | 'details';
 
+const connectionStatusLabel = (connection: HubConnection): string => {
+  if (connection.needsAttention > 0 || connection.state === 'needs-attention') return 'Needs review';
+  switch (connection.state) {
+    case 'live': return 'Synced';
+    case 'scanning': return 'Scanning';
+    case 'syncing': return 'Importing';
+    case 'error': return 'Import failed';
+    default: return 'Checking';
+  }
+};
+
 // Import Inbox hub — the single wrapper around importing (docs/import-hub-redesign.md).
 // Modeled on an email backlog: one total, grouped lanes, in-flight progress. You
 // visit it when you want; nothing drags you in. Re-skinned to the Avec look — a
@@ -37,7 +48,7 @@ export default function ImportHubScreen() {
   const insets = useSafeAreaInsets();
   const completedLane = route.params?.completedLane;
 
-  const { loading, error, refresh, totalNeedsYou, scanning, lanes, connections } = useImportHub();
+  const { loading, error, refresh, totalNeedsYou, scanning, lanes, connections, recentImports } = useImportHub();
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -71,12 +82,12 @@ export default function ImportHubScreen() {
     }
   }, [refresh]);
 
-  // A total match-status outage shouldn't hide the optimizer lanes — their counts
-  // load independently. In that case run degraded: hero + lanes stay, matches goes quiet.
-  const degraded = !!error && lanes.photos.count + lanes.details.count > 0;
-  const hardError = !!error && !degraded;
+  const hardError = !!error;
+  const failedImports = recentImports.filter((item) => item.status === 'failed');
+  const failedConnections = connections.filter((item) => item.state === 'error');
+  const hasImportFailure = failedImports.length > 0 || failedConnections.length > 0;
 
-  const allClear = !loading && !error && totalNeedsYou === 0;
+  const allClear = !loading && !error && !hasImportFailure && scanning.length === 0 && totalNeedsYou === 0;
 
   // Straight to the working lanes whenever we're not loading or hard-errored.
   const showLanes = !loading && !hardError;
@@ -204,11 +215,8 @@ export default function ImportHubScreen() {
     return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
   }, [scanning]);
 
-  // Matches lane derived state (kept out of JSX so the degraded/done/active
-  // branches read clearly). Degraded ⇒ the inbox failed to load, so the lane
-  // isn't actually cleared: not done, calm "couldn't load" copy, and the card
-  // itself becomes the retry affordance (no boxed banner).
-  const matchesLaneState = degraded ? 'locked' : laneState('matches', lanes.matches.count);
+  // Lane states are derived from the authoritative aggregate only.
+  const matchesLaneState = laneState('matches', lanes.matches.count);
   const photosLaneState = laneState('photos', lanes.photos.count);
   const detailsLaneState = laneState('details', lanes.details.count);
 
@@ -232,6 +240,16 @@ export default function ImportHubScreen() {
             <Text style={styles.errorTitle}>Couldn’t load your inbox</Text>
             <Text style={styles.errorSub}>{error}</Text>
             <PillButton label="Retry" variant="secondary" onPress={refresh} style={styles.errorRetry} />
+          </View>
+        ) : hasImportFailure ? (
+          <View style={styles.errorBlock}>
+            <Text style={styles.errorTitle}>An import needs attention</Text>
+            <Text style={styles.errorSub}>
+              {failedConnections.length > 0
+                ? `${failedConnections.length} ${failedConnections.length === 1 ? 'store could' : 'stores could'} not finish importing.`
+                : `${failedImports.length} recent ${failedImports.length === 1 ? 'import has' : 'imports have'} failed items.`}
+            </Text>
+            <PillButton label="Retry status" variant="secondary" onPress={refresh} style={styles.errorRetry} />
           </View>
         ) : allClear ? (
           <View style={styles.heroPad}>
@@ -273,15 +291,11 @@ export default function ImportHubScreen() {
               sub={
                 matchesLaneState === 'done'
                   ? 'Done'
-                  : degraded
-                    ? 'Couldn’t load right now'
-                    : matchesSub
+                  : matchesSub
               }
-              count={degraded ? undefined : lanes.matches.count}
+              count={lanes.matches.count}
               onPress={
-                degraded
-                  ? refresh
-                  : lanes.matches.count > 0
+                lanes.matches.count > 0
                     ? onMatchesPress
                     : undefined
               }
@@ -320,7 +334,7 @@ export default function ImportHubScreen() {
                 name={conn.platformName}
                 detail={conn.platformType}
                 count={conn.needsAttention}
-                rightLabel={conn.needsAttention > 0 ? undefined : 'Synced'}
+                rightLabel={connectionStatusLabel(conn)}
                 highlighted={!!handoffConnectionId && conn.connectionId === handoffConnectionId}
                 onPress={() => openStore(conn)}
                 onLongPress={() => openStorePrefs(conn)}

@@ -17,6 +17,8 @@ export interface ConnectResult {
   success: boolean;
   /** present for platforms that return it on the deep-link callback (Square/Clover). */
   connectionId?: string;
+  /** Whether the server confirmed that the import scan is queued or running. */
+  scanStarted?: boolean;
   /** user backed out of the browser sheet — not an error worth surfacing loudly. */
   cancelled?: boolean;
   errorMessage?: string;
@@ -37,23 +39,21 @@ const parseCallback = (url: string): { status: string | null; connectionId?: str
 export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
   const { orgId } = opts;
 
-  // Sync locations (best effort) then start the inventory scan. Fire-and-forget:
-  // by the time the user lands in the app, the scan + draft mappings are underway.
-  const startScan = useCallback(async (connectionId: string) => {
+  // Start (or reuse) the server-owned scan. OAuth authorization and import
+  // queueing are separate outcomes, so callers can render a retry when this
+  // returns false instead of claiming inventory is importing.
+  const startScan = useCallback(async (connectionId: string): Promise<boolean> => {
     try {
       const token = await ensureSupabaseJwt();
-      if (!token) return;
+      if (!token) return false;
       const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-      await fetch(`${API_BASE_URL}/api/pools/locations/sync/${connectionId}`, {
-        method: 'POST',
-        headers,
-      }).catch(() => {});
-      await fetch(`${API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`, {
+      const response = await fetch(`${API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`, {
         method: 'POST',
         headers,
       });
+      return response.ok;
     } catch {
-      // Non-fatal — the user can trigger a scan later from Connections.
+      return false;
     }
   }, []);
 
@@ -116,10 +116,11 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
         if (status !== 'success' && !connectionId) {
           return { success: false, errorMessage: 'The connection did not complete. Please try again.' };
         }
+        let scanStarted: boolean | undefined;
         if (connectionId) {
-          void startScan(connectionId);
+          scanStarted = await startScan(connectionId);
         }
-        return { success: true, connectionId };
+        return { success: true, connectionId, scanStarted };
       }
 
       return { success: false, errorMessage: 'The connection did not complete. Please try again.' };

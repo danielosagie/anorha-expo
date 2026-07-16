@@ -1375,7 +1375,6 @@ export default function CreateAccountScreen() {
         Currency: formData.currency || 'USD',
         Occupation: finalRole,
         BusinessType: finalBusinessType,
-        isOnboardingComplete: true
       }).eq('Id', dbUserId);
 
       if (userError) throw userError;
@@ -1396,16 +1395,21 @@ export default function CreateAccountScreen() {
 
       // 5. Create Org & Invites
       let createdOrgId: string | null = null;
-      if (createOrganization) {
-        try {
-          const org = await createOrganization({ name: formData.businessName });
-          createdOrgId = org?.id || null;
-          if (formData.invites.length > 0) {
-            for (const email of formData.invites) {
-              try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { log.warn(`Failed to invite ${email}`, inviteErr); }
-            }
+      if (!createOrganization) {
+        throw new Error('Organization setup is unavailable. Please try again.');
+      }
+      try {
+        const org = await createOrganization({ name: formData.businessName });
+        createdOrgId = org?.id || null;
+        if (!createdOrgId) throw new Error('Organization creation returned no ID');
+        if (formData.invites.length > 0) {
+          for (const email of formData.invites) {
+            try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { log.warn(`Failed to invite ${email}`, inviteErr); }
           }
-        } catch (e) { /* ignore */ }
+        }
+      } catch (error) {
+        log.error('[CreateAccount] Organization setup failed', error);
+        throw new Error('Could not create your organization. Please try again.');
       }
 
       // 5.5 Update org business address (includes phone)
@@ -1461,6 +1465,14 @@ export default function CreateAccountScreen() {
       }
 
       if (refreshOrgs) await refreshOrgs();
+
+      // Onboarding is complete only after the user record and organization both
+      // exist. The following connect step is deliberately skippable.
+      const { error: completionError } = await supabase
+        .from('Users')
+        .update({ isOnboardingComplete: true })
+        .eq('Id', dbUserId);
+      if (completionError) throw completionError;
 
       capture(AnalyticsEvents.ONBOARDING_COMPLETED, {
         create_organization: !!createOrganization,

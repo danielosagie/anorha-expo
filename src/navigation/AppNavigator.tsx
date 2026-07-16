@@ -720,12 +720,13 @@ const AppNavigator = () => {
       // session bridge wasn't ready — then navBooted locked a not-yet-onboarded user onto
       // Home, so CreateAccountScreen was skipped and never re-checked. Instead, hold the
       // loading shell until the bridge is ready (this effect re-runs when
-      // session.bridgeReady flips). Safety net: if the bridge never readies, fall back to
-      // Home after a few seconds rather than spinning forever.
+      // session.bridgeReady flips). If the bridge never readies, surface the
+      // retryable account-sync screen. Never guess that onboarding is complete.
       if (!session?.bridgeReady) {
         setIsLoading(true);
         const bridgeWaitFallback = setTimeout(() => {
-          setInitialAppScreen(prev => prev ?? 'TabNavigator');
+          setLastOnboardingDebugInfo('session bridge did not become ready within 6 seconds');
+          setInitialAppScreen(prev => prev ?? 'AccountSyncIssueScreen');
           setIsLoading(false);
         }, 6000);
         return () => clearTimeout(bridgeWaitFallback);
@@ -766,14 +767,14 @@ const AppNavigator = () => {
 
   const checkOnboardingAndNavigate = async () => {
     // Never let a slow token / me-view / DB lookup strand the boot on the startup shell.
-    // If the whole check hasn't resolved in 8s, land on the default TabNavigator — the
-    // same fallback the bridge-wait above uses (~line 727). The real work still finishes
-    // and self-corrects the landing if it resolves to a different screen.
+    // If the check times out, show a retryable account-sync state. A timeout is not
+    // evidence that onboarding finished, so it must never route directly to Home.
     let done = false;
     const landingTimeout = setTimeout(() => {
       if (done) return;
-      log.warn('[Onboarding Check] Timed out (8s) — landing on TabNavigator.');
-      setInitialAppScreen((prev) => prev ?? 'TabNavigator');
+      log.warn('[Onboarding Check] Timed out (8s) — showing AccountSyncIssue.');
+      setLastOnboardingDebugInfo('onboarding check timed out after 8 seconds');
+      setInitialAppScreen((prev) => prev ?? 'AccountSyncIssueScreen');
       setIsLoading(false);
     }, 8000);
     try {
@@ -793,8 +794,9 @@ const AppNavigator = () => {
       }
 
       if (!token) {
-        log.warn('[Onboarding Check] Supabase token unavailable. Keeping existing signed-in user on TabNavigator.');
-        setInitialAppScreen('TabNavigator');
+        log.warn('[Onboarding Check] Supabase token unavailable. Showing AccountSyncIssue.');
+        setLastOnboardingDebugInfo('Supabase token unavailable after retry');
+        setInitialAppScreen('AccountSyncIssueScreen');
         return;
       }
 

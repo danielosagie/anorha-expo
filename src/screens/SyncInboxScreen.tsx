@@ -265,13 +265,18 @@ const SyncInboxScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
           ) : (
-            // total === 0 → the scan hasn't produced anything yet (still polling):
-            // claim nothing. Otherwise every item is decided → "All caught up".
             <View style={styles.center}>
               {(summary?.total ?? 0) === 0 ? (
                 <>
-                  <ActivityIndicator color={RC.green} />
-                  <Text style={styles.emptyText}>Syncing…</Text>
+                  <Text style={styles.emptyTitle}>Nothing needs review</Text>
+                  <Text style={styles.emptyText}>Import progress stays in the Import inbox.</Text>
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('ImportHub')}
+                    style={styles.inboxBtn}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.inboxBtnText}>Open Import inbox</Text>
+                  </TouchableOpacity>
                 </>
               ) : (
                 <>

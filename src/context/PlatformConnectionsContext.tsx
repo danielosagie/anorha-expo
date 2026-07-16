@@ -18,6 +18,8 @@ export interface PlatformConnectionRow {
   DisplayName: string;
   Status: string;
   IsEnabled: boolean;
+  NeedsReauth?: boolean;
+  RecommendedAction?: 'reconnect' | 'rescan' | 'fix_resume' | 'manage' | null;
   LastSyncSuccessAt?: string | null;
   CreatedAt: string;
   UpdatedAt: string;
@@ -76,12 +78,11 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
         return;
       }
       setAuthReady(true);
-      const resp = await fetch(`${API_BASE}/api/platform-connections`, {
+      const resp = await fetch(`${API_BASE}/api/platform-connections?includeDisabled=true`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) {
         setError(`Failed to load connections (${resp.status})`);
-        setConnections([]);
         return;
       }
       const rows: PlatformConnectionRow[] = await resp.json();
@@ -113,7 +114,6 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       } catch { }
     } catch (e: any) {
       setError(e?.message || 'Failed to load connections');
-      setConnections([]);
     } finally {
       setLoading(false);
     }

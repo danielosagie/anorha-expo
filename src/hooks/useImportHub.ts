@@ -3,8 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
-import { usePlatformConnections, PlatformConnectionRow } from '../context/PlatformConnectionsContext';
-import { normalizeDisplayName } from '../config/platforms';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOptimizerQueues } from './useOptimizerQueues';
 
 const log = createLogger('useImportHub');
@@ -30,10 +29,6 @@ async function fetchWithTimeout(url: string, init?: RequestInit, ms = 10000): Pr
     clearTimeout(timer);
   }
 }
-
-// States that mean the connection is still importing — poll it and show the
-// in-flight strip until it settles.
-const IN_FLIGHT = new Set(['scanning', 'syncing', 'reconciling', 'pending', 'ready_to_sync']);
 
 export interface HubLaneConnection {
   connectionId: string;
@@ -72,19 +67,13 @@ export interface ImportHubData {
   scanning: ImportHubScanning[];
   /** Every enabled connection, for the hub's "Your stores" list. */
   connections: HubConnection[];
+  recentImports: InboxRecentImport[];
   lanes: {
     matches: { count: number; byConnection: HubLaneConnection[] };
     photos: { count: number };
     details: { count: number };
   };
 }
-
-type PerConnResult = {
-  connectionId: string;
-  platformName: string;
-  state: string;
-  needsAttention: number;
-};
 
 // ---------------------------------------------------------------------------
 // Backend aggregate (GET /api/sync/inbox/summary) — one request that replaces
@@ -119,10 +108,8 @@ export interface InboxSummaryResponse {
   recentImports: InboxRecentImport[];
 }
 
-// Single aggregate fetch. Like fetchConnectionStatus it NEVER throws: any
-// 404 / non-2xx / network error / malformed body returns null so the caller
-// falls back to the per-connection fan-out. Fields are coerced defensively so
-// a partially-shaped payload can't crash the downstream memos.
+// Single authoritative aggregate fetch. A malformed or unavailable response is
+// an error state, never a fabricated empty inbox.
 async function fetchInboxSummary(token: string | null): Promise<InboxSummaryResponse | null> {
   const headers = {
     Authorization: `Bearer ${token ?? ''}`,
@@ -165,67 +152,17 @@ async function fetchInboxSummary(token: string | null): Promise<InboxSummaryResp
   }
 }
 
-// Per-connection status fetch. Tries the (unconsumed) /status endpoint first and
-// falls back to /resolution's summary — either way it NEVER throws, so one bad
-// connection contributes 0 instead of poisoning the whole hub.
-async function fetchConnectionStatus(
-  conn: PlatformConnectionRow,
-  token: string | null,
-): Promise<PerConnResult | null> {
-  const platformName = normalizeDisplayName(conn.DisplayName || conn.PlatformType);
-  const headers = {
-    Authorization: `Bearer ${token ?? ''}`,
-    'Content-Type': 'application/json',
-  };
-  try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/connections/${conn.Id}/status`, { headers });
-    if (res.ok) {
-      const j: any = await res.json();
-      return {
-        connectionId: conn.Id,
-        platformName,
-        state: String(j?.state ?? conn.Status ?? '').toLowerCase(),
-        needsAttention: Number(j?.counts?.needsAttention ?? 0) || 0,
-      };
-    }
-  } catch (err: any) {
-    log.debug('status fetch failed, trying resolution', conn.Id, err?.message);
-  }
-  try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/connections/${conn.Id}/resolution`, { headers });
-    if (res.ok) {
-      const j: any = await res.json();
-      return {
-        connectionId: conn.Id,
-        platformName,
-        state: String(conn.Status ?? '').toLowerCase(),
-        needsAttention: Number(j?.summary?.needsAttention ?? 0) || 0,
-      };
-    }
-  } catch (err: any) {
-    log.debug('resolution fallback failed', conn.Id, err?.message);
-  }
-  return null;
-}
-
 /**
  * Client-side aggregate for the Import Inbox (see docs/import-hub-redesign.md).
  *
- * Each refresh cycle tries ONE server aggregate first —
- * GET /api/sync/inbox/summary — and maps it into the matches lane + scanning
- * strip directly. If that endpoint is absent/broken (it is not in prod yet) it
- * falls back to the original fan-out over the existing prod endpoints:
- *   - per enabled connection: GET /sync/connections/:id/status (→ /resolution)
+ * Each refresh cycle reads ONE authoritative server aggregate:
+ * GET /api/sync/inbox/summary. If it is unavailable, the screen shows an error
+ * instead of manufacturing zero counts from partial per-connection responses.
  * The optimizer gaps (photos/details lanes) are always computed client-side via
  * useOptimizerQueues (catalog-wide, unscoped) regardless of which path is used.
  *
- * The aggregate's absence is remembered for the session (aggregateDeadRef) so
- * poll ticks don't pay a doomed extra request every 20s — but an explicit
- * refresh() (pull-to-refresh, focus re-entry) clears that flag and retries, so
- * once the backend ships it's picked up without an app restart.
- *
  * Refetches on focus and whenever the enabled-connection set changes; polls
- * every 20s (on whichever path is active) while anything is still scanning/syncing.
+ * every 20s while anything is still scanning/syncing.
  */
 export function useImportHub(): ImportHubData {
   const { liveConnections } = usePlatformConnections();
@@ -238,18 +175,10 @@ export function useImportHub(): ImportHubData {
     () => (liveConnections || []).filter((c) => c.IsEnabled !== false),
     [liveConnections],
   );
-  // Read the live objects inside the stable `refresh` without listing the array
-  // (whose identity churns on every progress event) as a dependency.
-  const enabledRef = useRef(enabled);
-  enabledRef.current = enabled;
   // Refetch only when the SET of connections changes, not on every status flip
   // (status changes are picked up by the poll / the live-status fallback below).
   const connSig = useMemo(() => enabled.map((c) => c.Id).sort().join('|'), [enabled]);
 
-  const [results, setResults] = useState<PerConnResult[]>([]);
-  // Non-null while the server aggregate is the active data source; null means we
-  // are on the fan-out path (or have no data yet). Exactly one of summary /
-  // results drives the derived outputs below.
   const [summary, setSummary] = useState<InboxSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -262,9 +191,6 @@ export function useImportHub(): ImportHubData {
   const refreshIdRef = useRef(0);
   const firstDoneRef = useRef(false);
   const optFirstDoneRef = useRef(false);
-  // Once the aggregate endpoint answers 404 / non-2xx / malformed, remember it
-  // so 20s poll ticks skip the doomed request. Cleared on explicit refresh().
-  const aggregateDeadRef = useRef(false);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -275,23 +201,12 @@ export function useImportHub(): ImportHubData {
     if (!optLoading) optFirstDoneRef.current = true;
   }, [optLoading]);
 
-  const refresh = useCallback(async (opts?: { retryAggregate?: boolean }) => {
+  const refresh = useCallback(async () => {
     // Claim this refresh as the latest; a later refresh bumps the id and any
     // in-flight setState from this (now stale) run is skipped.
     const myId = ++refreshIdRef.current;
     const isCurrent = () => mountedRef.current && refreshIdRef.current === myId;
 
-    const conns = enabledRef.current;
-    if (!conns.length) {
-      if (isCurrent()) {
-        setResults([]);
-        setSummary(null);
-        setError(null);
-        firstDoneRef.current = true;
-        setLoading(false);
-      }
-      return;
-    }
     let token: string | null = null;
     try {
       token = await ensureSupabaseJwt();
@@ -299,37 +214,10 @@ export function useImportHub(): ImportHubData {
       token = null;
     }
 
-    // Explicit refresh (pull-to-refresh / focus re-entry) forgets a prior
-    // aggregate failure so a freshly-shipped backend is picked up live.
-    if (opts?.retryAggregate) aggregateDeadRef.current = false;
-
-    // Preferred path: one server aggregate. Skip it only if we've already
-    // learned this session that the endpoint isn't there.
-    if (!aggregateDeadRef.current) {
-      const agg = await fetchInboxSummary(token);
-      if (!isCurrent()) return;
-      if (agg) {
-        setSummary(agg);
-        setResults([]);
-        setError(null);
-        firstDoneRef.current = true;
-        setLoading(false);
-        return;
-      }
-      // Absent / broken — remember so poll ticks don't retry, then fall through.
-      aggregateDeadRef.current = true;
-    }
-
-    // Fallback path: fan out over the existing per-connection prod endpoints.
-    const settled = await Promise.all(conns.map((c) => fetchConnectionStatus(c, token)));
+    const agg = token ? await fetchInboxSummary(token) : null;
     if (!isCurrent()) return;
-    const ok = settled.filter((r): r is PerConnResult => r !== null);
-    // Only a TOTAL failure surfaces an error — a single failing connection just
-    // contributes 0.
-    const allFailed = ok.length === 0;
-    setSummary(null);
-    setResults(ok);
-    setError(allFailed ? 'Couldn’t load your import inbox.' : null);
+    setSummary(agg);
+    setError(agg ? null : 'Couldn’t verify your import status. Pull to retry.');
     firstDoneRef.current = true;
     setLoading(false);
   }, []);
@@ -337,7 +225,7 @@ export function useImportHub(): ImportHubData {
   const refreshAll = useCallback(async () => {
     // Await BOTH sources so callers (pull-to-refresh) can keep their spinner up
     // until the data has actually settled.
-    await Promise.all([refresh({ retryAggregate: true }), refreshOpt()]);
+    await Promise.all([refresh(), refreshOpt()]);
   }, [refresh, refreshOpt]);
 
   useFocusEffect(
@@ -354,41 +242,15 @@ export function useImportHub(): ImportHubData {
     refreshAll();
   }, [focused, connSig, refreshAll]);
 
-  const resultById = useMemo(() => {
-    const m: Record<string, PerConnResult> = {};
-    for (const r of results) m[r.connectionId] = r;
-    return m;
-  }, [results]);
-
   const scanning = useMemo<ImportHubScanning[]>(() => {
-    // Aggregate path: the server tells us exactly which connections are in
-    // flight (scanning | syncing).
-    if (summary) {
-      return summary.connections
-        .filter((c) => c.state === 'scanning' || c.state === 'syncing')
-        .map((c) => ({
-          connectionId: c.connectionId,
-          platformName: c.displayName || c.platformType,
-          state: c.state,
-        }));
-    }
-    // Fan-out path: cross-reference the live enabled set with the last fetched
-    // per-connection statuses (so a just-started scan shows immediately via the
-    // live c.Status even before the next fetch lands).
-    const out: ImportHubScanning[] = [];
-    for (const c of enabled) {
-      const r = resultById[c.Id];
-      const state = r?.state || (c.Status || '').toLowerCase();
-      if (IN_FLIGHT.has(state)) {
-        out.push({
-          connectionId: c.Id,
-          platformName: r?.platformName || normalizeDisplayName(c.DisplayName || c.PlatformType),
-          state,
-        });
-      }
-    }
-    return out;
-  }, [summary, enabled, resultById]);
+    return (summary?.connections || [])
+      .filter((c) => c.state === 'scanning' || c.state === 'syncing')
+      .map((c) => ({
+        connectionId: c.connectionId,
+        platformName: c.displayName || c.platformType,
+        state: c.state,
+      }));
+  }, [summary]);
 
   const anyScanning = scanning.length > 0;
 
@@ -411,54 +273,25 @@ export function useImportHub(): ImportHubData {
   }, [anyScanning, refreshOpt]);
 
   const matchesByConnection = useMemo<HubLaneConnection[]>(() => {
-    // Aggregate path: per-connection needs-attention straight from the server.
-    if (summary) {
-      return summary.connections
-        .filter((c) => c.needsAttention > 0)
-        .map((c) => ({
-          connectionId: c.connectionId,
-          platformName: c.displayName || c.platformType,
-          count: c.needsAttention,
-        }));
-    }
-    // Fan-out path.
-    return results
-      .filter((r) => r.needsAttention > 0)
-      .map((r) => ({ connectionId: r.connectionId, platformName: r.platformName, count: r.needsAttention }));
-  }, [summary, results]);
-  // On the aggregate path the lane total is the server's authoritative
-  // totalNeedsAttention (which can include reasons not tied to any one
-  // connection); on the fan-out path it's the sum of the per-connection counts.
-  const matchesCount = summary
-    ? summary.totalNeedsAttention
-    : matchesByConnection.reduce((a, b) => a + b.count, 0);
+    return (summary?.connections || [])
+      .filter((c) => c.needsAttention > 0)
+      .map((c) => ({
+        connectionId: c.connectionId,
+        platformName: c.displayName || c.platformType,
+        count: c.needsAttention,
+      }));
+  }, [summary]);
+  const matchesCount = summary?.totalNeedsAttention || 0;
 
-  // Full "Your stores" list: always every enabled connection, enriched with the
-  // per-connection state/needsAttention from whichever path is active (aggregate
-  // summary or fan-out results). Keyed off `enabled` so a store with nothing to
-  // review still lists (as a quiet "Synced" row), not just the ones with matches.
   const connections = useMemo<HubConnection[]>(() => {
-    const meta: Record<string, { state: string; needsAttention: number }> = {};
-    if (summary) {
-      for (const c of summary.connections) {
-        meta[c.connectionId] = { state: c.state, needsAttention: c.needsAttention };
-      }
-    } else {
-      for (const r of results) {
-        meta[r.connectionId] = { state: r.state, needsAttention: r.needsAttention };
-      }
-    }
-    return enabled.map((c) => {
-      const m = meta[c.Id];
-      return {
-        connectionId: c.Id,
-        platformName: normalizeDisplayName(c.DisplayName || c.PlatformType),
-        platformType: c.PlatformType,
-        state: m?.state || (c.Status || '').toLowerCase(),
-        needsAttention: m?.needsAttention || 0,
-      };
-    });
-  }, [enabled, summary, results]);
+    return (summary?.connections || []).map((c) => ({
+      connectionId: c.connectionId,
+      platformName: c.displayName || c.platformType,
+      platformType: c.platformType,
+      state: c.state,
+      needsAttention: c.needsAttention,
+    }));
+  }, [summary]);
 
   const photosCount = optCounts.photoNeeded;
   const detailsCount = optCounts.dataNeeded + optCounts.manualQueue;
@@ -474,6 +307,7 @@ export function useImportHub(): ImportHubData {
     totalNeedsYou,
     scanning,
     connections,
+    recentImports: summary?.recentImports || [],
     lanes: {
       matches: { count: matchesCount, byConnection: matchesByConnection },
       photos: { count: photosCount },

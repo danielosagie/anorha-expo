@@ -25,7 +25,7 @@ import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { getPlatform, connectStepsFor, type ConnectStepKind } from '../config/platforms';
 import { BRAND_PRIMARY } from '../design/tokens';
 
-type FlowPhase = 'consent' | 'connecting' | 'linkComputer' | 'done';
+type FlowPhase = 'consent' | 'connecting' | 'importFailed' | 'linkComputer' | 'done';
 
 interface Props {
   visible: boolean;
@@ -41,7 +41,7 @@ interface Props {
 const TEXT_SECONDARY = '#6B7280';
 
 export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, onConnected }: Props) {
-  const { connect } = usePlatformConnect({ orgId });
+  const { connect, startScan } = usePlatformConnect({ orgId });
   const { refresh } = usePlatformConnections();
   const status = usePlatformConnectStatus(platform || '');
   const statusRef = useRef(status);
@@ -49,6 +49,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
 
   const [phase, setPhase] = useState<FlowPhase>('consent');
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [failedConnectionId, setFailedConnectionId] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
 
   const steps = platform ? connectStepsFor(platform) : [];
@@ -62,6 +63,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     if (!visible || !platform) return;
     const s = statusRef.current;
     setConnectError(null);
+    setFailedConnectionId(null);
     setScanOpen(false);
     if (!s.oauthConnected && s.steps.includes('oauth')) {
       setPhase('consent');
@@ -108,6 +110,12 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
         refresh?.();
         // Nudge once more after the callback row commits, then decide next step.
         setTimeout(() => refresh?.(), 2500);
+        if (res.connectionId && res.scanStarted === false) {
+          setFailedConnectionId(res.connectionId);
+          setConnectError('Your store is connected, but the inventory import did not start.');
+          setPhase('importFailed');
+          return;
+        }
         advanceAfterOAuth();
       } else if (res.cancelled) {
         setPhase('consent');
@@ -120,6 +128,20 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
       setPhase('consent');
     }
   }, [platform, connect, refresh, advanceAfterOAuth]);
+
+  const retryImport = useCallback(async () => {
+    if (!failedConnectionId) return;
+    setConnectError(null);
+    setPhase('connecting');
+    const started = await startScan(failedConnectionId);
+    if (started) {
+      refresh?.();
+      advanceAfterOAuth();
+      return;
+    }
+    setConnectError('The import still could not start. Check your connection and try again.');
+    setPhase('importFailed');
+  }, [failedConnectionId, startScan, refresh, advanceAfterOAuth]);
 
   if (!platform || !def) return null;
 
@@ -171,6 +193,20 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
             <TouchableOpacity style={styles.scanBtn} onPress={() => setScanOpen(true)} activeOpacity={0.85}>
               <Icon name="qrcode-scan" size={18} color={BRAND_PRIMARY} />
               <Text style={styles.scanBtnText}>Scan the code on your computer</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.laterBtn} onPress={onCancel} activeOpacity={0.7}>
+              <Text style={styles.laterText}>Do this later</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {phase === 'importFailed' ? (
+          <View style={styles.importFailedWrap}>
+            <Icon name="alert-circle-outline" size={34} color="#BA7517" />
+            <Text style={styles.importFailedTitle}>Connected, import paused</Text>
+            <Text style={styles.importFailedText}>{connectError}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={retryImport} activeOpacity={0.85}>
+              <Text style={styles.retryBtnText}>Retry import</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.laterBtn} onPress={onCancel} activeOpacity={0.7}>
               <Text style={styles.laterText}>Do this later</Text>
@@ -239,4 +275,9 @@ const styles = StyleSheet.create({
   laterText: { color: TEXT_SECONDARY, fontSize: 14, fontWeight: '600' },
   doneWrap: { alignItems: 'center', gap: 10, paddingVertical: 28 },
   doneText: { fontSize: 16, fontWeight: '700', color: '#18181B' },
+  importFailedWrap: { alignItems: 'center', paddingVertical: 20 },
+  importFailedTitle: { marginTop: 10, fontSize: 17, fontWeight: '700', color: '#18181B' },
+  importFailedText: { marginTop: 6, maxWidth: 300, textAlign: 'center', fontSize: 14, lineHeight: 20, color: TEXT_SECONDARY },
+  retryBtn: { marginTop: 18, minHeight: 50, alignSelf: 'stretch', borderRadius: 14, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
+  retryBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
 });

@@ -61,29 +61,6 @@ export function useResolution(connectionId: string | null | undefined) {
     refresh();
   }, [refresh]);
 
-  // A freshly-connected scan is still populating when the inbox first mounts, so
-  // the initial fetch lands before any resolver items exist. Without this the
-  // user is stranded on an empty list until they pull to refresh. Poll a bounded
-  // number of times (≈60s at 3s cadence) until the scan has produced anything
-  // (summary.total > 0), then stop. Paused while a resolve is in flight so it
-  // can't clobber the optimistic state; the counter persists across re-renders
-  // (a ref, not effect-local) and resets only when the connection changes.
-  const pollCountRef = useRef(0);
-  useEffect(() => {
-    pollCountRef.current = 0;
-  }, [connectionId]);
-  useEffect(() => {
-    if (!connectionId) return;
-    if ((result?.summary?.total ?? 0) > 0) return; // scan produced data → done
-    if (resolving !== null) return; // don't fight an in-flight resolve
-    if (pollCountRef.current >= 20) return; // cap reached → give up, manual refresh only
-    const id = setTimeout(() => {
-      pollCountRef.current += 1;
-      refresh();
-    }, 3000);
-    return () => clearTimeout(id);
-  }, [connectionId, result, resolving, refresh]);
-
   // Apply one decision. The row is removed only AFTER the server confirms, so a
   // failed resolve (or a failed reconcile refresh) can never leave an item hidden
   // while the server still considers it unresolved.
@@ -108,7 +85,7 @@ export function useResolution(connectionId: string | null | undefined) {
         if (res.status === 409) {
           log.debug('resolve conflicted (409) — refetching', platformId);
           await refresh();
-          return null;
+          throw new Error('This item changed before your choice was saved. Review its latest state and try again.');
         }
         if (!res.ok) throw new Error(`Resolve failed: ${res.status}`);
         setResult((prev) =>

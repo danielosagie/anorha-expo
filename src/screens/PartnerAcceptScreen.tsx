@@ -14,6 +14,7 @@ import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { useOrg } from '../context/OrgContext';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PartnerAcceptScreen');
 
@@ -37,32 +38,26 @@ const PartnerAcceptScreen: React.FC = () => {
   const theme = useTheme();
   const route = useRoute();
   const navigation = useNavigation<any>();
+  const { currentOrg } = useOrg();
 
-  const { inviteCode, inviteId, initialDetails } = (route.params as RouteParams) || {};
+  const { inviteCode } = (route.params as RouteParams) || {};
 
   const [status, setStatus] = useState<AcceptStatus>('loading');
   const [inviteDetails, setInviteDetails] = useState<{
     orgName?: string;
     locationName?: string;
-    inviterName?: string;
     expiresAt?: string;
     productCount?: number;
     shareType?: string;
-  } | null>(initialDetails || null);
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // If we have initial details, use them and set ready immediately
-    if (initialDetails && (inviteId || inviteCode)) {
-      setInviteDetails(prev => ({ ...prev, ...initialDetails }));
-      setStatus('ready');
-    } else {
-      loadInviteDetails();
-    }
-  }, [inviteCode, inviteId]);
+    loadInviteDetails();
+  }, [inviteCode]);
 
   const loadInviteDetails = async () => {
-    if (!inviteCode && !inviteId) {
+    if (!inviteCode) {
       setError('Invalid invite link');
       setStatus('error');
       return;
@@ -73,7 +68,7 @@ const PartnerAcceptScreen: React.FC = () => {
       const token = await ensureSupabaseJwt();
 
       const response = await fetch(
-        `${API_BASE_URL}/api/partner-invites/preview?${inviteCode ? `code=${inviteCode}` : `id=${inviteId}`}`,
+        `${API_BASE_URL}/api/cross-org/invites/token/${encodeURIComponent(inviteCode)}`,
         {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -87,7 +82,13 @@ const PartnerAcceptScreen: React.FC = () => {
       }
 
       const data = await response.json();
-      setInviteDetails(data);
+      setInviteDetails({
+        orgName: data.sourceOrgName,
+        locationName: data.sourcePoolName,
+        expiresAt: data.expiresAt,
+        productCount: data.productCount,
+        shareType: data.shareType,
+      });
       setStatus('ready');
     } catch (err: any) {
       log.error('[PartnerAcceptScreen] Error loading invite:', err);
@@ -97,22 +98,24 @@ const PartnerAcceptScreen: React.FC = () => {
   };
 
   const handleAccept = async () => {
+    if (!inviteCode || !currentOrg?.id) {
+      setError('Choose an organization before accepting this invite.');
+      setStatus('error');
+      return;
+    }
     try {
       setStatus('accepting');
       const token = await ensureSupabaseJwt();
 
       const response = await fetch(
-        `${API_BASE_URL}/api/partner-invites/accept`,
+        `${API_BASE_URL}/api/cross-org/invites/${encodeURIComponent(inviteCode)}/accept?orgId=${encodeURIComponent(currentOrg.id)}`,
         {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            inviteCode,
-            inviteId,
-          }),
+          body: JSON.stringify({}),
         }
       );
 
@@ -144,8 +147,20 @@ const PartnerAcceptScreen: React.FC = () => {
         {
           text: 'Decline',
           style: 'destructive',
-          onPress: () => {
-            navigation.goBack();
+          onPress: async () => {
+            if (!inviteCode) return;
+            try {
+              const token = await ensureSupabaseJwt();
+              const response = await fetch(
+                `${API_BASE_URL}/api/cross-org/invites/${encodeURIComponent(inviteCode)}/decline`,
+                { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+              );
+              if (!response.ok) throw new Error('Could not decline invite');
+              navigation.goBack();
+            } catch (error: any) {
+              setError(error?.message || 'Could not decline invite');
+              setStatus('error');
+            }
           },
         },
       ]
@@ -233,13 +248,6 @@ const PartnerAcceptScreen: React.FC = () => {
             </View>
           )}
 
-          {inviteDetails?.inviterName && (
-            <View style={styles.detailRow}>
-              <Icon name="account" size={20} color={theme.colors.primary} />
-              <Text style={styles.detailLabel}>Invited By</Text>
-              <Text style={styles.detailValue}>{inviteDetails.inviterName}</Text>
-            </View>
-          )}
         </View>
 
         <Text style={styles.description}>

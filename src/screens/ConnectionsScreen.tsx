@@ -26,12 +26,15 @@ import { useImportHub } from '../hooks/useImportHub';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
 
-const statusOf = (raw?: string): { label: string; color: string } => {
+const statusOf = (raw?: string, enabled = true): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
-  if (s.includes('active') || s.includes('connect') || s === 'ok' || s === 'live') return { label: 'Connected', color: '#43631A' };
-  if (s.includes('error') || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Needs reconnect', color: '#DC2626' };
-  if (s.includes('sync')) return { label: 'Syncing…', color: '#A2611A' };
-  return { label: raw || 'Connected', color: '#71717A' };
+  if (!enabled || s === 'inactive') return { label: 'Disconnected', color: '#71717A' };
+  if (s === 'active' || s === 'live') return { label: 'Synced', color: '#43631A' };
+  if (s === 'review' || s === 'needs-attention') return { label: 'Needs review', color: '#BA7517' };
+  if (s === 'error' || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Import failed', color: '#DC2626' };
+  if (s === 'pending' || s === 'scanning') return { label: 'Scanning products…', color: '#A2611A' };
+  if (s === 'syncing' || s === 'reconciling' || s === 'ready_to_sync') return { label: 'Importing inventory…', color: '#A2611A' };
+  return { label: 'Checking status', color: '#71717A' };
 };
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
@@ -60,7 +63,7 @@ const APPS = [
 const ConnectionsScreen = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { liveConnections, loading, refresh } = usePlatformConnections();
+  const { liveConnections, loading, error: connectionsError, refresh } = usePlatformConnections();
   const overlay = usePlatformPickerOverlay();
   const { currentOrg } = useOrg();
 
@@ -182,6 +185,28 @@ const ConnectionsScreen = () => {
       },
     ]);
   };
+
+  const retryImport = useCallback(async (connection: any) => {
+    try {
+      const token = await ensureSupabaseJwt();
+      const reenable = connection.IsEnabled === false || String(connection.Status).toLowerCase() === 'inactive';
+      const endpoint = reenable
+        ? `${API_BASE_URL}/api/platform-connections/${connection.Id}/enable`
+        : `${API_BASE_URL}/api/sync/connections/${connection.Id}/start-scan`;
+      const response = await fetch(endpoint, {
+        method: reenable ? 'PATCH' : 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Request failed (${response.status})`);
+      }
+      await refresh?.();
+    } catch (error: any) {
+      Alert.alert('Couldn’t start import', error?.message || 'Please try again.');
+    }
+  }, [refresh]);
+
   const [poolsLoading, setPoolsLoading] = useState(false);
   const [createPoolOpen, setCreatePoolOpen] = useState(false);
 
@@ -245,7 +270,13 @@ const ConnectionsScreen = () => {
           <View style={styles.rowInfo}>
             <Text style={styles.rowTitle}>Import inbox</Text>
             <Text style={[styles.rowSub, hub.totalNeedsYou === 0 && styles.inboxSubMuted]} numberOfLines={1}>
-              {hub.totalNeedsYou > 0
+              {hub.error
+                ? 'Couldn’t verify import status'
+                : hub.connections.some((connection) => connection.state === 'error')
+                  ? 'An import needs attention'
+                  : hub.scanning.length > 0
+                    ? 'Importing inventory…'
+                    : hub.totalNeedsYou > 0
                 ? `${hub.totalNeedsYou} ${hub.totalNeedsYou === 1 ? 'item needs' : 'items need'} you`
                 : 'All caught up'}
             </Text>
@@ -277,20 +308,28 @@ const ConnectionsScreen = () => {
         <View style={styles.card}>
           {loading && (liveConnections?.length || 0) === 0 ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
+          ) : connectionsError && (liveConnections?.length || 0) === 0 ? (
+            <TouchableOpacity style={styles.loadingRow} onPress={() => refresh?.()}>
+              <Text style={styles.empty}>Couldn’t load your connections. Tap to retry.</Text>
+            </TouchableOpacity>
           ) : (liveConnections?.length || 0) === 0 ? (
             <Text style={styles.empty}>No platforms connected yet.</Text>
           ) : (
             liveConnections.map((c: any, i: number) => {
-              const st = statusOf(c.Status);
+              const st = statusOf(c.Status, c.IsEnabled !== false);
               const attn = attentionByConn[c.Id] || 0;
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.row, i > 0 && styles.rowBorder]}
                   activeOpacity={0.7}
-                  onPress={() =>
-                    navigation.navigate('SyncRules', { connectionId: c.Id, platformName: c.PlatformType })
-                  }
+                  onPress={() => {
+                    if (c.IsEnabled === false || String(c.Status).toLowerCase() === 'inactive') {
+                      void retryImport(c);
+                      return;
+                    }
+                    navigation.navigate('SyncRules', { connectionId: c.Id, platformName: c.PlatformType });
+                  }}
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
                   <View style={styles.rowInfo}>
@@ -305,7 +344,7 @@ const ConnectionsScreen = () => {
                       <TouchableOpacity
                         style={styles.manageBtn}
                         hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                        onPress={(e: any) => { e.stopPropagation?.(); refresh?.(); }}
+                        onPress={(e: any) => { e.stopPropagation?.(); void retryImport(c); }}
                       >
                         <RefreshCw size={16} color="#52525B" />
                       </TouchableOpacity>

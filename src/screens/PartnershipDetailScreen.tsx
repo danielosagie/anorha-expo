@@ -52,9 +52,8 @@ export default function PartnershipDetailScreen() {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
-            if (res.ok) {
-                const data = await res.json();
-                const flatProducts: LinkedProduct[] = [];
+            if (!res.ok) throw new Error(await res.text() || `Request failed (${res.status})`);
+            const data = await res.json();
 
                 // The API returns grouped products. Flattening for mobile list view simplicity or using as is.
                 // API returns: Record<productId, LinkedProduct[]>
@@ -68,13 +67,11 @@ export default function PartnershipDetailScreen() {
                 // For simplicity, we will just display the list.
 
                 // If data is array:
-                if (Array.isArray(data)) {
-                    setProducts(data);
-                } else {
-                    // Grouped by ID?
-                    const list = Object.values(data).flat() as LinkedProduct[];
-                    setProducts(list);
-                }
+            if (Array.isArray(data)) {
+                setProducts(data);
+            } else {
+                const list = Object.values(data).flat() as LinkedProduct[];
+                setProducts(list);
             }
         } catch (error) {
             log.error(error);
@@ -96,18 +93,18 @@ export default function PartnershipDetailScreen() {
 
     const handleToggleSync = async (link: LinkedProduct) => {
         const action = link.status === 'paused' ? 'resume' : 'pause';
-        // Optimistic
-        setProducts(prev => prev.map(p => p.id === link.id ? { ...p, status: link.status === 'paused' ? 'active' : 'paused' } : p));
 
         try {
             const token = await ensureSupabaseJwt();
-            await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}/${action}`, {
+            const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}/${action}`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}` }
             });
-        } catch (e) {
+            if (!response.ok) throw new Error(await response.text() || `Request failed (${response.status})`);
+            setProducts(prev => prev.map(p => p.id === link.id ? { ...p, status: link.status === 'paused' ? 'active' : 'paused' } : p));
+        } catch (e: any) {
             log.error(e);
-            loadProducts(); // revert
+            Alert.alert('Couldn’t update sync', e?.message || 'Please try again.');
         }
     };
 
@@ -125,7 +122,7 @@ export default function PartnershipDetailScreen() {
                 </View>
                 <View style={[styles.statusBadge, item.status === 'active' ? styles.statusActive : styles.statusPaused]}>
                     <Text style={[styles.statusText, item.status === 'active' ? styles.statusTextActive : styles.statusTextPaused]}>
-                        {item.status === 'active' ? 'Syncing' : 'Paused'}
+                        {item.status === 'active' ? 'Sync on' : 'Paused'}
                     </Text>
                 </View>
             </View>

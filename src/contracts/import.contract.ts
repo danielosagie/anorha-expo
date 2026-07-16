@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/import.contract.ts (sha256:a637864cc865)
+// @generated from sssync-bknd/src/contracts/import.contract.ts (sha256:7d230f944b0e)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * IMPORT / MAPPING CONTRACT — Match & Optimize (import) resolver seam.
@@ -127,5 +127,7 @@ export const zMappingSuggestion = z.object({
   sourceHash: z.string().optional(),
   /** Persisted decision from a previous session for this exact item (hash-checked server-side). */
   priorResolution: zImportAction.nullable().optional(),
+  /** The canonical a prior LINK_EXISTING chose — replays re-link to THIS id only (null for CREATE_NEW/IGNORE). */
+  priorCanonicalId: z.string().nullable().optional(),
 });
 export type MappingSuggestion = z.infer<typeof zMappingSuggestion>;

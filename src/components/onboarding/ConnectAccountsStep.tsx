@@ -56,16 +56,13 @@ export default function ConnectAccountsStep({
 
   // The platform whose combined connect flow (OAuth + link-computer) is open.
   const [flowPlatform, setFlowPlatform] = useState<ConnectablePlatform | null>(null);
-  // Platforms the user finished connecting during THIS session (optimistic).
-  const [justConnected, setJustConnected] = useState<Set<ConnectablePlatform>>(new Set());
-
   // Fully connected = every required step done (Facebook needs OAuth AND a linked
-  // computer). justConnected covers the brief window before the row lands live.
+  // computer). Read server-backed connection rows only; OAuth completion alone
+  // must not fabricate an importing state.
   const isFullyConnected = useCallback(
     (key: ConnectablePlatform) =>
-      justConnected.has(key) ||
       derivePlatformConnectStatus(key, liveConnections, { computerOnline, presenceLoaded }).isFullyConnected,
-    [justConnected, liveConnections, computerOnline, presenceLoaded],
+    [liveConnections, computerOnline, presenceLoaded],
   );
 
   const connectedCount = useMemo(
@@ -101,6 +98,9 @@ export default function ConnectAccountsStep({
 
         {PLATFORMS.map((p, i) => {
           const connected = isFullyConnected(p.key);
+          const connection = liveConnections.find((item) => item.PlatformType.toLowerCase() === p.key && item.IsEnabled !== false);
+          const connectionStatus = String(connection?.Status || '').toLowerCase();
+          const importing = ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync'].includes(connectionStatus);
           return (
             <View key={p.key} style={[styles.row, i > 0 && styles.rowBorder]}>
               <View style={styles.logoSquare}>
@@ -108,7 +108,7 @@ export default function ConnectAccountsStep({
               </View>
               <View style={styles.rowInfo}>
                 <Text style={styles.rowName}>{p.name}</Text>
-                {justConnected.has(p.key) ? (
+                {importing ? (
                   <Text style={styles.rowStatus} numberOfLines={1}>Importing inventory…</Text>
                 ) : null}
               </View>
@@ -151,7 +151,6 @@ export default function ConnectAccountsStep({
         orgId={orgId}
         onCancel={() => setFlowPlatform(null)}
         onConnected={() => {
-          setJustConnected((prev) => (flowPlatform ? new Set(prev).add(flowPlatform) : prev));
           setFlowPlatform(null);
           refresh?.();
           setTimeout(() => refresh?.(), 2500);

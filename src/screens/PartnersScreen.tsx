@@ -53,6 +53,12 @@ const log = createLogger('PartnersScreen');
 
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
+const requireOk = async (response: Response, fallback: string): Promise<Response> => {
+    if (response.ok) return response;
+    const message = await response.text().catch(() => '');
+    throw new Error(message || `${fallback} (${response.status})`);
+};
+
 export interface Partnership {
     id: string;
     partnerOrgName?: string;
@@ -171,15 +177,18 @@ export default function PartnersScreen() {
                     fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } })
                 ]);
 
-                if (partnersRes.ok) {
-                    const pData = await partnersRes.json();
-                    setPartnerships(pData.partnerships || []);
-                }
+                await Promise.all([
+                    requireOk(partnersRes, 'Could not load partnerships'),
+                    requireOk(invitesRes, 'Could not load invites'),
+                    requireOk(poolsRes, 'Could not load pools'),
+                ]);
 
-                if (invitesRes.ok) {
-                    const iData = await invitesRes.json();
-                    setPendingInvites(iData.sent || []);
-                    setReceivedInvites((iData.received || []).map((inv: any) => ({
+                const pData = await partnersRes.json();
+                setPartnerships(pData.partnerships || []);
+
+                const iData = await invitesRes.json();
+                setPendingInvites(iData.sent || []);
+                setReceivedInvites((iData.received || []).map((inv: any) => ({
                         id: inv.id,
                         sourceOrgName: inv.sourceOrgName || 'Unknown Organization',
                         sourcePoolName: inv.sourcePoolName || 'Unknown Pool',
@@ -188,15 +197,12 @@ export default function PartnersScreen() {
                         variantCount: inv.variantCount || 0,
                         expiresAt: inv.expiresAt,
                         token: inv.token || inv.id,
-                    })));
-                }
+                })));
 
-                if (poolsRes.ok) {
-                    const poolsData = await poolsRes.json();
-                    setPools(poolsData);
-                    if (poolsData.length > 0 && !invitePoolId) {
-                        setInvitePoolId(poolsData[0].id);
-                    }
+                const poolsData = await poolsRes.json();
+                setPools(poolsData);
+                if (poolsData.length > 0 && !invitePoolId) {
+                    setInvitePoolId(poolsData[0].id);
                 }
             } catch (error: any) {
                 log.error('[PartnersScreen] Error loading data:', error);
@@ -222,14 +228,16 @@ export default function PartnersScreen() {
                 fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/pending?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
             ]);
 
-            if (partnersRes.ok) {
-                const pData = await partnersRes.json();
-                setPartnerships(pData.partnerships || []);
-            }
-            if (invitesRes.ok) {
-                const iData = await invitesRes.json();
-                setPendingInvites(iData.sent || []);
-                setReceivedInvites((iData.received || []).map((inv: any) => ({ // Map again
+            await Promise.all([
+                requireOk(partnersRes, 'Could not refresh partnerships'),
+                requireOk(invitesRes, 'Could not refresh invites'),
+            ]);
+
+            const pData = await partnersRes.json();
+            setPartnerships(pData.partnerships || []);
+            const iData = await invitesRes.json();
+            setPendingInvites(iData.sent || []);
+            setReceivedInvites((iData.received || []).map((inv: any) => ({
                     id: inv.id,
                     sourceOrgName: inv.sourceOrgName || 'Unknown Organization',
                     sourcePoolName: inv.sourcePoolName || 'Unknown Pool',
@@ -238,9 +246,11 @@ export default function PartnersScreen() {
                     variantCount: inv.variantCount || 0,
                     expiresAt: inv.expiresAt,
                     token: inv.token || inv.id,
-                })));
-            }
-        } catch (e) { log.error("Background refresh failed", e); }
+            })));
+        } catch (e: any) {
+            log.error('Background refresh failed', e);
+            showAlertModal('Couldn’t refresh partners', e?.message || 'Please try again.', 'error');
+        }
     };
 
 
@@ -308,13 +318,14 @@ export default function PartnersScreen() {
                 setConfirmModal(prev => ({ ...prev, visible: false }));
                 try {
                     const token = await ensureSupabaseJwt();
-                    await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${inviteId}?orgId=${currentOrg.id}`, {
+                    const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${inviteId}?orgId=${currentOrg.id}`, {
                         method: 'DELETE',
                         headers: { Authorization: `Bearer ${token}` }
                     });
-                    refreshData();
+                    await requireOk(response, 'Could not revoke invite');
+                    await refreshData();
                     showMessage({ message: 'Invite revoked', type: 'info' });
-                } catch (e) { log.error(e); }
+                } catch (e: any) { showAlertModal('Couldn’t revoke invite', e?.message || 'Please try again.', 'error'); }
             }
         });
     };
@@ -326,13 +337,14 @@ export default function PartnersScreen() {
 
         try {
             const token = await ensureSupabaseJwt();
-            await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}/${action}?orgId=${currentOrg.id}`, {
+            const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}/${action}?orgId=${currentOrg.id}`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}` }
             });
-        } catch (e) {
-            log.debug(e);
-            refreshData();
+            await requireOk(response, `Could not ${action} partnership`);
+        } catch (e: any) {
+            await refreshData();
+            showAlertModal(`Couldn’t ${action} partnership`, e?.message || 'Please try again.', 'error');
         }
     };
 
@@ -347,13 +359,14 @@ export default function PartnersScreen() {
                 setConfirmModal(prev => ({ ...prev, visible: false }));
                 try {
                     const token = await ensureSupabaseJwt();
-                    await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}?cleanup=true`, {
+                    const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${p.id}?cleanup=true`, {
                         method: 'DELETE',
                         headers: { Authorization: `Bearer ${token}` }
                     });
-                    refreshData();
+                    await requireOk(response, 'Could not end partnership');
+                    await refreshData();
                     showMessage({ message: 'Partnership ended', type: 'info' });
-                } catch (e) { log.error(e); }
+                } catch (e: any) { showAlertModal('Couldn’t end partnership', e?.message || 'Please try again.', 'error'); }
             }
         });
     };
@@ -380,12 +393,9 @@ export default function PartnersScreen() {
             duration: 3000,
         });
 
-        // Optimistic Remove from list
-        setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
-
         try {
             const token = await ensureSupabaseJwt();
-            const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/accept`, {
+            const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/accept?orgId=${encodeURIComponent(currentOrg.id)}`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -396,6 +406,7 @@ export default function PartnersScreen() {
 
             if (res.ok) {
                 const result = await res.json();
+                setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
                 capture(AnalyticsEvents.PARTNER_INVITE_ACCEPTED, { source: 'partners_screen' });
 
                 // Check for onboarding next steps (e.g. no platform connected yet)
@@ -444,13 +455,14 @@ export default function PartnersScreen() {
                 setConfirmModal(prev => ({ ...prev, visible: false }));
                 try {
                     const token = await ensureSupabaseJwt();
-                    await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/decline`, {
+                    const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/${invite.token}/decline`, {
                         method: 'POST',
                         headers: { Authorization: `Bearer ${token}` }
                     });
+                    await requireOk(response, 'Could not decline invite');
                     setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
                     showMessage({ message: 'Invite declined', type: 'info' });
-                } catch (e) { log.error(e); }
+                } catch (e: any) { showAlertModal('Couldn’t decline invite', e?.message || 'Please try again.', 'error'); }
             }
         });
     };
