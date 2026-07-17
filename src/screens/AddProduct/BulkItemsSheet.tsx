@@ -273,6 +273,7 @@ export const BulkItemsSheet: React.FC<{
     products: Array<{
       productIndex: number;
       productId: string;
+      clientItemId: string;
       variantId?: string;
       imageUrls: string[];
       coverImageIndex: number;
@@ -291,20 +292,45 @@ export const BulkItemsSheet: React.FC<{
     // Guarantee the backend only ever receives uploaded public URLs. A raw device file://
     // path would be persisted onto the variant (PrimaryImageUrl) + ProductImages and then
     // never render in the gallery and never publish. Upload any local uri here first.
-    const productsWithHostedImages = await Promise.all(products.map(async (p) => {
+    const uploadResults = await Promise.all(products.map(async (p) => {
       const urls = Array.isArray(p.imageUrls) ? p.imageUrls : [];
+      let uploadFailed = false;
       const hosted = await Promise.all(urls.map(async (u, i) => {
-        if (typeof u !== 'string' || !u.trim()) return '';
+        if (typeof u !== 'string' || !u.trim()) {
+          uploadFailed = true;
+          return '';
+        }
         if (/^https?:\/\//i.test(u)) return u; // already uploaded
         try {
           return await uploadProductImage(u, `${p.productId || p.productIndex}-${i}`);
         } catch (e) {
-          log.warn('[generate] image upload failed; dropping local uri instead of persisting file://', e);
+          uploadFailed = true;
+          log.warn('[generate] image upload failed', e);
           return '';
         }
       }));
-      return { ...p, imageUrls: hosted.filter(Boolean) };
+      if (uploadFailed || hosted.length !== urls.length || hosted.some((url) => !url)) {
+        return { clientItemId: p.clientItemId, product: null };
+      }
+      const { clientItemId: _clientItemId, ...product } = p;
+      return { clientItemId: p.clientItemId, product: { ...product, imageUrls: hosted } };
     }));
+
+    const failedItemIds = uploadResults.filter((result) => !result.product).map((result) => result.clientItemId);
+    if (failedItemIds.length > 0) {
+      setItemLoadingStates((prev) => {
+        const next = { ...prev };
+        failedItemIds.forEach((itemId) => {
+          next[itemId] = { isLoading: false, stage: 'Failed', error: 'Photo upload failed' };
+        });
+        return next;
+      });
+    }
+
+    const successfulUploads = uploadResults.filter((result): result is typeof result & { product: NonNullable<typeof result.product> } => Boolean(result.product));
+    if (successfulUploads.length === 0) {
+      return { job: null, submittedItemIds: [] as string[] };
+    }
 
     const response = await fetch(`${API_BASE}/api/products/generate/jobs`, {
       method: 'POST',
@@ -313,7 +339,7 @@ export const BulkItemsSheet: React.FC<{
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        products: productsWithHostedImages,
+        products: successfulUploads.map((result) => result.product),
         selectedPlatforms: connectedPlatformKeys,
         options: { useScraping: true },
       }),
@@ -331,8 +357,11 @@ export const BulkItemsSheet: React.FC<{
       throw new Error(`HTTP ${response.status}: ${response.statusText} :: ${responseText.slice(0, 200)}`);
     }
 
-    return parsed as JobResponse | null;
-  }, [connectedPlatformKeys]);
+    return {
+      job: parsed as JobResponse | null,
+      submittedItemIds: successfulUploads.map((result) => result.clientItemId),
+    };
+  }, [connectedPlatformKeys, setItemLoadingStates]);
 
   // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections).
   // keepSheetOpen: swipe-to-generate fires this per-card and the cart stays up so the
@@ -409,6 +438,7 @@ export const BulkItemsSheet: React.FC<{
           generateProduct: selectedCandidate ? {
             productIndex: index,
             productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
+            clientItemId: item.id,
             variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
             imageUrls,
             coverImageIndex: 0,
@@ -433,9 +463,12 @@ export const BulkItemsSheet: React.FC<{
         const generateProductsPayload = directGenerateEntries.flatMap((entry) => (
           entry.generateProduct ? [{ ...entry.generateProduct, productIndex: entry.originalIndex }] : []
         ));
-        const directJobResponse = await submitDirectGenerateJob(generateProductsPayload);
+        const { job: directJobResponse, submittedItemIds } = await submitDirectGenerateJob(generateProductsPayload);
 
         const directJobId = directJobResponse?.jobId;
+        if (submittedItemIds.length === 0) {
+          return;
+        }
         if (!directJobId) {
           throw new Error('Generate job response missing jobId');
         }
@@ -443,7 +476,9 @@ export const BulkItemsSheet: React.FC<{
         // In-place: queue the generate job; items stay in the cart and process async.
         // Only the items actually in this job (directGenerateEntries) — not all bulkItems.
         onQueueGeneration?.(
-          directGenerateEntries.map((entry) => ({ itemId: entry.item.id, jobId: directJobId, processType: 'generate' as const })),
+          directGenerateEntries
+            .filter((entry) => submittedItemIds.includes(entry.item.id))
+            .map((entry) => ({ itemId: entry.item.id, jobId: directJobId, processType: 'generate' as const })),
         );
         return;
       }
@@ -457,10 +492,13 @@ export const BulkItemsSheet: React.FC<{
 
       let directJobResponse: JobResponse | null = null;
       let directJobId: string | undefined;
+      let submittedDirectItemIds: string[] = [];
       if (directJobMap.length > 0) {
-        directJobResponse = await submitDirectGenerateJob(directJobMap);
+        const directSubmission = await submitDirectGenerateJob(directJobMap);
+        directJobResponse = directSubmission.job;
+        submittedDirectItemIds = directSubmission.submittedItemIds;
         directJobId = directJobResponse?.jobId || undefined;
-        if (!directJobId) {
+        if (submittedDirectItemIds.length > 0 && !directJobId) {
           throw new Error('Generate job response missing jobId');
         }
       }
@@ -478,7 +516,9 @@ export const BulkItemsSheet: React.FC<{
       if (analyzeFirstPhotos.length === 0 && directJobId) {
         // Only the direct-generate items are in this job — photo-less non-direct items must not be queued.
         onQueueGeneration?.(
-          directGenerateEntries.map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const })),
+          directGenerateEntries
+            .filter((entry) => submittedDirectItemIds.includes(entry.item.id))
+            .map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const })),
         );
         return;
       }
@@ -495,7 +535,9 @@ export const BulkItemsSheet: React.FC<{
         // In-place: direct items generate, analyze items match (auto-generates) — all async in the cart.
         onQueueGeneration?.([
           ...(directJobId
-            ? directGenerateEntries.map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const }))
+            ? directGenerateEntries
+              .filter((entry) => submittedDirectItemIds.includes(entry.item.id))
+              .map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const }))
             : []),
           ...analyzeEntries.map((entry) => ({ itemId: entry.item.id, jobId, processType: 'match' as const })),
         ]);
@@ -504,6 +546,15 @@ export const BulkItemsSheet: React.FC<{
       }
     } catch (error) {
       log.error('[ANALYZE] Error:', error);
+      setItemLoadingStates((prev) => {
+        const next = { ...prev };
+        targetItems.forEach((item) => {
+          if (item.photos.length > 0) {
+            next[item.id] = { isLoading: false, stage: 'Failed', error: 'Try again' };
+          }
+        });
+        return next;
+      });
       Alert.alert('Error', 'Failed to start analysis. Please try again.');
     } finally {
       isAnalyzeInFlightRef.current = false;

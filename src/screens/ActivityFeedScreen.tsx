@@ -832,7 +832,7 @@ const ActivityFeedScreen = observer(() => {
           <View style={{ marginBottom: 20 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
               <Text style={{ fontSize: 18, fontWeight: '700', color: theme.colors.text }}>Active Liquidation</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('CampaignsList' as any)}>
+              <TouchableOpacity onPress={() => navigation.navigate('SproutHomeScreen' as any)}>
                 <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>See All</Text>
               </TouchableOpacity>
             </View>
@@ -851,7 +851,7 @@ const ActivityFeedScreen = observer(() => {
                   revenue={item.RevenueGenerated || 0}
                   daysRemaining={item.Goal?.timeframeDays - (item.Progress?.daysElapsed || 0) || 0}
                   status={item.Status}
-                  onPress={() => navigation.navigate('CampaignDetail' as any, { campaignId: item.Id })}
+                  onPress={() => navigation.navigate('LiquidationCampaignScreen' as any, { campaignId: item.Id, entryPoint: 'detail' })}
                 />
               )}
             />

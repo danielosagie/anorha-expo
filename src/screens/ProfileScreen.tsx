@@ -91,7 +91,6 @@ interface PlatformConnection {
 
 // REMOVE Top-level await for user fetching
 // const { data: { user }, error: userError } = await supabase.auth.getUser();
-// console.log("[ProfileScreen] User ID:", user?.id);
 
 // if (userError || !user) {
 //   Alert.alert("Authentication Error", "Could not get user information. Please log in again.");

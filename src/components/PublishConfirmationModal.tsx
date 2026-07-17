@@ -124,7 +124,7 @@ export default function PublishConfirmationModal({
 
     // Facebook posts through the seller's own computer — give an honest, non-blocking
     // heads-up if FB is on and no computer is currently online (publishing still queues).
-    const { computerOnline, computers } = useFacebookJobStatus();
+    const { computerOnline, computers } = useFacebookJobStatus(visible);
     const showComputerHeadsUp = selectedPlatforms.has('facebook') && !computerOnline;
 
     // Optional pin: with 2+ linked computers, let the seller choose WHICH one posts

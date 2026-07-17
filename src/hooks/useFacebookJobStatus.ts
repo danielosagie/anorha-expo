@@ -212,26 +212,27 @@ export interface FacebookJobStatus {
   presenceLoaded: boolean;
 }
 
-export function useFacebookJobStatus(): FacebookJobStatus {
+export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus {
   const { client, userId } = useBrowserJobsConvexContext();
 
   const jobs = useWatchedQuery<BrowserJobDoc[]>(
     client,
     browserJobsApi.browserJobs.getForUser,
-    userId ? { userId } : 'skip',
+    enabled && userId ? { userId } : 'skip',
   );
   const presence = useWatchedQuery<WorkerPresenceDoc[]>(
     client,
     browserJobsApi.workerPresence.getForUser,
-    userId ? { userId } : 'skip',
+    enabled && userId ? { userId } : 'skip',
   );
 
   // Local tick so presence-staleness flips offline without a Convex push.
   const [tick, forceTick] = useState(0);
   useEffect(() => {
+    if (!enabled) return;
     const t = setInterval(() => forceTick((n) => n + 1), TICK_MS);
     return () => clearInterval(t);
-  }, []);
+  }, [enabled]);
 
   const computerOnline = useMemo(() => {
     if (!presence || presence.length === 0) return false;
@@ -293,6 +294,6 @@ export function useFacebookJobStatus(): FacebookJobStatus {
     // useWatchedQuery yields undefined until the first result lands — that's
     // "loading", not "no computers". (In degraded mode it never loads; treat
     // as loaded so callers fall back to their degraded handling.)
-    presenceLoaded: presence !== undefined || !client || !userId,
+    presenceLoaded: !enabled || presence !== undefined || !client || !userId,
   };
 }

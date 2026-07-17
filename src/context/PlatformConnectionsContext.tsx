@@ -229,12 +229,15 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       setProgressByConnectionId(prev => {
         const now = Date.now();
         const next: Record<string, SyncProgressUpdate> = {};
+        let expired = false;
         Object.entries(prev).forEach(([id, progress]) => {
           if (now - progress.receivedAt <= PROGRESS_OVERRIDE_TTL_MS) {
             next[id] = progress;
+          } else {
+            expired = true;
           }
         });
-        return next;
+        return expired ? next : prev;
       });
     }, 60 * 1000);
     return () => clearInterval(interval);
@@ -255,7 +258,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     return !!connectedByPlatform[key];
   }, [connectedByPlatform]);
 
-  const value: ContextValue = {
+  const value = useMemo<ContextValue>(() => ({
     connections,
     liveConnections,
     progressByConnectionId,
@@ -265,7 +268,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     loading,
     error,
     toggles,
-  };
+  }), [connections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, fetchConnections, loading, error, toggles]);
 
   return (
     <PlatformConnectionsContext.Provider value={value}>

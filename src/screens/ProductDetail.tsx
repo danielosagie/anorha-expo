@@ -1965,7 +1965,7 @@ const ProductDetailScreen = observer(
     }, [detailedItem, platformLabelForConnection, showBanner, loadPlatformData, mergeConfirmedOverride]);
 
     // Always fire the latest flush closure from the debounce timer.
-    const flushOverridesRef = useRef<() => void>(() => {});
+    const flushOverridesRef = useRef<() => Promise<void>>(async () => {});
     useEffect(() => {
       flushOverridesRef.current = flushPendingOverrides;
     }, [flushPendingOverrides]);
@@ -1974,7 +1974,7 @@ const ProductDetailScreen = observer(
       const prev = pendingOverridesRef.current.get(connectionId) || {};
       pendingOverridesRef.current.set(connectionId, { ...prev, ...fields });
       if (overrideSaveTimeoutRef.current) clearTimeout(overrideSaveTimeoutRef.current);
-      overrideSaveTimeoutRef.current = setTimeout(() => flushOverridesRef.current?.(), 1200);
+      overrideSaveTimeoutRef.current = setTimeout(() => { void flushOverridesRef.current(); }, 1200);
     }, []);
 
     // Decide whether a form change is a per-platform override (a single specific-tab edit of
@@ -2044,14 +2044,6 @@ const ProductDetailScreen = observer(
       [detailedItem, overridesByConnection, platformLabelForConnection, showBanner, loadPlatformData],
     );
 
-    // Cancel any in-flight override debounce on unmount.
-    useEffect(
-      () => () => {
-        if (overrideSaveTimeoutRef.current) clearTimeout(overrideSaveTimeoutRef.current);
-      },
-      [],
-    );
-
     useEffect(() => {
       if (!ENABLE_AUTOSAVE) return;
       if (!hasUnsavedChanges || isSaving) return;
@@ -2074,6 +2066,39 @@ const ProductDetailScreen = observer(
         }
       };
     }, [hasUnsavedChanges, isSaving, saveError, performAutoSave]);
+
+    const performAutoSaveRef = useRef<() => Promise<void>>(async () => {});
+    performAutoSaveRef.current = performAutoSave;
+    const exitSavePromiseRef = useRef<Promise<void> | null>(null);
+    const flushPendingSaves = useCallback(() => {
+      if (exitSavePromiseRef.current) return;
+      if (overrideSaveTimeoutRef.current) {
+        clearTimeout(overrideSaveTimeoutRef.current);
+        overrideSaveTimeoutRef.current = null;
+      }
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+        autoSaveTimeoutRef.current = null;
+      }
+      const promise = Promise.all([
+        flushOverridesRef.current(),
+        performAutoSaveRef.current(),
+      ]).then(() => undefined);
+      exitSavePromiseRef.current = promise;
+      void promise.finally(() => {
+        if (exitSavePromiseRef.current === promise) exitSavePromiseRef.current = null;
+      });
+    }, []);
+
+    useEffect(() => {
+      const removeBeforeRemove = (navigation as any).addListener('beforeRemove', flushPendingSaves);
+      const removeBlur = (navigation as any).addListener('blur', flushPendingSaves);
+      return () => {
+        removeBeforeRemove();
+        removeBlur();
+        flushPendingSaves();
+      };
+    }, [navigation, flushPendingSaves]);
 
     // Show a quiet "Saved" then fade it out after 5s of no changes. While saving or with
     // unsaved edits it stays hidden (the header shows "Saving…" instead).
@@ -2852,20 +2877,18 @@ const ProductDetailScreen = observer(
 
         // Update via API
         const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('Authentication required');
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updateData),
+        });
 
-        if (token) {
-          const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(updateData),
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to update product images');
-          }
+        if (!response.ok) {
+          throw new Error('Failed to update product images');
         }
 
         // Update local state
@@ -2889,20 +2912,18 @@ const ProductDetailScreen = observer(
         // Update via API
         const session = await supabase.auth.getSession();
         const token = session?.data.session?.access_token;
+        if (!token) throw new Error('Authentication required');
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updateData),
+        });
 
-        if (token) {
-          const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(updateData),
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to update product images');
-          }
+        if (!response.ok) {
+          throw new Error('Failed to update product images');
         }
 
         // Update local state
@@ -2922,34 +2943,34 @@ const ProductDetailScreen = observer(
         const session = await supabase.auth.getSession();
         const token = session?.data.session?.access_token;
         const updateData = { ImageUrls: nextImageUrls };
-        if (token) {
-          const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(updateData),
-          });
-          if (!response.ok) throw new Error('Failed to reorder images');
-        }
+        if (!token) throw new Error('Authentication required');
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updateData),
+        });
+        if (!response.ok) throw new Error('Failed to reorder images');
         setDetailedItem(prev => prev ? { ...prev } : prev);
         // displayImages will refresh from productImages$ after sync
         setHasUnsavedChanges(false);
       } catch (error) {
         log.error('Error reordering images:', error);
+        setOptimisticImages(null);
+        Alert.alert('Save failed', 'Please try again.');
       }
     };
 
     // In the delete handler
     const handleDelete = () => {
       Alert.alert(
-        'Confirm Delete',
-        'This action cannot be undone. Do you want to archive or hard delete?',
+        'Archive product',
+        'Archive this product?',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Archive', onPress: () => archiveProduct() },
-          { text: 'Hard Delete', style: 'destructive', onPress: () => hardDeleteProduct() },
         ]
       );
     };
@@ -2959,18 +2980,17 @@ const ProductDetailScreen = observer(
       if (!detailedItem?.Id) return;
       try {
         const token = await ensureSupabaseJwt();
-        await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/archive`, {
+        if (!token) throw new Error('Authentication required');
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/archive`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (!response.ok) throw new Error('Archive failed');
         navigation.goBack();
       } catch (error) {
-        // handle
+        log.error('Error archiving product:', error);
+        Alert.alert('Archive failed', 'Please try again.');
       }
-    };
-
-    const hardDeleteProduct = async () => {
-      // similar for delete
     };
 
     // Load initial data

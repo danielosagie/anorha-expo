@@ -114,27 +114,6 @@ export async function initializeLegendState(
     const currentUserId = userIdToInitialize;
     log.debug(`[SupaLegend] currentUserId set to: ${currentUserId}`);
 
-    // --- DIAGNOSTIC CACHE CLEAR DISABLED ---
-    // Commenting out aggressive cache clearing as it forces Legend to re-fetch from Supabase
-    // every time, causing empty state until network request completes.
-    // Only uncomment this if you're debugging cache corruption issues.
-    /*
-    const productVariantsPersistKey = `productVariants_user_${currentUserId}_v6`;
-    const inventoryLevelsPersistKey = `inventoryLevels_user_${currentUserId}_v5`;
-    try {
-        console.log(`[SupaLegend - DIAGNOSTIC] Attempting to remove AsyncStorage key: ${productVariantsPersistKey}`);
-        await AsyncStorage.removeItem(productVariantsPersistKey);
-        console.log(`[SupaLegend - DIAGNOSTIC] Successfully removed AsyncStorage key: ${productVariantsPersistKey}`);
-
-        console.log(`[SupaLegend - DIAGNOSTIC] Attempting to remove AsyncStorage key: ${inventoryLevelsPersistKey}`);
-        await AsyncStorage.removeItem(inventoryLevelsPersistKey);
-        console.log(`[SupaLegend - DIAGNOSTIC] Successfully removed AsyncStorage key: ${inventoryLevelsPersistKey}`);
-    } catch (e) {
-        console.error(`[SupaLegend - DIAGNOSTIC] Error removing AsyncStorage keys:`, e);
-    }
-    */
-    // --- END DIAGNOSTIC ---
-
     configureSyncedSupabase({
         generateId,
     });
@@ -270,11 +249,9 @@ export async function initializeLegendState(
     log.debug(`[SupaLegend] productVariants$ activated. Current local count: ${Object.keys(productVariants$.get() || {}).length}`);
 
     // Optionally activate others if needed, but productVariants is primary for now
-    // console.log("[SupaLegend] Activating platformProductMappings$...");
     // platformProductMappings$.get();
     log.debug("[SupaLegend] Activating productImages$...");
     productImages$.get();
-    // console.log("[SupaLegend] Activating inventoryLevels$...");
     // inventoryLevels$.get();
 
     legendStateObservablesSingleton = {
