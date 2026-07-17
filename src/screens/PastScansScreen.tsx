@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,6 +14,7 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import { CHAT_COLORS, CHAT_FONT, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PastScansScreen');
+const GENERATION_PAGE_SIZE = 25;
 
 
 // --- Interfaces for Data Types ---
@@ -83,136 +84,99 @@ const PastScansScreen = () => {
   const [generationJobs, setGenerationJobs] = useState<GenerationJob[]>([]);
   const [draftScans, setDraftScans] = useState<DraftScan[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreGenerations, setHasMoreGenerations] = useState(true);
+  const [openingJobId, setOpeningJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const generationPageRef = useRef(0);
+  const generationLoadingRef = useRef(false);
 
-  const fetchPastGenerations = useCallback(async () => {
+  const fetchPastGenerations = useCallback(async (reset = false) => {
+    if (generationLoadingRef.current) return;
+    generationLoadingRef.current = true;
+    const page = reset ? 0 : generationPageRef.current;
+
     try {
-      setLoading(true);
-      setError(null);
+      if (reset) {
+        setLoading(true);
+        setError(null);
+        generationPageRef.current = 0;
+      } else {
+        setLoadingMore(true);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No authenticated user');
 
+      const from = page * GENERATION_PAGE_SIZE;
+      const to = from + GENERATION_PAGE_SIZE - 1;
       let data: any[] | null = null;
       const primaryQuery = await supabase
-        .from("generate_jobs")
-        .select('job_id, match_job_id, created_at, status, summary, results')
+        .from('generate_jobs')
+        .select('job_id, match_job_id, created_at, status, summary')
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
       if (primaryQuery.error?.code === '42703') {
         log.warn('[PastScans] generate_jobs.match_job_id missing; falling back to schema-compatible select');
         const fallbackQuery = await supabase
-          .from("generate_jobs")
-          .select('job_id, created_at, status, summary, results')
+          .from('generate_jobs')
+          .select('job_id, created_at, status, summary')
           .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-        if (fallbackQuery.error) {
-          log.error('Database error (fallback query):', fallbackQuery.error);
-          throw new Error('Failed to fetch past scans');
-        }
+          .order('created_at', { ascending: false })
+          .range(from, to);
+        if (fallbackQuery.error) throw fallbackQuery.error;
         data = fallbackQuery.data;
       } else if (primaryQuery.error) {
-        log.error('Database error:', primaryQuery.error);
-        throw new Error('Failed to fetch past scans');
+        throw primaryQuery.error;
       } else {
         data = primaryQuery.data;
       }
 
-      if (!data) {
-        setGenerationJobs([]);
-        return;
-      }
+      const rawJobs = (data || []) as any[];
+      const formattedJobs = rawJobs.map((job) => ({
+        ...job,
+        id: job.job_id,
+        summary: {
+          ...(job.summary || {}),
+          firstTitle: job.summary?.firstTitle || 'Generated Listing',
+          firstThumb: job.summary?.firstThumb || '',
+        },
+        matchJobId: job.match_job_id || null,
+      } as GenerationJob));
 
-      const rawJobs = data as any[];
-
-      // Collect all unique variantIds from results across jobs
-      const variantIdSet = new Set<string>();
-      rawJobs.forEach(job => {
-        const results = Array.isArray(job.results) ? job.results : [];
-        results.forEach((r: any) => {
-          if (r && typeof r.variantId === 'string' && r.variantId) {
-            variantIdSet.add(r.variantId);
+      setGenerationJobs((previous) => {
+        const jobs = reset ? formattedJobs : [...previous, ...formattedJobs];
+        const grouped = jobs.reduce((acc, job) => {
+          const workflowKey = job.matchJobId || `solo-${job.id}`;
+          const existing = acc.get(workflowKey);
+          if (!existing) {
+            acc.set(workflowKey, { ...job, workflowGroupId: workflowKey, workflowJobCount: job.workflowJobCount || 1 });
+          } else {
+            const latest = new Date(job.created_at).getTime() > new Date(existing.created_at).getTime()
+              ? job
+              : existing;
+            acc.set(workflowKey, {
+              ...latest,
+              workflowGroupId: workflowKey,
+              workflowJobCount: (existing.workflowJobCount || 1) + 1,
+            });
           }
-        });
+          return acc;
+        }, new Map<string, GenerationJob>());
+        return Array.from(grouped.values());
       });
 
-      // Fetch PrimaryImageUrl (cover image) for all variants we found
-      let variantCoverMap: Record<string, string> = {};
-      const variantIds = Array.from(variantIdSet);
-
-      if (variantIds.length > 0) {
-        const { data: variants, error: variantError } = await supabase
-          .from('ProductVariants')
-          .select('Id, PrimaryImageUrl')
-          .in('Id', variantIds);
-
-        if (variantError) {
-          log.error('Error fetching ProductVariants for generate_jobs:', variantError);
-        } else if (Array.isArray(variants)) {
-          variantCoverMap = variants.reduce((acc: Record<string, string>, v: any) => {
-            const id = v?.Id;
-            const cover = v?.PrimaryImageUrl;
-            if (typeof id === 'string' && typeof cover === 'string' && cover) {
-              acc[id] = cover;
-            }
-            return acc;
-          }, {});
-        }
-      }
-
-      // The table has `job_id`, but our keyExtractor needs `id`. Let's map it.
-      const formattedJobs = rawJobs.map(job => {
-        const results = Array.isArray(job.results) ? job.results : [];
-        const first = results[0] || null;
-        const firstVariantId = first?.variantId;
-        const coverFromVariant = firstVariantId ? variantCoverMap[firstVariantId] : undefined;
-
-        const platforms = (first && first.platforms) ? first.platforms : {};
-        const title =
-          job.summary?.firstTitle ||
-          first?.title ||
-          first?.generatedTitle ||
-          first?.listingTitle ||
-          first?.productTitle ||
-          platforms?.shopify?.title ||
-          platforms?.amazon?.title ||
-          platforms?.ebay?.title ||
-          'Generated Listing';
-
-        const thumb =
-          coverFromVariant ||
-          job.summary?.firstThumb ||
-          first?.sourceImageUrl ||
-          '';
-
-        const summary = { ...(job.summary || {}), firstTitle: title, firstThumb: thumb };
-        const matchJobId = job.match_job_id || first?.matchJobId || first?.match_job_id || null;
-        return { ...job, id: job.job_id, summary, results, matchJobId } as GenerationJob;
-      });
-
-      const groupedByWorkflow = formattedJobs.reduce((acc, job) => {
-        const workflowKey = job.matchJobId || `solo-${job.id}`;
-        const existing = acc.get(workflowKey);
-        if (!existing) {
-          acc.set(workflowKey, { ...job, workflowGroupId: workflowKey, workflowJobCount: 1 });
-        } else {
-          const nextCount = (existing.workflowJobCount || 1) + 1;
-          const latest = new Date(job.created_at).getTime() > new Date(existing.created_at).getTime() ? job : existing;
-          acc.set(workflowKey, {
-            ...latest,
-            workflowGroupId: workflowKey,
-            workflowJobCount: nextCount,
-          });
-        }
-        return acc;
-      }, new Map<string, GenerationJob>());
-
-      setGenerationJobs(Array.from(groupedByWorkflow.values()));
+      generationPageRef.current = page + 1;
+      setHasMoreGenerations(rawJobs.length === GENERATION_PAGE_SIZE);
     } catch (err: any) {
       log.error('Error in fetchPastGenerations:', err);
-      setError(err.message || 'Failed to fetch past scans');
+      if (reset) setError(err.message || 'Failed to fetch past scans');
     } finally {
+      generationLoadingRef.current = false;
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
@@ -262,27 +226,57 @@ const PastScansScreen = () => {
 
   useEffect(() => {
     if (activeTab === 'listings') {
-      fetchPastGenerations();
+      fetchPastGenerations(true);
     } else if (activeTab === 'drafts') {
       fetchDraftScans();
     }
   }, [activeTab, fetchPastGenerations, fetchDraftScans]);
 
-  const handleLoadGeneration = (job: GenerationJob) => {
-    if (job.status === 'completed') {
+  const handleLoadGeneration = useCallback(async (job: GenerationJob) => {
+    if (job.status !== 'completed') {
+      log.debug(`Job status is '${job.status}', cannot view results yet.`);
+      return;
+    }
+    if (openingJobId) return;
+
+    setOpeningJobId(job.id);
+    try {
+      let row: any = null;
+      const primaryQuery = await supabase
+        .from('generate_jobs')
+        .select('job_id, match_job_id, created_at, status, summary, results')
+        .eq('job_id', job.id)
+        .single();
+      if (primaryQuery.error?.code === '42703') {
+        const fallbackQuery = await supabase
+          .from('generate_jobs')
+          .select('job_id, created_at, status, summary, results')
+          .eq('job_id', job.id)
+          .single();
+        if (fallbackQuery.error) throw fallbackQuery.error;
+        row = fallbackQuery.data;
+      } else if (primaryQuery.error) {
+        throw primaryQuery.error;
+      } else {
+        row = primaryQuery.data;
+      }
+
       navigation.navigate('GenerateDetailsScreen', {
         jobId: job.id,
         status: 'completed',
-        results: Array.isArray(job.results) ? job.results : [],
+        results: Array.isArray(row?.results) ? row.results : [],
         summary: [],
-        completedAt: job.created_at || '',
-        matchJobId: job.matchJobId || undefined,
+        completedAt: row?.created_at || job.created_at || '',
+        matchJobId: row?.match_job_id || job.matchJobId || undefined,
         focusIndex: 0,
       } as any);
-    } else {
-      log.debug(`Job status is '${job.status}', cannot view results yet.`);
+    } catch (err) {
+      log.error('[PastScans] Failed to load generation results:', err);
+      Alert.alert('Could not open', 'Please try again.');
+    } finally {
+      setOpeningJobId(null);
     }
-  };
+  }, [navigation, openingJobId]);
 
   const handleLoadDraft = (draft: DraftScan) => {
     try {
@@ -314,21 +308,12 @@ const PastScansScreen = () => {
   );
 
   const renderScanItem = ({ item }: { item: GenerationJob }) => {
-    const results = item.results || [];
-    const images = results
-      .map((r: any) => (
-        r?.sourceImageUrl ||
-        r?.images?.[0] || // If array of strings
-        r?.images?.[0]?.url || // If array of objects
-        r?.platforms?.shopify?.images?.[0] || // Try platform specific
-        ''
-      ))
-      .filter((uri: string) => !!uri);
-    const firstImage = images[0] || (item as any)?.summary?.firstThumb;
+    const itemCount = item.summary?.totalProducts || 0;
+    const firstImage = item.summary?.firstThumb;
     const meta = statusMeta(item.status);
     return (
       <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => handleLoadGeneration(item)}>
-        {renderThumb(firstImage, results.length, 'image-off')}
+        {renderThumb(firstImage, itemCount, 'image-off')}
         <View style={styles.rowInfo}>
           <Text style={styles.rowTitle} numberOfLines={1}>{(item as any)?.summary?.firstTitle || 'Generated Listing'}</Text>
           <Text style={styles.rowMeta} numberOfLines={1}>
@@ -342,7 +327,9 @@ const PastScansScreen = () => {
             </Text>
           </View>
         </View>
-        <Icon name="chevron-right" size={22} color={CHAT_COLORS.faint} />
+        {openingJobId === item.id
+          ? <ActivityIndicator size="small" color={CHAT_COLORS.brand} />
+          : <Icon name="chevron-right" size={22} color={CHAT_COLORS.faint} />}
       </TouchableOpacity>
     );
   };
@@ -376,7 +363,7 @@ const PastScansScreen = () => {
     }
 
     if (error) {
-      const retryFn = activeTab === 'listings' ? fetchPastGenerations : fetchDraftScans;
+      const retryFn = activeTab === 'listings' ? () => fetchPastGenerations(true) : fetchDraftScans;
       return (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
@@ -392,6 +379,11 @@ const PastScansScreen = () => {
           renderItem={renderScanItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.listContent, listTopPadding]}
+          onEndReached={() => {
+            if (hasMoreGenerations && !loadingMore) fetchPastGenerations(false);
+          }}
+          onEndReachedThreshold={0.4}
+          ListFooterComponent={loadingMore ? <ActivityIndicator style={{ marginVertical: 18 }} color={CHAT_COLORS.brand} /> : null}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Icon name="history" size={44} color={CHAT_COLORS.faint} />

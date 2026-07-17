@@ -133,6 +133,42 @@ import { PanGestureHandler, TapGestureHandler, State, PanGestureHandlerGestureEv
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { MaterialIcons } from '@expo/vector-icons';
+
+const MAX_DOCUMENT_PHOTOS = 12;
+const DOCUMENT_IMAGE_MAX_DIMENSION = 1600;
+
+const encodeDocumentPhotosSequentially = async (
+  photos: CapturedPhoto[],
+  filenamePrefix: 'page' | 'receipt',
+): Promise<Array<{ base64: string; filename: string }>> => {
+  const images: Array<{ base64: string; filename: string }> = [];
+
+  for (let index = 0; index < photos.length; index += 1) {
+    const photo = photos[index];
+    try {
+      const width = photo.width || 0;
+      const height = photo.height || 0;
+      const resizeAction = Math.max(width, height) > DOCUMENT_IMAGE_MAX_DIMENSION
+        ? [{ resize: width >= height
+          ? { width: DOCUMENT_IMAGE_MAX_DIMENSION }
+          : { height: DOCUMENT_IMAGE_MAX_DIMENSION } }]
+        : [];
+      const resized = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        resizeAction,
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      const base64 = await FileSystem.readAsStringAsync(resized.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      images.push({ base64, filename: `${filenamePrefix}_${index + 1}.jpg` });
+    } catch (error) {
+      log.error(`[${filenamePrefix.toUpperCase()}] Failed to encode photo:`, error);
+    }
+  }
+
+  return images;
+};
 import { Camera as CameraIcon, RotateCcw } from 'lucide-react-native';
 
 import { useNavigation, useRoute, useIsFocused, useFocusEffect } from '@react-navigation/native';
@@ -1835,6 +1871,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     if (!cameraRef.current || isCapturing) return;
 
+    if ((cameraMode === 'manifest' || cameraMode === 'receipt')) {
+      const documentPhotoCount = bulkItems.reduce((count, item) => count + item.photos.length, 0);
+      if (documentPhotoCount >= MAX_DOCUMENT_PHOTOS) {
+        Alert.alert('Photo limit', '12 photo max');
+        return;
+      }
+    }
+
     try {
       setIsCapturing(true);
       setCurrentInstruction('processing');
@@ -1975,7 +2019,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, freemiumStatus]);
+  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, freemiumStatus, cameraMode, bulkItems]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -2562,38 +2606,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         Alert.alert('No Pages', 'Please capture at least one manifest page first.');
         return;
       }
+      if (allPhotos.length > MAX_DOCUMENT_PHOTOS) {
+        Alert.alert('Photo limit', '12 photo max');
+        return;
+      }
 
       log.debug('[CONTINUE] Manifest mode - parsing', allPhotos.length, 'pages');
       showNotificationMessage('Parsing manifest...', 10000);
 
       try {
-        // Convert photos to base64 using fetch
-        const images = await Promise.all(
-          allPhotos.map(async (photo, index) => {
-            try {
-              // Use fetch to get the image as blob, then convert to base64
-              const response = await fetch(photo.uri);
-              const blob = await response.blob();
-              const base64 = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                  const result = reader.result as string;
-                  // Remove data URL prefix (e.g., "data:image/jpeg;base64,")
-                  const base64Data = result.split(',')[1] || result;
-                  resolve(base64Data);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-              });
-              return { base64, filename: `page_${index + 1}.jpg` };
-            } catch (e) {
-              log.error('[MANIFEST] Failed to read photo:', e);
-              return null;
-            }
-          })
-        );
-
-        const validImages = images.filter(Boolean);
+        const validImages = await encodeDocumentPhotosSequentially(allPhotos, 'page');
         if (validImages.length === 0) {
           throw new Error('Failed to process any images');
         }
@@ -2644,36 +2666,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         Alert.alert('No Receipts', 'Please capture at least one receipt first.');
         return;
       }
+      if (allPhotos.length > MAX_DOCUMENT_PHOTOS) {
+        Alert.alert('Photo limit', '12 photo max');
+        return;
+      }
 
       log.debug('[CONTINUE] Receipt mode - processing', allPhotos.length, 'receipts');
       showNotificationMessage('Processing receipt...', 10000);
 
       try {
-        // Convert photos to base64 using fetch
-        const images = await Promise.all(
-          allPhotos.map(async (photo, index) => {
-            try {
-              const response = await fetch(photo.uri);
-              const blob = await response.blob();
-              const base64 = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                  const result = reader.result as string;
-                  const base64Data = result.split(',')[1] || result;
-                  resolve(base64Data);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-              });
-              return { base64, filename: `receipt_${index + 1}.jpg` };
-            } catch (e) {
-              log.error('[RECEIPT] Failed to read photo:', e);
-              return null;
-            }
-          })
-        );
-
-        const validImages = images.filter(Boolean);
+        const validImages = await encodeDocumentPhotosSequentially(allPhotos, 'receipt');
         if (validImages.length === 0) {
           throw new Error('Failed to process any images');
         }
@@ -2729,15 +2731,30 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    const isDocumentImport = cameraMode === 'manifest' || cameraMode === 'receipt';
+    const existingDocumentPhotos = isDocumentImport
+      ? bulkItems.reduce((count, item) => count + item.photos.length, 0)
+      : 0;
+    const remainingDocumentSlots = MAX_DOCUMENT_PHOTOS - existingDocumentPhotos;
+    if (isDocumentImport && remainingDocumentSlots <= 0) {
+      Alert.alert('Photo limit', '12 photo max');
+      return;
+    }
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false,
       allowsMultipleSelection: true,
+      selectionLimit: isDocumentImport ? remainingDocumentSlots : 0,
       quality: 0.8,
     });
 
     if (!result.canceled && result.assets?.length) {
       const assets = result.assets;
+      if (isDocumentImport && assets.length > remainingDocumentSlots) {
+        Alert.alert('Photo limit', '12 photo max');
+        return;
+      }
       log.debug('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s)');
 
       // Build CapturedPhoto for each selected asset (no crop frame)

@@ -124,5 +124,14 @@
         ]
       }
     }
+  },
+  "overrides": {
+    "@supabase/realtime-js": {
+      "ws": "^8.21.0"
+    },
+    "react-native-markdown-display": {
+      "markdown-it": "^14.3.0"
+    },
+    "linkify-it": "^5.0.1"
   }
 }
