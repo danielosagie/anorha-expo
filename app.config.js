@@ -23,7 +23,7 @@ export default {
   orientation: "portrait",
   android: {
     package: "anorha.alpha",
-    versionCode: 11,
+    versionCode: 12,
     orientation: "portrait",
     permissions: [
       "android.permission.CAMERA",
@@ -41,7 +41,7 @@ export default {
     // expo-widgets ExpoWidgetsTarget read this same value, so their CFBundleVersions match
     // (remote autoIncrement only stamped the app target → widget stayed at "2" → ITMS-90473).
     // Bump this each App Store submission. (Was on remote autoIncrement at build 55.)
-    buildNumber: "68",
+    buildNumber: "69",
     icon: "./src/assets/1024_anorha.png",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,

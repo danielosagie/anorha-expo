@@ -496,7 +496,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
 
     // Handle empty object or null
     if (!record || Object.keys(record).length === 0) {
-      // console.log('[LocationsManagerV2] No available locations (empty record)');
       return [];
     }
 
@@ -555,7 +554,6 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
         setAvailable([]);
         return;
       }
-      // console.log('[LocationsManagerV2] Loading available locations for org:', resolvedOrgId);
       const r = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${resolvedOrgId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });

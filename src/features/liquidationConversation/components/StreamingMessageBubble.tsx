@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { BRAND_PRIMARY } from '../../../design/tokens';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { Check, Copy, Pause, ThumbsDown, ThumbsUp, Volume2 } from 'lucide-react-native';
 import { AnorhaFace } from '../../../components/brand/AnorhaFace';
 import Markdown from 'react-native-markdown-display';
 import { HorizontalFadeScroll } from './HorizontalFadeScroll';
@@ -15,6 +16,7 @@ import { deriveActivities } from './activity/deriveActivities';
 import { sanitizeDisplayText } from '../displayText';
 import { useSystemNotifications } from '../../../context/SystemNotificationContext';
 import { SproutDisclaimer } from './SproutDisclaimer';
+import { DiaTextReveal } from '../../../components/DiaTextReveal';
 
 // A tappable cart card the agent drops in after turning photos into draft listings.
 // Tapping it opens the AddProduct cart hydrated from the quick-scan session.
@@ -113,7 +115,9 @@ const MessageActions = ({
   return (
     <View style={styles.actionsRow}>
       <Pressable style={styles.actionIcon} onPress={copy} hitSlop={ACTION_HITSLOP} accessibilityRole="button" accessibilityLabel="Copy response">
-        <Icon name={copied ? 'check' : 'content-copy'} size={18} color={copied ? '#5D7E16' : '#9CA3AF'} />
+        {copied
+          ? <Check size={19} color="#5D7E16" strokeWidth={2.2} />
+          : <Copy size={19} color="#9CA3AF" strokeWidth={2} />}
       </Pressable>
       <Pressable
         style={[styles.actionIcon, narrationState === 'playing' && styles.actionIconActive]}
@@ -126,11 +130,9 @@ const MessageActions = ({
         {narrationState === 'loading' ? (
           <ActivityIndicator size="small" color="#5D7E16" />
         ) : (
-          <Icon
-            name={narrationState === 'playing' ? 'pause' : 'volume-high'}
-            size={19}
-            color={narrationState === 'playing' || narrationState === 'paused' ? '#5D7E16' : '#9CA3AF'}
-          />
+          narrationState === 'playing'
+            ? <Pause size={20} color="#5D7E16" fill="#5D7E16" strokeWidth={2} />
+            : <Volume2 size={20} color={narrationState === 'paused' ? '#5D7E16' : '#9CA3AF'} strokeWidth={2} />
         )}
       </Pressable>
       <Pressable
@@ -140,7 +142,7 @@ const MessageActions = ({
         accessibilityRole="button"
         accessibilityLabel="Helpful response"
       >
-        <Icon name={vote === 'up' ? 'thumb-up' : 'thumb-up-outline'} size={18} color={vote === 'up' ? '#5D7E16' : '#9CA3AF'} />
+        <ThumbsUp size={19} color={vote === 'up' ? '#5D7E16' : '#9CA3AF'} fill={vote === 'up' ? '#5D7E16' : 'transparent'} strokeWidth={2} />
       </Pressable>
       <Pressable
         style={styles.actionIcon}
@@ -149,7 +151,7 @@ const MessageActions = ({
         accessibilityRole="button"
         accessibilityLabel="Unhelpful response"
       >
-        <Icon name={vote === 'down' ? 'thumb-down' : 'thumb-down-outline'} size={18} color={vote === 'down' ? '#52525B' : '#9CA3AF'} />
+        <ThumbsDown size={19} color={vote === 'down' ? '#52525B' : '#9CA3AF'} fill={vote === 'down' ? '#52525B' : 'transparent'} strokeWidth={2} />
       </Pressable>
     </View>
   );
@@ -252,9 +254,22 @@ const buildBlocks = (raw: string, activities: ActivityPayload[]): AssistantBlock
 };
 
 // One markdown text segment of an assistant reply (em-dashes stripped at render).
-const TextBlock = ({ text }: { text: string }) => {
+const TextBlock = ({ text, streaming, animationKey }: { text: string; streaming: boolean; animationKey: string }) => {
   const md = sanitizeDisplayText(text);
   if (!md.trim()) return null;
+  if (streaming) {
+    return (
+      <DiaTextReveal
+        text={md}
+        style={styles.messageText}
+        revealFrom="#FFFFFF"
+        revealTo="#111827"
+        duration={900}
+        delay={0}
+        animationKey={animationKey}
+      />
+    );
+  }
   return (
     <MarkdownBoundary content={md}>
       <Markdown style={styles.markdown} rules={markdownRules}>{md}</Markdown>
@@ -292,7 +307,7 @@ const AssistantBody = ({
             planItems={planItems}
           />
         ) : (
-          <TextBlock key={b.key} text={b.text} />
+          <TextBlock key={b.key} text={b.text} streaming={isStreaming} animationKey={b.key} />
         ),
       )}
     </>
@@ -315,11 +330,93 @@ type Props = {
   onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
   planItems?: CampaignItem[];
   showDisclaimer?: boolean;
+  showFollowUps?: boolean;
+  onFollowUp?: (prompt: string) => void;
   narrationState?: 'idle' | 'loading' | 'playing' | 'paused';
   onToggleNarration?: (messageId: string, text: string, title?: string) => void;
 };
 
-const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onFeedback, planItems, showDisclaimer = false, narrationState = 'idle', onToggleNarration }: Props) => {
+type FollowUpSuggestion = { label: string; prompt: string };
+
+const normalizeFollowUps = (message: ConversationMessage, activities: ActivityPayload[]): FollowUpSuggestion[] => {
+  const metadata = (message.metadata ?? {}) as any;
+  const authored = metadata.followUps ?? metadata.follow_ups ?? metadata.suggestedQuestions;
+  if (Array.isArray(authored)) {
+    const normalized = authored
+      .map((suggestion: unknown): FollowUpSuggestion | null => {
+        if (typeof suggestion === 'string') {
+          const label = suggestion.trim();
+          return label ? { label, prompt: label } : null;
+        }
+        if (!suggestion || typeof suggestion !== 'object') return null;
+        const record = suggestion as Record<string, unknown>;
+        const label = typeof record.label === 'string'
+          ? record.label.trim()
+          : typeof record.question === 'string'
+            ? record.question.trim()
+            : '';
+        const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : label;
+        return label && prompt ? { label, prompt } : null;
+      })
+      .filter((suggestion: FollowUpSuggestion | null): suggestion is FollowUpSuggestion => !!suggestion)
+      .slice(0, 3);
+    if (normalized.length) return normalized;
+  }
+
+  const kinds = new Set(activities.map(activity => activity.kind));
+  if (kinds.has('plan')) {
+    return [
+      { label: 'What is the biggest risk in this plan?', prompt: 'What is the biggest risk in this plan?' },
+      { label: 'What would you change first?', prompt: 'What would you change first in this plan, and why?' },
+    ];
+  }
+  if (kinds.has('document')) {
+    return [
+      { label: 'What matters most in this report?', prompt: 'What matters most in this report?' },
+      { label: 'What should I do next?', prompt: 'Based on this report, what should I do next?' },
+    ];
+  }
+  if (kinds.has('value-change') || kinds.has('publish')) {
+    return [
+      { label: 'Why did these values change?', prompt: 'Why did these values change?' },
+      { label: 'What should I watch next?', prompt: 'What should I watch next after these changes?' },
+    ];
+  }
+
+  const content = message.content.toLowerCase();
+  if (content.includes('price') || content.includes('revenue') || content.includes('target')) {
+    return [
+      { label: 'Can we still hit the target?', prompt: 'Can we still hit the target?' },
+      { label: 'Which item should move first?', prompt: 'Which item should move first, and why?' },
+    ];
+  }
+  return [
+    { label: 'What should I do next?', prompt: 'What should I do next?' },
+    { label: 'What is the biggest risk?', prompt: 'What is the biggest risk right now?' },
+  ];
+};
+
+const FollowUpPrompts = ({ suggestions, onPress }: { suggestions: FollowUpSuggestion[]; onPress: (prompt: string) => void }) => (
+  <View style={styles.followUps} accessibilityLabel="Suggested follow-up questions">
+    {suggestions.map((suggestion, index) => (
+      <Pressable
+        key={`${suggestion.label}-${index}`}
+        style={({ pressed }) => [styles.followUpRow, pressed && styles.followUpRowPressed]}
+        onPress={() => {
+          Haptics.selectionAsync().catch(() => undefined);
+          onPress(suggestion.prompt);
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={suggestion.label}
+      >
+        <Icon name="arrow-right" size={19} color="#A1A1AA" />
+        <Text style={styles.followUpText}>{suggestion.label}</Text>
+      </Pressable>
+    ))}
+  </View>
+);
+
+const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onFeedback, planItems, showDisclaimer = false, showFollowUps = false, onFollowUp, narrationState = 'idle', onToggleNarration }: Props) => {
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -357,6 +454,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
   // The inline activity cards (tool receipts, price/inventory diffs, routines).
   // deriveActivities keeps legacy toolSteps-only turns byte-identical to before.
   const activities = useMemo(() => deriveActivities(message, isStreaming), [message, isStreaming]);
+  const followUps = useMemo(() => normalizeFollowUps(message, activities), [message, activities]);
   const imageUrls = Array.isArray(message.imageUrls)
     ? message.imageUrls.filter((u): u is string => typeof u === 'string' && !!u)
     : [];
@@ -504,6 +602,9 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
             onToggleNarration={onToggleNarration}
           />
         ) : null}
+        {!isUser && !isStreaming && !isFailed && renderMarkdown && showFollowUps && onFollowUp ? (
+          <FollowUpPrompts suggestions={followUps} onPress={onFollowUp} />
+        ) : null}
         {!isUser && !isStreaming && !isFailed && renderMarkdown && showDisclaimer ? <SproutDisclaimer /> : null}
       </View>
     </Animated.View>
@@ -538,6 +639,8 @@ export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (pr
     (a.imageUrls?.join('|') || '') === (b.imageUrls?.join('|') || '')
     && prev.planItems === next.planItems
     && prev.showDisclaimer === next.showDisclaimer
+    && prev.showFollowUps === next.showFollowUps
+    && prev.onFollowUp === next.onFollowUp
     && prev.narrationState === next.narrationState
   );
 });
@@ -620,12 +723,12 @@ const styles = StyleSheet.create({
   jobCardTitle: {
     color: '#1F2937',
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 14,
+    fontSize: 15,
   },
   jobCardSub: {
     color: '#5D7E16',
     fontFamily: 'Inter_500Medium',
-    fontSize: 12,
+    fontSize: 13,
     marginTop: 2,
   },
   rowLeft: {
@@ -664,7 +767,7 @@ const styles = StyleSheet.create({
   actionMetaText: {
     color: '#5D7E16',
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 11,
+    fontSize: 12,
     textTransform: 'capitalize',
   },
   userActionMetaText: {
@@ -673,15 +776,15 @@ const styles = StyleSheet.create({
   messageText: {
     color: '#111827',
     fontFamily: 'Inter_500Medium',
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 15,
+    lineHeight: 22,
   },
   markdown: {
     body: {
       color: '#111827',
       fontFamily: 'Inter_500Medium',
-      fontSize: 14,
-      lineHeight: 20,
+      fontSize: 15,
+      lineHeight: 22,
     },
     paragraph: {
       marginTop: 0,
@@ -689,17 +792,17 @@ const styles = StyleSheet.create({
     },
     heading1: {
       fontFamily: 'Inter_700Bold',
-      fontSize: 18,
+      fontSize: 19,
       marginBottom: 10,
     },
     heading2: {
       fontFamily: 'Inter_700Bold',
-      fontSize: 16,
+      fontSize: 17,
       marginBottom: 8,
     },
     heading3: {
       fontFamily: 'Inter_600SemiBold',
-      fontSize: 15,
+      fontSize: 16,
       marginBottom: 6,
     },
     strong: {
@@ -732,7 +835,7 @@ const styles = StyleSheet.create({
       paddingHorizontal: 4,
       paddingVertical: 2,
       fontFamily: 'Menlo',
-      fontSize: 12,
+      fontSize: 13,
     },
     code_block: {
       backgroundColor: '#0F172A',
@@ -741,7 +844,7 @@ const styles = StyleSheet.create({
       padding: 10,
       marginBottom: 8,
       fontFamily: 'Menlo',
-      fontSize: 12,
+      fontSize: 13,
     },
     fence: {
       backgroundColor: '#0F172A',
@@ -750,7 +853,7 @@ const styles = StyleSheet.create({
       padding: 10,
       marginBottom: 8,
       fontFamily: 'Menlo',
-      fontSize: 12,
+      fontSize: 13,
     },
     blockquote: {
       borderLeftWidth: 3,
@@ -788,12 +891,12 @@ const styles = StyleSheet.create({
     },
     th_text: {
       fontFamily: 'Inter_600SemiBold',
-      fontSize: 12,
+      fontSize: 13,
       color: '#111827',
     },
     td_text: {
       fontFamily: 'Inter_500Medium',
-      fontSize: 12,
+      fontSize: 13,
       color: '#111827',
     },
   } as any,
@@ -804,8 +907,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: '#4B5563',
     fontFamily: 'Inter_400Regular',
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 13,
+    lineHeight: 19,
   },
   userSummaryText: {
     color: '#D1D5DB',
@@ -863,14 +966,14 @@ const styles = StyleSheet.create({
   decisionTitle: {
     color: '#111827',
     fontFamily: 'Inter_700Bold',
-    fontSize: 13,
+    fontSize: 14,
   },
   decisionBody: {
     marginTop: 4,
     color: '#6B7280',
     fontFamily: 'Inter_400Regular',
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 13,
+    lineHeight: 19,
   },
   decisionActions: {
     flexDirection: 'row',
@@ -893,12 +996,12 @@ const styles = StyleSheet.create({
   decisionPrimaryText: {
     color: '#5D7E16',
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 12,
+    fontSize: 13,
   },
   decisionSecondaryText: {
     color: '#111827',
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 12,
+    fontSize: 13,
   },
   retryButton: {
     marginTop: 10,
@@ -910,7 +1013,7 @@ const styles = StyleSheet.create({
   retryText: {
     color: '#EF4444',
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 12,
+    fontSize: 13,
   },
   // After-message control bar (copy / retry / thumbs). Bigger, easier-to-hit targets.
   actionsRow: {
@@ -928,6 +1031,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionIconActive: { backgroundColor: 'rgba(147,200,34,0.12)' },
+  followUps: {
+    marginTop: 8,
+  },
+  followUpRow: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E7EB',
+    paddingHorizontal: 4,
+    paddingVertical: 10,
+  },
+  followUpRowPressed: {
+    opacity: 0.58,
+  },
+  followUpText: {
+    flex: 1,
+    color: '#27272A',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
+    lineHeight: 22,
+  },
   // Wide markdown tables — scroller wrapper + the bordered table container.
   mdTableScroll: {
     width: '100%',

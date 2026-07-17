@@ -29,7 +29,7 @@ const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
   ? API_BASE_RAW.replace(/\/$/, '')
   : `${API_BASE_RAW.replace(/\/$/, '')}/api`;
 
-const ISSUE_TYPES = ['Billing', 'Subscription', 'AI Credits', 'Other'];
+const ISSUE_TYPES = ['Billing', 'Subscription', 'AI usage', 'Other'];
 
 export default function BillingSupportScreen() {
   const theme = useTheme();

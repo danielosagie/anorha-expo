@@ -86,11 +86,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
 
   useEffect(() => {
     (async () => {
-      const compatible = await LocalAuthentication.hasHardwareAsync();
-      const enrolled = await LocalAuthentication.isEnrolledAsync();
-      const savedEmail = await SecureStore.getItemAsync('biometric_email');
-      setIsBiometricSupported(compatible);
-      setHasBiometricCreds(!!savedEmail);
+      try {
+        const compatible = await LocalAuthentication.hasHardwareAsync();
+        const enrolled = await LocalAuthentication.isEnrolledAsync();
+        const savedEmail = await SecureStore.getItemAsync('biometric_email');
+        setIsBiometricSupported(compatible && enrolled);
+        setHasBiometricCreds(compatible && enrolled && !!savedEmail);
+      } catch {
+        setIsBiometricSupported(false);
+        setHasBiometricCreds(false);
+      }
     })();
   }, []);
 
@@ -304,9 +309,19 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
                 {
                   text: 'Yes',
                   onPress: async () => {
-                    await SecureStore.setItemAsync('biometric_email', email);
-                    await SecureStore.setItemAsync('biometric_password', password);
-                    setIsBiometricSupported(true);
+                    try {
+                      await SecureStore.setItemAsync('biometric_password', password);
+                      await SecureStore.setItemAsync('biometric_email', email);
+                      setIsBiometricSupported(true);
+                      setHasBiometricCreds(true);
+                    } catch {
+                      await Promise.allSettled([
+                        SecureStore.deleteItemAsync('biometric_email'),
+                        SecureStore.deleteItemAsync('biometric_password'),
+                      ]);
+                      setHasBiometricCreds(false);
+                      Alert.alert('Face ID', 'Setup failed.');
+                    }
                   },
                 },
               ]);

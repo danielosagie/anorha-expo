@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RC } from '../resolve/ResolveKit';
 import ErrorModal from '../ErrorModal';
 import { useBatchGenerate, BatchItemStatus, BatchGenerateInput } from '../../hooks/useBatchGenerate';
+import { normalizeOptimizerVariantRow, OPTIMIZER_VARIANT_SELECT } from '../../hooks/useOptimizerQueues';
 const log = createLogger('OptimizerBatchGenerateView');
 
 
@@ -61,14 +62,11 @@ export function OptimizerBatchGenerateView({ onBack, onComplete, queueProducts }
             await ensureSupabaseJwt();
             const { data, error } = await supabase
                 .from('ProductVariants')
-                .select(`
-                    Id, Title, Description, Sku, Price,
-                    ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
-                `)
+                .select(OPTIMIZER_VARIANT_SELECT)
                 .limit(100);
 
             if (error) throw error;
-            const list = data || [];
+            const list = (data || []).map(normalizeOptimizerVariantRow);
             setProducts(list);
             const initialSelection = new Set<string>();
             list.slice(0, 5).forEach((p: any) => initialSelection.add(p.Id));

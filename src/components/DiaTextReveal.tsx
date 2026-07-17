@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   Animated,
+  Easing,
   StyleProp,
   StyleSheet,
   Text,
@@ -17,19 +18,35 @@ type Props = {
   numberOfLines?: number;
   revealFrom?: string;
   revealTo?: string;
+  duration?: number;
+  delay?: number;
+  animationKey?: string;
+  onComplete?: () => void;
 };
 
-/** Native counterpart to Magic UI's DiaTextReveal. The sweep resolves to solid text. */
+/** Native counterpart to Magic UI's DiaTextReveal. Resolves left to right. */
 export function DiaTextReveal({
   text,
   style,
-  numberOfLines = 2,
+  numberOfLines,
   revealFrom = '#FAFAF8',
   revealTo = '#71717A',
+  duration = 480,
+  delay = 40,
+  animationKey,
+  onComplete,
 }: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [layoutReady, setLayoutReady] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const progress = useRef(new Animated.Value(0)).current;
+  const completedKeyRef = useRef<string | null>(null);
+  const onCompleteRef = useRef(onComplete);
+  const resolvedAnimationKey = animationKey ?? text;
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     let mounted = true;
@@ -44,15 +61,35 @@ export function DiaTextReveal({
   }, []);
 
   useEffect(() => {
-    if (!size.width || reduceMotion) return;
+    if (!layoutReady) return;
+
+    if (reduceMotion) {
+      if (completedKeyRef.current !== resolvedAnimationKey) {
+        completedKeyRef.current = resolvedAnimationKey;
+        onCompleteRef.current?.();
+      }
+      return;
+    }
+
+    completedKeyRef.current = null;
+    progress.stopAnimation();
     progress.setValue(0);
-    Animated.timing(progress, {
+    const animation = Animated.timing(progress, {
       toValue: 1,
-      duration: 480,
-      delay: 40,
+      duration,
+      delay,
+      easing: Easing.bezier(0.22, 1, 0.36, 1),
       useNativeDriver: true,
-    }).start();
-  }, [progress, reduceMotion, size.width, text]);
+    });
+    animation.start(({ finished }) => {
+      if (finished && completedKeyRef.current !== resolvedAnimationKey) {
+        completedKeyRef.current = resolvedAnimationKey;
+        onCompleteRef.current?.();
+      }
+    });
+
+    return () => animation.stop();
+  }, [delay, duration, layoutReady, progress, reduceMotion, resolvedAnimationKey]);
 
   if (reduceMotion) {
     return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
@@ -60,7 +97,7 @@ export function DiaTextReveal({
 
   const translateX = progress.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, -size.width],
+    outputRange: [-size.width, 0],
   });
 
   return (
@@ -71,6 +108,7 @@ export function DiaTextReveal({
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
           setSize((current) => current.width === width && current.height === height ? current : { width, height });
+          if (width > 0 && height > 0) setLayoutReady(true);
         }}
       >
         {text}
@@ -83,7 +121,7 @@ export function DiaTextReveal({
         >
           <Animated.View style={{ width: size.width * 2, height: size.height, transform: [{ translateX }] }}>
             <LinearGradient
-              colors={[revealFrom, revealFrom, revealTo, revealTo]}
+              colors={[revealTo, revealTo, revealFrom, revealFrom]}
               locations={[0, 0.44, 0.56, 1]}
               start={{ x: 0, y: 0.5 }}
               end={{ x: 1, y: 0.5 }}

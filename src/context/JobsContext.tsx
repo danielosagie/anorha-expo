@@ -90,6 +90,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     });
 
     const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const isPollingRef = useRef(false);
     const [isPolling, setIsPolling] = useState(false);
 
     // Persist state to AsyncStorage
@@ -309,9 +310,14 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         return state.items.filter(item => state.generateJobs[item.index]?.status === 'failed');
     }, [state.items, state.generateJobs]);
 
-    // Poll for processing jobs
+    const generateJobsRef = useRef(state.generateJobs);
+    generateJobsRef.current = state.generateJobs;
+    const pollCallbacksRef = useRef({ markGenerateComplete, markGenerateFailed, updateGenerateJob });
+    pollCallbacksRef.current = { markGenerateComplete, markGenerateFailed, updateGenerateJob };
+
+    // Poll for processing jobs using the latest state, including jobs added after polling starts.
     const pollProcessingJobs = useCallback(async () => {
-        const processing = Object.entries(state.generateJobs)
+        const processing = Object.entries(generateJobsRef.current)
             .filter(([, job]) => job.status === 'processing' || job.status === 'queued');
 
         if (processing.length === 0) return;
@@ -323,11 +329,11 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 if (!status) continue;
 
                 if (status.status === 'completed') {
-                    markGenerateComplete(index);
+                    pollCallbacksRef.current.markGenerateComplete(index);
                 } else if (status.status === 'failed') {
-                    markGenerateFailed(index);
+                    pollCallbacksRef.current.markGenerateFailed(index);
                 } else {
-                    updateGenerateJob(index, {
+                    pollCallbacksRef.current.updateGenerateJob(index, {
                         currentStage: status.currentStage,
                         progress: status.progress,
                     });
@@ -336,21 +342,25 @@ export function JobsProvider({ children }: { children: ReactNode }) {
                 log.warn(`[JobsContext] Poll failed for job ${job.jobId}:`, e);
             }
         }
-    }, [state.generateJobs, markGenerateComplete, markGenerateFailed, updateGenerateJob]);
+    }, []);
 
     // Start/stop polling
     const startPolling = useCallback(() => {
-        if (isPolling) return;
+        if (isPollingRef.current) return;
+        isPollingRef.current = true;
         setIsPolling(true);
 
-        const poll = () => {
-            pollProcessingJobs();
-            pollingRef.current = setTimeout(poll, 3000);
+        const poll = async () => {
+            await pollProcessingJobs();
+            if (isPollingRef.current) {
+                pollingRef.current = setTimeout(() => { void poll(); }, 3000);
+            }
         };
-        poll();
-    }, [isPolling, pollProcessingJobs]);
+        void poll();
+    }, [pollProcessingJobs]);
 
     const stopPolling = useCallback(() => {
+        isPollingRef.current = false;
         setIsPolling(false);
         if (pollingRef.current) {
             clearTimeout(pollingRef.current);

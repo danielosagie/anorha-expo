@@ -83,6 +83,7 @@ export const useLiquidationConversationController = ({
   const processingByThreadRef = useRef<Record<string, boolean>>({});
   const decisionsInFlightRef = useRef<Set<string>>(new Set());
   const resolvedDecisionIdsRef = useRef<Set<string>>(new Set());
+  const pendingPromptRequestRef = useRef(0);
 
   useEffect(() => {
     surfaceStateRef.current = surfaceState;
@@ -224,6 +225,8 @@ export const useLiquidationConversationController = ({
 
   const loadThreadIntoMemory = useCallback(async (campaignId: string, threadId: string) => {
     setIsLoadingMessages(true);
+    setPendingQuestion(null);
+    setPendingPlan(null);
     const stored = await loadThreadState(campaignId, threadId);
     threadStatesRef.current = {
       ...threadStatesRef.current,
@@ -273,7 +276,8 @@ export const useLiquidationConversationController = ({
       const prev = activeThreadIdRef.current;
       const resolved = (prev && list.some(thread => thread.id === prev))
         ? prev
-        : (list.find(thread => thread.isPrimary)?.id || list[0]?.id || null);
+        : (list[0]?.id || list.find(thread => thread.isPrimary)?.id || null);
+      activeThreadIdRef.current = resolved;
       setActiveThreadId(resolved);
       return resolved;
     } finally {
@@ -318,15 +322,15 @@ export const useLiquidationConversationController = ({
     setIsLoadingMessages(true);
     (async () => {
       try {
-        // Open straight into the campaign's primary feed (with history) rather than
-        // the overview — the seller lands in the one continuous thread.
-        const primaryId = await loadThreads(activeCampaignId);
+        // Open the campaign's most recently updated chat. Notifications can override
+        // this with their exact thread id once the route is ready.
+        const initialThreadId = await loadThreads(activeCampaignId);
         if (cancelled) return;
         await loadCampaignDetails(activeCampaignId);
         if (cancelled) return;
-        if (primaryId) {
+        if (initialThreadId) {
           setSurfaceState('chat_active');
-          await loadThreadIntoMemory(activeCampaignId, primaryId);
+          await loadThreadIntoMemory(activeCampaignId, initialThreadId);
         } else {
           setSurfaceState('home_overview');
           setIsLoadingMessages(false);
@@ -595,15 +599,15 @@ export const useLiquidationConversationController = ({
       throw new Error('Select a campaign first');
     }
 
-    // Default to the one feed: reuse the active thread, else the campaign's primary
-    // thread. forceFreshThread is the explicit, rare "new side-thread" escape hatch
-    // (createNewThread) — the seller no longer spawns a chat just by messaging.
+    // Reuse the chat the seller is currently viewing. A fresh chat is created only
+    // through New chat or an explicit handoff from Home / a notification.
     if (!forceFreshThread) {
       if (activeThreadIdRef.current) {
         return activeThreadIdRef.current;
       }
       const primary = threads.find(thread => thread.isPrimary);
       if (primary) {
+        activeThreadIdRef.current = primary.id;
         setActiveThreadId(primary.id);
         setThreadStateFor(primary.id, current => current ?? createEmptyThreadState(campaignId, primary.id), { immediate: true });
         // Pull history so a home->send lands in the full feed, not an empty one.
@@ -621,6 +625,7 @@ export const useLiquidationConversationController = ({
       title: 'New chat',
     });
     setThreads(prev => [created, ...prev.filter(thread => thread.id !== created.id)]);
+    activeThreadIdRef.current = created.id;
     setActiveThreadId(created.id);
     setThreadStateFor(created.id, () => createEmptyThreadState(campaignId, created.id), { immediate: true });
     return created.id;
@@ -865,14 +870,19 @@ export const useLiquidationConversationController = ({
   }, []);
 
   const openThread = useCallback((threadId: string) => {
+    setPendingQuestion(null);
+    setPendingPlan(null);
+    activeThreadIdRef.current = threadId;
     setActiveThreadId(threadId);
     setSurfaceState(streamingByThread[threadId] ? 'chat_streaming' : 'chat_active');
   }, [streamingByThread]);
 
   const createNewThread = useCallback(async () => {
     const threadId = await ensureChatThread(true);
+    activeThreadIdRef.current = threadId;
     setActiveThreadId(threadId);
     setSurfaceState(streamingByThread[threadId] ? 'chat_streaming' : 'chat_active');
+    return threadId;
   }, [ensureChatThread, streamingByThread]);
 
   const renameThread = useCallback(async (threadId: string, title: string) => {
@@ -953,8 +963,13 @@ export const useLiquidationConversationController = ({
   // events, not on an interval.
   const refreshPendingPrompts = useCallback(async (campaignId: string, threadId: string) => {
     if (!campaignId || !threadId) return;
+    const requestId = ++pendingPromptRequestRef.current;
     try {
       const prompts = await adapter.getPendingPrompts(campaignId, threadId);
+      if (
+        requestId !== pendingPromptRequestRef.current ||
+        activeThreadIdRef.current !== threadId
+      ) return;
       setPendingQuestion(prompts.question);
       setPendingPlan(prompts.plan);
     } catch {
@@ -971,9 +986,9 @@ export const useLiquidationConversationController = ({
     : null;
   useEffect(() => {
     const cid = activeCampaignIdRef.current;
-    if (!cid || !activeThreadId || isStreaming) return;
+    if (!cid || !activeThreadId || isStreaming || isLoadingMessages) return;
     void refreshPendingPrompts(cid, activeThreadId);
-  }, [activeThreadId, isStreaming, lastMessageId, refreshPendingPrompts]);
+  }, [activeThreadId, isLoadingMessages, isStreaming, lastMessageId, refreshPendingPrompts]);
 
   // ── Sprout opens a brand-new clearout thread itself: greeting first, a product
   //    question if genuinely needed, and the opening plan draft — instead of a blank

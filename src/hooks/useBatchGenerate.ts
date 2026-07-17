@@ -10,11 +10,10 @@ const log = createLogger('useBatchGenerate');
 //
 // There is exactly ONE generation path that is real end-to-end in the current
 // backend: POST /api/products/regenerate/submit (RegenerateJobProcessor →
-// AiGenerationService). That job GENERATES title/description but does NOT write
-// them to ProductVariants — it only stores results on the job + emits a socket
-// event. So this hook does the persistence itself, writing the generated fields
-// straight to ProductVariants (the same table/columns OptimizerReviewView writes
-// and useOptimizerQueues reads), which is what makes the queue actually shrink.
+// AiGenerationService). That job GENERATES title/description but does not write
+// them to the canonical item. This hook persists through the product update API,
+// which splits parent fields (Products.Title/Description) from variant identity
+// fields after the normalized item-model migration.
 //
 // (The /backfill/* "bulk_ai_backfill" path is scaffolding — hardcoded template
 //  strings, AI call commented out, never writes ProductVariants.Title — so it is
@@ -41,7 +40,7 @@ const POLL_INTERVAL_MS = 25_000;
 const MAX_WAIT_MS = 20 * 60_000;
 // Canonical target platform: title/description are platform-agnostic, and
 // 'shopify' yields a full long-form title+description we map onto the canonical
-// ProductVariants fields.
+// product fields.
 const TARGET_PLATFORM = 'shopify';
 
 const titleOk = (t?: string | null) =>
@@ -292,13 +291,22 @@ export function useBatchGenerate(): UseBatchGenerateResult {
             continue;
           }
 
-          // Persist to ProductVariants — same table/columns useOptimizerQueues reads.
-          const { error: upErr } = await supabase
-            .from('ProductVariants')
-            .update(update)
-            .eq('Id', it.variantId);
-          if (upErr) {
-            log.error('[BatchGenerate] persist failed', it.variantId, upErr);
+          // The backend owns the normalized write split: Title/Description go to
+          // Products while SKU and other sellable identity remain on ProductVariants.
+          const persistToken = await ensureSupabaseJwt();
+          const persistResponse = persistToken
+            ? await fetch(`${API_BASE_URL}/api/products/${it.variantId}`, {
+                method: 'PUT',
+                headers: {
+                  Authorization: `Bearer ${persistToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(update),
+              })
+            : null;
+          if (!persistResponse?.ok) {
+            const body = await persistResponse?.text().catch(() => '');
+            log.error('[BatchGenerate] persist failed', it.variantId, persistResponse?.status, body);
             markFailed.push(it.variantId);
             continue;
           }

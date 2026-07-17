@@ -1,20 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import { Text } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { StyleProp, StyleSheet, Text, TextStyle } from 'react-native';
+import { DiaTextReveal } from './DiaTextReveal';
 
 export interface StreamingTextProps {
     text: string;
-    style?: any;
+    style?: StyleProp<TextStyle>;
     speed?: number;
     startDelay?: number;
     onComplete?: () => void;
     shouldStream?: boolean;
+    revealFrom?: string;
+    revealTo?: string;
+    numberOfLines?: number;
 }
 
 /**
- * Types text in character-by-character. When `shouldStream` is false it renders the
- * full text instantly (and still fires `onComplete` once). Shared by the chat insight
- * card and the home greeting so "streaming" happens ONLY when there's genuinely
- * something new to show — never a replay on remount or navigation back.
+ * Reveals new text with the same left-to-right color sweep used by live tool work.
+ * When `shouldStream` is false it renders instantly, so navigation never replays it.
  */
 export const StreamingText: React.FC<StreamingTextProps> = React.memo(({
     text,
@@ -23,58 +25,44 @@ export const StreamingText: React.FC<StreamingTextProps> = React.memo(({
     startDelay = 0,
     onComplete,
     shouldStream = true,
+    revealFrom = 'rgba(255,255,255,0.16)',
+    revealTo,
+    numberOfLines,
 }) => {
-    const [displayedText, setDisplayedText] = useState('');
-    const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    const intervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
-    const completedRef = React.useRef(false);
-    const lastTextRef = React.useRef<string>('');
+    const completedKeyRef = useRef<string | null>(null);
+    const complete = useCallback(() => {
+        if (completedKeyRef.current === text) return;
+        completedKeyRef.current = text;
+        onComplete?.();
+    }, [onComplete, text]);
 
     useEffect(() => {
-        // Only restart animation if text actually changed.
-        if (lastTextRef.current === text && displayedText.length > 0) {
-            return;
+        if (!shouldStream && completedKeyRef.current !== text) {
+            const completion = setTimeout(() => {
+                complete();
+            }, 0);
+            return () => clearTimeout(completion);
         }
-        lastTextRef.current = text;
+        return undefined;
+    }, [complete, shouldStream, text]);
 
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        completedRef.current = false;
+    if (!shouldStream) return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
 
-        if (!shouldStream) {
-            setDisplayedText(text);
-            if (!completedRef.current) {
-                completedRef.current = true;
-                onComplete?.();
-            }
-            return;
-        }
-
-        setDisplayedText('');
-        let charIndex = 0;
-
-        timeoutRef.current = setTimeout(() => {
-            intervalRef.current = setInterval(() => {
-                if (charIndex < text.length) {
-                    setDisplayedText(text.slice(0, charIndex + 1));
-                    charIndex++;
-                } else {
-                    if (intervalRef.current) clearInterval(intervalRef.current);
-                    if (!completedRef.current) {
-                        completedRef.current = true;
-                        onComplete?.();
-                    }
-                }
-            }, speed);
-        }, startDelay);
-
-        return () => {
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            if (intervalRef.current) clearInterval(intervalRef.current);
-        };
-    }, [text, shouldStream, speed, startDelay]); // onComplete intentionally excluded to prevent loops
-
-    return <Text style={style}>{displayedText}</Text>;
+    const resolvedColor = revealTo ?? StyleSheet.flatten(style)?.color;
+    const duration = Math.min(1400, Math.max(520, text.length * Math.max(3, speed * 0.15)));
+    return (
+        <DiaTextReveal
+            text={text}
+            style={style}
+            numberOfLines={numberOfLines}
+            revealFrom={revealFrom}
+            revealTo={typeof resolvedColor === 'string' ? resolvedColor : '#111827'}
+            duration={duration}
+            delay={startDelay}
+            animationKey={text}
+            onComplete={complete}
+        />
+    );
 });
 
 export default StreamingText;

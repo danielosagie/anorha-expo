@@ -270,6 +270,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const platformsRef = useRef<GeneratedPlatformDetails>({});
   const [, forceUpdate] = useState({});
   const debounceTimerRef = useRef<any>(null);
+  const draftSaveInFlightRef = useRef<{ json: string; promise: Promise<void> } | null>(null);
+  const buildPlatformPayloadRef = useRef<() => any>(() => ({ media: { imageUris: [], coverImageIndex: 0 } }));
   const lastHydratedJobRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string>('');
   const lastScheduledRef = useRef<string | null>(null);
@@ -574,18 +576,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const draftKey = variantIdForDraft
     ? `gen-draft:v:${variantIdForDraft}`
     : (jobId ? `gen-draft:j:${jobId}:${currentProductIndex}` : null);
-  useEffect(() => {
-    if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) {
-      return;
+  const flushDraft = useCallback(async () => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
     }
+    if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return;
+
     const currentJson = JSON.stringify(platformsRef.current);
     if (currentJson === lastSavedRef.current) return;
-    if (lastScheduledRef.current !== null && lastScheduledRef.current === currentJson) return;
+    if (draftSaveInFlightRef.current?.json === currentJson) {
+      await draftSaveInFlightRef.current.promise;
+      return;
+    }
     lastScheduledRef.current = currentJson;
 
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-
-    debounceTimerRef.current = setTimeout(async () => {
+    const savePromise = (async () => {
       try {
         setSaveState('saving');
         // 1) Local-first: always persist so unsaved generations survive a reload.
@@ -600,7 +606,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ draftData: platformsRef.current, media: buildPlatformPayload().media }),
+              body: JSON.stringify({ draftData: platformsRef.current, media: buildPlatformPayloadRef.current().media }),
             });
             if (!response.ok) {
               const errorText = await response.text();
@@ -621,12 +627,46 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         lastScheduledRef.current = null;
         setSaveState('error');
       }
-    }, 1200);
+    })();
+
+    draftSaveInFlightRef.current = { json: currentJson, promise: savePromise };
+    try {
+      await savePromise;
+    } finally {
+      if (draftSaveInFlightRef.current?.promise === savePromise) {
+        draftSaveInFlightRef.current = null;
+      }
+    }
+  }, [draftKey, variantIdForDraft]);
+
+  useEffect(() => {
+    if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return;
+    const currentJson = JSON.stringify(platformsRef.current);
+    if (currentJson === lastSavedRef.current) return;
+    if (lastScheduledRef.current !== null && lastScheduledRef.current === currentJson) return;
+    lastScheduledRef.current = currentJson;
+
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => { void flushDraft(); }, 1200);
 
     return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
     };
-  }, [draftKey, variantIdForDraft, updateCounter]);
+  }, [draftKey, variantIdForDraft, updateCounter, flushDraft]);
+
+  useEffect(() => {
+    const flush = () => { void flushDraft(); };
+    const removeBeforeRemove = navigation.addListener('beforeRemove', flush);
+    const removeBlur = navigation.addListener('blur', flush);
+    return () => {
+      removeBeforeRemove();
+      removeBlur();
+      flush();
+    };
+  }, [navigation, flushDraft]);
 
   // Restore a local draft on mount when nothing has hydrated yet (covers unsaved, no-variantId
   // items that the backend draft-load can't reach).
@@ -1595,6 +1635,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return payload;
   };
 
+  buildPlatformPayloadRef.current = buildPlatformPayload;
+
 
 
   const doSaveToInventory = async () => {
@@ -1610,7 +1652,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return;
       }
 
-      const payload = buildPlatformPayload();
+      const rawPayload = buildPlatformPayload();
+      const durableImageUris = await uploadLocalImagesToSupabase(rawPayload.media.imageUris || []);
+      const payload = {
+        ...rawPayload,
+        media: {
+          ...rawPayload.media,
+          imageUris: durableImageUris,
+        },
+      };
 
       // SKU Enhancement: If SKU is DRAFT- or missing, generate a permanent INV- SKU
       let finalSku = payload.platformDetails.canonical.sku;
@@ -1795,6 +1845,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const publicUrls: string[] = [];
     let lastError: string | null = null;
     let attempted = 0;
+    let failed = 0;
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('You appear to be signed out. Please sign in again to add photos.');
@@ -1831,7 +1882,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         if (error) {
           log.error('[UPLOAD] Supabase upload error:', error);
           lastError = error.message || 'Storage upload failed';
-          continue; // Skip this image but continue with others
+          failed += 1;
+          continue;
         }
 
         const { data: urlData } = supabase.storage
@@ -1844,12 +1896,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       } catch (err: any) {
         log.error('[UPLOAD] Failed to upload image:', localUri, err);
         lastError = err?.message || 'Upload failed';
+        failed += 1;
       }
     }
 
-    // If we tried to upload local files and none succeeded, surface the reason
-    // instead of returning [] (which silently no-ops the "Add Photo" action).
-    if (attempted > 0 && publicUrls.length === 0) {
+    // Publishing and inventory saves must preserve the complete selected gallery.
+    // A partial upload is a failure so the original local gallery remains available to retry.
+    if (attempted > 0 && failed > 0) {
       throw new Error(lastError || 'Image upload failed. Please try again.');
     }
 
@@ -2233,7 +2286,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           images: newImages
         }
       };
-      // console.log('[GEN-DETAILS] handleImagesChange RESULT:', JSON.stringify(updated[canonicalKey]?.images));
       return updated;
     });
   };

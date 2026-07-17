@@ -220,7 +220,6 @@ export function useCollaboration() {
     if (!socketRef.current) return () => { };
 
     const handler = (data: any) => {
-      // console.log('[Collaboration] Job Progress:', data);
       callback(data);
     };
 
@@ -245,4 +244,3 @@ export function useCollaboration() {
     onJobProgress, // New export
   };
 }
-

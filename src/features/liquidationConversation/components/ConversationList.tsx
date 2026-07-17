@@ -11,8 +11,14 @@ import ActivityTraySheet from './activity/ActivityTraySheet';
 import { useActivityTray } from './activity/useActivityTray';
 import type { ActivityPayload, CampaignItem, ConversationMessage, DecisionPrompt, PlanPayload, ValueChange } from '../types';
 import { useMessageNarration } from '../useMessageNarration';
+import { useChatPreferences } from '../chatPreferences';
 
 type MessageWithTime = ConversationMessage & { time: string };
+const CHAT_SCROLL_BEHAVIOR = {
+  startRenderingFromBottom: true,
+  autoscrollToBottomThreshold: 0.2,
+  animateAutoScrollToBottom: false,
+} as const;
 
 type Props = {
   messages: MessageWithTime[];
@@ -24,6 +30,8 @@ type Props = {
   onCancelQueued?: (clientMessageId: string) => void;
   /** Record a thumbs up/down on an assistant reply. */
   onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
+  /** Ask one of the contextual questions shown under the latest reply. */
+  onFollowUp?: (prompt: string) => void;
   /** Jump from an activity card / tray to the product it touched. */
   onOpenItem?: (productId: string) => void;
   /** Revert a value change from the review tray (optimistic). */
@@ -42,6 +50,9 @@ type Props = {
   /** Padding so the feed clears the floating glass header/footer. */
   contentTopInset?: number;
   contentBottomInset?: number;
+  /** Scroll to a message selected from chat search. */
+  scrollToMessageId?: string;
+  scrollRequestKey?: number;
 };
 
 export const ConversationList = ({
@@ -53,6 +64,7 @@ export const ConversationList = ({
   onOpenCart,
   onCancelQueued,
   onFeedback,
+  onFollowUp,
   onOpenItem,
   onUndo,
   onRoutineAction,
@@ -63,10 +75,13 @@ export const ConversationList = ({
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
+  scrollToMessageId,
+  scrollRequestKey,
 }: Props) => {
   // One review-tray instance for the whole feed (hoisted here so FlashList
   // recycling can never unmount an open tray as its row scrolls off).
   const { openTray, trayProps } = useActivityTray();
+  const { suggestedFollowUps } = useChatPreferences();
   const listRef = useRef<any>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const canJump = useMemo(() => messages.length > 2, [messages.length]);
@@ -101,28 +116,20 @@ export const ConversationList = ({
     if (scrollFrameRef.current != null) cancelAnimationFrame(scrollFrameRef.current);
   }, []);
 
-  // Land at the bottom on first open AND whenever the thread switches (the list stays
-  // mounted across thread switches, so a fresh thread would otherwise stay scrolled
-  // wherever the last one was). Keyed off the rendered thread.
-  const threadKey = messages[0]?.threadId ?? null;
-  const didInitialScrollRef = useRef(false);
-  const prevThreadKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (threadKey !== prevThreadKeyRef.current) {
-      prevThreadKeyRef.current = threadKey;
-      didInitialScrollRef.current = false;
-    }
-  }, [threadKey]);
+    if (!scrollToMessageId || loading) return;
+    const index = messages.findIndex(message => message.id === scrollToMessageId);
+    if (index < 0) return;
+    const frame = requestAnimationFrame(() => {
+      nearBottomRef.current = index >= messages.length - 2;
+      setShowJumpToLatest(index < messages.length - 2);
+      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.22 });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [loading, messages, scrollRequestKey, scrollToMessageId]);
 
-  const finishInitialScroll = useCallback(() => {
-    if (didInitialScrollRef.current) return;
-    if (loading || !messages.length) return;
-    didInitialScrollRef.current = true;
-    prevLenRef.current = messages.length;
-    nearBottomRef.current = true;
-    setShowJumpToLatest(false);
-    scrollToBottom(false);
-  }, [loading, messages.length, scrollToBottom]);
+  const threadKey = messages[0]?.threadId ?? null;
+  const autoScrollThreadRef = useRef<string | null>(threadKey);
 
   // iMessage-style swipe-left to reveal timestamps on the right.
   const dragX = useSharedValue(0);
@@ -159,6 +166,15 @@ export const ConversationList = ({
     return (last.content?.length ?? 0) + reasoningLen + steps * 40;
   })();
   useEffect(() => {
+    if (threadKey !== autoScrollThreadRef.current) {
+      autoScrollThreadRef.current = threadKey;
+      prevLenRef.current = messages.length;
+      prevBottomRef.current = contentBottomInset ?? 0;
+      prevTailRef.current = tailGrowth;
+      nearBottomRef.current = true;
+      setShowJumpToLatest(false);
+      return;
+    }
     if (!nearBottomRef.current || userDraggingRef.current) {
       prevLenRef.current = messages.length;
       prevBottomRef.current = contentBottomInset ?? 0;
@@ -175,7 +191,7 @@ export const ConversationList = ({
       // New message → gentle animated scroll; streaming growth → instant pin (no jank).
       scrollToBottom(grew);
     }
-  }, [messages, contentBottomInset, tailGrowth, scrollToBottom]);
+  }, [messages, contentBottomInset, tailGrowth, scrollToBottom, threadKey]);
 
   if (loading) {
     return (
@@ -191,17 +207,17 @@ export const ConversationList = ({
       <TimestampRevealContext.Provider value={dragX}>
       <GestureDetector gesture={revealPan}>
       <FlashList
+        key={threadKey ?? 'empty-thread'}
         ref={listRef}
         data={messages}
         keyExtractor={item => item.id}
+        maintainVisibleContentPosition={CHAT_SCROLL_BEHAVIOR}
         contentContainerStyle={{
           paddingHorizontal: 12,
           paddingTop: contentTopInset ?? 10,
           paddingBottom: contentBottomInset ?? 18,
         }}
         ListHeaderComponent={ListHeaderComponent}
-        onLoad={finishInitialScroll}
-        onContentSizeChange={finishInitialScroll}
         renderItem={({ item }) => (
           <StreamingMessageBubble
             message={item}
@@ -214,6 +230,8 @@ export const ConversationList = ({
             onFeedback={onFeedback}
             planItems={planItems}
             showDisclaimer={item.id === latestAssistantId}
+            showFollowUps={suggestedFollowUps && item.id === latestAssistantId && messages[messages.length - 1]?.id === item.id}
+            onFollowUp={onFollowUp}
             narrationState={
               loadingMessageId === item.id
                 ? 'loading'
@@ -298,7 +316,7 @@ const styles = StyleSheet.create({
   loadingText: {
     color: '#71717A',
     fontFamily: 'Inter_500Medium',
-    fontSize: 13,
+    fontSize: 14,
   },
   emptyState: {
     marginTop: 80,
@@ -309,15 +327,15 @@ const styles = StyleSheet.create({
   emptyTitle: {
     color: '#111827',
     fontFamily: 'Inter_700Bold',
-    fontSize: 15,
+    fontSize: 16,
   },
   emptyText: {
     maxWidth: 260,
     textAlign: 'center',
     color: '#6B7280',
     fontFamily: 'Inter_400Regular',
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 14,
+    lineHeight: 20,
   },
   // Small circular down-arrow bubble (iMessage/Claude-style), floats bottom-right above
   // the composer. White with a hairline + soft shadow to match the app's calm surfaces.

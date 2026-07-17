@@ -16,7 +16,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { ensureSupabaseJwt, supabase } from '../../lib/supabase';
-import { OPTIMIZER_THRESHOLDS } from '../../hooks/useOptimizerQueues';
+import {
+    normalizeOptimizerVariantRow,
+    OPTIMIZER_THRESHOLDS,
+    OPTIMIZER_VARIANT_SELECT,
+} from '../../hooks/useOptimizerQueues';
 import { uploadProductImage } from '../../utils/uploadProductImage';
 import { API_BASE_URL } from '../../config/env';
 import { createLogger } from '../../utils/logger';
@@ -70,13 +74,10 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
             await ensureSupabaseJwt();
             const { data, error } = await supabase
                 .from('ProductVariants')
-                .select(`
-                    Id, Title, Price, Sku,
-                    ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
-                `)
+                .select(OPTIMIZER_VARIANT_SELECT)
                 .limit(100);
             if (error) throw error;
-            const needingPhotos = (data || []).filter(
+            const needingPhotos = (data || []).map(normalizeOptimizerVariantRow).filter(
                 (p) => !p.ProductImages || (Array.isArray(p.ProductImages) ? p.ProductImages.length : 0) < OPTIMIZER_THRESHOLDS.minImages,
             );
             setProducts(needingPhotos);

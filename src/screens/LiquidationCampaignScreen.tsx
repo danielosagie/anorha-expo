@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-  ChevronLeft, Menu, Box, MessageSquare, Settings as SettingsIcon, Pencil, Check,
+  PanelLeft, Box,
   Search, X, Plus, PlusCircle, ChevronRight, AlertCircle, CheckCircle2,
 } from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
@@ -80,9 +80,6 @@ const LiquidationCampaignScreen = () => {
   /* ── local state ──────────────────────────────────────────────────── */
   const [isConfigSheetOpen, setIsConfigSheetOpen] = useState(false);
   const [configCampaignTarget, setConfigCampaignTarget] = useState<{ id: string; title: string } | null>(null);
-  const [renameTarget, setRenameTarget] = useState<null | { kind: 'thread' | 'campaign'; id: string; title: string }>(null);
-  const [renameValue, setRenameValue] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
   const [platformFilter, setPlatformFilter] = useState('All');
@@ -198,15 +195,6 @@ const LiquidationCampaignScreen = () => {
     catch (e: any) { Alert.alert('Could not load settings', e?.message || 'Unable to load'); }
   };
 
-  // Close (end) the clearout — the single terminal action; a clearout is only ever
-  // soft-hidden, never destroyed, so this replaces "Delete". Moves it to Completed.
-  const closeClearout = (campaignId: string, title: string) => {
-    confirmThen('Close clearout', `Close "${title}"? It'll move to Completed. You won't lose anything.`, () => {
-      controller.setCampaignStatus(campaignId, 'completed').catch((e: any) => Alert.alert('Could not close', e?.message || 'Unable'));
-      navigation.goBack();
-    });
-  };
-
   const saveConfig = async () => {
     const campaignId = configCampaignTarget?.id || controller.activeCampaignId;
     if (!campaignId || !controller.campaignConfig) return;
@@ -226,26 +214,6 @@ const LiquidationCampaignScreen = () => {
       controller.setNotice('Settings updated');
       await controller.loadCampaignDetails(campaignId);
     } catch (e: any) { Alert.alert('Save failed', e?.message || 'Failed'); }
-  };
-
-  const openRename = (kind: 'thread' | 'campaign', id: string, title: string) => {
-    setRenameTarget({ kind, id, title });
-    setRenameValue(title);
-  };
-
-  const submitRename = async () => {
-    const title = renameValue.trim();
-    if (!renameTarget || !title) return;
-    try {
-      if (renameTarget.kind === 'thread') {
-        await controller.renameThread(renameTarget.id, title);
-      } else {
-        await controller.renameCampaign(renameTarget.id, title);
-      }
-      controller.setNotice('Renamed');
-      setRenameTarget(null);
-      setRenameValue('');
-    } catch (e: any) { Alert.alert('Rename failed', e?.message || 'Unable'); }
   };
 
   // Items table handlers
@@ -365,7 +333,16 @@ const LiquidationCampaignScreen = () => {
     else navigation.navigate('ProductDetail', { productId: item.productId });
   };
 
-  const handleEllipsis = () => setMenuOpen(open => !open);
+  const openCampaignSidebar = () => {
+    const campaign = controller.activeCampaign;
+    const campaignId = initialCampaignId || campaign?.id;
+    if (!campaignId) return;
+    navigation.navigate('CampaignThreadScreen', {
+      campaignId,
+      title: campaign?.title,
+      openDrawer: true,
+    });
+  };
 
   /* ── render ───────────────────────────────────────────────────────── */
 
@@ -534,8 +511,15 @@ const LiquidationCampaignScreen = () => {
             />
           </View>
           <View style={s.headerRow}>
-            <TouchableOpacity style={s.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
-              <ChevronLeft size={22} color="#18181B" />
+            <TouchableOpacity
+              style={s.chatPill}
+              onPress={openCampaignSidebar}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Open campaign sidebar"
+            >
+              <PanelLeft size={17} color="#18181B" />
+              <Text style={s.chatPillText}>Items</Text>
             </TouchableOpacity>
 
             <View style={s.titlePill}>
@@ -545,9 +529,14 @@ const LiquidationCampaignScreen = () => {
               </Text>
             </View>
 
-            <TouchableOpacity style={s.chatPill} onPress={handleEllipsis} activeOpacity={0.85}>
-              <Menu size={16} color="#18181B" />
-              <Text style={s.chatPillText}>Chat</Text>
+            <TouchableOpacity
+              style={s.navCircle}
+              onPress={() => navigation.navigate('SproutHomeScreen')}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Close clearout view"
+            >
+              <X size={21} color="#18181B" />
             </TouchableOpacity>
           </View>
 
@@ -564,45 +553,6 @@ const LiquidationCampaignScreen = () => {
           ) : null}
         </View>
       </KeyboardAvoidingView>
-
-      {/* ── Clean dropdown menu (Items / Settings / Rename / Delete) ── */}
-      {menuOpen ? (
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
-          <View style={[s.dropdown, { top: insets.top + 64 }]}>
-            <View style={s.dropItem}>
-              <Box size={18} color="#43631A" />
-              <Text style={[s.dropText, { color: '#43631A' }]}>Items</Text>
-              <View style={{ flex: 1 }} />
-              <Check size={17} color="#43631A" />
-            </View>
-            <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); navigation.navigate('CampaignThreadScreen', { campaignId: cam?.id, title: cam?.title }); }}>
-              <MessageSquare size={18} color="#3F3F46" />
-              <Text style={s.dropText}>Chat</Text>
-            </TouchableOpacity>
-            <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); navigation.navigate('CampaignSettings', { campaignId: cam?.id, title: cam?.title }); }}>
-              <SettingsIcon size={18} color="#3F3F46" />
-              <Text style={s.dropText}>Settings</Text>
-            </TouchableOpacity>
-            <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) openRename('campaign', cam.id, cam.title); }}>
-              <Pencil size={18} color="#3F3F46" />
-              <Text style={s.dropText}>Rename</Text>
-            </TouchableOpacity>
-            <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} activeOpacity={0.7}
-              onPress={() => { const cam = controller.activeCampaign; setMenuOpen(false); if (cam) closeClearout(cam.id, cam.title); }}>
-              <CheckCircle2 size={18} color="#3B6300" />
-              <Text style={[s.dropText, { color: '#3B6300' }]}>Close clearout</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
 
       {/* ═══════════════ MODALS ═══════════════════════════════════════ */}
 
@@ -653,25 +603,6 @@ const LiquidationCampaignScreen = () => {
             <ConfigInput label="Max drop (%)" value={String(controller.campaignConfig?.guardrails.maxAutoPriceDropPercent || '')}
               onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, guardrails: { ...prev.guardrails, maxAutoPriceDropPercent: Number(v || 0) } }) : prev)} />
             <TouchableOpacity style={s.primaryBtn} onPress={saveConfig}><Text style={s.primaryBtnText}>Save settings</Text></TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Rename */}
-      <Modal visible={!!renameTarget} transparent animationType="fade" onRequestClose={() => setRenameTarget(null)}>
-        <View style={s.renameBackdrop}>
-          <Pressable style={s.sheetBackdropTap} onPress={() => setRenameTarget(null)} />
-          <View style={s.renamePanel}>
-            <Text style={s.sheetTitle}>Rename</Text>
-            <TextInput style={s.configInput} value={renameValue} onChangeText={setRenameValue} autoFocus placeholderTextColor="#9CA3AF" />
-            <View style={s.rowActions}>
-              <TouchableOpacity style={[s.secondaryBtn, { flex: 1 }]} onPress={() => setRenameTarget(null)}>
-                <Text style={s.secondaryBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.primaryBtn, { flex: 1 }]} onPress={submitRename}>
-                <Text style={s.primaryBtnText}>Save</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         </View>
       </Modal>
@@ -782,7 +713,7 @@ const s = StyleSheet.create({
   header: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 14, paddingBottom: 10 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   navCircle: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    width: 88, height: 42, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   titlePill: {
@@ -793,7 +724,7 @@ const s = StyleSheet.create({
   pillTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
   pillSub: { fontSize: 12, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
   chatPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9,
+    width: 88, height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22,
     shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   chatPillText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
@@ -821,7 +752,16 @@ const s = StyleSheet.create({
   // Search + add row
   searchRow: { paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
   searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F4F4F1', borderRadius: 24, paddingHorizontal: 16, height: 48 },
-  searchInput: { flex: 1, fontSize: 15, color: '#18181B', fontFamily: 'Inter_500Medium', paddingVertical: 0 },
+  searchInput: {
+    flex: 1,
+    height: '100%',
+    fontSize: 15,
+    color: '#18181B',
+    fontFamily: 'Inter_500Medium',
+    paddingVertical: 0,
+    textAlign: 'left',
+    textAlignVertical: 'center',
+  },
   addBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#18181B', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
 
   // Per-platform filter chips
@@ -867,16 +807,6 @@ const s = StyleSheet.create({
   itemChip: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
   itemChipText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
 
-  // Clean dropdown menu (centered under the title pill)
-  dropdown: {
-    position: 'absolute', left: '50%', marginLeft: -110, width: 220,
-    backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
-    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
-  },
-  dropItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
-  dropText: { color: '#27272A', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
-  dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
-
   // Bulk action bar
   bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 12, zIndex: 1000 },
   baBtn: { flex: 1, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 10, borderWidth: 0.5, alignItems: 'center' },
@@ -916,8 +846,6 @@ const s = StyleSheet.create({
   configInput: { height: 46, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFF', paddingHorizontal: 12, color: '#111827', fontFamily: 'Inter_500Medium', fontSize: 14 },
 
   // Rename
-  renameBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 20, backgroundColor: 'rgba(0,0,0,0.24)' },
-  renamePanel: { borderRadius: 24, backgroundColor: '#FFF', paddingHorizontal: 18, paddingTop: 18, paddingBottom: 22 },
 
   // Reprice pct
   pctRow: { flexDirection: 'row', gap: 7, marginTop: 6, marginBottom: 10 },
