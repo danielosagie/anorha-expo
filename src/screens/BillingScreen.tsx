@@ -207,31 +207,23 @@ export default function BillingScreen() {
   const subscriptionStatus = summary?.subscription?.Status || summary?.subscription?.status;
   const planName = (planFromSummary as 'Growth' | 'Teams' | undefined) || undefined;
 
-  const aiScansLimit = safeNumber(summary?.ai_scans_limit, planName === 'Teams' ? 80 : 40);
-  const aiUnitCents = safeNumber(summary?.ai_credit_unit_cents, planName === 'Teams' ? 15 : 20);
-  const aiCreditsUsedLegacy = safeNumber(summary?.ai_credits_used);
-  const aiCreditsLimitLegacy = safeNumber(summary?.ai_credits_limit, aiScansLimit);
-  const aiAllowanceCents = safeNumber(
-    summary?.ai_credits_cents ?? summary?.ai_allowance_cents,
-    aiCreditsLimitLegacy * aiUnitCents
+  const computeAllowanceCents = safeNumber(
+    summary?.compute_allowance_cents ?? summary?.ai_allowance_cents ?? summary?.ai_credits_cents,
+    planName === 'Teams' ? 600 : 200,
   );
   const teamMembersCount = safeNumber(summary?.team_members_count);
   const teamMembersIncluded = safeNumber(summary?.team_members_included);
   const teamMembersExtra = Math.max(0, safeNumber(summary?.team_members_extra));
   const teamMembersCost = safeNumber(summary?.team_members_cost);
-  const pricePerScan = aiUnitCents / 100;
 
   let planTitle = 'No active plan';
-  let planDescription = 'Choose a plan to unlock live sync, AI scanning, and team features.';
   let basePrice = 0;
   if (planName === 'Growth') {
     planTitle = 'Growth · $20/month';
     basePrice = 20;
-    planDescription = `${teamMembersIncluded || 2} users/partners included, unlimited platforms & inventory, AI: ${aiScansLimit || 40} scans included then ${formatCurrency(pricePerScan)}/scan.`;
   } else if (planName === 'Teams') {
     planTitle = 'Teams · $60/month';
     basePrice = 60;
-    planDescription = `${teamMembersIncluded || 5} users/partners (+$10/spot after), unlimited platforms & inventory, AI: ${aiScansLimit || 80} scans included then ${formatCurrency(pricePerScan)}/scan.`;
   }
 
   const featureUsage = summary?.usage || {};
@@ -241,6 +233,10 @@ export default function BillingScreen() {
   const usageHistoryEntries = Object.values(
     featureEntries.reduce((acc, [key, value]: [string, any]) => {
       const totalCostCents = safeNumber(value?.totalCost ?? value?.total_cost ?? value?.total_cost_cents);
+      const internalCostCents = safeNumber(
+        value?.internalCost ?? value?.internal_cost ?? value?.internal_cost_cents,
+        totalCostCents,
+      );
       const totalQuantity = safeNumber(
         value?.totalQuantity ?? value?.total_quantity ?? value?.quantity ?? value?.count
       );
@@ -249,25 +245,28 @@ export default function BillingScreen() {
       const existing = acc[displayName];
       if (existing) {
         existing.totalCostCents += totalCostCents;
+        existing.internalCostCents += internalCostCents;
         existing.totalQuantity += totalQuantity;
       } else {
-        acc[displayName] = { key: displayName, displayName, totalCostCents, totalQuantity };
+        acc[displayName] = { key: displayName, displayName, totalCostCents, internalCostCents, totalQuantity };
       }
       return acc;
-    }, {} as Record<string, { key: string; displayName: string; totalCostCents: number; totalQuantity: number }>)
-  ).sort((a, b) => b.totalCostCents - a.totalCostCents);
+    }, {} as Record<string, { key: string; displayName: string; totalCostCents: number; internalCostCents: number; totalQuantity: number }>)
+  ).sort((a, b) => b.internalCostCents - a.internalCostCents);
 
-  const totalUsageHistoryCents = usageHistoryEntries.reduce((sum, entry) => sum + entry.totalCostCents, 0);
-  const aiUsedCents = summary?.ai_used_cents == null
-    ? (totalUsageHistoryCents || (aiCreditsUsedLegacy * aiUnitCents))
-    : safeNumber(summary?.ai_used_cents);
+  const totalUsageHistoryCents = usageHistoryEntries.reduce((sum, entry) => sum + entry.internalCostCents, 0);
+  const computeUsedCents = Math.max(
+    safeNumber(summary?.compute_used_cents ?? summary?.ai_used_cents),
+    totalUsageHistoryCents,
+  );
+  const computeUsagePercent = computeAllowanceCents > 0
+    ? Math.max(0, Math.round((computeUsedCents / computeAllowanceCents) * 100))
+    : 0;
   const aiOverageCents = safeNumber(
     summary?.ai_overage_cents ?? summary?.ai_credits_overage_cents,
-    Math.max(0, aiUsedCents - aiAllowanceCents)
+    0,
   );
   const aiOverageDollars = aiOverageCents / 100;
-  const aiUsedDollars = aiUsedCents / 100;
-  const aiAllowanceDollars = aiAllowanceCents / 100;
   const totalCostEstimate = basePrice + teamMembersCost + aiOverageDollars;
 
   const handleManageSubscription = async () => {
@@ -351,8 +350,8 @@ export default function BillingScreen() {
   const supportContext = {
     planName: planName || 'Unknown',
     subscriptionStatus: subscriptionStatus || 'inactive',
-    aiAllowanceCents,
-    aiUsedCents,
+    aiAllowanceCents: computeAllowanceCents,
+    aiUsedCents: computeUsedCents,
   };
 
   return (
@@ -409,12 +408,10 @@ export default function BillingScreen() {
             <View style={styles.cardGroup}>
               <View style={styles.usageItem}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={styles.listValue}>AI Credits</Text>
-                  <Text style={styles.listSubValue}>
-                    {formatCurrency(aiUsedDollars)} of {formatCurrency(aiAllowanceDollars)}
-                  </Text>
+                  <Text style={styles.listValue}>AI usage</Text>
+                  <Text style={styles.listSubValue}>{computeUsagePercent}% used</Text>
                 </View>
-                <HealthBar used={aiUsedCents} limit={aiAllowanceCents} fillColor={ANORHA_GREEN} />
+                <HealthBar used={computeUsedCents} limit={computeAllowanceCents} fillColor={ANORHA_GREEN} />
                 {aiOverageDollars > 0 && <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {formatCurrency(aiOverageDollars)} overage</Text>}
               </View>
               <View style={styles.separator} />
@@ -430,7 +427,7 @@ export default function BillingScreen() {
 
             {usageHistoryEntries.length > 0 && (
               <>
-                <Text style={styles.sectionHeader}>Usage History</Text>
+                <Text style={styles.sectionHeader}>Usage by feature</Text>
                 <View style={styles.cardGroup}>
                   {usageHistoryEntries.map((entry, idx) => (
                     <React.Fragment key={entry.key}>
@@ -439,7 +436,9 @@ export default function BillingScreen() {
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                           <Text style={styles.listValue}>{entry.displayName}</Text>
                           <Text style={styles.listValue}>
-                            {formatCurrency(entry.totalCostCents / 100)}
+                            {computeAllowanceCents > 0
+                              ? `${Math.max(0, Math.round((entry.internalCostCents / computeAllowanceCents) * 100))}%`
+                              : '0%'}
                           </Text>
                         </View>
                         <Text style={styles.listSubValue}>
@@ -572,6 +571,7 @@ export default function BillingScreen() {
           refreshBillingData();
         }}
         hasSubscription={hasActiveSubscription}
+        usagePercent={computeUsagePercent}
       />
     </View>
   );

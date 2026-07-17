@@ -36,6 +36,7 @@ import type {
   StreamTurnObserver,
 } from './types';
 import { createLogger } from '../../utils/logger';
+import { getChatPreferencesSnapshot } from './chatPreferences';
 const log = createLogger('HybridConversationDataAdapter');
 
 
@@ -509,6 +510,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
             actionPayload: input.actionPayload,
             imageUrls: input.imageUrls,
             kickoff: input.kickoff || undefined,
+            useSharedMemory: getChatPreferencesSnapshot().sharedMemory,
           }),
         } as any);
         source.addEventListener('message', handleMessage);
@@ -789,7 +791,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     threadId: string,
   ): Promise<{ question: QuestionPrompt | null; plan: DecisionPrompt | null }> {
     const response = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
-      `/api/agent/sessions/${campaignId}/pending-actions`,
+      `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
     ).catch(() => null);
     const actions = (response?.pendingActions || [])
       .filter((action) => action?.status !== 'completed' && action?.status !== 'rejected')
@@ -810,6 +812,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     const plan: DecisionPrompt | null = planAction
       ? {
           id: planAction.id,
+          threadId: planAction.threadId,
           kind: 'approve',
           planId: planAction.id,
           title: String(input.title),
@@ -1025,6 +1028,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         threadId: input.threadId,
         clientMessageId: input.clientMessageId,
         imageUrls: input.imageUrls,
+        useSharedMemory: getChatPreferencesSnapshot().sharedMemory,
       }),
     });
 

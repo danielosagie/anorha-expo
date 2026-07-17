@@ -143,7 +143,7 @@ const Paywall: React.FC<PaywallProps> = ({
               </View>
               <Text style={[styles.pricingPrice, { color: themeColors.text }]}>$20<Text style={styles.pricingPeriod}>/month</Text></Text>
               <Text style={[styles.pricingFeatures, { color: themeColors.textSecondary }]}>
-                2 platforms • 40 AI scans/mo • 2 team members
+                2 platforms • AI usage included • 2 team members
               </Text>
             </TouchableOpacity>
           </View>
@@ -334,7 +334,6 @@ const styles = StyleSheet.create({
 });
 
 export default Paywall;
-
 
 
 

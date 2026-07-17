@@ -1,6 +1,5 @@
 import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import {
-  Alert,
   Dimensions,
   Keyboard,
   PanResponder,
@@ -21,7 +20,7 @@ import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute, useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { setActiveThread } from '../lib/activeThread';
 import { useAuth } from '@clerk/expo';
-import { ChevronLeft, Menu, MessageCircle, Package, Search, Settings, AlertCircle, CheckCircle2, X, Plus } from 'lucide-react-native';
+import { CheckCircle2, ChevronRight, MessageCircle, Package, PanelLeft, Search, Settings, AlertCircle, X, SquarePen } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
@@ -30,7 +29,7 @@ import { ConvexLiveMessages } from '../features/liquidationConversation/ConvexLi
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 import QuestionCard from '../features/liquidationConversation/components/QuestionCard';
 import PlanCard from '../features/liquidationConversation/components/PlanCard';
-import type { CampaignItem, CampaignThreadSummary, PlanPayload } from '../features/liquidationConversation/types';
+import type { CampaignItem, CampaignThreadSummary, ConversationMessage, PlanPayload } from '../features/liquidationConversation/types';
 import { useLegendState } from '../context/LegendStateContext';
 import { loadInventoryCatalog } from '../lib/inventoryCatalog';
 import { NarrationPlayerHost } from '../context/NarrationContext';
@@ -61,8 +60,10 @@ const relativeTime = (iso?: string) => {
 
 type DrawerContentProps = {
   threads: CampaignThreadSummary[];
+  messages: ConversationMessage[];
   activeThreadId: string | null;
   onSelectThread: (threadId: string) => void;
+  onSelectMessage: (messageId: string) => void;
   onNewThread: () => void;
   onNavInventory: () => void;
   onNavSettings: () => void;
@@ -74,8 +75,10 @@ type DrawerContentProps = {
 // content — not the whole chat screen (message list, composer, header).
 const DrawerContent = React.memo(({
   threads,
+  messages,
   activeThreadId,
   onSelectThread,
+  onSelectMessage,
   onNewThread,
   onNavInventory,
   onNavSettings,
@@ -92,60 +95,106 @@ const DrawerContent = React.memo(({
     );
     const q = threadSearch.trim().toLowerCase();
     if (!q) return sorted;
-    return sorted.filter(t => (t.title || (t.isPrimary ? 'Main thread' : 'Thread')).toLowerCase().includes(q));
+    return sorted.filter(t => (t.title || 'New chat').toLowerCase().includes(q));
   }, [threads, threadSearch]);
 
+  const messageMatches = useMemo(() => {
+    const q = threadSearch.trim().toLowerCase();
+    if (!q) return [];
+    return messages
+      .filter(message => message.content.toLowerCase().includes(q))
+      .slice(-4)
+      .reverse()
+      .map(message => {
+        const matchIndex = message.content.toLowerCase().indexOf(q);
+        const start = Math.max(0, matchIndex - 44);
+        const end = Math.min(message.content.length, matchIndex + q.length + 72);
+        return {
+          ...message,
+          searchExcerpt: `${start > 0 ? '…' : ''}${message.content.slice(start, end)}${end < message.content.length ? '…' : ''}`,
+        };
+      });
+  }, [messages, threadSearch]);
+
   return (
-    <>
-      {/* Search */}
+    <View style={s.drawerContent}>
+
+
       <View style={s.drawerSearch}>
         <Search size={18} color="#71717A" />
         <TextInput
           style={s.drawerSearchInput}
           value={threadSearch}
           onChangeText={setThreadSearch}
-          placeholder="Search threads…"
-          placeholderTextColor="#9CA3AF"
+          placeholder="Search chats"
+          placeholderTextColor="#8C8C86"
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
         />
       </View>
 
-      {/* Pinned nav shortcuts */}
-      <TouchableOpacity style={s.navRow} onPress={onCloseDrawer} activeOpacity={0.7}>
-        <MessageCircle size={20} color="#18181B" />
-        <Text style={s.navRowLabel}>Chat</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={s.navRow} onPress={onNavInventory} activeOpacity={0.7}>
-        <Package size={20} color="#18181B" />
-        <Text style={s.navRowLabel}>Inventory</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={s.navRow} onPress={onNavSettings} activeOpacity={0.7}>
-        <Settings size={20} color="#18181B" />
-        <Text style={s.navRowLabel}>Campaign settings</Text>
-      </TouchableOpacity>
-      <View style={s.drawerDivider} />
+      <View style={s.drawerPrimaryNav}>
+        <TouchableOpacity style={[s.drawerNavRow, s.drawerNavRowActive]} onPress={onCloseDrawer} activeOpacity={0.7}>
+          <MessageCircle size={21} color="#18181B" />
+          <Text style={s.drawerNavLabel}>Chat</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.drawerNavRow} onPress={onNavInventory} activeOpacity={0.7}>
+          <Package size={21} color="#52525B" />
+          <Text style={s.drawerNavLabel}>Inventory</Text>
+          <ChevronRight size={18} color="#A1A1AA" />
+        </TouchableOpacity>
+        <TouchableOpacity style={s.drawerNavRow} onPress={onNavSettings} activeOpacity={0.7}>
+          <Settings size={21} color="#52525B" />
+          <Text style={s.drawerNavLabel}>Settings</Text>
+          <ChevronRight size={18} color="#A1A1AA" />
+        </TouchableOpacity>
+      </View>
 
-      {/* Recents — newest first */}
-      <Text style={s.recentsLabel}>Recents</Text>
-      <ScrollView contentContainerStyle={{ paddingBottom: bottomInset + 92 }} showsVerticalScrollIndicator={false}>
+      {threadSearch.trim() ? (
+        <>
+          <Text style={s.recentsLabel}>In this chat</Text>
+          {messageMatches.length ? (
+            <View style={s.messageMatches}>
+              {messageMatches.map(message => (
+                <TouchableOpacity
+                  key={message.id}
+                  style={s.messageMatchRow}
+                  onPress={() => onSelectMessage(message.id)}
+                  activeOpacity={0.7}
+                >
+                  <MessageCircle size={17} color="#71717A" />
+                  <View style={s.messageMatchCopy}>
+                    <Text style={s.messageMatchRole}>{message.role === 'user' ? 'You' : 'Sprout'}</Text>
+                    <Text style={s.messageMatchText} numberOfLines={2}>{message.searchExcerpt}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <Text style={s.drawerEmpty}>No messages match your search.</Text>
+          )}
+          <Text style={s.recentsLabel}>Chats</Text>
+        </>
+      ) : (
+        <Text style={s.recentsLabel}>Recent</Text>
+      )}
+      <ScrollView style={s.drawerThreads} contentContainerStyle={s.drawerThreadsContent} showsVerticalScrollIndicator={false}>
         {visibleThreads.length === 0 ? (
           <Text style={s.drawerEmpty}>
-            {threadSearch.trim() ? 'No threads match your search.' : 'No threads yet. Start one below.'}
+            {threadSearch.trim() ? 'No chats match your search.' : 'No chats yet. Start one above.'}
           </Text>
         ) : (
           visibleThreads.map(t => {
             const active = t.id === activeThreadId;
             return (
               <TouchableOpacity key={t.id} style={[s.threadRow, active && s.threadRowActive]} onPress={() => onSelectThread(t.id)} activeOpacity={0.7}>
-                <View style={[s.threadDot, { backgroundColor: active ? '#93C822' : '#D4D4D8' }]} />
                 <View style={{ flex: 1 }}>
-                  <Text style={s.threadTitle} numberOfLines={1}>
-                    {t.title || (t.isPrimary ? 'Main thread' : 'Thread')}
+                  <Text style={[s.threadTitle, active && s.threadTitleActive]} numberOfLines={1}>
+                    {t.title || 'New chat'}
                   </Text>
                   <Text style={s.threadMeta} numberOfLines={1}>
-                    {t.isPrimary ? 'Primary · ' : ''}{relativeTime(t.lastMessageAt || t.updatedAt)}
+                    {relativeTime(t.lastMessageAt || t.updatedAt)}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -154,16 +203,17 @@ const DrawerContent = React.memo(({
         )}
       </ScrollView>
 
-      {/* Floating new-chat FAB */}
-      <TouchableOpacity
-        style={[s.newChatFab, { bottom: bottomInset + 16 }]}
-        onPress={onNewThread}
-        activeOpacity={0.85}
-      >
-        <Plus size={18} color="#FFFFFF" />
-        <Text style={s.newChatFabText}>New chat</Text>
-      </TouchableOpacity>
-    </>
+      <View style={[s.drawerFooter, { paddingBottom: bottomInset + 8 }]}>
+        <TouchableOpacity style={s.footerSettingsButton} onPress={onNavSettings} activeOpacity={0.7}>
+          <Settings size={19} color="#52525B" />
+          <Text style={s.footerSettingsLabel}>Settings</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.footerNewChatButton} onPress={onNewThread} activeOpacity={0.75}>
+          <SquarePen size={18} color="#18181B" />
+          <Text style={s.footerNewChatLabel}>New chat</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 });
 DrawerContent.displayName = 'DrawerContent';
@@ -250,22 +300,41 @@ const CampaignThreadScreen = () => {
   );
   useEffect(() => { controllerRef.current = controller; });
 
-  // Handoff from the home insight: a ready-to-send task arrives as initialPrompt.
-  // Fire it as a normal message once the thread is ready — exactly once, then clear
-  // the param so remounts/back-nav never re-send it.
+  // Notifications open the exact chat that produced them. Home reports and overseer
+  // plans intentionally start a fresh chat, then send their handoff prompt into it.
+  const requestedThreadId = route.params?.threadId as string | undefined;
   const initialPrompt = route.params?.initialPrompt as string | undefined;
-  const sentInitialPromptRef = useRef(false);
+  const startNewChat = route.params?.startNewChat === true;
+  const handledRouteRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!initialPrompt || sentInitialPromptRef.current) return;
-    if (controller.isLoadingMessages || !controller.activeThreadId) return;
-    sentInitialPromptRef.current = true;
-    navigation.setParams({ initialPrompt: undefined });
-    controller.queueTextMessage(initialPrompt).catch(() => undefined);
-  }, [initialPrompt, controller.isLoadingMessages, controller.activeThreadId]);
+    if (controller.activeCampaignId !== campaignId || controller.isLoadingThreads) return;
+    if (!requestedThreadId && !initialPrompt) return;
+    const routeKey = `${campaignId}:${requestedThreadId || ''}:${startNewChat ? 'new' : 'existing'}:${initialPrompt || ''}`;
+    if (handledRouteRef.current === routeKey) return;
+    handledRouteRef.current = routeKey;
 
-  const [menuOpen, setMenuOpen] = useState(false);
+    const applyRoute = async () => {
+      const activeController = controllerRef.current;
+      if (requestedThreadId) {
+        activeController.openThread(requestedThreadId);
+      }
+      if (initialPrompt) {
+        if (startNewChat) await activeController.createNewThread();
+        navigation.setParams({ threadId: undefined, initialPrompt: undefined, startNewChat: undefined });
+        await activeController.queueTextMessage(initialPrompt);
+      } else {
+        navigation.setParams({ threadId: undefined });
+      }
+    };
+    void applyRoute().catch(() => {
+      handledRouteRef.current = null;
+      controllerRef.current.setNotice('Could not open that chat. Try again.');
+    });
+  }, [campaignId, controller.activeCampaignId, controller.isLoadingThreads, initialPrompt, navigation, requestedThreadId, startNewChat]);
+
   const [editingPlan, setEditingPlan] = useState<PlanPayload | null>(null);
   const [composerFocusKey, setComposerFocusKey] = useState(0);
+  const [messageJump, setMessageJump] = useState<{ id: string; key: number } | null>(null);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
   const [footerH, setFooterH] = useState(150);
@@ -313,6 +382,7 @@ const CampaignThreadScreen = () => {
   const [drawerMounted, setDrawerMounted] = useState(false);
 
   const closeDrawer = useCallback(() => {
+    Keyboard.dismiss();
     drawerMountedRef.current = false;
     drawerProgress.value = withTiming(0, { duration: 220 }, finished => {
       if (finished) runOnJS(setDrawerMounted)(false);
@@ -324,6 +394,22 @@ const CampaignThreadScreen = () => {
   // doesn't need native-thread tracking. Created once — everything it closes
   // over (shared value, setState, refs, DRAWER_W) is stable across renders.
   const drawerMountedRef = useRef(false);
+  const openDrawer = useCallback(() => {
+    if (drawerMountedRef.current) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    drawerMountedRef.current = true;
+    setDrawerMounted(true);
+    drawerProgress.value = withTiming(1, { duration: 200 });
+  }, [drawerProgress]);
+
+  useEffect(() => {
+    if (!route.params?.openDrawer) return;
+    const timer = setTimeout(() => {
+      openDrawer();
+      navigation.setParams({ openDrawer: undefined });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [navigation, openDrawer, route.params?.openDrawer]);
   const edgePan = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_e, g) => g.dx > 10 && Math.abs(g.dy) < g.dx,
@@ -360,11 +446,20 @@ const CampaignThreadScreen = () => {
   const switchThread = useCallback((threadId: string) => {
     const c = controllerRef.current;
     if (threadId !== c.activeThreadId) c.openThread(threadId);
+    setMessageJump(null);
+    closeDrawer();
+  }, [closeDrawer]);
+
+  const jumpToMessage = useCallback((messageId: string) => {
+    setMessageJump({ id: messageId, key: Date.now() });
     closeDrawer();
   }, [closeDrawer]);
   const startThread = useCallback(async () => {
     closeDrawer();
-    try { await controllerRef.current.createNewThread(); } catch { /* ignore */ }
+    try {
+      await controllerRef.current.createNewThread();
+      setComposerFocusKey(key => key + 1);
+    } catch { /* ignore */ }
   }, [closeDrawer]);
   const navToInventory = useCallback(() => {
     closeDrawer();
@@ -374,12 +469,11 @@ const CampaignThreadScreen = () => {
   }, [closeDrawer, navigation, campaignId]);
   const navToSettings = useCallback(() => {
     closeDrawer();
-    // Campaign settings for THIS clearout (not the app settings page).
     navigation.navigate('CampaignSettings', { campaignId, title: passedTitle });
   }, [closeDrawer, navigation, campaignId, passedTitle]);
 
   // Our left-edge pan opens the threads drawer; the stack's back-swipe would
-  // steal that exact gesture, so it's off for this screen (the ‹ button remains).
+  // steal that exact gesture, so it's off for this screen (the close button remains).
   useEffect(() => {
     navigation.setOptions?.({ gestureEnabled: false });
   }, [navigation]);
@@ -406,43 +500,12 @@ const CampaignThreadScreen = () => {
     }
   };
 
-  const handleEllipsis = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    setMenuOpen(open => !open);
-  };
-
-  const goToInventory = () => {
-    setMenuOpen(false);
-    navigation.navigate('LiquidationCampaignScreen', { campaignId, entryPoint: 'detail' });
-  };
-  const goToSettings = () => {
-    setMenuOpen(false);
-    navigation.navigate('CampaignSettings', { campaignId, title: passedTitle });
-  };
-  // Close (end) the clearout — moves it to the Completed filter. This is the single
-  // terminal action; there's no separate delete because a clearout is only ever
-  // soft-hidden, never destroyed. Persists via PATCH sessions/:id/status.
-  const closeClearout = () => {
-    setMenuOpen(false);
-    Alert.alert(
-      'Close clearout?',
-      "It'll move to Completed. You won't lose anything.",
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Close clearout',
-          onPress: async () => {
-            try {
-              await controller.setCampaignStatus(campaignId, 'completed');
-              navigation.navigate('SproutHomeScreen');
-            } catch (e: any) {
-              Alert.alert('Could not close', e?.message || 'Unable to close this clearout');
-            }
-          },
-        },
-      ],
-    );
-  };
+  const handleFollowUp = useCallback((prompt: string) => {
+    const activeController = controllerRef.current;
+    void activeController.queueTextMessage(prompt).catch(() => {
+      activeController.setNotice('Could not send that question. Try again.');
+    });
+  }, []);
 
   // Stage-aware nudge: before the first sale, invite a first move; once it's selling,
   // it's about steering. Keeps the composer from reading like a generic blank box.
@@ -479,10 +542,26 @@ const CampaignThreadScreen = () => {
       ((m.metadata as any)?.toolSteps as any[] | undefined)?.some((s) => s?.plan?.pendingActionId === id),
     );
   }, [controller.pendingPlan?.planId, controller.activeMessages]);
+  const pendingQuestionForThread =
+    controller.pendingQuestion &&
+    (!controller.pendingQuestion.threadId || controller.pendingQuestion.threadId === controller.activeThreadId)
+      ? controller.pendingQuestion
+      : null;
+  const pendingPlanForThread =
+    controller.pendingPlan &&
+    (!controller.pendingPlan.threadId || controller.pendingPlan.threadId === controller.activeThreadId)
+      ? controller.pendingPlan
+      : null;
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="dark-content" />
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(147,200,34,0.14)', 'rgba(147,200,34,0.055)', 'rgba(255,255,255,0)']}
+        locations={[0, 0.5, 1]}
+        style={s.pageWash}
+      />
       {/* Renders nothing — subscribes to live Convex messages for the open thread
           and feeds agent-initiated posts (digests, proactive updates) into the feed. */}
       <ConvexLiveMessages threadId={controller.activeThreadId} onMessages={controller.ingestLiveMessages} />
@@ -495,6 +574,7 @@ const CampaignThreadScreen = () => {
         onDecision={controller.submitDecision}
         onRetry={controller.retryMessage}
         onFeedback={controller.submitMessageFeedback}
+        onFollowUp={handleFollowUp}
         onCancelQueued={controller.cancelQueuedMessage}
         onOpenCart={(sessionId: string) => {
           // AddProduct is a hidden TAB screen, so go through the nested navigator
@@ -537,11 +617,13 @@ const CampaignThreadScreen = () => {
         submittingDecisionId={controller.submittingDecisionId}
         contentTopInset={headerH + 8}
         contentBottomInset={footerH + 8 + feedKeyboardInset}
+        scrollToMessageId={messageJump?.id}
+        scrollRequestKey={messageJump?.key}
       />
 
       {/* ── Faded scrim behind the question/plan card so it reads as a focused tray sitting
           where the keyboard was. Non-interactive (taps fall through to scroll the feed). ── */}
-      {(controller.pendingQuestion || (controller.pendingPlan && !planShownInline)) ? (
+      {(pendingQuestionForThread || (pendingPlanForThread && !planShownInline)) ? (
         <View pointerEvents="none" style={s.cardScrim} />
       ) : null}
 
@@ -558,10 +640,10 @@ const CampaignThreadScreen = () => {
             and the last message can't hide behind the pending-question card. */}
         <View onLayout={e => setFooterH(e.nativeEvent.layout.height)}>
         {/* ── Sprout's proposed plan (Accept / Revise / Follow-up), above the composer ── */}
-        {controller.pendingPlan && !planShownInline && (
+        {pendingPlanForThread && !planShownInline && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
             <PlanCard
-              prompt={controller.pendingPlan}
+              prompt={pendingPlanForThread}
               onDecision={controller.submitDecision}
               submitting={!!controller.submittingDecisionId}
             />
@@ -569,13 +651,13 @@ const CampaignThreadScreen = () => {
         )}
 
         {/* ── Sprout's structured question (tappable options), above the composer ── */}
-        {controller.pendingQuestion && (
+        {pendingQuestionForThread && (
           <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
             <QuestionCard
-              prompt={controller.pendingQuestion}
+              prompt={pendingQuestionForThread}
               submitting={controller.answeringQuestion}
               onSubmit={(answers, other) =>
-                controller.submitAnswer(controller.pendingQuestion!, answers, other)
+                controller.submitAnswer(pendingQuestionForThread, answers, other)
               }
             />
           </View>
@@ -659,24 +741,22 @@ const CampaignThreadScreen = () => {
               as content scrolls out the bottom (rit3zh/expo-progressive-blur technique). */}
           <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="down" />
           <LinearGradient
-            colors={['#FFFFFF', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+            colors={['rgba(248,252,240,0.98)', 'rgba(252,253,249,0.86)', 'rgba(255,255,255,0)']}
             locations={[0, 0.55, 1]}
             style={StyleSheet.absoluteFill}
           />
         </View>
         <View style={s.headerRow}>
-          <View style={s.headerLeft}>
-            <TouchableOpacity
-              style={s.navCircle}
-              onPress={() => {
-                if (navigation.canGoBack()) navigation.goBack();
-                else navigation.navigate('SproutHomeScreen');
-              }}
-              activeOpacity={0.85}
-            >
-              <ChevronLeft size={22} color="#18181B" />
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={s.chatPill}
+            onPress={openDrawer}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Open chat sidebar"
+          >
+            <PanelLeft size={17} color="#18181B" />
+            <Text style={s.chatPillText}>Chat</Text>
+          </TouchableOpacity>
 
           <View style={s.titlePill}>
             <Text style={s.pillTitle} numberOfLines={1}>{campaignTitle}</Text>
@@ -685,10 +765,23 @@ const CampaignThreadScreen = () => {
             </Text>
           </View>
 
-          <TouchableOpacity style={s.chatPill} onPress={handleEllipsis} activeOpacity={0.85}>
-            <Menu size={16} color="#18181B" />
-            <Text style={s.chatPillText}>Chat</Text>
-          </TouchableOpacity>
+          <View style={s.headerLeft}>
+            <TouchableOpacity
+              style={s.navCircle}
+              onPress={() => {
+                if (navigation.canGoBack()) {
+                  navigation.goBack();
+                  return;
+                }
+                navigation.navigate('SproutHomeScreen');
+              }}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
+              <X size={21} color="#18181B" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {hasPendingAsks && latestAsk ? (
@@ -704,29 +797,6 @@ const CampaignThreadScreen = () => {
         ) : null}
       </View>
 
-      {/* ── Clean dropdown menu (not native) ────────────────────── */}
-      {menuOpen ? (
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setMenuOpen(false)} />
-          <View style={[s.dropdown, { top: insets.top + 54 }]}>
-            <TouchableOpacity style={s.dropItem} onPress={goToInventory} activeOpacity={0.7}>
-              <Package size={18} color="#3F3F46" />
-              <Text style={s.dropText}>Inventory</Text>
-            </TouchableOpacity>
-            <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} onPress={goToSettings} activeOpacity={0.7}>
-              <Settings size={18} color="#3F3F46" />
-              <Text style={s.dropText}>Campaign settings</Text>
-            </TouchableOpacity>
-            <View style={s.dropDivider} />
-            <TouchableOpacity style={s.dropItem} onPress={closeClearout} activeOpacity={0.7}>
-              <CheckCircle2 size={18} color="#3B6300" />
-              <Text style={[s.dropText, { color: '#3B6300' }]}>Close clearout</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
-
       {/* ── Threads drawer: pull right from the left edge ──────── */}
       <View style={[s.edgeSwipe, { top: insets.top + 50 }]} {...edgePan.panHandlers} />
 
@@ -740,8 +810,10 @@ const CampaignThreadScreen = () => {
       >
         <DrawerContent
           threads={controller.threads}
+          messages={controller.activeMessages}
           activeThreadId={controller.activeThreadId}
           onSelectThread={switchThread}
+          onSelectMessage={jumpToMessage}
           onNewThread={startThread}
           onNavInventory={navToInventory}
           onNavSettings={navToSettings}
@@ -757,6 +829,13 @@ const CampaignThreadScreen = () => {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
+  pageWash: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 310,
+  },
   flex: { flex: 1 },
   // The composer's keyboard-avoider: absolute bottom anchor so behavior:'padding' lifts
   // the composer column with the keyboard (the feed is a full-bleed sibling behind it).
@@ -772,22 +851,21 @@ const s = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerLeft: { width: 88, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   navCircle: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   titlePill: {
     flexShrink: 1, alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 8,
     shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 12, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
-  pillTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
-  pillSub: { fontSize: 12, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
-  chatPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 9,
+  pillTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  pillSub: { fontSize: 13, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
+  closeCircle: {
+    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF',
     shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
-  chatPillText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 
   // Ambient "needs you" tray (floats under the pills)
   ambientTray: {
@@ -796,8 +874,8 @@ const s = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
   },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { fontSize: 12, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
-  trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
+  trayText: { fontSize: 13, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
+  trayAction: { fontSize: 13, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Floating glass footer — transparent so the progressive blur shows through; the
   // blur band (footerBlur) carries the white fade and obscures content scrolling under.
@@ -806,61 +884,77 @@ const s = StyleSheet.create({
   // room to fade to clear (top) before it sits solid under the input (bottom).
   footerBlur: { position: 'absolute', left: 0, right: 0, top: -44, bottom: 0 },
   errorBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
-  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },
+  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 13 },
+  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 13 },
   noticeBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
+  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 13 },
   chipsContent: { paddingHorizontal: 12, gap: 8, flexDirection: 'row', paddingBottom: 8, paddingTop: 2 },
   quickChip: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 16, backgroundColor: '#F4F4F1' },
-  quickChipText: { fontSize: 14, color: '#52525B', fontFamily: 'Inter_500Medium' },
-
-  // Clean dropdown menu
-  dropdown: {
-    position: 'absolute', right: 14, minWidth: 200,
-    backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 6,
-    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10,
-  },
-  dropItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 13 },
-  dropText: { color: '#27272A', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
-  dropDivider: { height: 1, backgroundColor: '#F1F2EE', marginHorizontal: 12 },
+  quickChipText: { fontSize: 15, color: '#52525B', fontFamily: 'Inter_500Medium' },
 
   // Threads drawer
   edgeSwipe: { position: 'absolute', left: 0, bottom: 0, width: 34 },
   drawerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
   drawerPanel: {
     position: 'absolute', top: 0, left: 0, bottom: 0,
-    backgroundColor: '#FFFFFF', paddingHorizontal: 14,
-    borderTopRightRadius: 28, borderBottomRightRadius: 28,
-    shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 6, height: 0 }, elevation: 16,
+    backgroundColor: '#F7F8F4', paddingHorizontal: 16,
+    borderTopRightRadius: 20, borderBottomRightRadius: 20,
+    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 20, shadowOffset: { width: 5, height: 0 }, elevation: 14,
   },
+  drawerContent: { flex: 1 },
+  drawerPrimaryNav: { gap: 4, marginBottom: 14 },
+  drawerNavRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 13, paddingHorizontal: 12, borderRadius: 14 },
+  drawerNavRowActive: { backgroundColor: '#ECEEE8' },
+  drawerNavLabel: { flex: 1, fontSize: 17, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   drawerSearch: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#F1F1EE', borderRadius: 14, paddingHorizontal: 12, marginBottom: 10,
+    height: 46, flexDirection: 'row', alignItems: 'center', gap: 9,
+    backgroundColor: '#ECEEE8', borderRadius: 15, paddingHorizontal: 13, marginBottom: 10,
   },
   drawerSearchInput: {
-    flex: 1, fontSize: 15, color: '#18181B', fontFamily: 'Inter_400Regular',
-    paddingVertical: Platform.OS === 'ios' ? 11 : 8,
-  },
-  navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 4 },
-  navRowLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
-  drawerDivider: { height: 1, backgroundColor: '#F1F1EE', marginVertical: 8 },
-  recentsLabel: {
-    fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold',
-    textTransform: 'uppercase', letterSpacing: 0.5, paddingHorizontal: 4, paddingVertical: 8,
-  },
-  drawerEmpty: { color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingVertical: 20, textAlign: 'center' },
-  threadRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 10, borderRadius: 14 },
-  threadRowActive: { backgroundColor: 'rgba(147,200,34,0.12)' },
-  threadDot: { width: 8, height: 8, borderRadius: 4 },
-  threadTitle: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
-  threadMeta: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_500Medium', marginTop: 2 },
-  newChatFab: {
     flex: 1,
-    position: 'absolute', right: 16, flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#93C822', borderRadius: 999, paddingHorizontal: 16, paddingVertical: 12,
-    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8,
+    height: '100%',
+    fontSize: 16,
+    color: '#18181B',
+    fontFamily: 'Inter_400Regular',
+    paddingVertical: 0,
+    textAlign: 'left',
+    textAlignVertical: 'center',
   },
-  newChatFabText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 14 },
+  messageMatches: { gap: 2 },
+  messageMatchRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  messageMatchCopy: { flex: 1, justifyContent: 'center' },
+  messageMatchRole: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold', textAlign: 'left' },
+  messageMatchText: { marginTop: 2, fontSize: 15, lineHeight: 20, color: '#27272A', fontFamily: 'Inter_500Medium', textAlign: 'left' },
+  drawerThreads: { flex: 1 },
+  drawerThreadsContent: { paddingBottom: 20 },
+  drawerFooter: { flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E7E8E3', paddingTop: 12 },
+  recentsLabel: {
+    fontSize: 14, color: '#71717A', fontFamily: 'Inter_600SemiBold',
+    paddingHorizontal: 10, paddingTop: 14, paddingBottom: 8,
+  },
+  drawerEmpty: { color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 14, paddingVertical: 20, textAlign: 'center' },
+  threadRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 10, borderRadius: 14 },
+  threadRowActive: { backgroundColor: '#EAF2DA' },
+  threadTitle: { fontSize: 16, color: '#3F3F46', fontFamily: 'Inter_500Medium', textAlign: 'left' },
+  threadTitleActive: { color: '#18181B', fontFamily: 'Inter_700Bold' },
+  threadMeta: { fontSize: 13, color: '#9CA3AF', fontFamily: 'Inter_500Medium', marginTop: 2 },
+  footerSettingsButton: { height: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 16 },
+  footerSettingsLabel: { fontSize: 15, color: '#3F3F46', fontFamily: 'Inter_600SemiBold' },
+  footerNewChatButton: { height: 48, flex: 1.25, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 24, backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#E4E4DF' },
+  footerNewChatLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  chatPill: {
+    width: 88, height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+  },
+  chatPillText: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 });
 
 export default CampaignThreadScreen;

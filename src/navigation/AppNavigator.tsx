@@ -74,6 +74,7 @@ import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
 import CampaignSettingsScreen from '../screens/CampaignSettingsScreen';
+import SproutChatSettingsScreen from '../screens/SproutChatSettingsScreen';
 import CampaignInventorySelectScreen from '../screens/CampaignInventorySelectScreen';
 import SproutHomeScreen from '../screens/SproutHomeScreen';
 import CampaignThreadScreen from '../screens/CampaignThreadScreen';
@@ -245,8 +246,16 @@ export type AppStackParamList = {
   Backups: undefined;
   LiquidationCampaignScreen: { campaignId: string; entryPoint?: 'tab' | 'detail' } | undefined;
   CampaignSettings: { campaignId: string; title?: string } | undefined;
+  SproutChatSettings: undefined;
   CampaignInventorySelect: { campaignId: string; title?: string } | undefined;
-  CampaignThreadScreen: { campaignId: string; title?: string; initialPrompt?: string } | undefined;
+  CampaignThreadScreen: {
+    campaignId: string;
+    title?: string;
+    threadId?: string;
+    initialPrompt?: string;
+    startNewChat?: boolean;
+    openDrawer?: boolean;
+  } | undefined;
   SproutHomeScreen: undefined;
   Partners: undefined;
 };
@@ -283,7 +292,10 @@ const TabNavigator = () => {
         // A Sprout ping (a reply, sale, needs-you, or digest) → open that campaign's
         // thread so the freshly posted message is right there.
         setTimeout(() => {
-          navigation.navigate('CampaignThreadScreen', { campaignId: String(data.campaignId) });
+          navigation.navigate('CampaignThreadScreen', {
+            campaignId: String(data.campaignId),
+            threadId: data.threadId ? String(data.threadId) : undefined,
+          });
         }, 500);
       } else if (data?.type === 'job_complete' || data?.type === 'listing_ready') {
         // Import / sync / listing-generation finished — deep-link the user to their
@@ -446,6 +458,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="Partners" component={sb(PartnersScreen)} />
     <AppStackNav.Screen name="LiquidationCampaignScreen" component={sb(LiquidationCampaignScreen)} options={{ headerTitle: 'Inventory', animationEnabled: false }} />
     <AppStackNav.Screen name="CampaignSettings" component={sb(CampaignSettingsScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="SproutChatSettings" component={sb(SproutChatSettingsScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="CampaignInventorySelect" component={sb(CampaignInventorySelectScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SproutHomeScreen" component={sb(SproutHomeScreen)} options={{ headerTitle: 'Sprout' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />

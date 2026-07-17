@@ -696,13 +696,6 @@ const SproutHomeScreen: React.FC = () => {
     const source = sanitizeDisplayText(insight?.report?.title || insightHeadline || 'Report');
     return compactDisplayText(source, { maxChars: 42, maxSentences: 1 }) || 'Report';
   }, [insight?.report?.title, insightHeadline]);
-  const insightReportSubtitle = useMemo(() => {
-    const source = sanitizeDisplayText(
-      insight?.report?.summary || insightSolution || 'See the recommended next move.',
-    );
-    return compactDisplayText(source, { maxChars: 78, maxSentences: 1 });
-  }, [insight?.report?.summary, insightSolution]);
-
   // Report bottom sheet — the same viewer the chat uses, mounted here so the
   // home screen can open a report directly (no detour through a chat prompt).
   const { openTray, trayProps } = useActivityTray();
@@ -790,6 +783,7 @@ const SproutHomeScreen: React.FC = () => {
     if (!campaignId) return;
     navigation.navigate('CampaignThreadScreen', {
       campaignId,
+      startNewChat: true,
       initialPrompt:
         'Give me the full report: everything that happened since I last checked, what it means, and the next moves as a report document.',
     });
@@ -901,7 +895,6 @@ const SproutHomeScreen: React.FC = () => {
               {!controller.loading && (insight?.report?.sections?.length || insight?.reportId) ? (
                 <ReportPreviewCard
                   title={insightReportTitle}
-                  subtitle={insightReportSubtitle}
                   chip="Report"
                   borderColor={THEME.cardBorder}
                   onPress={() => {
@@ -1228,6 +1221,7 @@ const SproutHomeScreen: React.FC = () => {
           label: 'Make changes',
           onPress: () => navigation.navigate('CampaignThreadScreen', {
             campaignId: handoffTarget.campaignId,
+            startNewChat: true,
             initialPrompt: handoffTarget.prompt,
           }),
         } : undefined}
@@ -1665,11 +1659,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 9,
   },
-  reportTextCol: { flex: 1, gap: 4 },
-  // Match the finding and explanation directly above the card. The document
-  // preview is part of that same thought, not a smaller metadata treatment.
+  reportTextCol: { flex: 1 },
+  // The hero already explains the finding. This card is only the destination,
+  // so it carries the report title without repeating its summary.
   reportTitle: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, color: '#FFFFFF' },
-  reportSub: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, color: 'rgba(255,255,255,0.78)' },
+  reportSub: { marginTop: 3, fontFamily: FONT.medium, fontSize: 13.5, lineHeight: 18, color: 'rgba(255,255,255,0.72)' },
   reportChip: {
     backgroundColor: 'rgba(244,244,245,0.2)',
     borderWidth: 1,

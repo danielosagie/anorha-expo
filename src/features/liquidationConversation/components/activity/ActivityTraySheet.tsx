@@ -222,14 +222,18 @@ export default function ActivityTraySheet({
                 <TouchableOpacity style={styles.circleBtn} onPress={onClose} hitSlop={HIT} accessibilityLabel="Close">
                   <Icon name="close" size={21} color={CHAT_COLORS.dim} />
                 </TouchableOpacity>
-                <Text style={styles.docHeaderTitle} numberOfLines={1}>{sanitizeDisplayText(payload.document.title || payload.title)}</Text>
+                <Text style={styles.docHeaderTitle} numberOfLines={1}>
+                  Report: {sanitizeDisplayText(payload.document.title || payload.title)}
+                </Text>
                 <TouchableOpacity style={styles.circleBtn} onPress={() => { Haptics.selectionAsync().catch(() => undefined); setMenuOpen(o => !o); }} hitSlop={HIT} accessibilityLabel="Document options">
                   <Icon name="dots-horizontal" size={20} color={CHAT_COLORS.dim} />
                 </TouchableOpacity>
               </View>
             ) : payload.kind === 'plan' && depth === 1 ? (
               <View style={styles.planHeader}>
-                <Text style={styles.planHeaderTitle}>Review plan</Text>
+                <Text style={styles.planHeaderTitle} numberOfLines={1}>
+                  Plan: {getPlanDisplayTitle(payload.plan)}
+                </Text>
                 <View style={styles.planHeaderActions}>
                   {onEditPlan ? (
                     <Pressable
@@ -933,7 +937,7 @@ function DocumentPage({
             <TextInput
               value={note}
               onChangeText={setNote}
-              placeholder="What should Sprout change?"
+              placeholder="Describe the changes you want"
               placeholderTextColor={CHAT_COLORS.faint}
               style={styles.docReviseInput}
               multiline
@@ -949,14 +953,15 @@ function DocumentPage({
                 onPress={submitRevise}
                 activeOpacity={0.85}
               >
-                <Text style={styles.docReviseSendText}>Ask Sprout</Text>
+                <Text style={styles.docReviseSendText}>Send changes</Text>
               </TouchableOpacity>
             </View>
           </View>
         ) : (
           <TouchableOpacity style={styles.docReviseCta} onPress={() => setReviseOpen(true)} activeOpacity={0.85}>
-            <Icon name="creation" size={16} color={CHAT_COLORS.brandDeep} />
-            <Text style={styles.docReviseCtaText}>Ask Sprout to revise</Text>
+            <Icon name="pencil-outline" size={17} color={CHAT_COLORS.inkSoft} />
+            <Text style={styles.docReviseCtaText}>Request changes</Text>
+            <Icon name="chevron-right" size={18} color={CHAT_COLORS.faint} />
           </TouchableOpacity>
         )
       ) : null}
@@ -1271,7 +1276,7 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     paddingBottom: 8,
   },
-  planHeaderTitle: { fontSize: 18, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink },
+  planHeaderTitle: { flex: 1, marginRight: 10, fontSize: 18, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink },
   planHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   tile: {
     width: 32,
@@ -1616,17 +1621,17 @@ const styles = StyleSheet.create({
   docReviseCta: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 8,
-    backgroundColor: CHAT_COLORS.white,
+    backgroundColor: CHAT_COLORS.surfaceAlt,
     borderRadius: 12,
     borderCurve: 'continuous',
     borderWidth: 1,
     borderColor: CHAT_COLORS.border,
     paddingVertical: 12,
+    paddingHorizontal: 13,
     marginTop: 2,
   },
-  docReviseCtaText: { fontSize: 14, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+  docReviseCtaText: { flex: 1, fontSize: 14, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
   docActionBlock: {
     gap: 6,
     paddingTop: 2,

@@ -1,7 +1,7 @@
 // OptimizerReviewView — the optimize "review" step.
 //
-// Product-detail style, one item at a time: tap any field to edit (saved to the
-// ProductVariant), a per-channel readiness pill row (red count of gaps → green
+// Product-detail style, one item at a time: tap any field to edit (saved through
+// the canonical product API), a per-channel readiness pill row (red count of gaps → green
 // check when ready), ‹ Item N › nav and a progress bar. Replaces the old
 // display-only "fill the gaps" resolver, which never persisted edits.
 //
@@ -26,7 +26,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
+import { ensureSupabaseJwt } from '../../lib/supabase';
+import { API_BASE_URL } from '../../config/env';
 import { RC } from '../resolve/ResolveKit';
 import { normalizeDisplayName } from '../../config/platforms';
 import { ClassifiedProduct, OPTIMIZER_THRESHOLDS } from '../../hooks/useOptimizerQueues';
@@ -89,9 +90,20 @@ const OptimizerReviewView: React.FC<Props> = ({ products, platforms, onBack, onC
       setEdits((prev) => ({ ...prev, [curId]: { ...prev[curId], [key]: value } }));
       setSaveState('saving');
       try {
-        await ensureSupabaseJwt();
-        const { error } = await supabase.from('ProductVariants').update({ [key]: value }).eq('Id', curId);
-        if (error) throw error;
+        const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('You’re signed out.');
+        const response = await fetch(`${API_BASE_URL}/api/products/${curId}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ [key]: value }),
+        });
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new Error(body || `Save failed (${response.status})`);
+        }
         setSaveState('saved');
         if (saveTimer.current) clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => setSaveState('idle'), 2500);

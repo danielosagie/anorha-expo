@@ -18,6 +18,7 @@ export type OptimizerQueue = 'photo-needed' | 'data-needed' | 'manual-queue';
 
 export interface ClassifiedProduct {
   Id: string;
+  ProductId: string;
   Title: string;
   Description?: string | null;
   Sku?: string | null;
@@ -87,10 +88,24 @@ export interface UseOptimizerQueuesOptions {
   limit?: number;
 }
 
-const VARIANT_SELECT = `
-  Id, Title, Description, Sku,
-  ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl)
+export const OPTIMIZER_VARIANT_SELECT = `
+  Id, ProductId, Title, Sku, Price,
+  ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl),
+  Products!inner(Title, Description)
 `;
+
+export function normalizeOptimizerVariantRow(row: any): any {
+  const parent = Array.isArray(row?.Products) ? row.Products[0] : row?.Products;
+  return {
+    ...row,
+    ProductId: row?.ProductId || parent?.Id,
+    // Product copy was normalized onto Products in item-model Phase 4B.
+    // A variant Title is only an option label now, not the canonical product title.
+    Title: parent?.Title || row?.Title || '',
+    Description: parent?.Description || '',
+    ProductImages: Array.isArray(row?.ProductImages) ? row.ProductImages : [],
+  };
+}
 
 export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
   const { connectionId, limit = 20000 } = options;
@@ -130,7 +145,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
           const chunk = ids.slice(i, i + 300);
           const { data, error } = await supabase
             .from('ProductVariants')
-            .select(VARIANT_SELECT)
+            .select(OPTIMIZER_VARIANT_SELECT)
             .in('Id', chunk);
           if (error) throw error;
           if (data) raw.push(...data);
@@ -142,7 +157,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
         for (let from = 0; from < limit; from += 1000) {
           const { data, error } = await supabase
             .from('ProductVariants')
-            .select(VARIANT_SELECT)
+            .select(OPTIMIZER_VARIANT_SELECT)
             .range(from, from + 999);
           if (error) throw error;
           if (!data || data.length === 0) break;
@@ -151,7 +166,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
         }
       }
 
-      const classified = raw.map(classifyProduct);
+      const classified = raw.map(normalizeOptimizerVariantRow).map(classifyProduct);
       setProducts(classified);
 
       // Independent dimensions — an item can need both photos and details.

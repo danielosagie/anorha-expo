@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, Animated, Image, Linking, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated as RNAnimated, Image, Linking, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { AudioModule, RecordingPresets, useAudioRecorder } from 'expo-audio';
-import { Plus, ArrowRight, Mic, X, Check, Clock, Pencil } from 'lucide-react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Plus, ArrowRight, Mic, X, Check, Clock, Pencil, Camera, Images, Paperclip } from 'lucide-react-native';
 import { API_BASE_URL } from '../../config/env';
 import { persistPendingVoice, getPendingVoice, clearPendingVoice, fileExists } from '../../features/liquidationConversation/pendingVoice';
 
@@ -81,6 +82,8 @@ export const MessageComposer = ({
   // When the failure is a denied permission we offer a jump to Settings; other
   // failures (audio session, prepare) shouldn't blame the mic permission.
   const [voiceErrorSettings, setVoiceErrorSettings] = useState(false);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
   // Rolling levels (0..1) that drive the live waveform bars.
   const [levels, setLevels] = useState<number[]>(() => new Array(WAVE_BARS).fill(BASE_LEVEL));
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -93,8 +96,9 @@ export const MessageComposer = ({
   const onChangeRef = useRef(onChangeText);
   onChangeRef.current = onChangeText;
   const resumedRef = useRef(false);
-  const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
+  const pulseLoop = useRef<RNAnimated.CompositeAnimation | null>(null);
   const inputRef = useRef<TextInput>(null);
+  const attachProgress = useSharedValue(0);
 
   const hasText = value.trim().length > 0;
   const canSend = hasText || imageUris.length > 0;
@@ -106,6 +110,37 @@ export const MessageComposer = ({
     if (timerRef.current) clearInterval(timerRef.current);
     if (meterRef.current) clearInterval(meterRef.current);
   }, []);
+
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    attachProgress.value = withTiming(attachMenuOpen ? 1 : 0, {
+      duration: reduceMotion ? 1 : attachMenuOpen ? 210 : 150,
+      easing: attachMenuOpen
+        ? Easing.bezier(0.22, 1, 0.36, 1)
+        : Easing.bezier(0.4, 0, 1, 1),
+    });
+  }, [attachMenuOpen, attachProgress, reduceMotion]);
+
+  const attachMenuStyle = useAnimatedStyle(() => ({
+    opacity: attachProgress.value,
+    transform: [
+      { translateY: (1 - attachProgress.value) * 10 },
+      { scaleX: 0.94 + attachProgress.value * 0.06 },
+      { scaleY: 0.92 + attachProgress.value * 0.08 },
+    ],
+  }));
+
+  const attachButtonStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: 1 - attachProgress.value * 0.06 },
+      { rotate: `${attachProgress.value * 45}deg` },
+    ],
+  }));
 
   useEffect(() => {
     if (!focusRequestKey) return;
@@ -175,27 +210,17 @@ export const MessageComposer = ({
     }
   }, [addUris]);
 
-  // The + button opens an attach menu: camera, photo library, or a file from the Files app.
-  const attach = useCallback(() => {
+  const runAttachAction = useCallback((action: () => void) => {
+    setAttachMenuOpen(false);
     tap();
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Take Photo', 'Photo Library', 'Choose File', 'Cancel'], cancelButtonIndex: 3 },
-        (i) => {
-          if (i === 0) void pickFromCamera();
-          else if (i === 1) void pickFromLibrary();
-          else if (i === 2) void pickFile();
-        },
-      );
-    } else {
-      Alert.alert('Add to chat', undefined, [
-        { text: 'Take Photo', onPress: () => void pickFromCamera() },
-        { text: 'Photo Library', onPress: () => void pickFromLibrary() },
-        { text: 'Choose File', onPress: () => void pickFile() },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
-  }, [pickFromCamera, pickFromLibrary, pickFile]);
+    const delay = reduceMotion ? 0 : 110;
+    setTimeout(action, delay);
+  }, [reduceMotion]);
+
+  const toggleAttachMenu = useCallback(() => {
+    tap();
+    setAttachMenuOpen(open => !open);
+  }, []);
 
   const stopWave = () => {
     pulseLoop.current?.stop();
@@ -428,9 +453,47 @@ export const MessageComposer = ({
         </View>
       ) : (
         <View style={styles.row}>
-          <TouchableOpacity style={styles.attachBtn} onPress={attach} activeOpacity={0.8}>
-            <Plus size={22} color="#18181B" />
-          </TouchableOpacity>
+          <Animated.View
+            pointerEvents={attachMenuOpen ? 'auto' : 'none'}
+            style={[styles.attachMenu, attachMenuStyle]}
+            accessibilityViewIsModal={attachMenuOpen}
+          >
+            <Pressable
+              style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+              onPress={() => runAttachAction(() => void pickFromCamera())}
+              accessibilityRole="button"
+              accessibilityLabel="Open camera"
+            >
+              <View style={styles.attachOptionIcon}><Camera size={20} color="#3F3F46" strokeWidth={2} /></View>
+              <Text style={styles.attachOptionText}>Camera</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+              onPress={() => runAttachAction(() => void pickFromLibrary())}
+              accessibilityRole="button"
+              accessibilityLabel="Choose photos"
+            >
+              <View style={styles.attachOptionIcon}><Images size={20} color="#3F3F46" strokeWidth={2} /></View>
+              <Text style={styles.attachOptionText}>Photos</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+              onPress={() => runAttachAction(() => void pickFile())}
+              accessibilityRole="button"
+              accessibilityLabel="Choose files"
+            >
+              <View style={styles.attachOptionIcon}><Paperclip size={20} color="#3F3F46" strokeWidth={2} /></View>
+              <Text style={styles.attachOptionText}>Files</Text>
+            </Pressable>
+          </Animated.View>
+
+          <Pressable onPress={toggleAttachMenu} accessibilityRole="button" accessibilityLabel={attachMenuOpen ? 'Close attachment menu' : 'Add to chat'}>
+            {({ pressed }) => (
+              <Animated.View style={[styles.attachBtn, attachButtonStyle, pressed && styles.attachBtnPressed]}>
+                <Plus size={22} color="#18181B" strokeWidth={2.2} />
+              </Animated.View>
+            )}
+          </Pressable>
 
           <View style={styles.card}>
             {contextAttachment ? (
@@ -476,6 +539,7 @@ export const MessageComposer = ({
                 autoFocus={autoFocus}
                 value={value}
                 onChangeText={onChangeText}
+                onFocus={() => setAttachMenuOpen(false)}
                 editable={!transcribing}
               />
               {transcribing ? (
@@ -531,7 +595,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  queueText: { color: '#5D7E16', fontFamily: FONT.medium, fontSize: 12 },
+  queueText: { color: '#5D7E16', fontFamily: FONT.medium, fontSize: 13 },
 
   voiceErrorBanner: {
     marginBottom: 8,
@@ -546,10 +610,44 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
-  voiceErrorText: { flex: 1, color: '#B91C1C', fontFamily: FONT.medium, fontSize: 12 },
-  voiceErrorAction: { color: '#B91C1C', fontFamily: FONT.semibold, fontSize: 12, textDecorationLine: 'underline' },
+  voiceErrorText: { flex: 1, color: '#B91C1C', fontFamily: FONT.medium, fontSize: 13 },
+  voiceErrorAction: { color: '#B91C1C', fontFamily: FONT.semibold, fontSize: 13, textDecorationLine: 'underline' },
 
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: 9 },
+  attachMenu: {
+    position: 'absolute',
+    left: 0,
+    bottom: 58,
+    width: 224,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOpacity: 0.12,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+    zIndex: 20,
+  },
+  attachOption: {
+    minHeight: 54,
+    paddingHorizontal: 8,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  attachOptionPressed: { backgroundColor: '#F4F4F5' },
+  attachOptionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4F4F5',
+  },
+  attachOptionText: { color: '#18181B', fontFamily: FONT.medium, fontSize: 17 },
   attachBtn: {
     width: 46,
     height: 46,
@@ -563,6 +661,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
+  attachBtnPressed: { opacity: 0.82 },
   card: {
     flex: 1,
     borderRadius: 24,
@@ -603,7 +702,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(147,200,34,0.28)',
   },
-  contextText: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 12.5 },
+  contextText: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13.5 },
   contextRemove: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   input: {
@@ -612,7 +711,7 @@ const styles = StyleSheet.create({
     maxHeight: 120,
     color: '#18181B',
     fontFamily: FONT.medium,
-    fontSize: 16,
+    fontSize: 17,
     paddingTop: 7,
     paddingBottom: 7,
   },
@@ -649,6 +748,6 @@ const styles = StyleSheet.create({
   recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#EF4444' },
   waveRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: 28, gap: 2 },
   waveBar: { width: 3, minHeight: 3, backgroundColor: BRAND, borderRadius: 1.5 },
-  recTimer: { fontFamily: FONT.semibold, fontSize: 13, color: '#EF4444', fontVariant: ['tabular-nums'] },
+  recTimer: { fontFamily: FONT.semibold, fontSize: 14, color: '#EF4444', fontVariant: ['tabular-nums'] },
   recDone: { width: 40, height: 40, borderRadius: 20, backgroundColor: BRAND, alignItems: 'center', justifyContent: 'center' },
 });

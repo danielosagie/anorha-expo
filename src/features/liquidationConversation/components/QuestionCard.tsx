@@ -141,8 +141,8 @@ const s = StyleSheet.create({
   card: { backgroundColor: '#FFFFFF', borderWidth: 0.5, borderColor: '#ECEBE6', borderRadius: 18, padding: 14 },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 12 },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 1 },
-  stepText: { fontSize: 12, color: '#71717A', fontFamily: 'Inter_600SemiBold' },
-  question: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', lineHeight: 21 },
+  stepText: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold' },
+  question: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold', lineHeight: 22 },
   questionFlex: { flex: 1 },
   option: {
     flexDirection: 'row', gap: 10, alignItems: 'flex-start', padding: 11, marginBottom: 8,
@@ -156,22 +156,22 @@ const s = StyleSheet.create({
   markOn: { backgroundColor: '#93C822', borderColor: '#93C822' },
   optBody: { flex: 1 },
   optLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  optLabel: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
+  optLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   optLabelAccent: { color: '#3B6D11' },
   recPill: {
-    fontSize: 11, color: '#3B6D11', borderWidth: 0.5, borderColor: '#93C822',
+    fontSize: 12, color: '#3B6D11', borderWidth: 0.5, borderColor: '#93C822',
     paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, overflow: 'hidden', fontFamily: 'Inter_500Medium',
   },
-  optDesc: { marginTop: 3, fontSize: 13, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 18 },
+  optDesc: { marginTop: 3, fontSize: 14, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 19 },
   optDescAccent: { color: '#3B6D11' },
   other: {
     borderWidth: 0.5, borderColor: '#ECEBE6', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
-    fontSize: 14, color: '#18181B', fontFamily: 'Inter_400Regular', backgroundColor: '#FAFAF8', marginTop: 2,
+    fontSize: 15, color: '#18181B', fontFamily: 'Inter_400Regular', backgroundColor: '#FAFAF8', marginTop: 2,
   },
   send: {
     marginTop: 10, backgroundColor: '#93C822', borderRadius: 12, paddingVertical: 12, alignItems: 'center',
   },
-  sendText: { fontSize: 14, color: '#FFFFFF', fontFamily: 'Inter_700Bold' },
+  sendText: { fontSize: 15, color: '#FFFFFF', fontFamily: 'Inter_700Bold' },
 });
 
 export default QuestionCard;

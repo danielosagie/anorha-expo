@@ -118,6 +118,7 @@ export interface PlanPayload {
 
 export interface DecisionPrompt {
   id: string;
+  threadId?: string;
   kind: 'approve' | 'revise' | 'follow_up';
   title: string;
   description?: string;

@@ -18,7 +18,7 @@ import { useAuth } from '@clerk/expo';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { ChevronLeft, ChevronDown, Target, Gauge, ShieldCheck, CheckCircle2 } from 'lucide-react-native';
+import { ChevronLeft, ChevronDown, ChevronRight, MessageCircleMore, Target, Gauge, ShieldCheck, CheckCircle2, Pencil } from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
 
@@ -56,12 +56,18 @@ const CampaignSettingsScreen = () => {
 
   const [headerH, setHeaderH] = useState(96);
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({ goal: true, pacing: true, guard: false, danger: false });
+  const [campaignName, setCampaignName] = useState(passedTitle || '');
+  const [open, setOpen] = useState<Record<string, boolean>>({ details: true, goal: true, pacing: true, guard: false, chat: true, danger: false });
   const cfg = controller.campaignConfig;
 
   useEffect(() => {
     controller.loadCampaignDetails(campaignId).catch(() => undefined);
   }, [campaignId]);
+
+  useEffect(() => {
+    const loadedTitle = controller.activeCampaign?.title;
+    if (loadedTitle && !campaignName.trim()) setCampaignName(loadedTitle);
+  }, [campaignName, controller.activeCampaign?.title]);
 
   const toggleSec = (k: string) => {
     Haptics.selectionAsync().catch(() => undefined);
@@ -76,6 +82,12 @@ const CampaignSettingsScreen = () => {
     if (!cfg) return;
     setSaving(true);
     try {
+      const title = campaignName.trim();
+      const currentTitle = controller.activeCampaign?.title || passedTitle || '';
+      if (title && title !== currentTitle) {
+        await controller.renameCampaign(campaignId, title);
+        navigation.setParams({ title });
+      }
       await adapter.updateCampaignConfig(campaignId, {
         targetRevenue: cfg.targetRevenue,
         timeframeDays: cfg.timeframeDays,
@@ -127,6 +139,23 @@ const CampaignSettingsScreen = () => {
           </View>
         ) : (
           <>
+            <Section title="Clearout details" icon={<Pencil size={18} color="#43631A" />} open={open.details} onToggle={() => toggleSec('details')}>
+              <View style={s.field}>
+                <Text style={s.fieldLabel}>Clearout name</Text>
+                <View style={s.fieldInputWrap}>
+                  <TextInput
+                    style={s.fieldInput}
+                    value={campaignName}
+                    onChangeText={setCampaignName}
+                    placeholder="Clearout name"
+                    placeholderTextColor="#9CA3AF"
+                    autoCapitalize="words"
+                    returnKeyType="done"
+                  />
+                </View>
+              </View>
+            </Section>
+
             <Section title="Goal" icon={<Target size={18} color="#43631A" />} open={open.goal} onToggle={() => toggleSec('goal')}>
               <Field label="Target revenue" prefix="$" value={cfg.targetRevenue} onChange={(v: number) =>setField({ targetRevenue: v })} />
               <Field label="Timeline" suffix="days" value={cfg.timeframeDays} onChange={(v: number) =>setField({ timeframeDays: v })} />
@@ -162,6 +191,16 @@ const CampaignSettingsScreen = () => {
                   thumbColor="#FFFFFF"
                 />
               </View>
+            </Section>
+
+            <Section title="Chat" icon={<MessageCircleMore size={18} color="#43631A" />} open={open.chat} onToggle={() => toggleSec('chat')}>
+              <TouchableOpacity style={s.linkRow} onPress={() => navigation.navigate('SproutChatSettings')} activeOpacity={0.75}>
+                <View style={s.linkCopy}>
+                  <Text style={s.linkLabel}>Chat settings</Text>
+                  <Text style={s.linkSub}>Memory, history, and suggested follow-ups</Text>
+                </View>
+                <ChevronRight size={19} color="#A1A1AA" />
+              </TouchableOpacity>
             </Section>
 
             <Section title="End clearout" icon={<CheckCircle2 size={18} color="#3B6300" />} open={open.danger} onToggle={() => toggleSec('danger')}>
@@ -286,6 +325,11 @@ const s = StyleSheet.create({
   switchRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 2 },
   switchLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 2 },
   switchSub: { fontSize: 12, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 17 },
+
+  linkRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  linkCopy: { flex: 1 },
+  linkLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
+  linkSub: { fontSize: 12, lineHeight: 17, color: '#71717A', fontFamily: 'Inter_400Regular', marginTop: 2 },
 
   deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13, borderRadius: 14, backgroundColor: 'rgba(147,200,34,0.12)', borderWidth: 1, borderColor: 'rgba(147,200,34,0.35)' },
   deleteText: { fontSize: 15, color: '#3B6300', fontFamily: 'Inter_600SemiBold' },

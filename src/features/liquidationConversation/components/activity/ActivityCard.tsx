@@ -10,19 +10,21 @@
 //
 // Every finished activity is tappable and opens ONE review tray. Calm law: the
 // normal finished turn stays quiet; only failed / out-of-sync goes loud.
-import React, { useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
 import type { ActivityPayload, CampaignItem, ValueChange } from '../../types';
 import ValueDiff from './ValueDiff';
 import RoutineCard from './RoutineCard';
 import { TypingIndicator } from './Typing';
 import { activityGlyph, changeKindGlyph, humanizeChannel, toolActivePhrase } from './humanizers';
-import { compactDisplayText, sanitizeDisplayText } from '../../displayText';
+import { sanitizeDisplayText } from '../../displayText';
 import { campaignItemPrice, getPlanDisplayTitle, getPlanPricePreviews, matchPlanItem } from '../../planPresentation';
 import { DiaTextReveal } from '../../../../components/DiaTextReveal';
+import { useChatPreferences } from '../../chatPreferences';
 
 export interface ActivityCardProps {
   payload: ActivityPayload;
@@ -38,7 +40,7 @@ export default function ActivityCard({ payload, streaming, onOpenTray, planItems
     case 'reminder':
       return <RoutineCard payload={payload} onOpenTray={onOpenTray} />;
     case 'tool-run':
-      return <ToolRunCard payload={payload} streaming={streaming} />;
+      return <ToolRunCard payload={payload} streaming={streaming} onOpenTray={onOpenTray} />;
     case 'value-change':
     case 'publish':
       return <RichActivityCard payload={payload} onOpenTray={onOpenTray} />;
@@ -51,9 +53,8 @@ export default function ActivityCard({ payload, streaming, onOpenTray, planItems
   }
 }
 
-// ── Plan card: a proposed plan the seller approves. Tap opens the tray to the full
-// plan (title, why, ordered steps) with Approve / Revise / Follow-up. Brand-tinted
-// because it's an action waiting on the seller, not a quiet receipt. ──
+// ── Plans and reports use the same compact artifact language as the home screen:
+// a tilted document tile, an explicit type in the title, and one clear view action. ──
 
 function PlanActivityCard({
   payload,
@@ -75,13 +76,23 @@ function PlanActivityCard({
     onOpenTray?.(payload);
   };
   return (
-    <TouchableOpacity style={styles.planCard} activeOpacity={0.85} onPress={press}>
-      <View style={styles.planHeader}>
-        <View style={styles.richTextCol}>
-          <Text style={styles.planTitle} numberOfLines={2}>{title}</Text>
-          {plan.summary ? <Text style={styles.planSummary} numberOfLines={2}>{compactDisplayText(plan.summary, { maxChars: 150, maxSentences: 1 })}</Text> : null}
+    <TouchableOpacity style={styles.artifactCard} activeOpacity={0.85} onPress={press}>
+      <View style={styles.artifactHeader}>
+        <View style={styles.artifactIconWrap}>
+          <LinearGradient
+            colors={['rgba(147,200,34,0.28)', 'rgba(147,200,34,0.10)']}
+            style={styles.artifactIconChip}
+          >
+            <Icon name="clipboard-text-outline" size={20} color={CHAT_COLORS.brandDeep} />
+          </LinearGradient>
         </View>
-        <Icon name="chevron-right" size={18} color="#C4C4CC" />
+        <View style={styles.richTextCol}>
+          <Text style={styles.artifactTitle} numberOfLines={2}>Plan: {title}</Text>
+        </View>
+        <View style={styles.artifactAction}>
+          <Text style={styles.artifactActionText}>View plan</Text>
+          <Icon name="chevron-right" size={15} color={CHAT_COLORS.brandDeep} />
+        </View>
       </View>
       {priceRows.length ? (
         <View style={styles.planPricePreview}>
@@ -115,20 +126,25 @@ function DocumentCard({
     onOpenTray?.(payload);
   };
   return (
-    <TouchableOpacity style={styles.richCard} activeOpacity={0.85} onPress={press}>
-      <View style={styles.richHeader}>
-        <View style={styles.tile}>
-          <Icon name="file-document-outline" size={18} color={CHAT_COLORS.brandDeep} />
+    <TouchableOpacity style={styles.artifactCard} activeOpacity={0.85} onPress={press}>
+      <View style={styles.artifactHeader}>
+        <View style={styles.artifactIconWrap}>
+          <LinearGradient
+            colors={['rgba(147,200,34,0.28)', 'rgba(147,200,34,0.10)']}
+            style={styles.artifactIconChip}
+          >
+            <Icon name="file-document-outline" size={20} color={CHAT_COLORS.brandDeep} />
+          </LinearGradient>
         </View>
         <View style={styles.richTextCol}>
-          <Text style={styles.richTitle} numberOfLines={1}>{sanitizeDisplayText(doc.title || payload.title)}</Text>
-          {doc.summary ? <Text style={styles.richSub} numberOfLines={2}>{compactDisplayText(doc.summary, { maxChars: 150, maxSentences: 1 })}</Text> : null}
+          <Text style={styles.artifactTitle} numberOfLines={2}>
+            Report: {sanitizeDisplayText(doc.title || payload.title)}
+          </Text>
         </View>
-        <Icon name="chevron-right" size={18} color="#C4C4CC" />
-      </View>
-      <View style={styles.docFooter}>
-        <Icon name="text-box-outline" size={13} color={CHAT_COLORS.dim} />
-        <Text style={styles.docFooterText}>Open report</Text>
+        <View style={styles.artifactAction}>
+          <Text style={styles.artifactActionText}>View report</Text>
+          <Icon name="chevron-right" size={15} color={CHAT_COLORS.brandDeep} />
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -219,21 +235,31 @@ function RichActivityCard({
 function ToolRunCard({
   payload,
   streaming,
+  onOpenTray,
 }: {
   payload: Extract<ActivityPayload, { kind: 'tool-run' }>;
   streaming: boolean;
+  onOpenTray?: (payload: ActivityPayload) => void;
 }) {
   const steps = payload.steps ?? [];
   const reasoning = payload.reasoning?.trim();
   const hasReasoning = !!reasoning;
   const count = steps.length;
-  const [expanded, setExpanded] = useState(false);
+  const { expandedActivity } = useChatPreferences();
+  const [expanded, setExpanded] = useState(expandedActivity);
+  useEffect(() => setExpanded(expandedActivity), [expandedActivity]);
 
   if (!streaming && !count && !hasReasoning) return null;
 
   const lastStep = count ? steps[count - 1] : null;
   const livePhrase = lastStep ? toolActivePhrase(lastStep.tool) : 'Working on it';
   const doneSummary = sanitizeDisplayText(payload.title || 'Finished the checks');
+  const canOpen = !streaming && (count > 0 || hasReasoning);
+  const openTray = () => {
+    if (!canOpen) return;
+    Haptics.selectionAsync().catch(() => undefined);
+    onOpenTray?.(payload);
+  };
 
   // The reasoning trace, shown inline (not buried in the tray): it streams live while
   // the model is still thinking, then collapses to a tappable "Thought it through" row.
@@ -265,7 +291,16 @@ function ToolRunCard({
       ) : null}
 
       {showStepsRow ? (
-        <View style={styles.activitySummary}>
+        <Pressable
+          style={styles.activitySummary}
+          disabled={!canOpen}
+          onPress={openTray}
+          hitSlop={8}
+          accessible={canOpen}
+          accessibilityRole={canOpen ? 'button' : undefined}
+          accessibilityLabel={canOpen ? `Open details for ${doneSummary}` : undefined}
+          accessibilityHint={canOpen ? 'Opens the completed tool work in a bottom sheet' : undefined}
+        >
           <DiaTextReveal
             key={streaming ? livePhrase : doneSummary}
             text={streaming ? livePhrase : doneSummary}
@@ -273,7 +308,8 @@ function ToolRunCard({
             revealFrom={CHAT_COLORS.white}
             revealTo={streaming ? CHAT_COLORS.inkSoft : CHAT_COLORS.dim}
           />
-        </View>
+          {canOpen ? <Icon name="chevron-right" size={17} color="#C4C4CC" /> : null}
+        </Pressable>
       ) : null}
     </View>
   );
@@ -319,8 +355,8 @@ const styles = StyleSheet.create({
   previewDiff: { marginLeft: 'auto' },
   moreLine: { fontSize: 11.5, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.faint },
 
-  // ── Plan card (neutral, opens the approve sheet) ──
-  planCard: {
+  // ── Plan / report artifact cards ──
+  artifactCard: {
     alignSelf: 'flex-start',
     width: '100%',
     maxWidth: '100%',
@@ -329,12 +365,33 @@ const styles = StyleSheet.create({
     backgroundColor: CHAT_COLORS.white,
     borderWidth: 1,
     borderColor: CHAT_COLORS.border,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
   },
-  planHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  planTitle: { fontSize: 15, lineHeight: 20, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
-  planSummary: { fontSize: 14, lineHeight: 19, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, marginTop: 2 },
+  artifactHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  artifactIconWrap: { transform: [{ rotate: '-7deg' }] },
+  artifactIconChip: {
+    width: 38,
+    height: 42,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(59,109,17,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  artifactTitle: { fontSize: 14, lineHeight: 19, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+  artifactAction: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(59,109,17,0.20)',
+    backgroundColor: 'rgba(147,200,34,0.10)',
+    paddingHorizontal: 10,
+  },
+  artifactActionText: { fontSize: 11.5, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
   planPricePreview: {
     gap: 8,
     marginTop: 12,
@@ -346,18 +403,6 @@ const styles = StyleSheet.create({
   planPriceName: { flex: 1, fontSize: 13.5, lineHeight: 18, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },
   planPriceBefore: { fontSize: 13.5, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },
   planPriceAfter: { fontSize: 13.5, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold },
-
-  // ── Document card footer ──
-  docFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 11,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: CHAT_COLORS.divider,
-  },
-  docFooterText: { fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
 
   // ── Tool-run receipt (reasoning block + live pill / done summary) ──
   toolRunWrap: { alignSelf: 'flex-start', maxWidth: '100%', gap: 6, marginBottom: 6 },
@@ -381,6 +426,9 @@ const styles = StyleSheet.create({
   activitySummary: {
     alignSelf: 'flex-start',
     maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     paddingVertical: 3,
   },
   activitySummaryText: { flexShrink: 1, fontSize: 14, lineHeight: 20, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },

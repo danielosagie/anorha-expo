@@ -51,7 +51,7 @@ const TIERS: Tier[] = [
         features: [
             'Unlimited syncs',
             'Unlimited integrations',
-            '40 AI scans included',
+            'Monthly AI usage included',
             'Email support',
         ],
     },
@@ -65,7 +65,7 @@ const TIERS: Tier[] = [
         additionalUserPrice: 8,
         features: [
             'Everything in Growth',
-            '120 AI scans included',
+            '3x monthly AI usage',
             'Priority support',
         ],
     },
@@ -80,6 +80,7 @@ interface TierSelectorModalProps {
         freeLimit: number;
         remaining: number;
     };
+    usagePercent?: number;
     hasSubscription?: boolean;
 }
 
@@ -91,7 +92,7 @@ const WHITE_BG = '#FFFFFF';
 const TABULAR_FEATURES = [
     { label: 'Platform integrations', free: '1 Platform', growth: 'Unlimited', teams: 'Unlimited' },
     { label: 'Real-time syncings', free: 'Limited', growth: 'Unlimited', teams: 'Unlimited' },
-    { label: 'Included AI scans', free: '10 / mo', growth: '40 / mo', teams: '120 / mo' },
+    { label: 'AI usage', free: 'Limited', growth: 'Included', teams: '3× included' },
     { label: 'Team members', free: '1 User', growth: '2 Users', teams: '5 Users' },
     { label: 'Priority Support', free: '-', growth: '-', teams: '✓' },
 ];
@@ -101,6 +102,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     onClose,
     onSuccess,
     usageInfo,
+    usagePercent,
     hasSubscription = false,
 }) => {
     const theme = useTheme();
@@ -224,13 +226,19 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                         <Text style={styles.subtitle}>Unlock full potential with premium</Text>
 
                         {/* Usage indicator */}
-                        {usageInfo && usageInfo.remaining === 0 && (
+                        {typeof usagePercent === 'number' ? (
                             <View style={styles.usageBadge}>
                                 <Text style={styles.usageBadgeText}>
-                                    Free tier exhausted ({usageInfo.usageCount}/{usageInfo.freeLimit} scans used)
+                                    {Math.max(0, Math.round(usagePercent))}% of this month&apos;s AI usage used
                                 </Text>
                             </View>
-                        )}
+                        ) : usageInfo && usageInfo.remaining === 0 ? (
+                            <View style={styles.usageBadge}>
+                                <Text style={styles.usageBadgeText}>
+                                    Monthly AI usage reached
+                                </Text>
+                            </View>
+                        ) : null}
                     </View>
 
                     {/* Plan Tabs */}

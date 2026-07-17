@@ -6,9 +6,11 @@ import { AnorhaFace } from '../../../components/brand/AnorhaFace';
 export const SproutDisclaimer = () => (
   <View style={styles.wrap}>
     <View style={styles.mark}>
-      <AnorhaFace size={13} />
+      <AnorhaFace size={20} />
     </View>
-    <Text style={styles.text}>Sprout can make mistakes. Double-check important details.</Text>
+    <View style={styles.textMark}>
+      <Text style={styles.text}>Sprout can make mistakes. Check important details.</Text>
+    </View>
   </View>
 );
 
@@ -16,24 +18,31 @@ const styles = StyleSheet.create({
   wrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-start',
+    justifyContent: 'space-between',
     gap: 7,
-    paddingTop: 0,
+    paddingTop: 6,
     paddingBottom: 6,
     paddingHorizontal: 0,
+    marginBottom: 0,
   },
   mark: {
-    width: 18,
-    height: 18,
+    width: "60%",
+    flexWrap: "wrap",
     borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(147,200,34,0.14)',
+  },
+  textMark: {
+    width: "50%",
+    flexWrap: "wrap",
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   text: {
     color: '#9CA3AF',
     fontFamily: 'Inter_400Regular',
-    fontSize: 11,
+    fontSize: 14,
     textAlign: 'left',
   },
 });
