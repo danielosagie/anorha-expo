@@ -68,6 +68,7 @@ const CampaignInventorySelectScreen = () => {
   );
 
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
@@ -87,11 +88,11 @@ const CampaignInventorySelectScreen = () => {
       const userId = legendState?.userId;
       if (!userId) return;
       setLoading(true);
+      setLoadingMore(false);
+      let renderedFirstPage = false;
       try {
-        const all: any[] = [];
         let from = 0;
         const size = 200;
-        // eslint-disable-next-line no-constant-condition
         while (true) {
           const to = from + size - 1;
           const { data, error } = await supabase
@@ -99,18 +100,31 @@ const CampaignInventorySelectScreen = () => {
             .select(SELECT_COLS)
             .eq('UserId', userId)
             .not('Sku', 'like', 'DRAFT-%')
+            .order('Id', { ascending: true })
             .range(from, to);
           if (error) throw error;
-          const r = data || [];
-          all.push(...r);
-          if (r.length < size) break;
+          if (cancelled) return;
+
+          const page = (data || []).filter(row => row.VariantType !== 'option' && !row.IsArchived);
+          if (!renderedFirstPage) {
+            setRows(page);
+            setLoading(false);
+            renderedFirstPage = true;
+          } else {
+            setRows(previous => [...previous, ...page]);
+          }
+
+          if ((data || []).length < size) break;
+          setLoadingMore(true);
           from += size;
         }
-        if (!cancelled) setRows(all.filter(r => r.VariantType !== 'option' && !r.IsArchived));
       } catch {
-        if (!cancelled) setRows([]);
+        if (!cancelled && !renderedFirstPage) setRows([]);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -372,6 +386,7 @@ const CampaignInventorySelectScreen = () => {
           keyboardShouldPersistTaps="handled"
           ListEmptyComponent={<Text style={s.empty}>No matching items.</Text>}
           ItemSeparatorComponent={() => <View style={s.sep} />}
+          ListFooterComponent={loadingMore ? <ActivityIndicator style={{ marginVertical: 20 }} color={BRAND} /> : null}
           renderItem={({ item }: any) => {
             const sel = selected.has(item.Id);
             return (

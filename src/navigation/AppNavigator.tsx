@@ -39,38 +39,25 @@ import OnboardingSlides from '../screens/OnboardingSlides';
 import AuthScreen from '../screens/AuthScreen';
 import GlobalSearchScreen from '../screens/GlobalSearchScreen';
 import InventoryOrdersScreen from '../screens/InventoryOrdersScreen';
-import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
-import ConnectionsScreen from '../screens/ConnectionsScreen';
-import ConnectPlatformsScreen from '../screens/ConnectPlatformsScreen';
-import PrivacySecurityScreen from '../screens/PrivacySecurityScreen';
-import AccountLoginScreen from '../screens/AccountLoginScreen';
 import PoolDetailScreen from '../screens/PoolDetailScreen';
-import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
-import ProductDetailScreen from '../screens/ProductDetail';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
 // NOTE: PhoneAuthScreen was removed — phone verification now goes through VerifyCodeScreen.
-import PastScansScreen from '../screens/PastScansScreen';
-import TeamScreen from '../screens/TeamScreen';
 import SyncInboxScreen from '../screens/SyncInboxScreen';
 import ImportHubScreen from '../screens/ImportHubScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
-import AddProductScreen from '../screens/AddProductScreen';
 // LoadingScreen + MatchSelectionScreen were deprecated and deleted. The LoadingScreen
 // param SHAPE is retained in AppStackParamList below because it's the canonical
 // "active flow" payload used by activeFlowPersistence; no route is registered, so
 // nothing can navigate to it. The MatchSelectionScreen param type and its JobResponse
 // shape are gone too — nothing referenced them.
-import GenerateDetailsScreen from '../screens/GenerateDetailsScreen';
 import VerifyCodeScreen from '../screens/VerifyCodeScreen';
 import ActivityFeedScreen from '../screens/ActivityFeedScreen';
 import PublishConfirmationScreen from '../screens/PublishConfirmationScreen';
 import PartnerAcceptScreen from '../screens/PartnerAcceptScreen';
 import PartnersScreen from '../screens/PartnersScreen';
 import PartnershipDetailScreen from '../screens/PartnershipDetailScreen';
-import { BackfillOptimizerScreen } from '../screens/BackfillOptimizerScreen';
-import { CSVColumnMappingScreen } from '../screens/CSVColumnMappingScreen';
 import PendingOrgInvitesScreen from '../screens/PendingOrgInvitesScreen';
 import LiquidationCampaignScreen from '../screens/LiquidationCampaignScreen';
 import CampaignSettingsScreen from '../screens/CampaignSettingsScreen';
@@ -78,10 +65,6 @@ import SproutChatSettingsScreen from '../screens/SproutChatSettingsScreen';
 import CampaignInventorySelectScreen from '../screens/CampaignInventorySelectScreen';
 import SproutHomeScreen from '../screens/SproutHomeScreen';
 import CampaignThreadScreen from '../screens/CampaignThreadScreen';
-import BackupsScreen from '../screens/BackupsScreen';
-import BillingScreen from '../screens/BillingScreen';
-import BillingSupportScreen from '../screens/BillingSupportScreen';
-import DeleteAccountInfoScreen from '../screens/DeleteAccountInfoScreen';
 import { SessionContext } from '../context/SessionContext';
 import { createLogger } from '../utils/logger';
 const log = createLogger('AppNavigator');
@@ -404,14 +387,14 @@ const TabNavigator = () => {
         // pinLeft are only a pre-measure fallback, never seen (the ring is invisible at rest).
         // onBack mirrors the real back button exactly (backWithOrigin) so the swipe
         // works on every revisit, not just the first.
-        component={sb(AddProductScreen, {
-          mode: 'pin', size: 44, pinLeft: 16, accent: '#FFFFFF',
-          // Deterministic back: honor an explicit `origin` param (e.g. the chat that
-          // opened the cart, whose stack entry got popped when we navigated to the
-          // already-mounted TabNavigator), else pop the current navigator, else the
-          // parent stack, else land on Home. Always navigates somewhere.
-          onBack: (nav: any) => backWithOrigin(nav),
-        })}
+        getComponent={() => sb(require('../screens/AddProductScreen').default, {
+            mode: 'pin', size: 44, pinLeft: 16, accent: '#FFFFFF',
+            // Deterministic back: honor an explicit `origin` param (e.g. the chat that
+            // opened the cart, whose stack entry got popped when we navigated to the
+            // already-mounted TabNavigator), else pop the current navigator, else the
+            // parent stack, else land on Home. Always navigates somewhere.
+            onBack: (nav: any) => backWithOrigin(nav),
+          })}
         options={{
           tabBarButton: () => null,
           tabBarItemStyle: { display: 'none' },
@@ -462,25 +445,25 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="CampaignInventorySelect" component={sb(CampaignInventorySelectScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SproutHomeScreen" component={sb(SproutHomeScreen)} options={{ headerTitle: 'Sprout' }} />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
-    <AppStackNav.Screen name="ProductDetail" component={sb(ProductDetailScreen)} />
-    <AppStackNav.Screen name="PastScans" component={sb(PastScansScreen)} />
+    <AppStackNav.Screen name="ProductDetail" getComponent={() => sb(require('../screens/ProductDetail').default)} />
+    <AppStackNav.Screen name="PastScans" getComponent={() => sb(require('../screens/PastScansScreen').default)} />
     <AppStackNav.Screen name="SyncInbox" component={sb(SyncInboxScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="ImportHub" component={sb(ImportHubScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
     {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
         a stack route also named 'Profile' collided with the Profile TAB and made
         navigate('Profile') push this legacy screen over the tabs. */}
-    <AppStackNav.Screen name="AccountSettings" component={sb(ProfileScreen)} />
-    <AppStackNav.Screen name="Connections" component={sb(ConnectionsScreen)} options={{ headerShown: false }} />
-    <AppStackNav.Screen name="ConnectPlatforms" component={sb(ConnectPlatformsScreen)} options={{ headerShown: false }} />
-    <AppStackNav.Screen name="PrivacySecurity" component={sb(PrivacySecurityScreen)} options={{ headerShown: false }} />
-    <AppStackNav.Screen name="AccountLogin" component={sb(AccountLoginScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="AccountSettings" getComponent={() => sb(require('../screens/ProfileScreen').default)} />
+    <AppStackNav.Screen name="Connections" getComponent={() => sb(require('../screens/ConnectionsScreen').default)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="ConnectPlatforms" getComponent={() => sb(require('../screens/ConnectPlatformsScreen').default)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="PrivacySecurity" getComponent={() => sb(require('../screens/PrivacySecurityScreen').default)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="AccountLogin" getComponent={() => sb(require('../screens/AccountLoginScreen').default)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="PoolDetail" component={sb(PoolDetailScreen)} options={{ headerShown: false }} />
-    <AppStackNav.Screen name="DeleteAccountInfo" component={sb(DeleteAccountInfoScreen)} />
-    <AppStackNav.Screen name="NotificationSettings" component={sb(NotificationSettingsScreen)} />
-    <AppStackNav.Screen name="Team" component={sb(TeamScreen)} />
-    <AppStackNav.Screen name="Billing" component={sb(BillingScreen)} />
-    <AppStackNav.Screen name="BillingSupport" component={sb(BillingSupportScreen)} />
+    <AppStackNav.Screen name="DeleteAccountInfo" getComponent={() => sb(require('../screens/DeleteAccountInfoScreen').default)} />
+    <AppStackNav.Screen name="NotificationSettings" getComponent={() => sb(require('../screens/NotificationSettingsScreen').default)} />
+    <AppStackNav.Screen name="Team" getComponent={() => sb(require('../screens/TeamScreen').default)} />
+    <AppStackNav.Screen name="Billing" getComponent={() => sb(require('../screens/BillingScreen').default)} />
+    <AppStackNav.Screen name="BillingSupport" getComponent={() => sb(require('../screens/BillingSupportScreen').default)} />
     <AppStackNav.Screen
       name="GlobalSearch"
       component={GlobalSearchScreen}
@@ -495,7 +478,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     {/* LoadingScreen + MatchSelectionScreen deprecated and removed — no routes registered. */}
     <AppStackNav.Screen
       name="GenerateDetailsScreen"
-      component={sb(GenerateDetailsScreen)}
+      getComponent={() => sb(require('../screens/GenerateDetailsScreen').default)}
       options={{
         // Kill react-navigation's interactive swipe-back (the card-slide that peeks the
         // screen below). The in-screen SwipeBackRing owns the back gesture now; fade the
@@ -507,10 +490,10 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="PublishConfirmation" component={sb(PublishConfirmationScreen)} />
     <AppStackNav.Screen name="PartnerAccept" component={sb(PartnerAcceptScreen)} />
     <AppStackNav.Screen name="PartnershipDetail" component={sb(PartnershipDetailScreen)} />
-    <AppStackNav.Screen name="BackfillOptimizer" component={sb(BackfillOptimizerScreen)} />
-    <AppStackNav.Screen name="CSVColumnMapping" component={sb(CSVColumnMappingScreen)} />
+    <AppStackNav.Screen name="BackfillOptimizer" getComponent={() => sb(require('../screens/BackfillOptimizerScreen').BackfillOptimizerScreen)} />
+    <AppStackNav.Screen name="CSVColumnMapping" getComponent={() => sb(require('../screens/CSVColumnMappingScreen').CSVColumnMappingScreen)} />
     <AppStackNav.Screen name="ActivityFeed" component={sb(ActivityFeedScreen)} />
-    <AppStackNav.Screen name="Backups" component={sb(BackupsScreen)} />
+    <AppStackNav.Screen name="Backups" getComponent={() => sb(require('../screens/BackupsScreen').default)} />
     {/* NOT wrapped: the chat uses the left swipe for its thread list. */}
     <AppStackNav.Screen name="CampaignThreadScreen" component={CampaignThreadScreen} options={{ headerTitle: 'Campaign Thread', animationEnabled: false }} />
   </AppStackNav.Navigator>

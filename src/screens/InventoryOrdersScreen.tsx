@@ -809,6 +809,64 @@ const InventoryOrdersScreen = observer(() => {
     ? legendInventoryLevels
     : directFetchLevels;
 
+  const inventoryLevelsWithShared = useMemo(() => {
+    const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
+    const poolQtyByVariant = new Map<string, number>();
+    Object.values(activeInventoryLevels).forEach((level: InventoryLevel) => {
+      if (!level.PlatformConnectionId && (level as any).PoolId) {
+        poolQtyByVariant.set(
+          level.ProductVariantId,
+          (poolQtyByVariant.get(level.ProductVariantId) || 0) + (level.Quantity || 0),
+        );
+      }
+    });
+    Object.entries(sharedLinkQuantities).forEach(([variantId, info]) => {
+      if (info.quantity > 0 && (poolQtyByVariant.get(variantId) || 0) <= 0) {
+        const syntheticId = `shared-${variantId}-${info.poolId || 'pool'}`;
+        levels[syntheticId] = {
+          Id: syntheticId,
+          ProductVariantId: variantId,
+          Quantity: info.quantity,
+          PoolId: info.poolId,
+          PlatformConnectionId: null,
+          PlatformLocationId: info.poolId || 'shared',
+          UpdatedAt: new Date().toISOString(),
+        } as unknown as InventoryLevel;
+      }
+    });
+    return levels;
+  }, [activeInventoryLevels, inventoryUpdateCounter, sharedLinkQuantities]);
+
+  const levelsByVariantId = useMemo(() => {
+    const index = new Map<string, InventoryLevel[]>();
+    Object.values(inventoryLevelsWithShared).forEach((level) => {
+      const existing = index.get(level.ProductVariantId);
+      if (existing) existing.push(level);
+      else index.set(level.ProductVariantId, [level]);
+    });
+    return index;
+  }, [inventoryLevelsWithShared]);
+
+  const imagesByVariantId = useMemo(() => {
+    const index = new Map<string, ProductImage[]>();
+    Object.values(activeProductImages).forEach((image) => {
+      const existing = index.get(image.ProductVariantId);
+      if (existing) existing.push(image);
+      else index.set(image.ProductVariantId, [image]);
+    });
+    return index;
+  }, [activeProductImages, variantUpdateCounter]);
+
+  const mappingsByVariantId = useMemo(() => {
+    const index = new Map<string, PlatformProductMapping[]>();
+    Object.values(activePlatformMappings).forEach((mapping) => {
+      const existing = index.get(mapping.ProductVariantId);
+      if (existing) existing.push(mapping);
+      else index.set(mapping.ProductVariantId, [mapping]);
+    });
+    return index;
+  }, [activePlatformMappings, variantUpdateCounter]);
+
   // Debug: Log when observables update (helps diagnose real-time issues)
   useEffect(() => {
     log.debug('[InventoryOrdersScreen] Observable state updated:', {
@@ -826,37 +884,9 @@ const InventoryOrdersScreen = observer(() => {
 
   const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
     const variants = activeProductVariants;
-    const images = activeProductImages;
-    const baseLevels = activeInventoryLevels;
-    const mappings = activePlatformMappings;
     // CRITICAL: Don't require platformConnections - partners may have products shared with them
     // without having connected any platforms yet
     if (Object.keys(variants).length === 0) return [];
-
-    // Merge shared link quantities into inventory levels when pool levels are missing/zero
-    const levels: Record<string, InventoryLevel> = { ...baseLevels };
-    const poolQtyByVariant = new Map<string, number>();
-    Object.values(baseLevels).forEach((level: InventoryLevel) => {
-      if (!level.PlatformConnectionId && (level as any).PoolId) {
-        const current = poolQtyByVariant.get(level.ProductVariantId) || 0;
-        poolQtyByVariant.set(level.ProductVariantId, current + (level.Quantity || 0));
-      }
-    });
-    Object.entries(sharedLinkQuantities).forEach(([variantId, info]) => {
-      const existingPoolQty = poolQtyByVariant.get(variantId) || 0;
-      if (info.quantity > 0 && existingPoolQty <= 0) {
-        const syntheticId = `shared-${variantId}-${info.poolId || 'pool'}`;
-        levels[syntheticId] = {
-          Id: syntheticId,
-          ProductVariantId: variantId,
-          Quantity: info.quantity,
-          PoolId: info.poolId,
-          PlatformConnectionId: null,
-          PlatformLocationId: info.poolId || 'shared',
-          UpdatedAt: new Date().toISOString(),
-        } as unknown as InventoryLevel;
-      }
-    });
 
     // CRITICAL FIX: Group variants by ProductId to properly handle base/option architecture
     // Build a map of ProductId -> option variants for inventory aggregation
@@ -893,9 +923,7 @@ const InventoryOrdersScreen = observer(() => {
      * Also handles pool-based inventory (no platform connection) for partners
      */
     const getPrimaryPlatformInventory = (variantId: string): number => {
-      const variantLevels = Object.values(levels).filter((level: InventoryLevel) =>
-        level.ProductVariantId === variantId
-      );
+      const variantLevels = levelsByVariantId.get(variantId) || [];
 
       // If no levels found, return 0
       if (variantLevels.length === 0) {
@@ -1031,8 +1059,7 @@ const InventoryOrdersScreen = observer(() => {
             conn.PlatformType.toLowerCase() === selectedPlatformType.toLowerCase() && conn.IsEnabled)
           .map((conn: PlatformConnection) => conn.Id);
 
-        const hasMapping = Object.values(mappings).some((mapping: PlatformProductMapping) =>
-          mapping.ProductVariantId === variantId &&
+        const hasMapping = (mappingsByVariantId.get(variantId) || []).some((mapping) =>
           relevantConnectionIds.includes(mapping.PlatformConnectionId) &&
           mapping.IsEnabled
         );
@@ -1061,7 +1088,7 @@ const InventoryOrdersScreen = observer(() => {
         if (!variant) return false;
 
         // Check if base variant has inventory at selected locations
-        const baseHasInventory = Object.values(levels).some((level: InventoryLevel) => {
+        const baseHasInventory = (levelsByVariantId.get(variantId) || []).some((level) => {
           const locationId = level.PlatformLocationId || 'unknown';
           const poolId = level.PoolId;
 
@@ -1069,7 +1096,7 @@ const InventoryOrdersScreen = observer(() => {
           const isLocationMatch = selectedLocationIds.includes(locationId);
           const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
 
-          return (level.ProductVariantId === variantId) && (isLocationMatch || isPoolMatch);
+          return isLocationMatch || isPoolMatch;
         });
 
         if (baseHasInventory) return true;
@@ -1077,7 +1104,7 @@ const InventoryOrdersScreen = observer(() => {
         // Also check option variants for inventory
         const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
         const optionHasInventory = optionVariants.some(ov =>
-          Object.values(levels).some((level: InventoryLevel) => {
+          (levelsByVariantId.get(ov.id) || []).some((level) => {
             const locationId = level.PlatformLocationId || 'unknown';
             const poolId = level.PoolId;
 
@@ -1085,7 +1112,7 @@ const InventoryOrdersScreen = observer(() => {
             const isLocationMatch = selectedLocationIds.includes(locationId);
             const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
 
-            return (level.ProductVariantId === ov.id) && (isLocationMatch || isPoolMatch);
+            return isLocationMatch || isPoolMatch;
           })
         );
 
@@ -1098,7 +1125,7 @@ const InventoryOrdersScreen = observer(() => {
       const variantWithType = variant as any;
 
       // Get images - check variant first, then product-level images
-      const variantImages = Object.values(images).filter((img: ProductImage) => img.ProductVariantId === variantId);
+      const variantImages = imagesByVariantId.get(variantId) || [];
       const imageUrl = variantImages.length > 0
         ? variantImages[0].ImageUrl
         : (variantWithType.PrimaryImageUrl || undefined);
@@ -1152,11 +1179,9 @@ const InventoryOrdersScreen = observer(() => {
       const platformNames: string[] = getVariantPlatforms(variant);
 
       const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
-      const syncTimestamps = Object.values(mappings)
-        .filter((mapping: PlatformProductMapping) =>
-          variantIdsForSync.includes(mapping.ProductVariantId) &&
-          mapping.IsEnabled !== false
-        )
+      const syncTimestamps = variantIdsForSync
+        .flatMap((id) => mappingsByVariantId.get(id) || [])
+        .filter((mapping) => mapping.IsEnabled !== false)
         .map((mapping: PlatformProductMapping) => mapping.LastSyncedAt || mapping.UpdatedAt)
         .filter((value: any) => typeof value === 'string' && value.length > 0) as string[];
       const latestSyncMs = syncTimestamps.reduce((max, value) => {
@@ -1192,7 +1217,7 @@ const InventoryOrdersScreen = observer(() => {
     });
 
     return Array.from(uniqueVariants.values());
-  }, [activeProductVariants, activeProductImages, activeInventoryLevels, activePlatformMappings, platformConnections, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter, sharedLinkQuantities]);
+  }, [activeProductVariants, imagesByVariantId, levelsByVariantId, mappingsByVariantId, platformConnections, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
