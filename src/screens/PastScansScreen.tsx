@@ -111,9 +111,11 @@ const PastScansScreen = () => {
       const from = page * GENERATION_PAGE_SIZE;
       const to = from + GENERATION_PAGE_SIZE - 1;
       let data: any[] | null = null;
+      // `results` is needed to derive the cover thumbnail (summary.firstThumb is
+      // not populated at write time). Kept bounded by the page range below.
       const primaryQuery = await supabase
         .from('generate_jobs')
-        .select('job_id, match_job_id, created_at, status, summary')
+        .select('job_id, match_job_id, created_at, status, summary, results')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .range(from, to);
@@ -122,7 +124,7 @@ const PastScansScreen = () => {
         log.warn('[PastScans] generate_jobs.match_job_id missing; falling back to schema-compatible select');
         const fallbackQuery = await supabase
           .from('generate_jobs')
-          .select('job_id, created_at, status, summary')
+          .select('job_id, created_at, status, summary, results')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .range(from, to);
@@ -135,16 +137,47 @@ const PastScansScreen = () => {
       }
 
       const rawJobs = (data || []) as any[];
-      const formattedJobs = rawJobs.map((job) => ({
-        ...job,
-        id: job.job_id,
-        summary: {
-          ...(job.summary || {}),
-          firstTitle: job.summary?.firstTitle || 'Generated Listing',
-          firstThumb: job.summary?.firstThumb || '',
-        },
-        matchJobId: job.match_job_id || null,
-      } as GenerationJob));
+
+      // Cover images live on ProductVariants, referenced by results[0].variantId.
+      // Look them up once per page for the jobs whose summary lacks a thumb.
+      const variantIdSet = new Set<string>();
+      rawJobs.forEach((job) => {
+        if (job.summary?.firstThumb) return;
+        const first = (Array.isArray(job.results) ? job.results : [])[0];
+        if (first && typeof first.variantId === 'string' && first.variantId) {
+          variantIdSet.add(first.variantId);
+        }
+      });
+      let variantCoverMap: Record<string, string> = {};
+      if (variantIdSet.size > 0) {
+        const { data: variants, error: variantError } = await supabase
+          .from('ProductVariants')
+          .select('Id, PrimaryImageUrl')
+          .in('Id', Array.from(variantIdSet));
+        if (variantError) {
+          log.warn('[PastScans] cover lookup failed:', variantError.message);
+        } else if (Array.isArray(variants)) {
+          variantCoverMap = variants.reduce((acc: Record<string, string>, v: any) => {
+            if (typeof v?.Id === 'string' && typeof v?.PrimaryImageUrl === 'string' && v.PrimaryImageUrl) {
+              acc[v.Id] = v.PrimaryImageUrl;
+            }
+            return acc;
+          }, {});
+        }
+      }
+
+      const formattedJobs = rawJobs.map((job) => {
+        const first = (Array.isArray(job.results) ? job.results : [])[0] || null;
+        const coverFromVariant = first?.variantId ? variantCoverMap[first.variantId] : undefined;
+        const thumb = job.summary?.firstThumb || coverFromVariant || first?.sourceImageUrl || '';
+        const title = job.summary?.firstTitle || first?.title || first?.generatedTitle || 'Generated Listing';
+        return {
+          ...job,
+          id: job.job_id,
+          summary: { ...(job.summary || {}), firstTitle: title, firstThumb: thumb },
+          matchJobId: job.match_job_id || first?.matchJobId || null,
+        } as GenerationJob;
+      });
 
       setGenerationJobs((previous) => {
         const jobs = reset ? formattedJobs : [...previous, ...formattedJobs];
