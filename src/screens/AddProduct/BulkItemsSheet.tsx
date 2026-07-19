@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, TouchableOpacity, FlatList, Image, TextInput, StyleSheet, Dimensions, Modal, Pressable, ActivityIndicator, Platform, Alert, KeyboardAvoidingView } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, FadeIn } from 'react-native-reanimated';
+import Animated, { Easing, Keyframe, ReduceMotion, useAnimatedStyle, useSharedValue, withSpring, FadeIn } from 'react-native-reanimated';
 import { PanGestureHandler, TapGestureHandler, State, Swipeable } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Camera as CameraIcon, RotateCcw } from 'lucide-react-native';
@@ -10,7 +10,7 @@ import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import BottomActionBar from '../../components/BottomActionBar';
 import { CapturedPhoto } from '../../components/camera/PhotoStack';
-import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../../components/camera/ShelfScanProgressCard';
+import { ShelfScanPlaceholderRow } from '../../components/camera/ShelfScanProgressCard';
 import { UnicodeSpinner } from './UnicodeSpinner';
 import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
@@ -26,7 +26,7 @@ const MAX_BATCH_ITEMS = 100;
 
 type BulkCartItem = { id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number };
 type RenderEntry =
-  | { kind: 'folderCard'; id: string; label?: string; childCount: number; sourcePhotoUri?: string; childIds: string[] }
+  | { kind: 'folderCard'; id: string; label?: string; childCount: number; sourcePhotoUri?: string; childIds: string[]; children: BulkCartItem[] }
   | { kind: 'item'; item: BulkCartItem; index: number };
 
 const extractPrice = (price: any): number | undefined =>
@@ -36,30 +36,144 @@ const extractPrice = (price: any): number | undefined =>
       ? price.extracted_value
       : undefined;
 
+const SHELF_ITEM_ENTERING = new Keyframe({
+  0: {
+    opacity: 0,
+    transform: [{ translateY: 8 }, { scale: 0.96 }],
+  },
+  72: {
+    opacity: 1,
+    transform: [{ translateY: 0 }, { scale: 1.01 }],
+    easing: Easing.bezier(0.22, 1, 0.36, 1),
+  },
+  100: {
+    opacity: 1,
+    transform: [{ translateY: 0 }, { scale: 1 }],
+    easing: Easing.bezier(0.22, 1, 0.36, 1),
+  },
+}).duration(280).reduceMotion(ReduceMotion.System);
+
 const FolderCartRow = React.memo(function FolderCartRow({
   entry,
   onOpen,
+  shelfProgress,
+  statusLabel,
+  quickScanStore,
+  confirmedQuickMatchByItemId,
 }: {
   entry: Extract<RenderEntry, { kind: 'folderCard' }>;
   onOpen?: (folderId: string) => void;
+  shelfProgress?: ShelfProgressState;
+  statusLabel?: string;
+  quickScanStore?: Record<string, { matchData: MatchResponse; matchRows: any[] }>;
+  confirmedQuickMatchByItemId?: Record<string, QuickMatchSelection>;
 }) {
+  const isStreaming = shelfProgress?.status === 'streaming';
+  const expectedCount = Math.max(entry.childCount, shelfProgress?.totalItems || 0);
+  const remainingCount = Math.max(0, expectedCount - entry.childCount);
+  const hasError = shelfProgress?.status === 'error' || shelfProgress?.status === 'timeout' || shelfProgress?.status === 'no_items';
+  const stateLabel = shelfProgress?.stalled
+    ? 'Reconnecting'
+    : hasError
+      ? statusLabel || 'Scan stopped'
+      : isStreaming
+        ? entry.childCount > 0
+          ? `${entry.childCount}${expectedCount > 0 ? ` of ${expectedCount}` : ''} added`
+          : expectedCount > 0
+            ? `${expectedCount} found`
+            : 'Scanning shelf'
+        : `${entry.childCount} item${entry.childCount === 1 ? '' : 's'} ready`;
+
   return (
-    <TouchableOpacity style={styles.folderCard} activeOpacity={0.85} onPress={() => onOpen?.(entry.id)}>
-      {entry.sourcePhotoUri ? (
-        <Image source={{ uri: entry.sourcePhotoUri }} style={styles.folderCardThumb} />
-      ) : (
-        <View style={[styles.folderCardThumb, styles.folderCardThumbEmpty]}>
-          <Icon name="folder-image" size={26} color="#93C822" />
+    <View style={styles.folderCard} accessibilityLabel={`Shelf folder, ${stateLabel}`}>
+      <TouchableOpacity style={styles.folderCardHeader} activeOpacity={0.82} onPress={() => onOpen?.(entry.id)} disabled={!onOpen}>
+        <View style={styles.folderCardThumbWrap}>
+          {entry.sourcePhotoUri ? (
+            <Image source={{ uri: entry.sourcePhotoUri }} style={styles.folderCardThumb} resizeMode="cover" />
+          ) : (
+            <View style={[styles.folderCardThumb, styles.folderCardThumbEmpty]}>
+              <Icon name="image-outline" size={24} color="#A1A1AA" />
+            </View>
+          )}
+          <View style={styles.folderBadge}>
+            <Icon name="folder" size={15} color="#0A0A0B" />
+          </View>
         </View>
-      )}
-      <View style={{ flex: 1, marginLeft: 12 }}>
-        <Text style={styles.folderCardTitle} numberOfLines={1}>{entry.label || 'Shelf'}</Text>
-        <Text style={styles.folderCardSub}>
-          {entry.childCount} item{entry.childCount === 1 ? '' : 's'} · Tap to review
-        </Text>
+        <View style={styles.folderCardHeading}>
+          <Text style={styles.folderCardEyebrow}>SHELF FOLDER</Text>
+          <Text style={styles.folderCardTitle} numberOfLines={1}>{entry.label || 'Shelf'}</Text>
+          <View style={styles.folderCardStatusRow}>
+            <View style={[styles.folderCardStatusDot, hasError && styles.folderCardStatusDotError]} />
+            <Text style={[styles.folderCardSub, hasError && styles.folderCardSubError]} numberOfLines={1}>{stateLabel}</Text>
+          </View>
+        </View>
+        {onOpen ? <Icon name="chevron-right" size={24} color="#A1A1AA" /> : null}
+      </TouchableOpacity>
+
+      <View style={styles.folderContents}>
+        {entry.children.length === 0 ? (
+          <View style={styles.folderWaitingRow}>
+            <View style={styles.folderWaitingIcon}>
+              <Icon name={hasError ? 'alert-circle-outline' : 'package-variant-closed'} size={20} color={hasError ? '#B45309' : '#5A8F12'} />
+            </View>
+            <View style={styles.folderWaitingCopy}>
+              <Text style={styles.folderWaitingTitle}>{hasError ? statusLabel || 'Nothing was added' : expectedCount > 0 ? 'Building your folder' : 'Looking for items'}</Text>
+              <Text style={styles.folderWaitingSub} numberOfLines={2}>
+                {hasError
+                  ? shelfProgress?.message || 'Retry the photo or take a clearer shelf shot.'
+                  : expectedCount > 0
+                    ? 'Each item will appear here as its result comes back.'
+                    : 'The first item will appear here as soon as it is identified.'}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          entry.children.map((item) => {
+            const confirmed = confirmedQuickMatchByItemId?.[item.id];
+            const confirmedIndex = confirmed?.preSelectedIndices?.[0];
+            const confirmedRow = typeof confirmedIndex === 'number' ? confirmed?.matchRows?.[confirmedIndex] : undefined;
+            const scan = quickScanStore?.[item.id];
+            const candidate = confirmedRow || scan?.matchData?.rankedCandidates?.[0];
+            const matchCount = scan?.matchData?.totalMatches || scan?.matchData?.rankedCandidates?.length || 0;
+            const imageUri = candidate?.imageUrl || candidate?.image;
+            const price = extractPrice(candidate?.price);
+            const title = candidate?.title || item.title || 'Shelf item';
+            const subtitle = confirmedRow
+              ? 'Match found'
+              : matchCount > 0
+                ? `${matchCount} match${matchCount === 1 ? '' : 'es'} found`
+                : 'Added · needs review';
+
+            return (
+              <Animated.View key={item.id} entering={isStreaming ? SHELF_ITEM_ENTERING : undefined} style={styles.folderItemRow}>
+                {imageUri ? (
+                  <Image source={{ uri: imageUri }} style={styles.folderItemThumb} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.folderItemThumb, styles.folderItemThumbEmpty]}>
+                    <Icon name="package-variant-closed" size={18} color="#71717A" />
+                  </View>
+                )}
+                <View style={styles.folderItemCopy}>
+                  <Text style={styles.folderItemTitle} numberOfLines={1}>{title}</Text>
+                  <View style={styles.folderItemStatusRow}>
+                    <View style={[styles.folderItemStatusDot, matchCount === 0 && styles.folderItemStatusDotNeedsReview]} />
+                    <Text style={styles.folderItemSub} numberOfLines={1}>{subtitle}</Text>
+                  </View>
+                </View>
+                {price != null ? <Text style={styles.folderItemPrice}>${Math.round(price)}</Text> : null}
+              </Animated.View>
+            );
+          })
+        )}
+
+        {isStreaming && entry.childCount > 0 && remainingCount > 0 ? (
+          <View style={styles.folderReceivingRow}>
+            <View style={styles.folderReceivingDot} />
+            <Text style={styles.folderReceivingText}>{remainingCount} more {remainingCount === 1 ? 'item' : 'items'} being identified</Text>
+          </View>
+        ) : null}
       </View>
-      <Icon name="chevron-right" size={24} color="#94A3B8" />
-    </TouchableOpacity>
+    </View>
   );
 });
 
@@ -358,7 +472,7 @@ export const BulkItemsSheet: React.FC<{
       let index = 0;
       for (const node of cartTree) {
         if (node.kind === 'folder') {
-          entries.push({ kind: 'folderCard', id: node.id, label: node.label, childCount: node.childCount, sourcePhotoUri: node.sourcePhotoUri, childIds: node.children.map((child) => child.id) });
+          entries.push({ kind: 'folderCard', id: node.id, label: node.label, childCount: node.childCount, sourcePhotoUri: node.sourcePhotoUri, childIds: node.children.map((child) => child.id), children: node.children });
         } else if (!savedSet.has(node.item.id)) {
           entries.push({ kind: 'item', item: node.item, index: index++ });
         }
@@ -818,7 +932,16 @@ export const BulkItemsSheet: React.FC<{
 
   const renderCartEntry = useCallback(({ item: entry }: { item: RenderEntry }) => {
     if (entry.kind === 'folderCard') {
-      return <FolderCartRow entry={entry} onOpen={onOpenFolder} />;
+      return (
+        <FolderCartRow
+          entry={entry}
+          onOpen={onOpenFolder}
+          shelfProgress={cameraMode === 'shelf' ? shelfProgress : undefined}
+          statusLabel={shelfPresentation?.title}
+          quickScanStore={quickScanStore}
+          confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
+        />
+      );
     }
     const item = entry.item;
     return (
@@ -844,6 +967,7 @@ export const BulkItemsSheet: React.FC<{
     );
   }, [
     confirmedQuickMatchByItemId,
+    cameraMode,
     currentInstruction,
     handleGenerateItem,
     handleOpenCartItem,
@@ -859,6 +983,8 @@ export const BulkItemsSheet: React.FC<{
     onUpdateItemQuantity,
     quickScanStore,
     sessionDupOwnerByItemId,
+    shelfPresentation?.title,
+    shelfProgress,
   ]);
 
   return (
@@ -915,7 +1041,11 @@ export const BulkItemsSheet: React.FC<{
               
               <View style={{ flex: 1, alignItems: 'center' }}>
                 <Text style={styles.sheetTitle}>
-                  {totalItems === 0 ? (cameraMode === 'shelf' ? 'Scan a shelf' : 'Cart') : 'Cart'}
+                  {cameraMode === 'shelf' && shelfProgress?.status === 'streaming'
+                    ? 'Scanning shelf'
+                    : totalItems === 0
+                      ? (cameraMode === 'shelf' ? 'Scan a shelf' : 'Cart')
+                      : 'Cart'}
                 </Text>
                 <Text style={{ marginTop: 2, fontSize: 12, color: '#71717A', fontWeight: '600' }}>
                   {totalItems} item{totalItems === 1 ? '' : 's'}
@@ -1000,20 +1130,22 @@ export const BulkItemsSheet: React.FC<{
               </TouchableOpacity>
             </View>
           ) : null}
-          {displayItems.length === 0 ? (
+          {renderList.length === 0 ? (
             (() => {
               if (cameraMode === 'shelf' && shelfPhotoUri && shelfProgress && shelfProgress.status !== 'idle') {
                 return (
-                  <ShelfScanProgressCard
-                    photoUri={shelfPhotoUri}
-                    title={shelfPresentation?.title || 'Inspecting shelf'}
-                    subtitle={shelfPresentation?.subtitle || 'Reading the shelf image.'}
-                    phase={shelfProgress.phase}
-                    status={shelfProgress.status}
-                    progress={shelfProgress.progress}
-                    totalItems={shelfProgress.totalItems}
-                    completedItems={shelfProgress.completedItems}
-                    stalled={shelfProgress.stalled}
+                  <FolderCartRow
+                    entry={{
+                      kind: 'folderCard',
+                      id: 'pending-shelf',
+                      label: 'Shelf',
+                      childCount: 0,
+                      sourcePhotoUri: shelfPhotoUri,
+                      childIds: [],
+                      children: [],
+                    }}
+                    shelfProgress={shelfProgress}
+                    statusLabel={shelfPresentation?.title || 'Inspecting shelf'}
                   />
                 );
               }
@@ -1021,14 +1153,18 @@ export const BulkItemsSheet: React.FC<{
               if (currentInstruction && currentInstruction !== 'ready') {
                 if (shelfPhotoUri) {
                   return (
-                    <ShelfScanProgressCard
-                      photoUri={shelfPhotoUri}
-                      title="Inspecting shelf"
-                      subtitle="Reading the photo and building the first item list."
-                      phase="inspecting_shelf"
-                      progress={0.18}
-                      totalItems={0}
-                      completedItems={0}
+                    <FolderCartRow
+                      entry={{
+                        kind: 'folderCard',
+                        id: 'pending-shelf',
+                        label: 'Shelf',
+                        childCount: 0,
+                        sourcePhotoUri: shelfPhotoUri,
+                        childIds: [],
+                        children: [],
+                      }}
+                      shelfProgress={shelfProgress}
+                      statusLabel="Inspecting shelf"
                     />
                   );
                 }
@@ -1281,19 +1417,90 @@ const styles = StyleSheet.create({
     minHeight: 100,
   },
   folderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 10,
+    borderRadius: 22,
+    padding: 14,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#ECEBE6',
+    shadowColor: '#000000',
+    shadowOpacity: 0.045,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
-  folderCardThumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#F1F1EE' },
+  folderCardHeader: { flexDirection: 'row', alignItems: 'center' },
+  folderCardThumbWrap: { width: 64, height: 64, position: 'relative' },
+  folderCardThumb: { width: 64, height: 64, borderRadius: 16, backgroundColor: '#F1F1EE' },
   folderCardThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
-  folderCardTitle: { fontSize: 16, fontWeight: '700', color: '#18181B' },
-  folderCardSub: { fontSize: 13, color: '#71717A', marginTop: 3 },
+  folderBadge: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    backgroundColor: '#B7E344',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  folderCardHeading: { flex: 1, marginLeft: 14 },
+  folderCardEyebrow: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8, color: '#8A8A85' },
+  folderCardTitle: { fontSize: 18, fontWeight: '700', color: '#18181B', marginTop: 2, letterSpacing: -0.25 },
+  folderCardStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5 },
+  folderCardStatusDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#93C822' },
+  folderCardStatusDotError: { backgroundColor: '#F59E0B' },
+  folderCardSub: { flex: 1, fontSize: 13, fontWeight: '600', color: '#71717A' },
+  folderCardSubError: { color: '#A2611A' },
+  folderContents: {
+    marginTop: 14,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E5E1',
+    gap: 8,
+  },
+  folderWaitingRow: {
+    minHeight: 76,
+    borderRadius: 16,
+    backgroundColor: '#F6F7F2',
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  folderWaitingIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 13,
+    backgroundColor: '#E9F3D5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  folderWaitingCopy: { flex: 1, marginLeft: 12 },
+  folderWaitingTitle: { fontSize: 14, fontWeight: '700', color: '#27272A' },
+  folderWaitingSub: { fontSize: 12, lineHeight: 17, color: '#71717A', marginTop: 3 },
+  folderItemRow: {
+    minHeight: 58,
+    borderRadius: 15,
+    backgroundColor: '#F7F7F4',
+    padding: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  folderItemThumb: { width: 42, height: 42, borderRadius: 11, backgroundColor: '#ECEDE8' },
+  folderItemThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  folderItemCopy: { flex: 1, marginHorizontal: 10 },
+  folderItemTitle: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: '#27272A' },
+  folderItemStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  folderItemStatusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#93C822' },
+  folderItemStatusDotNeedsReview: { backgroundColor: '#F59E0B' },
+  folderItemSub: { flex: 1, fontSize: 11, fontWeight: '500', color: '#7C7C78' },
+  folderItemPrice: { fontSize: 14, fontWeight: '700', color: '#27272A', marginRight: 4 },
+  folderReceivingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 5 },
+  folderReceivingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#93C822' },
+  folderReceivingText: { fontSize: 12, fontWeight: '600', color: '#71717A' },
   detailChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 12, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: 'rgba(245,158,11,0.12)' },
   detailChipText: { fontSize: 13, color: '#A2611A', fontWeight: '600' },
   detailEditor: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },

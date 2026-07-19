@@ -263,6 +263,30 @@ export const useLiquidationConversationController = ({
         }), { immediate: true });
       })
       .catch((fetchError: any) => {
+        const message = String(fetchError?.message || '');
+        const missingThread = fetchError?.statusCode === 404 || /thread\s+(not found|does not exist)/i.test(message);
+        if (missingThread) {
+          // A cached notification or an old local selection can outlive the
+          // server thread. Re-resolve against the live list and move to the
+          // newest valid thread instead of showing a fatal error banner.
+          void adapter.listThreads(campaignId).then(nextThreads => {
+            setThreads(nextThreads);
+            const nextThreadId = nextThreads[0]?.id || nextThreads.find(thread => thread.isPrimary)?.id || null;
+            if (nextThreadId && nextThreadId !== threadId) {
+              activeThreadIdRef.current = nextThreadId;
+              setActiveThreadId(nextThreadId);
+              return;
+            }
+            activeThreadIdRef.current = null;
+            setActiveThreadId(null);
+            setSurfaceState('home_overview');
+          }).catch(() => {
+            activeThreadIdRef.current = null;
+            setActiveThreadId(null);
+            setSurfaceState('home_overview');
+          });
+          return;
+        }
         setError(fetchError?.message || 'Failed to refresh thread');
       })
       .finally(() => setIsLoadingMessages(false));
@@ -659,10 +683,15 @@ export const useLiquidationConversationController = ({
     content: string,
     pending: string[],
   ) => {
-    const urls = (await Promise.all(
-      pending.map(uri => uploadProductImage(uri, createClientId('photo')).catch(() => null)),
-    )).filter((u): u is string => !!u);
-    if (!urls.length) {
+    let urls: string[];
+    try {
+      // Treat the attachment set as one turn. Sending only the uploads that happened
+      // to succeed makes the missing photos look saved even though the agent never
+      // received them, and the optimistic thumbnails then shrink after reconciliation.
+      urls = await Promise.all(
+        pending.map(uri => uploadProductImage(uri, createClientId('photo'))),
+      );
+    } catch {
       setThreadStateFor(
         threadId,
         current => failTurn(current, clientMessageId, 'Photos didn’t upload. Tap Retry to try again.'),

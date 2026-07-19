@@ -344,6 +344,55 @@ export function createFolderFromShelf(input: {
   return { folderId, childIds };
 }
 
+/** Add newly streamed shelf results to an existing folder without recreating it. */
+export function addItemsToFolder(
+  folderId: string,
+  items: { id?: string; title?: string; quantity?: number; photos?: CapturedPhoto[]; status?: CartStatus }[],
+): string[] {
+  const folder = getEntry(folderId);
+  if (!isFolder(folder)) return [];
+
+  const ts = now();
+  const nextChildIds = [...folder.childIds];
+  const addedIds: string[] = [];
+
+  for (const raw of items) {
+    const childId = raw.id || newId();
+    const existing = getEntry(childId);
+
+    if (isItem(existing)) {
+      if (existing.parentId !== folderId) continue;
+      if (!nextChildIds.includes(childId)) nextChildIds.push(childId);
+      addedIds.push(childId);
+      continue;
+    }
+
+    cart$.entries[childId].set({
+      kind: 'single',
+      id: childId,
+      parentId: folderId,
+      photos: raw.photos ?? [],
+      title: raw.title,
+      quantity: raw.quantity ?? 1,
+      status: raw.status ?? 'searching',
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    nextChildIds.push(childId);
+    addedIds.push(childId);
+  }
+
+  if (addedIds.length > 0) {
+    cart$.entries[folderId].assign({
+      childIds: nextChildIds,
+      status: 'scanning',
+      updatedAt: ts,
+    });
+  }
+
+  return addedIds;
+}
+
 /** Dissolve a folder, promoting its children to top-level singles in place. */
 export function ungroupFolder(folderId: string) {
   const folder = getEntry(folderId);

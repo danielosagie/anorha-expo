@@ -89,3 +89,4 @@ SPREAD_OPERATOR_GUIDE.md
 FIX_BARCODE_INVENTORY.md
 
 .env.local
+.gradle/

@@ -79,6 +79,36 @@ test('retryFailedTurn re-queues a failed message', () => {
   assert.equal(retried.pendingQueue[0].clientMessageId, 'msg-1');
 });
 
+test('retryFailedTurn keeps uploaded photos on the retried turn', () => {
+  const state = createEmptyThreadState(campaignId, threadId);
+  const imageUrls = ['https://cdn.example/item-1.jpg', 'https://cdn.example/item-2.jpg'];
+  const message = createTextMessage({
+    campaignId,
+    threadId,
+    clientMessageId: 'msg-photo',
+    role: 'user',
+    content: 'List these',
+    deliveryState: 'queued',
+    imageUrls,
+  });
+  const queued = enqueueTurn(
+    state,
+    toQueueItem({
+      campaignId,
+      threadId,
+      clientMessageId: 'msg-photo',
+      kind: 'message',
+      content: 'List these',
+      imageUrls,
+    }),
+    message,
+  );
+
+  const retried = retryFailedTurn(failTurn(queued, 'msg-photo', 'Network failed'), 'msg-photo');
+
+  assert.deepEqual(retried.pendingQueue[0].imageUrls, imageUrls);
+});
+
 test('mergeRemoteMessages keeps unsent local messages while hydrating remote history', () => {
   const localState = createQueuedTextState('msg-local', 'Local only');
   const remoteMessage: ConversationMessage = {

@@ -19,13 +19,14 @@ import PlatformLogo from './PlatformLogo';
 import { PlatformConsentBody } from './PlatformConnectSheet';
 import { LinkComputerBody } from './LinkComputerSheet';
 import LinkComputerScanSheet from './LinkComputerScanSheet';
+import ShopifyStorePicker from './ShopifyStorePicker';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { getPlatform, connectStepsFor, type ConnectStepKind } from '../config/platforms';
 import { BRAND_PRIMARY } from '../design/tokens';
 
-type FlowPhase = 'consent' | 'connecting' | 'importFailed' | 'linkComputer' | 'done';
+type FlowPhase = 'consent' | 'shopifyPicker' | 'connecting' | 'importFailed' | 'linkComputer' | 'done';
 
 interface Props {
   visible: boolean;
@@ -100,12 +101,12 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     }
   }, [phase, status.computerOnline, finish]);
 
-  const runOAuth = useCallback(async () => {
+  const completeOAuth = useCallback(async (shopifyShop?: string) => {
     if (!platform) return;
     setPhase('connecting');
     setConnectError(null);
     try {
-      const res = await connect(platform as ConnectablePlatform);
+      const res = await connect(platform as ConnectablePlatform, { shopifyShop });
       if (res.success) {
         refresh?.();
         // Nudge once more after the callback row commits, then decide next step.
@@ -129,6 +130,15 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     }
   }, [platform, connect, refresh, advanceAfterOAuth]);
 
+  const runOAuth = useCallback(() => {
+    if (platform === 'shopify') {
+      setConnectError(null);
+      setPhase('shopifyPicker');
+      return;
+    }
+    void completeOAuth();
+  }, [platform, completeOAuth]);
+
   const retryImport = useCallback(async () => {
     if (!failedConnectionId) return;
     setConnectError(null);
@@ -147,13 +157,17 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
 
   // Combined progress: "Step N of M" only when there is more than one step.
   const currentKind: ConnectStepKind | null =
-    phase === 'consent' || phase === 'connecting' ? 'oauth' : phase === 'linkComputer' ? 'linkComputer' : null;
+    phase === 'consent' || phase === 'shopifyPicker' || phase === 'connecting'
+      ? 'oauth'
+      : phase === 'linkComputer'
+        ? 'linkComputer'
+        : null;
   const stepIndex = currentKind ? steps.indexOf(currentKind) : -1;
   const showStepCount = steps.length > 1 && stepIndex >= 0;
 
   return (
     <>
-      <BaseModal visible={visible && !scanOpen} onClose={onCancel} position="bottom" showCloseButton={false} containerStyle={styles.sheet}>
+      <BaseModal visible={visible && !scanOpen && phase !== 'shopifyPicker'} onClose={onCancel} position="bottom" showCloseButton={false} containerStyle={styles.sheet}>
         <View style={styles.handle} />
 
         {/* Header: platform + combined step progress + close */}
@@ -221,6 +235,12 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
           </View>
         ) : null}
       </BaseModal>
+
+      <ShopifyStorePicker
+        visible={visible && phase === 'shopifyPicker'}
+        onCancel={() => setPhase('consent')}
+        onStore={(handle) => void completeOAuth(handle)}
+      />
 
       {/* QR pairing rides on top; hides the flow sheet while open. */}
       <LinkComputerScanSheet

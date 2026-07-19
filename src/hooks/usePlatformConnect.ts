@@ -24,6 +24,11 @@ export interface ConnectResult {
   errorMessage?: string;
 }
 
+export interface ConnectOptions {
+  /** Required for Shopify's store-specific Admin OAuth authorization URL. */
+  shopifyShop?: string;
+}
+
 const parseCallback = (url: string): { status: string | null; connectionId?: string; message?: string } => {
   // Strip any hash fragment (e.g. "#_=_") before reading query params.
   const noHash = url.split('#')[0];
@@ -58,7 +63,7 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
   }, []);
 
   const connect = useCallback(
-    async (platform: ConnectablePlatform): Promise<ConnectResult> => {
+    async (platform: ConnectablePlatform, options: ConnectOptions = {}): Promise<ConnectResult> => {
       const {
         data: { user },
         error,
@@ -74,7 +79,11 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
         return { success: false, errorMessage: 'This platform can’t be connected yet.' };
       }
 
-      const orgParam = orgId ? `&orgId=${orgId}` : '';
+      if (platform === 'shopify' && !options.shopifyShop) {
+        return { success: false, errorMessage: 'Choose your Shopify store first.' };
+      }
+
+      const orgParam = orgId ? `&orgId=${encodeURIComponent(orgId)}` : '';
       // 'bare' platforms (Shopify, Facebook) reuse a single callback; 'tagged'
       // OAuth platforms carry the platform key on the deep link.
       const finalRedirectUri =
@@ -90,9 +99,14 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
             .join('')
         : '';
 
+      const shopParam =
+        platform === 'shopify' && options.shopifyShop
+          ? `&shop=${encodeURIComponent(options.shopifyShop)}`
+          : '';
+
       const url = `${base}?userId=${user.id}&finalRedirectUri=${encodeURIComponent(
         finalRedirectUri,
-      )}${orgParam}${extraParams}`;
+      )}${orgParam}${extraParams}${shopParam}`;
 
       let result: WebBrowser.WebBrowserAuthSessionResult;
       try {

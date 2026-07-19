@@ -28,7 +28,7 @@ import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import {
   View,
@@ -68,6 +68,17 @@ const CART_SPRING = { damping: 30, stiffness: 280, overshootClamping: true } as 
 const genQueue$ = observable<Array<{ jobId: string; processType: 'generate' | 'match'; itemIds: string[]; startedAt?: number }>>([]);
 // Give up polling a single generate/match job after this long without a terminal status.
 const GEN_GIVE_UP_MS = 4 * 60 * 1000;
+
+// Shelf scans can identify many items at once. Keep sold-comp enrichment bounded so
+// a large shelf cannot fan out dozens of simultaneous SerpAPI requests on mobile.
+const SHELF_PRICING_CONCURRENCY = 3;
+const SHELF_PRICING_TIMEOUT_MS = 15_000;
+type ShelfPricingJob = {
+  itemId: string;
+  title: string;
+  token: string;
+  generation: number;
+};
 
 // A job can report status 'completed' while some (or all) of its payload is empty
 // (backend partial failure). Validate PER ITEM so a partial response can't mark the
@@ -909,7 +920,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId,
     itemStageById, setItemStageById,
     processedItemIds, setProcessedItemIds,
-    cartTree, createShelfFolder, ungroupFolder,
+    cartTree, createShelfFolder, addShelfItemsToFolder, ungroupFolder,
     savedForLaterIds, setItemSavedForLater,
   } = useBulkItems(() => ({
     bulkItems: __dsHasItems ? (dsBuildItems() as any) : [],
@@ -1324,6 +1335,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const quickScanCancelledRef = useRef(false);
   const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string }>>([]);
   const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
+  const activeShelfFolderIdRef = useRef<string | null>(null);
+  const pendingShelfItemsByIdRef = useRef<Record<string, { id: string; title: string; quantity: number; added: boolean }>>({});
+  const shelfPricingQueueRef = useRef<ShelfPricingJob[]>([]);
+  const shelfPricingActiveRef = useRef(0);
+  const shelfPricingGenerationRef = useRef(0);
+  const shelfPricingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const shelfPricingPumpRef = useRef<() => void>(() => {});
   const hasTriggeredBulkModalFtuxRef = useRef(false);
   // Deferred cart-Modal unmount after the close spring settles (cleared on reopen).
   const cartCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1344,18 +1362,126 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     shelfScanStreamRef.current = null;
   }, []);
 
+  const runShelfPricingJob = useCallback(async (job: ShelfPricingJob) => {
+    if (job.generation !== shelfPricingGenerationRef.current) return;
+
+    const abortController = new AbortController();
+    shelfPricingAbortControllersRef.current.set(job.itemId, abortController);
+    const timeout = setTimeout(() => abortController.abort(), SHELF_PRICING_TIMEOUT_MS);
+    let priceData: any;
+
+    try {
+      const cleanedTitle = job.title.replace(/\s*[|—–-]\s*(eBay|Amazon|Walmart|Etsy|Target)\s*$/i, '').trim();
+      const response = await fetch(`${API_BASE_URL}/api/ebay/pricing-research`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${job.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: cleanedTitle, condition: 'new', limit: 20 }),
+        signal: abortController.signal,
+      });
+      priceData = response.ok
+        ? await response.json()
+        : { low: null, median: null, high: null, recommended: null, samples: [], error: 'request_failed' };
+    } catch (error: any) {
+      priceData = {
+        low: null,
+        median: null,
+        high: null,
+        recommended: null,
+        samples: [],
+        error: error?.name === 'AbortError' ? 'pricing_timed_out' : 'request_failed',
+      };
+    } finally {
+      clearTimeout(timeout);
+      if (shelfPricingAbortControllersRef.current.get(job.itemId) === abortController) {
+        shelfPricingAbortControllersRef.current.delete(job.itemId);
+      }
+    }
+
+    // A retake/new shelf invalidates every queued response from the prior scan.
+    if (job.generation !== shelfPricingGenerationRef.current) return;
+
+    setQuickScanStore((prev) => {
+      const current = prev[job.itemId];
+      if (!current?.matchData?.rankedCandidates?.length) return prev;
+      const candidates = [...current.matchData.rankedCandidates];
+      const firstCandidate: any = candidates[0];
+      const existingPricing = firstCandidate?.pricingResearch;
+      const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low ?? 0);
+      const nextPricing = priceData?.error && existingPricing
+        ? { ...existingPricing, soldCompsError: priceData.error }
+        : priceData;
+
+      candidates[0] = {
+        ...firstCandidate,
+        price: (typeof firstCandidate?.price === 'number' && firstCandidate.price > 0)
+          ? firstCandidate.price
+          : (Number.isFinite(recommended) && recommended > 0 ? recommended : firstCandidate?.price),
+        // Even an empty/error response is stored. MatchPreview uses undefined to mean
+        // "still loading", so this guarantees the spinner always terminates.
+        pricingResearch: nextPricing,
+      };
+
+      return {
+        ...prev,
+        [job.itemId]: {
+          ...current,
+          matchData: { ...current.matchData, rankedCandidates: candidates },
+        },
+      };
+    });
+  }, [setQuickScanStore]);
+
+  const pumpShelfPricingQueue = useCallback(() => {
+    while (
+      shelfPricingActiveRef.current < SHELF_PRICING_CONCURRENCY
+      && shelfPricingQueueRef.current.length > 0
+    ) {
+      const job = shelfPricingQueueRef.current.shift();
+      if (!job) break;
+      shelfPricingActiveRef.current += 1;
+      void runShelfPricingJob(job).finally(() => {
+        shelfPricingActiveRef.current = Math.max(0, shelfPricingActiveRef.current - 1);
+        shelfPricingPumpRef.current();
+      });
+    }
+  }, [runShelfPricingJob]);
+  shelfPricingPumpRef.current = pumpShelfPricingQueue;
+
+  const enqueueShelfPricingResearch = useCallback((job: ShelfPricingJob) => {
+    // A repeated event for the same item replaces its still-queued job instead of
+    // spending another sold-comps request.
+    shelfPricingQueueRef.current = shelfPricingQueueRef.current.filter(
+      (queued) => queued.itemId !== job.itemId,
+    );
+    shelfPricingQueueRef.current.push(job);
+    shelfPricingPumpRef.current();
+  }, []);
+
+  const cancelShelfPricingResearch = useCallback(() => {
+    shelfPricingGenerationRef.current += 1;
+    shelfPricingQueueRef.current = [];
+    for (const controller of shelfPricingAbortControllersRef.current.values()) controller.abort();
+    shelfPricingAbortControllersRef.current.clear();
+  }, []);
+
   const resetShelfProgress = useCallback(() => {
     setShelfProgress(initialShelfProgressState());
   }, []);
 
   const resetShelfScanResults = useCallback(() => {
+    cancelShelfPricingResearch();
+    if (activeShelfFolderIdRef.current) {
+      removeEntry(activeShelfFolderIdRef.current);
+      activeShelfFolderIdRef.current = null;
+    }
     shelfQueryToItemIdRef.current = {};
+    pendingShelfItemsByIdRef.current = {};
     setBulkItems([]);
     setQuickScanStore({});
     setConfirmedQuickMatchByItemId({});
     setItemLoadingStates({});
     setActiveItemId(null);
-  }, []);
+  }, [cancelShelfPricingResearch, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore]);
 
   const stopShelfScan = useCallback((nextStatus: ShelfProgressStatus, overrides?: Partial<ShelfProgressState>) => {
     closeShelfScanStream();
@@ -1403,8 +1529,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useEffect(() => {
     return () => {
       closeShelfScanStream();
+      cancelShelfPricingResearch();
     };
-  }, [closeShelfScanStream]);
+  }, [cancelShelfPricingResearch, closeShelfScanStream]);
 
   const markItemsProcessed = useCallback((processedItems: Array<{ id: string }>, nextStage: ItemStage = 'submitted_for_match') => {
     const processedIdsForStage = processedItems.map((item) => item.id).filter(Boolean);
@@ -2138,6 +2265,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setShowDeepSearchSheet(true);
       sheetTranslateY.value = withSpring(0, CART_SPRING);
       resetShelfScanResults();
+      const shelfPricingGeneration = shelfPricingGenerationRef.current;
+      const { folderId } = createShelfFolder({
+        sourcePhotoUri: photo.uri,
+        label: 'Shelf',
+        items: [],
+      });
+      activeShelfFolderIdRef.current = folderId;
 
       // Compress image before converting to base64
       const compressedImage = await ImageManipulator.manipulateAsync(
@@ -2227,19 +2361,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             });
 
             shelfQueryToItemIdRef.current = {};
+            pendingShelfItemsByIdRef.current = {};
             items.forEach((item, idx) => {
               const query = typeof item === 'string' ? item : item.query;
               shelfQueryToItemIdRef.current[query] = folderItems[idx].id;
+              pendingShelfItemsByIdRef.current[folderItems[idx].id] = {
+                ...folderItems[idx],
+                title: query,
+                added: false,
+              };
             });
 
-            // Shelf items become a folder in the SHARED cart (alongside singles), not a separate flow.
-            createShelfFolder({
-              sourcePhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri || undefined,
-              label: 'Shelf',
-              items: folderItems,
-            });
             setIsBulkMode(true);
-            setActiveItemId(folderItems[0]?.id || null);
             setCurrentInstruction('extracting');
             setShelfProgress((prev) => ({
               ...prev,
@@ -2276,7 +2409,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
             if (itemId) {
               const quantity = typeof res?.quantity === 'number' ? res.quantity : 1;
-              setBulkItems((prev) => prev.map((item) => item.id === itemId ? { ...item, title: res.usedQuery, quantity } : item));
+              const pendingItem = pendingShelfItemsByIdRef.current[itemId];
+              const folderId = activeShelfFolderIdRef.current;
+              if (folderId && pendingItem && !pendingItem.added) {
+                addShelfItemsToFolder(folderId, [{
+                  id: itemId,
+                  title: res?.usedQuery || pendingItem.title,
+                  quantity,
+                }]);
+                pendingShelfItemsByIdRef.current[itemId] = { ...pendingItem, added: true };
+                setActiveItemId((current) => current || itemId);
+              }
+              setBulkItems((prev) => prev.map((item) => item.id === itemId ? { ...item, title: res?.usedQuery || item.title, quantity } : item));
 
               setItemLoadingStates((prev) => {
                 const next = { ...prev };
@@ -2285,28 +2429,46 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               });
 
               if (res?.matches && res.matches.length > 0) {
+                const livePricing = res?.livePricing;
+                const instantPricing = livePricing
+                  ? {
+                      low: livePricing.low,
+                      high: livePricing.high,
+                      median: livePricing.median,
+                      recommended: livePricing.median,
+                      sampleCount: livePricing.sampleCount,
+                      samples: livePricing.samples,
+                      livePricing,
+                    }
+                  : undefined;
+                const rankedCandidates = res.matches.map((match: any, index: number) => (
+                  index === 0 && instantPricing && !match?.pricingResearch
+                    ? { ...match, pricingResearch: instantPricing }
+                    : match
+                ));
+
                 setQuickScanStore((prev) => ({
                   ...prev,
                   [itemId]: {
                     matchData: {
                       systemAction: 'show_multiple_matches',
                       confidence: res.confidence || 'medium',
-                      rankedCandidates: res.matches,
-                      totalMatches: res.matches.length,
+                      rankedCandidates,
+                      totalMatches: rankedCandidates.length,
                     },
-                    matchRows: res.matches,
+                    matchRows: rankedCandidates,
                   },
                 }));
 
                 const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
-                  totalMatches: res.matches.length,
+                  totalMatches: rankedCandidates.length,
                   recommendedAction: 'show_multiple_matches',
                   rerankerConfidence: res.confidence === 'high' ? 0.9 : res.confidence === 'medium' ? 0.6 : 0.2,
-                  topCandidateIsLocalMatch: Boolean(res.matches[0]?.isLocalMatch),
+                  topCandidateIsLocalMatch: Boolean(rankedCandidates[0]?.isLocalMatch),
                 });
 
                 if (shouldAutoConfirmTopMatch) {
-                  const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(res.matches);
+                  const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(rankedCandidates);
                   setConfirmedQuickMatchByItemId((prev) => ({
                     ...prev,
                     [itemId]: {
@@ -2316,6 +2478,42 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                       confidence: res.confidence === 'high' ? 0.9 : 0.6,
                     },
                   }));
+                }
+
+                const topTitle = String(rankedCandidates[0]?.title || res?.usedQuery || '').trim();
+                if (topTitle && token) {
+                  enqueueShelfPricingResearch({
+                    itemId,
+                    title: topTitle,
+                    token,
+                    generation: shelfPricingGeneration,
+                  });
+                } else {
+                  // No searchable identity means enrichment cannot start. Store a terminal
+                  // marker so tapping the row shows an honest empty state, never a spinner.
+                  setQuickScanStore((prev) => {
+                    const current = prev[itemId];
+                    if (!current?.matchData?.rankedCandidates?.length) return prev;
+                    const candidates = [...current.matchData.rankedCandidates];
+                    candidates[0] = {
+                      ...candidates[0],
+                      pricingResearch: candidates[0]?.pricingResearch || {
+                        low: null,
+                        median: null,
+                        high: null,
+                        recommended: null,
+                        samples: [],
+                        error: 'no_searchable_title',
+                      },
+                    };
+                    return {
+                      ...prev,
+                      [itemId]: {
+                        ...current,
+                        matchData: { ...current.matchData, rankedCandidates: candidates },
+                      },
+                    };
+                  });
                 }
               }
 
@@ -2342,6 +2540,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }
 
           if (parsed.type === 'COMPLETE') {
+            const folderId = activeShelfFolderIdRef.current;
+            const remainingItems = Object.values(pendingShelfItemsByIdRef.current).filter((item) => !item.added);
+            if (folderId && remainingItems.length > 0) {
+              addShelfItemsToFolder(folderId, remainingItems.map(({ id, title, quantity }) => ({ id, title, quantity })));
+              remainingItems.forEach((item) => {
+                pendingShelfItemsByIdRef.current[item.id] = { ...item, added: true };
+              });
+              setActiveItemId((current) => current || remainingItems[0]?.id || null);
+            }
             stopShelfScan('completed', {
               phase: 'finishing',
               progress: 1,
@@ -2398,7 +2605,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         reasonCode: 'client_preflight_failed',
       });
     }
-  }, [closeShelfScanStream, ensureSupabaseJwt, resetShelfScanResults, shelfProgress.completedItems, sheetTranslateY, stopShelfScan]);
+  }, [addShelfItemsToFolder, closeShelfScanStream, createShelfFolder, enqueueShelfPricingResearch, resetShelfScanResults, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore, shelfProgress.completedItems, sheetTranslateY, stopShelfScan]);
 
   const runQuickScanTextSearch = useCallback(async (itemId: string, newQuery: string) => {
     try {

@@ -127,7 +127,9 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     logo: ShopifySvg,
     connect: {
       strategy: 'shopifyStorePicker',
-      loginPath: '/api/auth/shopify/initiate-store-picker',
+      // The reusable flow discovers the handle in Shopify Admin first, then
+      // calls this supported, store-specific OAuth entry point.
+      loginPath: '/api/auth/shopify/login',
       redirectStyle: 'bare',
     },
     capabilities: {

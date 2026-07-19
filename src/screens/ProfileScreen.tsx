@@ -1,8 +1,7 @@
-import React, { useState, useContext, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useContext, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Modal, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, Pressable, StyleProp, ViewStyle, ActivityIndicator, TextInput, Image, Linking, InteractionManager, Platform } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../context/ThemeContext';
@@ -11,7 +10,6 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import PlaceholderImage from '../components/Placeholder';
 import OrgSwitcher from '../components/OrgSwitcher';
-import PlatformLogo from '../components/PlatformLogo';
 import { useNavigation, useFocusEffect, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -42,6 +40,7 @@ import ConnectedPlatformList from '../components/ConnectedPlatformList';
 import { PLATFORM_CONFIG, PlatformKey } from '../config/platforms';
 import BaseModal from '../components/BaseModal';
 import ConnectDisclosureModal from '../components/ConnectDisclosureModal';
+import ConnectFlowSheet from '../components/ConnectFlowSheet';
 import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
@@ -377,11 +376,7 @@ const ProfileScreen = () => {
   const [entitlements, setEntitlements] = useState<{ planName: string | null; maxConnections: number; aiScanLimit: number | null; isPaid: boolean } | null>(null);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
-  type ShopifyFlowStep = 'idle' | 'enterInfo';
-  const [shopifyShopName, setShopifyShopName] = useState('');
-  const [shopifyFlowStep, setShopifyFlowStep] = useState<ShopifyFlowStep>('idle');
-  const [pastedShopifyUrl, setPastedShopifyUrl] = useState('');
-  const [manualShopName, setManualShopName] = useState('');
+  const [shopifyConnectVisible, setShopifyConnectVisible] = useState(false);
   const [optimizationSummary, setOptimizationSummary] = useState<{ total: number; fullyReady: number } | null>(null);
 
   // Delete Account Modal State
@@ -633,9 +628,7 @@ const ProfileScreen = () => {
       setCsvNameModalVisible(true);
       return;
     } else if (platform === 'shopify') {
-      setShopifyFlowStep('enterInfo');
-      setPastedShopifyUrl('');
-      setManualShopName('');
+      setShopifyConnectVisible(true);
     } else if (platform === 'clover') {
       handleCloverConnect();
     } else if (platform === 'square') {
@@ -670,7 +663,7 @@ const ProfileScreen = () => {
       const label = PLATFORM_CONFIG[platform as PlatformKey]?.label || platform;
       Alert.alert(`${label} coming soon`, `Connecting ${label} isn't available yet. We'll let you know when it's ready.`);
     }
-  }, [setShopifyFlowStep, setPastedShopifyUrl, setManualShopName, navigation, refreshConnections, currentOrg?.id]);
+  }, [navigation, refreshConnections, currentOrg?.id]);
 
   // Use a ref to hold the handler to avoid infinite loop
   const handleStartConnectRef = React.useRef(handleStartConnectPlatform);
@@ -925,154 +918,6 @@ const ProfileScreen = () => {
     } catch (error: any) {
       log.error('Failed to open team page:', error);
       Alert.alert('Error', `Failed to open team page: ${error.message}`);
-    }
-  };
-
-  // --- NEW: Logic for Guided Shopify Flow Step 4 (Open Browser) ---
-  const openShopifyForCopy = async () => {
-    log.debug("[ProfileScreen] Opening Shopify for user to copy URL...");
-    // Get User ID directly from Supabase auth
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-      log.error("[ProfileScreen] Error getting user from Supabase:", userError);
-      return;
-    }
-    const userId = user.id;
-
-    // This URL still initiates the backend picker, which will eventually lead the user
-    // to their Shopify dashboard after login/selection if needed.
-    // The user just needs to copy the URL *from* that dashboard.
-    const backendInitiationUrlBase = `${API_BASE_URL}/api/auth/shopify/initiate-store-picker`;
-    // Define and encode the final redirect URI needed by the backend
-    const finalRedirectUri = 'anorhaapp://auth-callback';
-    const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
-
-    // Append BOTH userId and finalRedirectUri plus orgId
-    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
-    const backendInitiationUrl = `${backendInitiationUrlBase}?userId=${userId}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
-
-    log.debug(`[ProfileScreen] Opening URL with Expo WebBrowser: ${backendInitiationUrl}`);
-    try {
-      await WebBrowser.openBrowserAsync(backendInitiationUrl);
-    } catch (error: unknown) {
-      log.error('[ProfileScreen] WebBrowser Error opening for copy:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      Alert.alert('Browser Error', `An error occurred opening the browser: ${message}`);
-    }
-  };
-  // --- END Guided Shopify Flow Logic ---
-
-  // --- NEW: Logic for Guided Shopify Flow Step 5 (Paste) ---
-  const handlePasteFromClipboard = async () => {
-    const text = await Clipboard.getStringAsync();
-    setPastedShopifyUrl(text);
-  };
-  // --- END Guided Shopify Flow Logic ---
-
-  // --- NEW: Logic for Guided Shopify Flow Steps 6 & 7 (Confirm/Connect) ---
-  const connectWithExtractedShopName = async (extractedShopName: string) => {
-    log.debug(`[ProfileScreen] Connecting with extracted shop name: ${extractedShopName}`);
-    // Get User ID
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      Alert.alert("Authentication Error", "Could not get user information. Please log in again.");
-      log.error("[ProfileScreen] Error getting user:", userError);
-      return;
-    }
-    const userId = user.id;
-
-    // Backend endpoint for direct login/authorization with shop name
-    const directLoginUrlBase = `${API_BASE_URL}/api/auth/shopify/login`;
-    const finalRedirectUri = 'anorhaapp://auth-callback';
-    const encodedFinalRedirectUri = encodeURIComponent(finalRedirectUri);
-
-    const orgIdParam = currentOrg?.id ? `&orgId=${currentOrg.id}` : '';
-    const directLoginUrl = `${directLoginUrlBase}?userId=${userId}&shop=${extractedShopName}&finalRedirectUri=${encodedFinalRedirectUri}${orgIdParam}`;
-    log.debug(`[ProfileScreen] Opening Final Auth URL: ${directLoginUrl}`);
-
-    try {
-      const result = await WebBrowser.openAuthSessionAsync(
-        directLoginUrl,
-        finalRedirectUri
-      );
-      log.debug('[ProfileScreen] Final WebBrowser Auth Result: ', result);
-
-      // Parse result for errors (handles error query params from backend)
-      const parsed = parseOAuthResult(result, 'Shopify');
-      if (!parsed.success && parsed.errorMessage) {
-        Alert.alert('Shopify Connection Failed', parsed.errorMessage);
-      } else if (parsed.success) {
-        refreshConnections(); // Refresh connections on success
-      }
-
-    } catch (error: unknown) {
-      log.error('[ProfileScreen] Final WebBrowser Auth Error:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      Alert.alert('Connection Error', `An error occurred opening the browser for final auth: ${message}`);
-    }
-  };
-
-  // REVISED: Single handler for confirm button in the combined modal
-  const handleConfirmInput = () => {
-    log.debug(`[ProfileScreen] Confirming input: URL='${pastedShopifyUrl}', Manual='${manualShopName}'`);
-    let shopNameToConnect: string | null = null;
-    let isValid = false;
-
-    // Prioritize pasted URL if both are entered
-    if (pastedShopifyUrl) {
-      const shopNameRegex = /admin\.shopify\.com\/store\/([a-zA-Z0-9\-]+)/;
-      const match = pastedShopifyUrl.match(shopNameRegex);
-      if (match && match[1]) {
-        shopNameToConnect = match[1];
-        isValid = true;
-        log.debug(`[ProfileScreen] Extracted shop name from URL: ${shopNameToConnect}`);
-      } else {
-        Alert.alert(
-          "Invalid URL Format",
-          "Could not automatically extract the shop name from the pasted URL. Please ensure it looks like 'https://admin.shopify.com/store/your-shop-name' or enter the name manually."
-        );
-        return; // Stop processing if URL is present but invalid
-      }
-    } else if (manualShopName) {
-      // Basic validation for manual name (e.g., non-empty, maybe no spaces)
-      const trimmedName = manualShopName.trim();
-
-      // Try to extract shop name from URL if user pasted the full URL
-      let extractedShopName = trimmedName;
-      if (trimmedName.includes('admin.shopify.com')) {
-        const shopNameRegex = /admin\.shopify\.com\/store\/([a-zA-Z0-9\-]+)/;
-        const match = trimmedName.match(shopNameRegex);
-        if (match && match[1]) {
-          extractedShopName = match[1];
-          log.debug(`[ProfileScreen] Extracted shop name from manual URL: ${extractedShopName}`);
-        }
-      }
-
-      if (extractedShopName && !extractedShopName.includes(' ')) { // Example validation
-        shopNameToConnect = extractedShopName;
-        isValid = true;
-        log.debug(`[ProfileScreen] Using manual shop name: ${shopNameToConnect}`);
-      } else {
-        Alert.alert(
-          "Invalid Shop Name",
-          "Please enter a valid shop name (usually contains letters, numbers, hyphens, no spaces) or a full Shopify admin URL."
-        );
-        return; // Stop processing if manual name is invalid
-      }
-    }
-
-    if (isValid && shopNameToConnect) {
-      // Reset state and close modal *before* calling connection function
-      setShopifyFlowStep('idle');
-      setPastedShopifyUrl('');
-      setManualShopName('');
-      // Call the connection function
-      connectWithExtractedShopName(shopNameToConnect);
-    } else {
-      // This case should ideally not be reached if button disable logic is correct, but good fallback.
-      Alert.alert("Missing Input", "Please paste the Shopify URL or enter the shop name.");
     }
   };
 
@@ -2062,129 +1907,17 @@ const ProfileScreen = () => {
       )}
       {/* --- END Platform Picker Bottom Bar Overlay --- */}
 
-      {/* --- REVISED: Guided Shopify Flow UI (Single Modal) --- */}
-      <Modal
-        transparent={true}
-        animationType="fade"
-        visible={shopifyFlowStep === 'enterInfo'}
-        onRequestClose={() => setShopifyFlowStep('idle')}
-      >
-        <Pressable style={styles.shopifyModalOverlay} onPress={() => setShopifyFlowStep('idle')}>
-          <Pressable style={styles.shopifyModalContent} onPress={() => { }}>
-            {/* Header with Icon */}
-            <View style={styles.shopifyModalHeader}>
-              <View style={styles.shopifyIconContainer}>
-                <PlatformLogo type="shopify" size={40} />
-              </View>
-              <Text style={styles.shopifyModalTitle}>Connect Shopify</Text>
-              <TouchableOpacity
-                onPress={() => setShopifyFlowStep('idle')}
-                style={styles.shopifyCloseButton}
-              >
-                <Icon name="close" size={24} color="#999" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.shopifyModalBody} showsVerticalScrollIndicator={false}>
-              {/* Option 1: Guided Setup */}
-              <View style={styles.shopifyOption}>
-                <View style={styles.shopifyOptionHeader}>
-                  <View style={[styles.stepNumber, { backgroundColor: BRAND_PRIMARY }]}>
-                    <Text style={styles.stepNumberText}>1</Text>
-                  </View>
-                  <Text style={styles.shopifyOptionTitle}>Guided Setup (Recommended)</Text>
-                </View>
-
-                <View style={styles.shopifySteps}>
-                  <Text style={styles.shopifyStep}>1. Tap to open your Shopify store</Text>
-                  <Text style={styles.shopifyStep}>2. Copy your admin URL</Text>
-                  <Text style={styles.shopifyStep}>3. Paste it below</Text>
-                </View>
-
-                <Button
-                  title="Open Shopify"
-                  icon="open-in-new"
-                  onPress={openShopifyForCopy}
-                  style={styles.shopifyOpenButton}
-                />
-
-                <View style={styles.shopifyPasteContainer}>
-                  <TextInput
-                    style={styles.shopifyPasteInput}
-                    placeholder="Paste your Shopify admin URL..."
-                    placeholderTextColor="#bbb"
-                    value={pastedShopifyUrl}
-                    onChangeText={(text) => { setPastedShopifyUrl(text); if (text) setManualShopName(''); }}
-                    autoCapitalize="none"
-                    keyboardType="url"
-                    selectTextOnFocus
-                  />
-                  <TouchableOpacity
-                    onPress={handlePasteFromClipboard}
-                    style={styles.shopifyPasteButton}
-                  >
-                    <Icon name="content-paste" size={20} color={BRAND_PRIMARY} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Divider */}
-              <View style={styles.shopifyDivider}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              {/* Option 2: Manual Entry */}
-              <View style={styles.shopifyOption}>
-                <View style={styles.shopifyOptionHeader}>
-                  <View style={[styles.stepNumber, { backgroundColor: '#ccc' }]}>
-                    <Text style={styles.stepNumberText}>2</Text>
-                  </View>
-                  <Text style={styles.shopifyOptionTitle}>Enter Shop Name</Text>
-                </View>
-
-                <Text style={styles.shopifyManualDescription}>
-                  Enter your shop's name (e.g., <Text style={{ fontWeight: '600' }}>my-store</Text> from <Text style={{ fontFamily: 'Menlo' }}>my-store.myshopify.com</Text>)
-                </Text>
-
-                <TextInput
-                  style={styles.shopifyManualInput}
-                  placeholder="my-store"
-                  placeholderTextColor="#bbb"
-                  value={manualShopName}
-                  onChangeText={(text) => { setManualShopName(text); if (text) setPastedShopifyUrl(''); }}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-
-              <View style={{ height: 20 }} />
-            </ScrollView>
-
-            {/* Action Buttons */}
-            <View style={styles.shopifyActionButtons}>
-              <Button
-                title="Cancel"
-                outlined
-                onPress={() => {
-                  setShopifyFlowStep('idle');
-                  setPastedShopifyUrl('');
-                  setManualShopName('');
-                }}
-                style={styles.shopifyCancelButton}
-              />
-              <Button
-                title="Connect Shopify"
-                onPress={handleConfirmInput}
-                disabled={!pastedShopifyUrl && !manualShopName.trim()}
-                style={styles.shopifyConnectButton}
-              />
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
-      {/* --- END REVISED Guided Shopify Flow UI --- */}
+      <ConnectFlowSheet
+        visible={shopifyConnectVisible}
+        platform="shopify"
+        orgId={currentOrg?.id}
+        onCancel={() => setShopifyConnectVisible(false)}
+        onConnected={() => {
+          setShopifyConnectVisible(false);
+          refreshConnections();
+          setTimeout(() => refreshConnections(), 2500);
+        }}
+      />
 
       <View style={styles.footer}>
         <Text style={styles.versionText}>Anorha v0.1</Text>
@@ -3214,157 +2947,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#999',
     textAlign: 'center',
-  },
-  // Beautiful Shopify Modal Styles
-  shopifyModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  shopifyModalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    width: '88%',
-    maxHeight: '85%',
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 16 },
-      android: { elevation: 12 },
-    }),
-  },
-  shopifyModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  shopifyIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: '#96C740',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  shopifyModalTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1a1a1a',
-    marginLeft: 12,
-  },
-  shopifyCloseButton: {
-    padding: 8,
-    marginRight: -8,
-  },
-  shopifyModalBody: {
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-  },
-  shopifyOption: {
-    marginBottom: 24,
-  },
-  shopifyOptionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  stepNumber: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  stepNumberText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  shopifyOptionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  shopifySteps: {
-    marginLeft: 48,
-    marginBottom: 14,
-    gap: 8,
-  },
-  shopifyStep: {
-    fontSize: 14,
-    color: '#555',
-    lineHeight: 20,
-  },
-  shopifyOpenButton: {
-    marginLeft: 48,
-    marginBottom: 12,
-  },
-  shopifyPasteContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 48,
-    marginBottom: 0,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e8e8e8',
-    paddingRight: 4,
-  },
-  shopifyPasteInput: {
-    flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#333',
-  },
-  shopifyPasteButton: {
-    padding: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  shopifyDivider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 20,
-  },
-  shopifyManualDescription: {
-    fontSize: 13,
-    color: '#666',
-    lineHeight: 18,
-    marginBottom: 12,
-    marginLeft: 48,
-  },
-  shopifyManualInput: {
-    marginLeft: 48,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e8e8e8',
-    fontSize: 14,
-    color: '#333',
-    backgroundColor: '#f8f9fa',
-  },
-  shopifyActionButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-  },
-  shopifyCancelButton: {
-    flex: 1,
-  },
-  shopifyConnectButton: {
-    flex: 1,
   },
   manageBtn: {
     borderWidth: 1,

@@ -73,6 +73,8 @@ type NestMessage = {
   content?: string;
   timestamp?: string;
   createdAt?: string;
+  imageUrls?: unknown;
+  image_urls?: unknown;
   metadata?: Record<string, unknown>;
 };
 
@@ -118,9 +120,18 @@ const readString = (value: unknown) => (typeof value === 'string' ? value : unde
 // Pull attached photo urls off a persisted message's metadata so they render as
 // thumbnails in the chat history. The backend may store them under any of these
 // keys depending on the turn type (seller-attached photos vs agent-posted job card).
-const extractImageUrls = (metadata: Record<string, any> | undefined): string[] => {
-  if (!metadata) return [];
-  const candidates = [metadata.imageUrls, metadata.image_urls, metadata.images, metadata.photos];
+const extractImageUrls = (
+  metadata: Record<string, any> | undefined,
+  message?: Pick<NestMessage, 'imageUrls' | 'image_urls'>,
+): string[] => {
+  const candidates = [
+    metadata?.imageUrls,
+    metadata?.image_urls,
+    metadata?.images,
+    metadata?.photos,
+    message?.imageUrls,
+    message?.image_urls,
+  ];
   for (const c of candidates) {
     if (Array.isArray(c)) {
       const urls = c.map(u => (typeof u === 'string' ? u : u?.url)).filter((u: unknown): u is string => typeof u === 'string' && !!u);
@@ -200,6 +211,11 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     for (const row of convexThreads || []) {
       const id = String(row?.threadId || '');
       if (!id) continue;
+      // Nest is the source of truth for live thread existence. Convex is only a
+      // cache/enrichment source; accepting cache-only ids resurrects deleted or
+      // expired threads and the next message fetch surfaces "Thread not found".
+      // Keep cache rows only when the live endpoint returned that thread.
+      if (!byId.has(id)) continue;
       const existing = byId.get(id);
       byId.set(id, {
         id,
@@ -1199,7 +1215,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     const createdAt = message.timestamp || message.createdAt || new Date().toISOString();
     const metadata = message.metadata || {};
     const kind = metadata.type === 'action' ? 'action' : 'text';
-    const imageUrls = extractImageUrls(metadata);
+    const imageUrls = extractImageUrls(metadata, message);
 
     return {
       id: message.id,

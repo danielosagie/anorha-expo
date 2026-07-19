@@ -171,6 +171,7 @@ export const retryFailedTurn = (
     clientMessageId,
     kind: target.kind === 'action' ? 'action' : 'message',
     content: target.content,
+    imageUrls: target.imageUrls,
     actionType: target.actionMeta?.actionType,
     actionPayload: target.metadata?.actionPayload as Record<string, unknown> | undefined,
     createdAt: new Date().toISOString(),

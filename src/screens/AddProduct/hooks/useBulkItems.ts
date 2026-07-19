@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  addItemsToFolder,
   cart$,
   createFolderFromShelf,
   reconcileBulkItems,
@@ -68,6 +69,8 @@ export interface UseBulkItems {
   cartTree: CartTreeNode[];
   /** Create a shelf folder of detected items in the shared cart; returns the new ids. */
   createShelfFolder: (input: ShelfFolderInput) => { folderId: string; childIds: string[] };
+  /** Add streamed results to an existing shelf folder. */
+  addShelfItemsToFolder: (folderId: string, items: ShelfFolderInput['items']) => string[];
   /** Dissolve a folder, promoting its children to top-level singles. */
   ungroupFolder: (folderId: string) => void;
   /** Item ids set aside via "Save for later" (excluded from checkout/subtotal). */
@@ -150,6 +153,10 @@ export function useBulkItems(getInitial: () => BulkItemsInitial): UseBulkItems {
   }, []);
 
   const createShelfFolder = useCallback((input: ShelfFolderInput) => createFolderFromShelf(input), []);
+  const addShelfItemsToFolder = useCallback(
+    (folderId: string, items: ShelfFolderInput['items']) => addItemsToFolder(folderId, items),
+    [],
+  );
   const ungroupFolder = useCallback((folderId: string) => storeUngroupFolder(folderId), []);
 
   return {
@@ -167,6 +174,7 @@ export function useBulkItems(getInitial: () => BulkItemsInitial): UseBulkItems {
     setProcessedItemIds,
     cartTree: snapshot.cartTree,
     createShelfFolder,
+    addShelfItemsToFolder,
     ungroupFolder,
     savedForLaterIds: snapshot.savedForLaterIds,
     setItemSavedForLater: storeSetItemSavedForLater,
