@@ -45,6 +45,42 @@ const ACTION_BAR_BOTTOM_OFFSET = 24;
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 
+type SerializedSaveSender = (token: number, isLatest: () => boolean) => Promise<boolean>;
+
+function useLatestSaveSerializer(send: SerializedSaveSender) {
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const stateRef = useRef<{
+    requestToken: number;
+    trailing: boolean;
+    drain: Promise<boolean> | null;
+  }>({ requestToken: 0, trailing: false, drain: null });
+
+  return useCallback((): Promise<boolean> => {
+    const state = stateRef.current;
+    state.requestToken += 1;
+    state.trailing = true;
+    if (!state.drain) {
+      state.drain = (async () => {
+        let latestResult = true;
+        while (state.trailing) {
+          state.trailing = false;
+          const token = state.requestToken;
+          try {
+            latestResult = await sendRef.current(token, () => token === state.requestToken);
+          } catch {
+            latestResult = false;
+          }
+        }
+        return latestResult;
+      })().finally(() => {
+        state.drain = null;
+      });
+    }
+    return state.drain;
+  }, []);
+}
+
 // Feature flag to hide AI refill functionality
 
 
@@ -270,11 +306,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const platformsRef = useRef<GeneratedPlatformDetails>({});
   const [, forceUpdate] = useState({});
   const debounceTimerRef = useRef<any>(null);
-  const draftSaveInFlightRef = useRef<{ json: string; promise: Promise<void> } | null>(null);
   const buildPlatformPayloadRef = useRef<() => any>(() => ({ media: { imageUris: [], coverImageIndex: 0 } }));
   const lastHydratedJobRef = useRef<string | null>(null);
   const lastSavedRef = useRef<string>('');
   const lastScheduledRef = useRef<string | null>(null);
+  const draftEditVersionRef = useRef(0);
   // Surfaced in the header so the user can SEE autosave working (it runs silently otherwise).
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   // The save status rides in the header subtitle transiently, then fades so only the item
@@ -295,6 +331,23 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [generatingPlatformKeys, setGeneratingPlatformKeys] = useState<Set<string>>(new Set());
 
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
+  const editorSessionKey = `${jobId || 'job'}:${currentProductIndex}:${(route.params as any)?.variantId || ''}:${(route.params as any)?.productId || ''}`;
+  const editorGenerationRef = useRef(0);
+  const lastEditorSessionKeyRef = useRef(editorSessionKey);
+  useEffect(() => {
+    if (lastEditorSessionKeyRef.current === editorSessionKey) return;
+    lastEditorSessionKeyRef.current = editorSessionKey;
+    editorGenerationRef.current += 1;
+    platformsRef.current = {};
+    activeRegenJobsRef.current = {};
+    setGeneratingPlatformKeys(new Set());
+    lastHydratedJobRef.current = null;
+    lastSavedRef.current = '';
+    lastScheduledRef.current = null;
+    draftEditVersionRef.current += 1;
+    setSaveState('idle');
+    forceUpdate({});
+  }, [editorSessionKey]);
 
   // Listen for socket updates for ANY regeneration job we started
   const { onJobProgress } = useCollaboration();
@@ -367,6 +420,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const updatePlatforms = (updater: (prev: GeneratedPlatformDetails) => GeneratedPlatformDetails) => {
     platformsRef.current = updater(platformsRef.current);
+    draftEditVersionRef.current += 1;
     forceUpdate({}); // Trigger re-render
     setUpdateCounter(c => c + 1); // Signal content change
     log.debug('[GEN-DETAILS] Updated platforms, triggering auto-save...');
@@ -544,6 +598,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     // every edit (price, category, …) each time they navigated back — the autosave was
     // writing fine, but re-hydration overwrote it on the way back in. Load the local draft
     // first and use it as the existing edits (which win in the smart-merge).
+    const hydrationGeneration = editorGenerationRef.current;
+    const hydrationSessionKey = editorSessionKey;
+    const wasEmptyAtRequest = Object.keys(platformsRef.current || {}).length === 0;
     (async () => {
       let existing: any = platformsRef.current;
       if (!existing || Object.keys(existing).length === 0) {
@@ -559,12 +616,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           } catch { /* ignore */ }
         }
       }
-      const hydrated = hydratePlatformsFromBackend(normalized, existing);
+      if (hydrationGeneration !== editorGenerationRef.current || hydrationSessionKey !== lastEditorSessionKeyRef.current) return;
+      // If the request began against an empty editor but the seller typed while
+      // AsyncStorage was in flight, merge under the CURRENT values instead of
+      // replacing them with the request-time empty snapshot.
+      const draftMerged = hydratePlatformsFromBackend(normalized, existing);
+      const hydrated = wasEmptyAtRequest && Object.keys(platformsRef.current || {}).length > 0
+        ? hydratePlatformsFromBackend(draftMerged, platformsRef.current)
+        : draftMerged;
       log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(hydrated));
       updatePlatforms(() => hydrated);
       lastHydratedJobRef.current = currentJobId;
     })();
-  }, [results, jobId, currentProductIndex]);
+  }, [results, jobId, currentProductIndex, editorSessionKey]);
 
 
   // ========== AUTO-SAVE: local-first, backend when possible ==========
@@ -576,68 +640,68 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const draftKey = variantIdForDraft
     ? `gen-draft:v:${variantIdForDraft}`
     : (jobId ? `gen-draft:j:${jobId}:${currentProductIndex}` : null);
-  const flushDraft = useCallback(async () => {
+  const sendSerializedDraft = useCallback<SerializedSaveSender>(async (_sendToken, isLatest) => {
+    if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return true;
+    const currentJson = JSON.stringify(platformsRef.current);
+    if (currentJson === lastSavedRef.current) return true;
+
+    // Freeze exactly what this send represents. Both storage targets and the
+    // Saved indicator use this same immutable snapshot.
+    const snapshot = JSON.parse(currentJson);
+    const mediaSnapshot = buildPlatformPayloadRef.current().media;
+    const sendEditVersion = draftEditVersionRef.current;
+    const sendGeneration = editorGenerationRef.current;
+    const sendSessionKey = editorSessionKey;
+    const responseIsCurrent = () => isLatest()
+      && sendGeneration === editorGenerationRef.current
+      && sendSessionKey === lastEditorSessionKeyRef.current;
+
+    try {
+      if (responseIsCurrent()) setSaveState('saving');
+      await AsyncStorage.setItem(draftKey, JSON.stringify({ draftData: snapshot, savedAt: Date.now() }));
+
+      const variantId = variantIdForDraft;
+      if (variantId) {
+        const baseUrl = API_BASE_URL;
+        const authToken = await ensureSupabaseJwt();
+        if (baseUrl && authToken) {
+          const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ draftData: snapshot, media: mediaSnapshot }),
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Backend draft failed (${response.status}): ${errorText}`);
+          }
+        }
+      }
+
+      if (responseIsCurrent()) {
+        lastSavedRef.current = currentJson;
+        lastScheduledRef.current = null;
+        setSaveState(draftEditVersionRef.current === sendEditVersion ? 'saved' : 'idle');
+      }
+      log.debug('[GEN-DETAILS AutoSave] ✅ Saved', variantId ? '(local + backend)' : '(local)');
+      return true;
+    } catch (error) {
+      log.error('[GEN-DETAILS AutoSave] ❌ Error:', error);
+      if (responseIsCurrent()) {
+        lastScheduledRef.current = null;
+        setSaveState('error');
+      }
+      return false;
+    }
+  }, [draftKey, variantIdForDraft, editorSessionKey]);
+
+  const requestDraftSave = useLatestSaveSerializer(sendSerializedDraft);
+  const flushDraft = useCallback(async (): Promise<boolean> => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
-    if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return;
-
-    const currentJson = JSON.stringify(platformsRef.current);
-    if (currentJson === lastSavedRef.current) return;
-    if (draftSaveInFlightRef.current?.json === currentJson) {
-      await draftSaveInFlightRef.current.promise;
-      return;
-    }
-    lastScheduledRef.current = currentJson;
-
-    const savePromise = (async () => {
-      try {
-        setSaveState('saving');
-        // 1) Local-first: always persist so unsaved generations survive a reload.
-        await AsyncStorage.setItem(draftKey, JSON.stringify({ draftData: platformsRef.current, savedAt: Date.now() }));
-
-        // 2) Sync to the backend once we have a real variantId.
-        const variantId = variantIdForDraft;
-        if (variantId) {
-          const baseUrl = API_BASE_URL;
-          const token = await ensureSupabaseJwt();
-          if (baseUrl && token) {
-            const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({ draftData: platformsRef.current, media: buildPlatformPayloadRef.current().media }),
-            });
-            if (!response.ok) {
-              const errorText = await response.text();
-              log.error('[GEN-DETAILS AutoSave] ❌ Backend draft failed (local save OK):', response.status, errorText);
-              lastScheduledRef.current = null;
-              setSaveState('error');
-              return;
-            }
-          }
-        }
-
-        lastSavedRef.current = currentJson;
-        lastScheduledRef.current = null;
-        setSaveState('saved');
-        log.debug('[GEN-DETAILS AutoSave] ✅ Saved', variantId ? '(local + backend)' : '(local)');
-      } catch (error) {
-        log.error('[GEN-DETAILS AutoSave] ❌ Error:', error);
-        lastScheduledRef.current = null;
-        setSaveState('error');
-      }
-    })();
-
-    draftSaveInFlightRef.current = { json: currentJson, promise: savePromise };
-    try {
-      await savePromise;
-    } finally {
-      if (draftSaveInFlightRef.current?.promise === savePromise) {
-        draftSaveInFlightRef.current = null;
-      }
-    }
-  }, [draftKey, variantIdForDraft]);
+    return requestDraftSave();
+  }, [requestDraftSave]);
 
   useEffect(() => {
     if (!draftKey || !platformsRef.current || Object.keys(platformsRef.current).length === 0) return;
@@ -673,15 +737,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!draftKey) return;
     let cancelled = false;
+    const restoreGeneration = editorGenerationRef.current;
+    const restoreSessionKey = editorSessionKey;
     (async () => {
       try {
         if (platformsRef.current && Object.keys(platformsRef.current).length > 0) return;
         const raw = await AsyncStorage.getItem(draftKey);
         if (cancelled || !raw) return;
-        if (platformsRef.current && Object.keys(platformsRef.current).length > 0) return;
+        if (restoreGeneration !== editorGenerationRef.current || restoreSessionKey !== lastEditorSessionKeyRef.current) return;
         const parsed = JSON.parse(raw);
         if (parsed?.draftData && Object.keys(parsed.draftData).length > 0) {
-          platformsRef.current = parsed.draftData;
+          platformsRef.current = Object.keys(platformsRef.current || {}).length > 0
+            ? hydratePlatformsFromBackend(parsed.draftData, platformsRef.current)
+            : parsed.draftData;
           lastSavedRef.current = JSON.stringify(parsed.draftData);
           forceUpdate({});
           log.debug('[GEN-DETAILS AutoSave] ↩︎ Restored local draft');
@@ -689,7 +757,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
-  }, [draftKey]);
+  }, [draftKey, editorSessionKey]);
   const platformKeys: string[] = useMemo(() => Object.keys(displayedPlatforms as Record<string, any>), [displayedPlatforms]);
   // Chat-style item switcher dropdown (replaces the old bulk ItemJobsModal here)
   const [itemMenuOpen, setItemMenuOpen] = useState(false);
@@ -723,12 +791,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     updatePlatforms(prev => {
       const updated = { ...prev };
       for (const [platform, fieldChanges] of Object.entries(diff.fixes as Record<string, any>)) {
+        const accepted: Record<string, any> = {};
+        for (const [field, value] of Object.entries(fieldChanges as Record<string, any>)) {
+          const basedOn = diff.changes.find((change) => change.platform === platform && change.field === field)?.before;
+          const current = (prev[platform] as any)?.[field];
+          if (JSON.stringify(current) === JSON.stringify(basedOn)) accepted[field] = value;
+        }
+        if (Object.keys(accepted).length === 0) continue;
         updated[platform] = {
           ...(updated[platform] || {}),
-          ...fieldChanges,
+          ...accepted,
           __refilled: Array.from(new Set([
             ...((updated[platform] as any)?.__refilled || []),
-            ...Object.keys(fieldChanges as Record<string, any>),
+            ...Object.keys(accepted),
           ])),
         };
       }
@@ -1011,6 +1086,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const switchToItem = (idx: number) => {
     setItemMenuOpen(false);
     if (idx === currentProductIndex) return;
+    void flushDraft();
     const targetJobId = itemGenerateJobs[idx]?.jobId;
     if (targetJobId && jobId && targetJobId !== jobId && !hasResultForIndex(idx)) {
       // Item lives on a different generate job — reload this screen against it.
@@ -2047,6 +2123,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const productId = (route.params as any)?.productId || effectiveResult?.productId;
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) return;
+      const regenGeneration = editorGenerationRef.current;
+      const regenSessionKey = editorSessionKey;
+      const regenProductIndex = currentProductIndex;
 
       // Optimistic UI update - start loading
       setGeneratingPlatformKeys(prev => new Set(prev).add(platformKey));
@@ -2084,7 +2163,81 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (regenJobId) {
         log.debug(`[GEN-DETAILS] Started regeneration for ${platformKey}, jobId: ${regenJobId}`);
         activeRegenJobsRef.current[regenJobId] = platformKey;
-        // We return here and let the socket listener handle the rest!
+        // Socket delivery is best-effort. Poll the existing throttled status
+        // endpoint at a conservative cadence so a missed event cannot leave the
+        // platform spinner stuck forever.
+        void (async () => {
+          const deadline = Date.now() + 100_000;
+          while (Date.now() < deadline && activeRegenJobsRef.current[regenJobId] === platformKey) {
+            await new Promise(resolve => setTimeout(resolve, 20_000));
+            if (activeRegenJobsRef.current[regenJobId] !== platformKey) return;
+            if (regenGeneration !== editorGenerationRef.current || regenSessionKey !== lastEditorSessionKeyRef.current) {
+              delete activeRegenJobsRef.current[regenJobId];
+              setGeneratingPlatformKeys(prev => {
+                const next = new Set(prev);
+                next.delete(platformKey);
+                return next;
+              });
+              return;
+            }
+            try {
+              const pollToken = await ensureSupabaseJwt();
+              if (!pollToken) continue;
+              const statusResponse = await fetch(`${baseUrl}/api/products/regenerate/status/${regenJobId}`, {
+                headers: { Authorization: `Bearer ${pollToken}` },
+              });
+              if (!statusResponse.ok) continue;
+              const statusJson = await statusResponse.json().catch(() => null);
+              if (!statusJson) continue;
+              if (statusJson.status === 'completed') {
+                let resultArray = Array.isArray(statusJson.results) ? statusJson.results : [];
+                if (resultArray.length === 0) {
+                  const resultResponse = await fetch(`${baseUrl}/api/products/regenerate/results/${regenJobId}`, {
+                    headers: { Authorization: `Bearer ${pollToken}` },
+                  });
+                  if (resultResponse.ok) {
+                    const resultJson = await resultResponse.json().catch(() => null);
+                    resultArray = Array.isArray(resultJson?.results) ? resultJson.results : [];
+                  }
+                }
+                const matched = resultArray.find((r: any) => (r?.productIndex ?? 0) === regenProductIndex) || resultArray[0];
+                const generated = matched?.platforms?.[platformKey];
+                if (generated) {
+                  const normalized = normalizeForListingEditor(generated);
+                  updatePlatforms(prev => hydratePlatformsFromBackend({ [platformKey]: normalized }, prev));
+                }
+                delete activeRegenJobsRef.current[regenJobId];
+                setGeneratingPlatformKeys(prev => {
+                  const next = new Set(prev);
+                  next.delete(platformKey);
+                  return next;
+                });
+                return;
+              }
+              if (statusJson.status === 'failed' || statusJson.status === 'cancelled') {
+                delete activeRegenJobsRef.current[regenJobId];
+                setGeneratingPlatformKeys(prev => {
+                  const next = new Set(prev);
+                  next.delete(platformKey);
+                  return next;
+                });
+                showErrorModal('Generation failed', `We couldn’t generate ${platformKey} details. Please try again.`, 'error');
+                return;
+              }
+            } catch (pollError) {
+              log.warn('[GEN-DETAILS] Regeneration fallback poll failed:', pollError);
+            }
+          }
+          if (activeRegenJobsRef.current[regenJobId] === platformKey) {
+            delete activeRegenJobsRef.current[regenJobId];
+            setGeneratingPlatformKeys(prev => {
+              const next = new Set(prev);
+              next.delete(platformKey);
+              return next;
+            });
+            showErrorModal('Generation is taking longer', `We couldn’t confirm ${platformKey} finished. Please try again.`, 'warning');
+          }
+        })();
       } else {
         setGeneratingPlatformKeys(prev => {
           const next = new Set(prev);
@@ -2210,6 +2363,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
 
     let canceled = false;
+    const requestGeneration = editorGenerationRef.current;
+    const requestSessionKey = editorSessionKey;
+    const wasEmptyAtRequest = Object.keys(platformsRef.current || {}).length === 0;
     (async () => {
       try {
         const baseUrl = API_BASE_URL;
@@ -2242,10 +2398,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           return;
         }
 
-        if (!canceled) {
+        if (!canceled
+          && requestGeneration === editorGenerationRef.current
+          && requestSessionKey === lastEditorSessionKeyRef.current) {
           log.debug('[GEN-DETAILS DraftLoad] ✅ Loaded draft:', currentDraft.DraftData);
-          // Restore the draft data into platformsRef
-          platformsRef.current = currentDraft.DraftData;
+          const localChangedWhileLoading = wasEmptyAtRequest && Object.keys(platformsRef.current || {}).length > 0;
+          platformsRef.current = localChangedWhileLoading
+            ? hydratePlatformsFromBackend(currentDraft.DraftData, platformsRef.current)
+            : currentDraft.DraftData;
           lastSavedRef.current = JSON.stringify(currentDraft.DraftData);
           lastScheduledRef.current = null;
           forceUpdate({}); // Trigger re-render with restored data
@@ -2256,7 +2416,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     })();
 
     return () => { canceled = true };
-  }, [(route.params as any)?.variantId, results]);
+  }, [(route.params as any)?.variantId, results, editorSessionKey]);
 
 
   const handleImagesChange = (newImages: string[]) => {
@@ -2621,6 +2781,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                       if (!baseUrl || !productId || !token) return;
 
                       const targetPlatform = platformKeys[0];
+                      const quickFixBase = JSON.parse(JSON.stringify(platformsRef.current));
+                      const quickFixGeneration = editorGenerationRef.current;
+                      const quickFixSessionKey = editorSessionKey;
 
                       const res = await fetch(`${baseUrl}/api/products/regenerate/submit`, {
                         method: 'POST',
@@ -2634,13 +2797,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                             regenerateType: 'specific_fields',
                             targetPlatform,
                             userQuery: text,
-                            currentProductData: displayedPlatforms,
+                            currentProductData: quickFixBase,
                           }],
                         }),
                       });
 
                       if (!res.ok) throw new Error('Quick fix failed');
                       const data = await res.json();
+                      if (quickFixGeneration !== editorGenerationRef.current || quickFixSessionKey !== lastEditorSessionKeyRef.current) return;
 
                       // Show the change as a diff to accept — never a silent overwrite.
                       if (data?.results?.[0]?.fixes) {
@@ -2648,7 +2812,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                         const changes: Array<{ platform: string; field: string; before: any; after: any }> = [];
                         for (const [platform, fieldChanges] of Object.entries(fixes)) {
                           for (const [field, after] of Object.entries(fieldChanges as Record<string, any>)) {
-                            const before = (displayedPlatforms as any)?.[platform]?.[field];
+                            const before = quickFixBase?.[platform]?.[field];
                             changes.push({ platform, field, before, after });
                           }
                         }

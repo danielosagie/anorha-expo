@@ -121,6 +121,7 @@ const SyncRulesScreen = () => {
   const attn = hub.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveRequestRef = useRef(0);
   useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current); }, []);
 
   const name = normalizeDisplayName(displayName || platformType || 'Platform');
@@ -179,6 +180,8 @@ const SyncRulesScreen = () => {
 
   // Autosave — merge the change, PUT the full canonical payload, revert on failure.
   const persist = async (next: Rules, prev: Rules) => {
+    const request = ++saveRequestRef.current;
+    if (savedTimer.current) clearTimeout(savedTimer.current);
     setSaveState('saving');
     try {
       const { data: session } = await supabase.auth.getSession();
@@ -203,12 +206,15 @@ const SyncRulesScreen = () => {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`Failed (${res.status})`);
+      if (request !== saveRequestRef.current) return;
       setSaveState('saved');
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSaveState('idle'), 1600);
+      savedTimer.current = setTimeout(() => {
+        if (request === saveRequestRef.current) setSaveState('idle');
+      }, 1600);
     } catch (err) {
       log.error('save sync rules', err);
-      setRules(prev); // roll back the optimistic change
+      if (request !== saveRequestRef.current) return;
+      setRules(prev); // this was the state visible before the latest change
       setSaveState('error');
     }
   };

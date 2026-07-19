@@ -78,6 +78,45 @@ const SSSYNC_API_BASE_URL = API_BASE_URL;
 // Debounced autosave keeps listing/inventory changes live without manual refresh.
 const ENABLE_AUTOSAVE = true;
 
+type SerializedSaveSender = (token: number, isLatest: () => boolean) => Promise<boolean>;
+
+// Single-flight, latest-at-send serializer. Requests made during a send share one
+// trailing pass; incrementing requestToken also invalidates response-side effects
+// from the older pass immediately.
+function useLatestSaveSerializer(send: SerializedSaveSender) {
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const stateRef = useRef<{
+    requestToken: number;
+    trailing: boolean;
+    drain: Promise<boolean> | null;
+  }>({ requestToken: 0, trailing: false, drain: null });
+
+  return useCallback((): Promise<boolean> => {
+    const state = stateRef.current;
+    state.requestToken += 1;
+    state.trailing = true;
+    if (!state.drain) {
+      state.drain = (async () => {
+        let latestResult = true;
+        while (state.trailing) {
+          state.trailing = false;
+          const token = state.requestToken;
+          try {
+            latestResult = await sendRef.current(token, () => token === state.requestToken);
+          } catch {
+            latestResult = false;
+          }
+        }
+        return latestResult;
+      })().finally(() => {
+        state.drain = null;
+      });
+    }
+    return state.drain;
+  }, []);
+}
+
 // 🚨 CRITICAL: ProductDetail should be READ-ONLY
 // It should ONLY read from cached database data (Supabase + PlatformSpecificData)
 // It should NEVER make platform API calls like sync-locations
@@ -302,6 +341,8 @@ const ProductDetailScreen = observer(
     const displayImagesKey = displayImages.join('|');
     useEffect(() => { setOptimisticImages(null); }, [displayImagesKey]);
     const editorImages = optimisticImages ?? displayImages;
+    const editorImagesRef = useRef<string[]>(editorImages);
+    editorImagesRef.current = editorImages;
 
     // Load this variant's ProductImages directly from Supabase (mirrors GenerateDetails).
     // Reliable even when the global productImages$ observable hasn't synced this item.
@@ -414,12 +455,17 @@ const ProductDetailScreen = observer(
 
     // Auto-save state (no more manual editing mode)
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const hasUnsavedChangesRef = useRef(false);
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaveTime, setLastSaveTime] = useState<number>(0);
     const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // Quiet "Saved" confirmation that fades out ~5s after the last save (no persistent badge).
     const savedOpacity = useRef(new Animated.Value(0)).current;
     const editVersionRef = useRef(0);
+    const photoVersionRef = useRef(0);
+    const textSaveRequestedRef = useRef(false);
+    const photoSaveRequestedRef = useRef(false);
     const [isUploadingImages, setIsUploadingImages] = useState(false);
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
     const scrollViewRef = useRef<ScrollView | null>(null);
@@ -546,6 +592,8 @@ const ProductDetailScreen = observer(
     // ========== CRITICAL FIX: useRef for data persistence + auto-save ==========
     const [updateCounter, setUpdateCounter] = useState(0);
     const [displayedPlatforms, setDisplayedPlatforms] = useState<Record<string, any>>({});
+    const displayedPlatformsRef = useRef<Record<string, any>>({});
+    displayedPlatformsRef.current = displayedPlatforms;
     const [, forceUpdate] = useState({});
 
     // Seed a canonical platform from detailedItem the moment we have the product, so the
@@ -573,7 +621,9 @@ const ProductDetailScreen = observer(
     // const displayedPlatforms = platformsRef.current; // This line is removed
 
     const updatePlatforms = (updater: (prev: Record<string, any>) => Record<string, any>) => {
-      setDisplayedPlatforms(updater);
+      const next = updater(displayedPlatformsRef.current);
+      displayedPlatformsRef.current = next;
+      setDisplayedPlatforms(next);
       forceUpdate({}); // Trigger re-render
       setUpdateCounter(c => c + 1); // Signal content change
       log.debug('[ProductDetail] Updated platforms, triggering auto-save...');
@@ -735,6 +785,10 @@ const ProductDetailScreen = observer(
       IsTaxable: true,
       TaxCode: '',
     });
+    const detailedItemRef = useRef(detailedItem);
+    const formDataRef = useRef(formData);
+    detailedItemRef.current = detailedItem;
+    formDataRef.current = formData;
 
     // NOTE: editVersionRef is bumped ONLY on a genuine user edit (in
     // ListingEditorForm's onChangePlatforms), NOT here. Bumping it on every
@@ -1648,159 +1702,119 @@ const ProductDetailScreen = observer(
       return locsByPlatform;
     }, [allPlatformLocations, connections, groupedInventory, platformLocationNames, detailedItem]);
 
-    // Auto-save function with proper API call
-    // Note: Pricing validation is flexible - either flat price OR all variants have prices
-    // This allows: Shopify with variants at different prices, Square with flat price, etc.
-    const performAutoSave = useCallback(async () => {
-      if (!detailedItem || !hasUnsavedChanges) {
-        log.debug('[ProductDetail] Skipping auto-save: no item or no changes');
-        return;
-      }
+    const sendSerializedProductSave = useCallback<SerializedSaveSender>(async (_sendToken, isLatest) => {
+      const saveText = textSaveRequestedRef.current;
+      const savePhotos = photoSaveRequestedRef.current;
+      textSaveRequestedRef.current = false;
+      photoSaveRequestedRef.current = false;
+      if (!saveText && !savePhotos) return true;
+
+      const item = detailedItemRef.current;
+      if (!item) return false;
       const saveStartEditVersion = editVersionRef.current;
+      const saveStartPhotoVersion = photoVersionRef.current;
+      const platformSnapshot = JSON.parse(JSON.stringify(displayedPlatformsRef.current || {}));
+      const currentForm = { ...formDataRef.current };
+      const imageSnapshot = [...editorImagesRef.current];
+      const cleanedPlatformData = cleanPlatformDataForSave(platformSnapshot);
+      const canonicalKey = Object.keys(platformSnapshot).includes('shopify') ? 'shopify' : Object.keys(platformSnapshot)[0];
+      const canonical = platformSnapshot[canonicalKey] || {};
+      const updateData: Record<string, any> = {};
 
-      log.debug('[ProductDetail] ========== SAVE START ==========');
-      log.debug('[ProductDetail] detailedItem BEFORE save:', JSON.stringify(detailedItem, null, 2).slice(0, 500));
-      log.debug('[ProductDetail] displayedPlatforms BEFORE save:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
-      log.debug('[ProductDetail] Starting auto-save for product:', detailedItem.Id);
-      setIsSaving(true);
-      try {
-        const token = await ensureSupabaseJwt();
-
-        if (!token) {
-          log.error('No authentication token available');
-          setSaveError('Not signed in — changes not saved');
-          return;
-        }
-
-        // CRITICAL FIX: Use displayedPlatforms data from ListingEditorForm, not just formData
-        // Extract canonical data from shopify platform (or first available)
-        const canonicalKey = Object.keys(displayedPlatforms).includes('shopify') ? 'shopify' : Object.keys(displayedPlatforms)[0];
-        const canonical = displayedPlatforms[canonicalKey] || {};
-
-        // Prepare update data - using the correct API structure from the backend
-        // CRITICAL FIX: Clean platform data to remove cross-platform location contamination
-        const cleanedPlatformData = cleanPlatformDataForSave(displayedPlatforms);
-
-        const updateData = {
-          Title: canonical.title || formData.Title,
-          Description: canonical.description || formData.Description,
-          Price: canonical.price !== undefined && canonical.price !== '' && !isNaN(Number(canonical.price)) ? Number(canonical.price) : formData.Price,
-          CompareAtPrice: canonical.compareAtPrice !== undefined && canonical.compareAtPrice !== '' && !isNaN(Number(canonical.compareAtPrice)) ? Number(canonical.compareAtPrice) : formData.CompareAtPrice,
-          Sku: canonical.sku || formData.Sku,
-          Barcode: canonical.barcode || formData.Barcode,
-          Weight: canonical.weight !== undefined && canonical.weight !== '' && !isNaN(Number(canonical.weight)) ? Number(canonical.weight) : formData.Weight,
-          WeightUnit: canonical.weightUnit || formData.WeightUnit,
-          RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : formData.RequiresShipping,
-          IsTaxable: formData.IsTaxable,
-          TaxCode: formData.TaxCode,
-          // IMPORTANT: Include CLEANED platform-specific data (variants, options, tags, etc)
-          // This prevents cross-platform location contamination from 'all' tab edits
+      if (saveText) {
+        Object.assign(updateData, {
+          Title: canonical.title || currentForm.Title,
+          Description: canonical.description || currentForm.Description,
+          Price: canonical.price !== undefined && canonical.price !== '' && !isNaN(Number(canonical.price)) ? Number(canonical.price) : currentForm.Price,
+          CompareAtPrice: canonical.compareAtPrice !== undefined && canonical.compareAtPrice !== '' && !isNaN(Number(canonical.compareAtPrice)) ? Number(canonical.compareAtPrice) : currentForm.CompareAtPrice,
+          Sku: canonical.sku || currentForm.Sku,
+          Barcode: canonical.barcode || currentForm.Barcode,
+          Weight: canonical.weight !== undefined && canonical.weight !== '' && !isNaN(Number(canonical.weight)) ? Number(canonical.weight) : currentForm.Weight,
+          WeightUnit: canonical.weightUnit || currentForm.WeightUnit,
+          RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : currentForm.RequiresShipping,
+          IsTaxable: currentForm.IsTaxable,
+          TaxCode: currentForm.TaxCode,
           PlatformSpecificData: cleanedPlatformData,
           Tags: canonical.tags || [],
           Vendor: canonical.vendor,
           ProductType: canonical.productType,
-        };
+        });
+        setIsSaving(true);
+      }
+      if (savePhotos) updateData.ImageUrls = imageSnapshot;
 
-        log.debug('Auto-saving product with full platform data:', detailedItem.Id, updateData);
-
-        // Update in our API
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
+      try {
+        const authToken = await ensureSupabaseJwt();
+        if (!authToken) throw new Error('Not signed in. Changes not saved');
+        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${item.Id}`, {
           method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(updateData),
         });
-
-        // Read the body once — the PUT /:id endpoint runs the platform sync
-        // synchronously and returns the real per-platform outcome in the body
-        // (syncStatus.platforms + a warnings[] of failures), not just a status code.
         const saveResult = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(saveResult?.message || `Failed to update product. Status: ${response.status}`);
+        if (!isLatest()) return true;
 
-        if (!response.ok) {
-          throw new Error(saveResult?.message || `Failed to update product. Status: ${response.status}`);
-        }
-
-        // The canonical save succeeded (response.ok). If a platform PUSH failed the
-        // backend still returns 200 with warnings[] — keep the saved state (the save
-        // DID succeed) but surface a calm, non-blocking notice and refresh the mappings
-        // so the Active Channels dot (which reads SyncStatus) reflects the failure.
-        const failedPlatforms: any[] = Array.isArray(saveResult?.warnings)
-          ? saveResult.warnings
-          : (saveResult?.syncStatus?.platforms || []).filter(
-              (p: any) => p?.status === 'error' || (Array.isArray(p?.errors) && p.errors.length > 0),
-            );
-        if (failedPlatforms.length > 0) {
-          const names = failedPlatforms
-            .map((p: any) => {
+        justSavedTimestampRef.current = Date.now();
+        if (saveText) {
+          const failedPlatforms: any[] = Array.isArray(saveResult?.warnings)
+            ? saveResult.warnings
+            : (saveResult?.syncStatus?.platforms || []).filter(
+                (p: any) => p?.status === 'error' || (Array.isArray(p?.errors) && p.errors.length > 0),
+              );
+          if (failedPlatforms.length > 0) {
+            const names = failedPlatforms.map((p: any) => {
               const name = (p?.platform || '').toString();
               return name ? name.charAt(0).toUpperCase() + name.slice(1) : 'a channel';
-            })
-            .filter((v, i, arr) => arr.indexOf(v) === i);
-          const label = names.length <= 1
-            ? (names[0] || 'a channel')
-            : `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
-          showBanner(`Saved — didn’t reach ${label}`, true);
-          loadPlatformData().catch(() => {});
-        } else {
-          log.debug('[ProductDetail] Product updated successfully; all platform pushes reported success.');
-        }
+            }).filter((v: string, i: number, arr: string[]) => arr.indexOf(v) === i);
+            const label = names.length <= 1 ? (names[0] || 'a channel') : `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+            showBanner(`Saved — didn’t reach ${label}`, true);
+            loadPlatformData().catch(() => {});
+          }
 
-        // Do NOT update Supabase directly - the real-time subscription will handle it
-        // The backend automatically triggers updates via database triggers
-
-        // Update local state
-        // ✅ CRITICAL FIX: Set timestamp BEFORE updating state to prevent realtime from overwriting during save
-        // Using timestamp-based blocking (2 second window) instead of boolean to prevent race conditions
-        justSavedTimestampRef.current = Date.now();
-        log.debug('[ProductDetail] Set save blocking timestamp:', justSavedTimestampRef.current);
-
-        log.debug('[ProductDetail] updateData being set:', JSON.stringify(updateData, null, 2).slice(0, 500));
-        log.debug('[ProductDetail] displayedPlatforms being set:', JSON.stringify(displayedPlatforms, null, 2).slice(0, 500));
-
-        // ✅ CRITICAL FIX: Use a function to merge state properly
-        // This prevents losing data like ImageUrls, Options, Metadata that aren't in updateData
-        setDetailedItem(prev => {
-          log.debug('[ProductDetail] setDetailedItem called with prev:', JSON.stringify(prev, null, 2).slice(0, 300));
-          if (!prev) return prev;
-          const merged = {
-            ...prev,              // ← Keep ALL existing fields (ImageUrls, Options, Metadata, etc.)
-            ...updateData,        // ← Override only the fields that changed
-            // Write platform data into Metadata.platformSpecificData — the SAME key
-            // the reload hydration reads. The old orphan top-level PlatformSpecificData
-            // was ignored by every reader, so the in-memory edit looked reverted on re-entry.
+          setDetailedItem(prev => prev ? ({
+            ...prev,
+            ...updateData,
             Metadata: { ...(prev as any).Metadata, platformSpecificData: cleanedPlatformData },
-          };
-          log.debug('[ProductDetail] setDetailedItem merged result:', JSON.stringify(merged, null, 2).slice(0, 300));
-          return merged as ProductVariant;
-        });
-
-        if (editVersionRef.current === saveStartEditVersion) {
-          setHasUnsavedChanges(false);
-        } else {
-          log.debug('[ProductDetail] Save completed but local edits changed during request; keeping unsaved state');
-          setHasUnsavedChanges(true);
+          } as ProductVariant) : prev);
+          const textStillCurrent = editVersionRef.current === saveStartEditVersion;
+          hasUnsavedChangesRef.current = !textStillCurrent;
+          setHasUnsavedChanges(!textStillCurrent);
+          setLastSaveTime(Date.now());
+          setSaveError(null);
+          setDraftData(null);
+        } else if (savePhotos && photoVersionRef.current === saveStartPhotoVersion) {
+          // Photo persistence is independent of text dirtiness. Never clear the
+          // product-wide text dirty flag after a gallery-only save.
+          setDetailedItem(prev => prev ? { ...prev } : prev);
         }
-        setLastSaveTime(Date.now());
-        setSaveError(null);
-
-        // CRITICAL FIX: Clear draft data after successful save
-        // This fixes the "Changes not published" message persisting
-        setDraftData(null);
-
-        log.debug('[ProductDetail] ========== SAVE END ==========');
-
+        return true;
       } catch (error) {
-        log.error('Auto-save failed:', error);
-        // Surface the failure instead of silently dropping the edit: keep the
-        // dirty flag so the change isn't lost, and show a retryable error.
-        setHasUnsavedChanges(true);
-        setSaveError(error instanceof Error ? error.message : 'Save failed');
+        log.error('Serialized product save failed:', error);
+        if (isLatest()) {
+          if (saveText) {
+            hasUnsavedChangesRef.current = true;
+            setHasUnsavedChanges(true);
+            setSaveError(error instanceof Error ? error.message : 'Save failed');
+          }
+          if (savePhotos) setOptimisticImages(null);
+        }
+        return false;
       } finally {
-        setIsSaving(false);
+        if (isLatest()) setIsSaving(false);
       }
-    }, [detailedItem, formData, hasUnsavedChanges, displayedPlatforms, showBanner, loadPlatformData]);
+    }, [showBanner, loadPlatformData]);
+
+    const requestProductSave = useLatestSaveSerializer(sendSerializedProductSave);
+
+    // Truthful save result for publish/generation/exit; background callers simply
+    // ignore false and leave the dirty/error state intact.
+    const performAutoSave = useCallback(async (): Promise<boolean> => {
+      if (!detailedItemRef.current) return false;
+      if (!hasUnsavedChangesRef.current) return true;
+      textSaveRequestedRef.current = true;
+      return requestProductSave();
+    }, [requestProductSave]);
 
     // ── Per-platform override save path ─────────────────────────────────────
     // Separate from performAutoSave: an edit on a specific platform tab targets ONE
@@ -1930,42 +1944,63 @@ const ProductDetailScreen = observer(
       });
     }, [fetchedOverrides, sessionOverrides, connections]);
 
-    // Flush the debounced pending overrides — one PUT per connection.
-    const flushPendingOverrides = useCallback(async () => {
-      if (!detailedItem) return;
+    // Flush the debounced pending overrides — one PUT per connection, serialized
+    // as a batch. Failed fields are merged back under any newer pending values.
+    const sendSerializedOverrides = useCallback<SerializedSaveSender>(async (_sendToken, isLatest) => {
+      const item = detailedItemRef.current;
+      if (!item) return false;
       const entries = Array.from(pendingOverridesRef.current.entries());
       pendingOverridesRef.current.clear();
-      if (entries.length === 0) return;
-      const productId = detailedItem.ProductId;
-      const variantId = detailedItem.Id;
+      if (entries.length === 0) return true;
+      const productId = item.ProductId;
+      const variantId = item.Id;
       let anyRefresh = false;
+      let allSucceeded = true;
       for (const [connectionId, fields] of entries) {
         const label = platformLabelForConnection(connectionId);
         try {
           const { ok, data } = await savePlatformOverride(productId, variantId, connectionId, fields);
           if (!ok || !data?.success) {
-            showBanner(`Couldn’t save custom ${label} details`, false);
+            const newer = pendingOverridesRef.current.get(connectionId) || {};
+            pendingOverridesRef.current.set(connectionId, { ...fields, ...newer });
+            allSucceeded = false;
+            if (isLatest()) showBanner(`Couldn’t save custom ${label} details`, false);
             continue;
           }
-          setSessionOverrides((prev) => ({
-            ...prev,
-            [connectionId]: mergeConfirmedOverride(prev[connectionId], fields, data.overrides),
-          }));
+          if (isLatest()) {
+            setSessionOverrides((prev) => ({
+              ...prev,
+              [connectionId]: mergeConfirmedOverride(prev[connectionId], fields, data.overrides),
+            }));
+          }
           // pushed:false = the override SAVED but the live push failed. Calm notice, and the
           // refresh below repaints the Active Channels dot from the new SyncStatus.
-          if (data.pushed === false) {
+          if (data.pushed === false && isLatest()) {
             showBanner(`Saved for ${label} — didn’t reach ${label}`, true);
           }
           anyRefresh = true;
         } catch {
-          showBanner(`Couldn’t save custom ${label} details`, false);
+          const newer = pendingOverridesRef.current.get(connectionId) || {};
+          pendingOverridesRef.current.set(connectionId, { ...fields, ...newer });
+          allSucceeded = false;
+          if (isLatest()) showBanner(`Couldn’t save custom ${label} details`, false);
         }
       }
-      if (anyRefresh) loadPlatformData().catch(() => {});
+      if (anyRefresh) {
+        loadPlatformData().catch(() => {});
+        refreshOverridesFnRef.current();
+      }
+      return allSucceeded;
     }, [detailedItem, platformLabelForConnection, showBanner, loadPlatformData, mergeConfirmedOverride]);
 
+    const requestOverrideFlush = useLatestSaveSerializer(sendSerializedOverrides);
+    const flushPendingOverrides = useCallback(async (): Promise<boolean> => {
+      if (pendingOverridesRef.current.size === 0) return true;
+      return requestOverrideFlush();
+    }, [requestOverrideFlush]);
+
     // Always fire the latest flush closure from the debounce timer.
-    const flushOverridesRef = useRef<() => Promise<void>>(async () => {});
+    const flushOverridesRef = useRef<() => Promise<boolean>>(async () => true);
     useEffect(() => {
       flushOverridesRef.current = flushPendingOverrides;
     }, [flushPendingOverrides]);
@@ -1989,7 +2024,8 @@ const ProductDetailScreen = observer(
         const keys = Object.keys(next).filter(
           (k) => typeof k === 'string' && k.trim().length > 0 && k.toLowerCase() !== 'pool',
         );
-        if (keys.length < 2) return null;
+        const availableKeys = Object.keys(prev).filter((k) => k.toLowerCase() !== 'pool');
+        if (availableKeys.length < 2) return null;
         const changed: Array<{ platformKey: string; fields: PlatformOverrideValues }> = [];
         for (const k of keys) {
           const diff = diffOverrideFields(prev[k], next[k]);
@@ -2067,11 +2103,11 @@ const ProductDetailScreen = observer(
       };
     }, [hasUnsavedChanges, isSaving, saveError, performAutoSave]);
 
-    const performAutoSaveRef = useRef<() => Promise<void>>(async () => {});
+    const performAutoSaveRef = useRef<() => Promise<boolean>>(async () => true);
     performAutoSaveRef.current = performAutoSave;
-    const exitSavePromiseRef = useRef<Promise<void> | null>(null);
-    const flushPendingSaves = useCallback(() => {
-      if (exitSavePromiseRef.current) return;
+    const exitSavePromiseRef = useRef<Promise<boolean> | null>(null);
+    const flushPendingSaves = useCallback((): Promise<boolean> => {
+      if (exitSavePromiseRef.current) return exitSavePromiseRef.current;
       if (overrideSaveTimeoutRef.current) {
         clearTimeout(overrideSaveTimeoutRef.current);
         overrideSaveTimeoutRef.current = null;
@@ -2083,20 +2119,35 @@ const ProductDetailScreen = observer(
       const promise = Promise.all([
         flushOverridesRef.current(),
         performAutoSaveRef.current(),
-      ]).then(() => undefined);
+      ]).then((results) => results.every(Boolean));
       exitSavePromiseRef.current = promise;
       void promise.finally(() => {
         if (exitSavePromiseRef.current === promise) exitSavePromiseRef.current = null;
       });
+      return promise;
     }, []);
 
     useEffect(() => {
-      const removeBeforeRemove = (navigation as any).addListener('beforeRemove', flushPendingSaves);
-      const removeBlur = (navigation as any).addListener('blur', flushPendingSaves);
+      let allowNextRemove = false;
+      let exitPending = false;
+      const removeBeforeRemove = (navigation as any).addListener('beforeRemove', (event: any) => {
+        if (allowNextRemove) return;
+        event.preventDefault();
+        if (exitPending) return;
+        exitPending = true;
+        void Promise.race<boolean>([
+          flushPendingSaves(),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
+        ]).finally(() => {
+          allowNextRemove = true;
+          (navigation as any).dispatch(event.data.action);
+        });
+      });
+      const removeBlur = (navigation as any).addListener('blur', () => { void flushPendingSaves(); });
       return () => {
         removeBeforeRemove();
         removeBlur();
-        flushPendingSaves();
+        void flushPendingSaves();
       };
     }, [navigation, flushPendingSaves]);
 
@@ -2281,10 +2332,8 @@ const ProductDetailScreen = observer(
 
       try {
         // 1. Auto-save first to ensure DB matches UI (prevents state loss on refresh)
-        if (hasUnsavedChanges) {
-          log.debug('[ProductDetail] Auto-saving before generation...');
-          await performAutoSave();
-        }
+        log.debug('[ProductDetail] Ensuring latest edits are saved before generation...');
+        if (!(await performAutoSave())) throw new Error('Could not save the latest edits before generation');
 
         const token = await ensureSupabaseJwt();
         if (!token) {
@@ -2391,10 +2440,8 @@ const ProductDetailScreen = observer(
       try {
         // 1. Auto-save first to ensure DB matches UI
         // This prevents "state loss" if the page refreshes from DB after publish
-        if (hasUnsavedChanges) {
-          log.debug('[ProductDetail] Auto-saving before publish...');
-          await performAutoSave();
-        }
+        log.debug('[ProductDetail] Ensuring latest edits are saved before publish...');
+        if (!(await performAutoSave())) throw new Error('Could not save the latest edits before publishing');
 
         const token = await ensureSupabaseJwt();
         if (!token) {
@@ -2711,6 +2758,8 @@ const ProductDetailScreen = observer(
       setDetailedItem(prev => {
         if (!prev) return prev;
         const updated = { ...prev, [field]: value } as ProductVariant;
+        editVersionRef.current += 1;
+        hasUnsavedChangesRef.current = true;
         setHasUnsavedChanges(true);
         return updated;
       });
@@ -2773,6 +2822,25 @@ const ProductDetailScreen = observer(
     }, [detailedItem]);
 
     // Image management functions
+    const applyEditorImageUpdate = useCallback((updater: (current: string[]) => string[]) => {
+      const previous = editorImagesRef.current;
+      const next = Array.from(new Set(updater(previous).filter(Boolean)));
+      editorImagesRef.current = next;
+      photoVersionRef.current += 1;
+      setOptimisticImages((currentOptimistic) => {
+        const current = currentOptimistic ?? previous;
+        const functionalNext = Array.from(new Set(updater(current).filter(Boolean)));
+        editorImagesRef.current = functionalNext;
+        return functionalNext;
+      });
+      return next;
+    }, []);
+
+    const persistPhotoGallery = useCallback(async (): Promise<boolean> => {
+      photoSaveRequestedRef.current = true;
+      return requestProductSave();
+    }, [requestProductSave]);
+
     const pickImagesFromLibrary = async () => {
       try {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -2870,31 +2938,8 @@ const ProductDetailScreen = observer(
       if (!detailedItem || imageUrls.length === 0) return;
 
       try {
-        const currentImages = displayImages;
-        const updatedImages = [...currentImages, ...imageUrls];
-
-        const updateData = { ImageUrls: updatedImages };
-
-        // Update via API
-        const token = await ensureSupabaseJwt();
-        if (!token) throw new Error('Authentication required');
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updateData),
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to update product images');
-        }
-
-        // Update local state
-        setDetailedItem(prev => prev ? { ...prev } : prev);
-        // displayImages will refresh from productImages$ after sync
-
+        applyEditorImageUpdate(current => [...current, ...imageUrls]);
+        if (!(await persistPhotoGallery())) throw new Error('Failed to update product images');
         Alert.alert('Success', `Added ${imageUrls.length} image(s) to product`);
       } catch (error) {
         log.error('Error adding images to product:', error);
@@ -2903,33 +2948,11 @@ const ProductDetailScreen = observer(
     };
 
     const removeImage = async (imageIndex: number) => {
-      if (!detailedItem || displayImages.length === 0) return;
+      if (!detailedItem || editorImagesRef.current.length === 0) return;
 
       try {
-        const updatedImages = displayImages.filter((_, index) => index !== imageIndex);
-        const updateData = { ImageUrls: updatedImages };
-
-        // Update via API
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
-        if (!token) throw new Error('Authentication required');
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updateData),
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to update product images');
-        }
-
-        // Update local state
-        setDetailedItem(prev => prev ? { ...prev } : prev);
-        // displayImages will refresh from productImages$ after sync
-
+        applyEditorImageUpdate(current => current.filter((_, index) => index !== imageIndex));
+        if (!(await persistPhotoGallery())) throw new Error('Failed to update product images');
         Alert.alert('Success', 'Image removed from product');
       } catch (error) {
         log.error('Error removing image:', error);
@@ -2940,22 +2963,8 @@ const ProductDetailScreen = observer(
     const reorderImages = async (nextImageUrls: string[]) => {
       if (!detailedItem) return;
       try {
-        const session = await supabase.auth.getSession();
-        const token = session?.data.session?.access_token;
-        const updateData = { ImageUrls: nextImageUrls };
-        if (!token) throw new Error('Authentication required');
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updateData),
-        });
-        if (!response.ok) throw new Error('Failed to reorder images');
-        setDetailedItem(prev => prev ? { ...prev } : prev);
-        // displayImages will refresh from productImages$ after sync
-        setHasUnsavedChanges(false);
+        applyEditorImageUpdate(() => nextImageUrls);
+        if (!(await persistPhotoGallery())) throw new Error('Failed to reorder images');
       } catch (error) {
         log.error('Error reordering images:', error);
         setOptimisticImages(null);
@@ -3823,13 +3832,8 @@ const ProductDetailScreen = observer(
       return () => { canceled = true };
     }, [detailedItem?.Id, hasUnsavedChanges]); // ONLY depend on product ID - NOT displayedPlatforms!
 
-    // Set up realtime subscriptions
-    // Use refs to track state to avoid stale closure issues
-    const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
-
-    useEffect(() => {
-      hasUnsavedChangesRef.current = hasUnsavedChanges;
-    }, [hasUnsavedChanges]);
+    // Set up realtime subscriptions. hasUnsavedChangesRef is declared with the
+    // save state above so the serializer and realtime deferral share one source.
 
     const scheduleDeferredExternalReload = useCallback((reason: string) => {
       pendingExternalReloadRef.current = true;
@@ -4571,6 +4575,7 @@ const ProductDetailScreen = observer(
                 if (override) {
                   queueOverrideSave(override.connectionId, override.fields);
                 } else {
+                  hasUnsavedChangesRef.current = true;
                   setHasUnsavedChanges(true);
                 }
                 // DEEP merge ONLY (no eager setDisplayedPlatforms(next) — that made the
@@ -4638,12 +4643,12 @@ const ProductDetailScreen = observer(
                   return merged;
                 });
               }}
-              onChangeImages={(next) => { setOptimisticImages(next); reorderImages(next); }}
+              onChangeImages={(next) => { void reorderImages(next); }}
               pendingImages={pendingImages}
               onOpenBarcodeScanner={(onResult) => {
                 openBarcodeScanner(onResult);
               }}
-              onOpenImageCapture={async (onResult) => {
+              onOpenImageCapture={async (_onResult) => {
                 try {
                   const assets = await captureOrPickImageAssets({ multiple: true });
                   if (!assets.length) return;
@@ -4652,10 +4657,12 @@ const ProductDetailScreen = observer(
                   setPendingImages(prev => [...prev, ...localUris]);
                   try {
                     const uploadedUrls = await uploadImagesToSupabase(assets);
-                    // onResult appends to the editor's images → onChangeImages → reorderImages
-                    // persists the full ImageUrls array. (No separate addImagesToProduct call —
-                    // that double-PUT raced and popped a redundant success Alert.)
-                    if (uploadedUrls.length > 0) onResult(uploadedUrls);
+                    // Append against the CURRENT gallery, not the list captured when upload
+                    // started. A remove/reorder performed during upload therefore survives.
+                    if (uploadedUrls.length > 0) {
+                      applyEditorImageUpdate(current => [...current, ...uploadedUrls]);
+                      if (!(await persistPhotoGallery())) throw new Error('Failed to save uploaded photos');
+                    }
                   } finally {
                     setPendingImages(prev => prev.filter(uri => !localUris.includes(uri)));
                     setIsUploadingImages(false);

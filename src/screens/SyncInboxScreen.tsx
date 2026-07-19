@@ -53,23 +53,26 @@ const SyncInboxScreen: React.FC = () => {
   // persisted. (The deck's own optimistic tally counts a card the instant it's
   // swiped, before the server answers; we no longer trust it for the summary.)
   const confirmedRef = useRef<Record<string, SyncItem['resolution']['kind']>>({});
+  const resolveAttemptRef = useRef<Record<string, number>>({});
 
   // A failed resolve refreshes+rolls back in the hook; surface it to the user
-  // too, and DON'T record it. Swallow the rejection (return null) so the deck's
-  // fire-and-forget commit doesn't produce an unhandled rejection. Reaching the
+  // too, and DON'T record it. Reaching the
   // line after `await resolve(...)` means the hook did NOT throw: the item is
-  // settled — a 200 removed the row, or a 409 reconciled it (already resolved on
-  // another device). Both count as confirmed; only the caught-failure branch,
-  // which rolled the row back, is excluded.
+  // settled and the row was removed. The caught-failure branch is excluded.
   const resolveSafe = useCallback(
     async (platformId: string, choice: SyncItem['resolution']['kind'], canonicalId?: string) => {
+      const attempt = (resolveAttemptRef.current[platformId] ?? 0) + 1;
+      resolveAttemptRef.current[platformId] = attempt;
       try {
         const res = await resolve(platformId, choice, canonicalId);
-        confirmedRef.current[platformId] = choice;
+        if (resolveAttemptRef.current[platformId] === attempt) confirmedRef.current[platformId] = choice;
         return res;
-      } catch {
-        setResolveErrorVisible(true);
-        return null;
+      } catch (error) {
+        if (resolveAttemptRef.current[platformId] === attempt) {
+          delete confirmedRef.current[platformId];
+          setResolveErrorVisible(true);
+        }
+        throw error;
       }
     },
     [resolve],

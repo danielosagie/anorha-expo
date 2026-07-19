@@ -404,6 +404,8 @@ export const PRESET_OPTIONS = [
 ];
 
 function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish }: Props, ref: React.Ref<ListingEditorFormRef>) {
+  const latestPlatformsRef = useRef(platforms);
+  latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
   const fieldYOffsets = useRef<Record<string, number>>({});
   const platformKeys = useMemo(() => {
@@ -1257,18 +1259,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   ]);
 
   const patchField = (key: string, value: any) => {
+    const current = latestPlatformsRef.current;
     if (activeTab === 'all') {
-      // When in "all" mode, update all platforms
-      const next = { ...platforms };
+      // Emit only the changed field for each platform. The parent applies these
+      // patches to its latest state, so separately debounced fields cannot replace
+      // one another with render-time whole-platform snapshots.
+      const next: PlatformsData = {};
       for (const platformKey of platformKeys) {
-        next[platformKey] = { ...(platforms[platformKey] || {}), [key]: value };
+        next[platformKey] = { [key]: value };
       }
+      latestPlatformsRef.current = Object.fromEntries(Object.entries(current).map(([platformKey, data]) => [
+        platformKey,
+        platformKeys.includes(platformKey) ? { ...(data || {}), [key]: value } : data,
+      ]));
       onChangePlatforms(next);
     } else {
-      // Update only the active platform
       const keyToEdit = activePlatformKey;
-      const next = { ...platforms, [keyToEdit]: { ...(platforms[keyToEdit] || {}), [key]: value } };
-      onChangePlatforms(next);
+      latestPlatformsRef.current = {
+        ...current,
+        [keyToEdit]: { ...(current[keyToEdit] || {}), [key]: value },
+      };
+      onChangePlatforms({ [keyToEdit]: { [key]: value } });
     }
   };
 
@@ -1277,27 +1288,41 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // closure, so the second write clobbered the first (e.g. the price chip set the price
   // and then the band write reset it — the chip appeared to do nothing).
   const patchFields = (patch: Record<string, any>) => {
+    const current = latestPlatformsRef.current;
     if (activeTab === 'all') {
-      const next = { ...platforms };
+      const next: PlatformsData = {};
       for (const platformKey of platformKeys) {
-        next[platformKey] = { ...(platforms[platformKey] || {}), ...patch };
+        next[platformKey] = patch;
       }
+      latestPlatformsRef.current = Object.fromEntries(Object.entries(current).map(([platformKey, data]) => [
+        platformKey,
+        platformKeys.includes(platformKey) ? { ...(data || {}), ...patch } : data,
+      ]));
       onChangePlatforms(next);
     } else {
       const keyToEdit = activePlatformKey;
-      const next = { ...platforms, [keyToEdit]: { ...(platforms[keyToEdit] || {}), ...patch } };
-      onChangePlatforms(next);
+      latestPlatformsRef.current = {
+        ...current,
+        [keyToEdit]: { ...(current[keyToEdit] || {}), ...patch },
+      };
+      onChangePlatforms({ [keyToEdit]: patch });
     }
   };
 
   const patchPlatform = (updater: (prev: PlatformState) => PlatformState) => {
-    const prev = (platforms[activePlatformKey] || {}) as PlatformState;
+    const current = latestPlatformsRef.current;
+    const prev = (current[activePlatformKey] || {}) as PlatformState;
     const nextPlatform = updater(prev);
     log.debug(`[PATCH] ${activePlatformKey}: variants before=${(prev.variants || []).length}, after=${(nextPlatform.variants || []).length}`);
     if (nextPlatform.variants?.length) {
       log.debug(`[PATCH] First variant inv keys:`, Object.keys(nextPlatform.variants[0]?.inventoryByLocation || {}));
     }
-    onChangePlatforms({ ...platforms, [activePlatformKey]: nextPlatform });
+    const minimalPatch: Record<string, any> = {};
+    for (const key of new Set([...Object.keys(prev), ...Object.keys(nextPlatform)])) {
+      if ((prev as any)[key] !== (nextPlatform as any)[key]) minimalPatch[key] = (nextPlatform as any)[key];
+    }
+    latestPlatformsRef.current = { ...current, [activePlatformKey]: nextPlatform };
+    onChangePlatforms({ [activePlatformKey]: minimalPatch });
   };
 
   const collapseSingleLocationLocs = useCallback(

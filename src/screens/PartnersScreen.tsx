@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
@@ -94,6 +94,7 @@ export default function PartnersScreen() {
     const theme = useTheme();
     const navigation = useNavigation<any>();
     const { currentOrg } = useOrg();
+    const currentOrgId = currentOrg?.id;
     const insets = useSafeAreaInsets();
 
     const [loading, setLoading] = useState(true);
@@ -112,6 +113,14 @@ export default function PartnersScreen() {
     const [inviteCanRevoke, setInviteCanRevoke] = useState(true); // true = consignment (can revoke), false = partnership
     const [pools, setPools] = useState<any[]>([]);
     const [sendingInvite, setSendingInvite] = useState(false);
+    const orgGenerationRef = useRef(0);
+    const orgIdentityRef = useRef<string | null>(currentOrgId ?? null);
+    const getRequestRef = useRef(0);
+    const orgIdentity = currentOrgId ?? null;
+    if (orgIdentityRef.current !== orgIdentity) {
+        orgIdentityRef.current = orgIdentity;
+        orgGenerationRef.current += 1;
+    }
 
     // Accept State
     const [acceptingInviteId, setAcceptingInviteId] = useState<string | null>(null);
@@ -165,17 +174,20 @@ export default function PartnersScreen() {
 
     useEffect(() => {
         const fetchInitial = async () => {
-            if (!currentOrg) return;
+            if (!currentOrgId) return;
+            const generation = orgGenerationRef.current;
+            const request = ++getRequestRef.current;
             try {
                 setLoading(true);
                 const token = await ensureSupabaseJwt();
-                const orgId = currentOrg.id;
+                const orgId = currentOrgId;
 
                 const [partnersRes, invitesRes, poolsRes] = await Promise.all([
                     fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
                     fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/pending?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
                     fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } })
                 ]);
+                if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
 
                 await Promise.all([
                     requireOk(partnersRes, 'Could not load partnerships'),
@@ -184,9 +196,11 @@ export default function PartnersScreen() {
                 ]);
 
                 const pData = await partnersRes.json();
+                const iData = await invitesRes.json();
+                const poolsData = await poolsRes.json();
+                if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
                 setPartnerships(pData.partnerships || []);
 
-                const iData = await invitesRes.json();
                 setPendingInvites(iData.sent || []);
                 setReceivedInvites((iData.received || []).map((inv: any) => ({
                         id: inv.id,
@@ -199,43 +213,50 @@ export default function PartnersScreen() {
                         token: inv.token || inv.id,
                 })));
 
-                const poolsData = await poolsRes.json();
                 setPools(poolsData);
-                if (poolsData.length > 0 && !invitePoolId) {
-                    setInvitePoolId(poolsData[0].id);
-                }
+                if (poolsData.length > 0) setInvitePoolId((current) => current || poolsData[0].id);
             } catch (error: any) {
+                if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
                 log.error('[PartnersScreen] Error loading data:', error);
                 showMessage({ message: 'Error', description: 'Failed to load partners data', type: 'danger' });
             } finally {
-                setLoading(false);
-                setRefreshing(false);
+                if (generation === orgGenerationRef.current) {
+                    setLoading(false);
+                    setRefreshing(false);
+                }
             }
         };
 
         fetchInitial();
-    }, [currentOrg]);
+    }, [currentOrgId]);
 
     // Simplified refresh that re-uses the logic but we need to keep access to it
     const refreshData = async () => {
         if (!currentOrg) return;
+        const generation = orgGenerationRef.current;
+        const request = ++getRequestRef.current;
         try {
             const token = await ensureSupabaseJwt();
             const orgId = currentOrg.id;
             // Background refresh without full screen loading
-            const [partnersRes, invitesRes] = await Promise.all([
+            const [partnersRes, invitesRes, poolsRes] = await Promise.all([
                 fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
                 fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/invites/pending?orgId=${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
+                fetch(`${SSSYNC_API_BASE_URL}/api/pools/org/${orgId}`, { headers: { 'Authorization': `Bearer ${token}` } }),
             ]);
+            if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
 
             await Promise.all([
                 requireOk(partnersRes, 'Could not refresh partnerships'),
                 requireOk(invitesRes, 'Could not refresh invites'),
+                requireOk(poolsRes, 'Could not refresh pools'),
             ]);
 
             const pData = await partnersRes.json();
-            setPartnerships(pData.partnerships || []);
             const iData = await invitesRes.json();
+            const poolsData = await poolsRes.json();
+            if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
+            setPartnerships(pData.partnerships || []);
             setPendingInvites(iData.sent || []);
             setReceivedInvites((iData.received || []).map((inv: any) => ({
                     id: inv.id,
@@ -247,7 +268,10 @@ export default function PartnersScreen() {
                     expiresAt: inv.expiresAt,
                     token: inv.token || inv.id,
             })));
+            setPools(poolsData);
+            if (poolsData.length > 0) setInvitePoolId((current) => current || poolsData[0].id);
         } catch (e: any) {
+            if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
             log.error('Background refresh failed', e);
             showAlertModal('Couldn’t refresh partners', e?.message || 'Please try again.', 'error');
         }
@@ -342,6 +366,7 @@ export default function PartnersScreen() {
                 headers: { Authorization: `Bearer ${token}` }
             });
             await requireOk(response, `Could not ${action} partnership`);
+            await refreshData();
         } catch (e: any) {
             await refreshData();
             showAlertModal(`Couldn’t ${action} partnership`, e?.message || 'Please try again.', 'error');

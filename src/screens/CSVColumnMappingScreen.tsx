@@ -306,9 +306,8 @@ export function CSVColumnMappingScreen() {
             // server also auto-commits the certain buckets for CSV; a failed
             // persist is a 5xx now (no more silent-200 lost imports).
             //
-            // A THROWN fetch (network drop, timeout) must clean up the orphan
-            // pseudo-connection exactly like a non-2xx response, so the call is
-            // wrapped — either failure path rolls back before surfacing.
+            // A thrown fetch is ambiguous: the server may have committed before
+            // the response was lost. Probe before deciding whether rollback is safe.
             setStage('uploading');
             let normRes: Response;
             try {
@@ -322,8 +321,31 @@ export function CSVColumnMappingScreen() {
                     }),
                 });
             } catch (fetchError) {
-                await rollbackConnection();
-                throw fetchError;
+                try {
+                    const probeRes = await fetch(`${API_BASE}/sync/connections/${newConnection.Id}/resolution`, {
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    });
+                    if (probeRes.status === 404) {
+                        await rollbackConnection();
+                        throw fetchError;
+                    }
+                    if (!probeRes.ok) throw new Error(`Import probe failed: ${probeRes.status}`);
+
+                    const probe = await probeRes.json();
+                    const landed = Number(probe?.summary?.total ?? 0) > 0;
+                    if (landed) {
+                        navigation.replace('ImportHub', { connectionId: newConnection.Id });
+                        return;
+                    }
+
+                    await rollbackConnection();
+                    throw fetchError;
+                } catch (probeError) {
+                    if (probeError === fetchError) throw fetchError;
+                    log.warn('[CSVColumnMapping] Could not verify import after normalize error:', probeError);
+                    showError('Import status unknown', 'Check the import before retrying.');
+                    return;
+                }
             }
             if (!normRes.ok) {
                 await rollbackConnection();

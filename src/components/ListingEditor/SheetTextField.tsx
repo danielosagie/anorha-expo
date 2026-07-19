@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, ReactNode } from 'react';
+import React, { useState, useEffect, useRef, useCallback, ReactNode } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
 import { Globe } from 'lucide-react-native';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
@@ -44,6 +44,24 @@ export default function SheetTextField({
   const [local, setLocal] = useState(value ?? '');
   const [focused, setFocused] = useState(false);
   const timeoutRef = useRef<any>(null);
+  const latestTextRef = useRef(value ?? '');
+  const pendingRef = useRef(false);
+  const onChangeTextRef = useRef(onChangeText);
+  onChangeTextRef.current = onChangeText;
+
+  const flushPendingChange = useCallback(() => {
+    if (timeoutRef.current != null) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (!pendingRef.current) return;
+    pendingRef.current = false;
+    onChangeTextRef.current(latestTextRef.current);
+  }, []);
+
+  // A sheet can disappear immediately after Save/Publish/Back. Deliver the last
+  // keystroke before unmount so the parent's serialized save sees the current text.
+  useEffect(() => () => flushPendingChange(), [flushPendingChange]);
 
   // Only adopt an external value (AI refill, realtime sync) when the user is NOT
   // actively editing — i.e. unfocused and no debounce pending. Without this guard a
@@ -58,10 +76,13 @@ export default function SheetTextField({
 
   const handleChange = (text: string) => {
     setLocal(text);
+    latestTextRef.current = text;
+    pendingRef.current = true;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       timeoutRef.current = null;
-      onChangeText(text);
+      pendingRef.current = false;
+      onChangeTextRef.current(latestTextRef.current);
     }, 300);
   };
 
@@ -79,7 +100,10 @@ export default function SheetTextField({
           value={local}
           onChangeText={handleChange}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => {
+            flushPendingChange();
+            setFocused(false);
+          }}
           multiline={multiline}
           keyboardType={keyboardType}
           placeholder={placeholder}

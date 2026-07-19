@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
@@ -385,6 +385,13 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [selectedListItem, setSelectedListItem] = useState<{ kind: 'pool' | 'single' | null; id?: string | null }>({ kind: null, id: null });
   const [resolvedOrgId, setResolvedOrgId] = useState<string | null>(orgId || null);
+  const orgGenerationRef = useRef(0);
+  const orgIdentityRef = useRef<string | null>(orgId || resolvedOrgId);
+  const orgIdentity = orgId || resolvedOrgId;
+  if (orgIdentityRef.current !== orgIdentity) {
+    orgIdentityRef.current = orgIdentity;
+    orgGenerationRef.current += 1;
+  }
 
   // Implicit Detection of FTUX Partner - only for ACCEPTERS who received shared inventory
   // Shows only ONCE per user (persisted via AsyncStorage)
@@ -536,57 +543,68 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
 
   // Load available locations for creating/editing
   const loadAvailableLocations = useCallback(async () => {
+    const generation = orgGenerationRef.current;
+    const requestOrgId = resolvedOrgId;
+    const isCurrent = () => generation === orgGenerationRef.current;
     if (!session?.bridgeReady) {
       log.debug('[LocationsManagerV2] Skipping available locations load until auth bridge is ready');
-      setAvailable([]);
+      if (isCurrent()) setAvailable([]);
       return;
     }
 
     try {
       const token = await ensureSupabaseJwt();
+      if (!isCurrent()) return;
       if (!token) {
         log.warn('[LocationsManagerV2] No JWT available for available locations load');
         setAvailable([]);
         return;
       }
-      if (!resolvedOrgId) {
+      if (!requestOrgId) {
         log.debug('[LocationsManagerV2] No org ID, skipping locations load');
         setAvailable([]);
         return;
       }
-      const r = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${resolvedOrgId}`, {
+      const r = await fetch(`${API_BASE_URL}/api/pools/locations/available?orgId=${requestOrgId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!isCurrent()) return;
       if (!r.ok) {
         const errorText = await r.text();
         // console.warn(`Failed to load locations: ${r.status} - ${errorText}`);
         return; // Don't throw for background loading in Default view
       }
       const rawRecord: Record<string, any> = await r.json();
+      if (!isCurrent()) return;
       const transformed = transformAvailableLocations(rawRecord);
       setAvailable(transformed);
     } catch (e) {
+      if (!isCurrent()) return;
       log.error('[LocationsManagerV2] loadAvailableLocations error', e);
       setAvailable([]);
     }
   }, [resolvedOrgId, session?.bridgeReady]);
 
   const loadList = useCallback(async () => {
+    const generation = orgGenerationRef.current;
+    const requestOrgId = resolvedOrgId;
+    const isCurrent = () => generation === orgGenerationRef.current;
     // If no org ID yet, just ensure we're not loading forever
-    if (!resolvedOrgId) {
-      setIsLoading(false);
+    if (!requestOrgId) {
+      if (isCurrent()) setIsLoading(false);
       return;
     }
 
     if (!session?.bridgeReady) {
       log.debug('[LocationsManagerV2] Skipping list load until auth bridge is ready');
-      setIsLoading(false);
+      if (isCurrent()) setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
     try {
       const token = await ensureSupabaseJwt();
+      if (!isCurrent()) return;
       if (!token) {
         log.warn('[LocationsManagerV2] No JWT available for list load');
         setPools([]);
@@ -603,17 +621,19 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       // Load pools, partnerships, invites, and members in parallel
       const headers = { Authorization: `Bearer ${token}` };
 
-      log.debug('[LocationsManagerV2] Fetching data for org:', resolvedOrgId);
+      log.debug('[LocationsManagerV2] Fetching data for org:', requestOrgId);
 
       const [poolsRes, partnersRes, invitesRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/pools/org/${resolvedOrgId}`, { headers }),
-        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${resolvedOrgId}`, { headers }).catch(e => { log.error('Partners fetch failed', e); return null; }),
-        fetch(`${API_BASE_URL}/api/cross-org/invites/pending?orgId=${resolvedOrgId}`, { headers }).catch(e => { log.error('Invites fetch failed', e); return null; }),
+        fetch(`${API_BASE_URL}/api/pools/org/${requestOrgId}`, { headers }),
+        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${requestOrgId}`, { headers }).catch(e => { log.error('Partners fetch failed', e); return null; }),
+        fetch(`${API_BASE_URL}/api/cross-org/invites/pending?orgId=${requestOrgId}`, { headers }).catch(e => { log.error('Invites fetch failed', e); return null; }),
       ]);
+      if (!isCurrent()) return;
 
       // Handle Pools
       if (poolsRes.ok) {
         const poolData = await poolsRes.json();
+        if (!isCurrent()) return;
         setPools(Array.isArray(poolData) ? poolData : []);
       } else {
         log.error('[LocationsManagerV2] Pools fetch failed', poolsRes.status, await poolsRes.text());
@@ -623,6 +643,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       // Handle Partnerships
       if (partnersRes?.ok) {
         const data = await partnersRes.json();
+        if (!isCurrent()) return;
         setPartnerships(data.partnerships || []);
       } else {
         if (partnersRes) log.error('[LocationsManagerV2] Partners fetch failed', partnersRes.status);
@@ -632,6 +653,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       // Handle Invites
       if (invitesRes?.ok) {
         const data = await invitesRes.json();
+        if (!isCurrent()) return;
         setPendingInvites(data.sent || []);
       } else {
         if (invitesRes) log.error('[LocationsManagerV2] Invites fetch failed', invitesRes.status);
@@ -644,17 +666,19 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
           .from('PlatformLocations')
           .select('PlatformConnectionId, PlatformLocationId, Name')
           .in('PlatformConnectionId', connectionIds);
+        if (!isCurrent()) return;
         setSingleLocations(platformLocs || []);
       } else {
         setSingleLocations([]);
       }
     } catch (e) {
+      if (!isCurrent()) return;
       log.error('[LocationsManagerV2] loadList error', e);
       Alert.alert('Error', 'Failed to load locations');
       setPools([]);
       setSingleLocations([]);
     } finally {
-      setIsLoading(false);
+      if (isCurrent()) setIsLoading(false);
     }
   }, [resolvedOrgId, connectionIds, loadAvailableLocations, session?.bridgeReady]);
 
@@ -856,6 +880,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
 
   // Confirm all changes in manage mode and save pools
   const confirmManageChanges = async () => {
+    let savedAny = false;
     try {
       setSaving(true);
       const token = await ensureSupabaseJwt();
@@ -926,6 +951,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
             }
             throw new Error(errorMessage);
           }
+          savedAny = true;
         }
       }
 
@@ -935,6 +961,7 @@ const LocationsManagerV2: React.FC<LocationsManagerV2Props> = ({
       setDraftPools({});
     } catch (e) {
       log.error('[LocationsManagerV2] confirmManageChanges error', e);
+      if (savedAny) await loadList();
       const errorMessage = e instanceof Error ? e.message : 'Failed to save changes';
       Alert.alert(
         'Failed to Save Changes',

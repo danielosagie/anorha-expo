@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Switch, ScrollView, Alert, TouchableOpacity, ActivityIndicator, StatusBar } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +16,7 @@ export default function NotificationSettingsScreen() {
     const { getToken } = useAuth();
 
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [testSending, setTestSending] = useState(false);
     const [preferences, setPreferences] = useState({
         JobCompletions: true,
@@ -24,45 +25,52 @@ export default function NotificationSettingsScreen() {
         SyncAlerts: true,
         MarketingUpdates: false,
     });
+    const preferencesRef = useRef(preferences);
+    const preferenceRequestTokens = useRef<Partial<Record<keyof typeof preferences, number>>>({});
 
-    useEffect(() => {
-        loadPreferences();
-    }, []);
-
-    const loadPreferences = async () => {
+    const loadPreferences = useCallback(async () => {
         try {
             setLoading(true);
+            setLoadError(null);
             const token = await getToken();
             const apiBaseUrl = API_BASE_URL;
             if (!apiBaseUrl) {
-                log.warn('API Base URL not found');
-                setLoading(false);
-                return;
+                throw new Error('API base URL not configured');
             }
 
             const res = await fetch(`${apiBaseUrl}/api/notifications/preferences`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
-            if (res.ok) {
-                const data = await res.json();
-                setPreferences({
-                    JobCompletions: data.jobCompletions ?? true,
-                    InventorySharing: data.inventorySharing ?? true,
-                    SproutInsights: data.sproutInsights ?? true,
-                    SyncAlerts: data.syncAlerts ?? true,
-                    MarketingUpdates: data.marketingUpdates ?? false,
-                });
-            }
+            if (!res.ok) throw new Error(`Failed to load settings (${res.status})`);
+            const data = await res.json();
+            const nextPreferences = {
+                JobCompletions: data.jobCompletions ?? true,
+                InventorySharing: data.inventorySharing ?? true,
+                SproutInsights: data.sproutInsights ?? true,
+                SyncAlerts: data.syncAlerts ?? true,
+                MarketingUpdates: data.marketingUpdates ?? false,
+            };
+            preferencesRef.current = nextPreferences;
+            setPreferences(nextPreferences);
         } catch (err) {
             log.error('Failed to load notification preferences:', err);
+            setLoadError('Couldn’t load settings.');
         } finally {
             setLoading(false);
         }
-    };
+    }, [getToken]);
+
+    useEffect(() => {
+        void loadPreferences();
+    }, [loadPreferences]);
 
     const togglePreference = async (key: keyof typeof preferences) => {
-        const newValue = !preferences[key];
+        const previousValue = preferencesRef.current[key];
+        const newValue = !previousValue;
+        const request = (preferenceRequestTokens.current[key] ?? 0) + 1;
+        preferenceRequestTokens.current[key] = request;
+        preferencesRef.current = { ...preferencesRef.current, [key]: newValue };
         setPreferences(prev => ({ ...prev, [key]: newValue }));
 
         try {
@@ -72,7 +80,7 @@ export default function NotificationSettingsScreen() {
             // Map frontend key (PascalCase) to backend key (camelCase)
             const backendKey = key.charAt(0).toLowerCase() + key.slice(1);
 
-            await fetch(`${apiBaseUrl}/api/notifications/preferences`, {
+            const res = await fetch(`${apiBaseUrl}/api/notifications/preferences`, {
                 method: 'PATCH',
                 headers: {
                     Authorization: `Bearer ${token}`,
@@ -80,10 +88,12 @@ export default function NotificationSettingsScreen() {
                 },
                 body: JSON.stringify({ [backendKey]: newValue })
             });
+            if (!res.ok) throw new Error(`Failed to save setting (${res.status})`);
         } catch (err) {
             log.error('Failed to update preference:', err);
-            // Revert on error
-            setPreferences(prev => ({ ...prev, [key]: !newValue }));
+            if (preferenceRequestTokens.current[key] !== request) return;
+            preferencesRef.current = { ...preferencesRef.current, [key]: previousValue };
+            setPreferences(prev => ({ ...prev, [key]: previousValue }));
             Alert.alert('Error', 'Failed to save setting');
         }
     };
@@ -144,6 +154,13 @@ export default function NotificationSettingsScreen() {
                 {loading ? (
                     <View style={styles.center}>
                         <ActivityIndicator size="large" color="#93C822" />
+                    </View>
+                ) : loadError ? (
+                    <View style={styles.loadErrorRow}>
+                        <Text style={styles.loadErrorText}>{loadError}</Text>
+                        <TouchableOpacity style={styles.retryButton} onPress={loadPreferences} activeOpacity={0.85}>
+                            <Text style={styles.retryButtonText}>Retry</Text>
+                        </TouchableOpacity>
                     </View>
                 ) : (
                     <>
@@ -222,6 +239,32 @@ const styles = StyleSheet.create({
         paddingVertical: 80,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    loadErrorRow: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#ECEBE6',
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    loadErrorText: {
+        color: '#71717A',
+        fontFamily: 'Inter_500Medium',
+        fontSize: 14,
+    },
+    retryButton: {
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: 12,
+        backgroundColor: '#18181B',
+    },
+    retryButtonText: {
+        color: '#FFFFFF',
+        fontFamily: 'Inter_600SemiBold',
+        fontSize: 13,
     },
     sectionLabel: {
         fontSize: 13,

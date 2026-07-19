@@ -9,8 +9,8 @@
 //   ignore    → drag the card down              ·  resolve('ignore')
 // Decisions commit per-card via resolve(); undo steps back so you can re-decide
 // (a re-decision overwrites server-side). Redo is intentionally inert for now.
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import type { SyncItem, ResolveChoice } from '../../types/syncItem';
 import { TinderShell, DeckChrome, RC } from '../resolve/ResolveKit';
 import DecisionCard from './DecisionCard';
@@ -49,31 +49,95 @@ export default function MatchReviewDeck({
     }
     return m;
   });
-  // Latest decision per item (keyed by platformId) so re-deciding after an undo
-  // OVERWRITES rather than double-counts. Tallied once on done.
-  const decisionsRef = useRef<Record<string, ResolveChoice>>({});
+  type Decision = { choice: ResolveChoice; canonicalId?: string };
+  type Outcome = { attempt: number; status: 'pending' | 'success' | 'failed' };
+
+  // Latest decision and outcome per item. Attempt tokens keep a slow, older
+  // re-decision from overwriting the result of the choice the user saw last.
+  const decisionsRef = useRef<Record<string, Decision>>({});
+  const outcomesRef = useRef<Record<string, Outcome>>({});
+  const pendingRef = useRef<Record<string, Promise<void>>>({});
+  const [ending, setEnding] = useState<{ kind: 'waiting' | 'done' | 'failed'; count?: number }>({ kind: 'waiting' });
 
   const cur = deck[pos];
 
-  const commit = useCallback(
-    (choice: ResolveChoice, canonicalId?: string) => {
-      if (!cur) return;
-      decisionsRef.current[cur.platformId] = choice;
-      void resolve(cur.platformId, choice, canonicalId);
-      setPos((p) => p + 1);
-    },
-    [cur, resolve],
-  );
+  const launchResolve = useCallback((platformId: string, decision: Decision) => {
+    const attempt = (outcomesRef.current[platformId]?.attempt ?? 0) + 1;
+    decisionsRef.current[platformId] = decision;
+    outcomesRef.current[platformId] = { attempt, status: 'pending' };
+
+    let tracked: Promise<void>;
+    tracked = Promise.resolve()
+      .then(() => resolve(platformId, decision.choice, decision.canonicalId))
+      .then(() => {
+        if (outcomesRef.current[platformId]?.attempt === attempt) {
+          outcomesRef.current[platformId] = { attempt, status: 'success' };
+        }
+      })
+      .catch(() => {
+        if (outcomesRef.current[platformId]?.attempt === attempt) {
+          outcomesRef.current[platformId] = { attempt, status: 'failed' };
+        }
+      })
+      .finally(() => {
+        if (pendingRef.current[platformId] === tracked) delete pendingRef.current[platformId];
+      });
+    pendingRef.current[platformId] = tracked;
+    return tracked;
+  }, [resolve]);
+
+  const commit = useCallback((choice: ResolveChoice, canonicalId?: string) => {
+    if (!cur) return;
+    void launchResolve(cur.platformId, { choice, canonicalId });
+    setPos((p) => p + 1);
+  }, [cur, launchResolve]);
 
   const tallyCounts = useCallback(() => {
     const c = { linked: 0, created: 0, ignored: 0 };
-    for (const v of Object.values(decisionsRef.current)) {
-      if (v === 'link') c.linked += 1;
-      else if (v === 'create') c.created += 1;
-      else if (v === 'ignore') c.ignored += 1;
+    for (const [platformId, decision] of Object.entries(decisionsRef.current)) {
+      if (outcomesRef.current[platformId]?.status !== 'success') continue;
+      if (decision.choice === 'link') c.linked += 1;
+      else if (decision.choice === 'create') c.created += 1;
+      else if (decision.choice === 'ignore') c.ignored += 1;
     }
     return c;
   }, []);
+
+  const settleEnding = useCallback(async () => {
+    setEnding({ kind: 'waiting' });
+    const pending = Object.values(pendingRef.current);
+    if (pending.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([
+        Promise.all(pending).then(() => true),
+        new Promise<boolean>((done) => { timer = setTimeout(() => done(false), 10000); }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (!settled) {
+        for (const outcome of Object.values(outcomesRef.current)) {
+          if (outcome.status === 'pending') outcome.status = 'failed';
+        }
+      }
+    }
+
+    const failed = Object.values(outcomesRef.current).filter((outcome) => outcome.status !== 'success').length;
+    setEnding(failed > 0 ? { kind: 'failed', count: failed } : { kind: 'done' });
+  }, []);
+
+  useEffect(() => {
+    if (pos >= total) void settleEnding();
+  }, [pos, total, settleEnding]);
+
+  const retryFailed = useCallback(async () => {
+    const failedIds = Object.keys(decisionsRef.current).filter(
+      (platformId) => outcomesRef.current[platformId]?.status !== 'success',
+    );
+    setEnding({ kind: 'waiting' });
+    for (const platformId of failedIds) {
+      void launchResolve(platformId, decisionsRef.current[platformId]);
+    }
+    await settleEnding();
+  }, [launchResolve, settleEnding]);
 
   const undo = useCallback(() => setPos((p) => Math.max(0, p - 1)), []);
 
@@ -88,8 +152,28 @@ export default function MatchReviewDeck({
     [undo, pos, commit],
   );
 
-  // Deck exhausted → hand back to the parent (its "all set" state).
+  // Deck exhausted: hold the ending until every optimistic swipe is confirmed.
   if (!cur) {
+    if (ending.kind === 'waiting') {
+      return (
+        <View style={[styles.done, { paddingTop: topInset + 40 }]}>
+          <ActivityIndicator color={RC.green} />
+          <Text style={styles.doneSub}>Saving</Text>
+        </View>
+      );
+    }
+
+    if (ending.kind === 'failed') {
+      return (
+        <View style={[styles.done, { paddingTop: topInset + 40 }]}>
+          <Text style={styles.doneTitle}>{ending.count} didn’t save</Text>
+          <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={retryFailed}>
+            <Text style={styles.doneBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.done, { paddingTop: topInset + 40 }]}>
         <Text style={styles.doneTitle}>All caught up</Text>
