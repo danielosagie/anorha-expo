@@ -1,0 +1,51 @@
+diff --git a/node_modules/expo-audio/android/.gradle/9.2.0/checksums/checksums.lock b/node_modules/expo-audio/android/.gradle/9.2.0/checksums/checksums.lock
+new file mode 100644
+index 0000000..1c17533
+Binary files /dev/null and b/node_modules/expo-audio/android/.gradle/9.2.0/checksums/checksums.lock differ
+diff --git a/node_modules/expo-audio/android/.gradle/9.2.0/fileChanges/last-build.bin b/node_modules/expo-audio/android/.gradle/9.2.0/fileChanges/last-build.bin
+new file mode 100644
+index 0000000..f76dd23
+Binary files /dev/null and b/node_modules/expo-audio/android/.gradle/9.2.0/fileChanges/last-build.bin differ
+diff --git a/node_modules/expo-audio/android/.gradle/9.2.0/fileHashes/fileHashes.bin b/node_modules/expo-audio/android/.gradle/9.2.0/fileHashes/fileHashes.bin
+new file mode 100644
+index 0000000..22d8efc
+Binary files /dev/null and b/node_modules/expo-audio/android/.gradle/9.2.0/fileHashes/fileHashes.bin differ
+diff --git a/node_modules/expo-audio/android/.gradle/9.2.0/fileHashes/fileHashes.lock b/node_modules/expo-audio/android/.gradle/9.2.0/fileHashes/fileHashes.lock
+new file mode 100644
+index 0000000..2ea341b
+Binary files /dev/null and b/node_modules/expo-audio/android/.gradle/9.2.0/fileHashes/fileHashes.lock differ
+diff --git a/node_modules/expo-audio/android/.gradle/9.2.0/gc.properties b/node_modules/expo-audio/android/.gradle/9.2.0/gc.properties
+new file mode 100644
+index 0000000..e69de29
+diff --git a/node_modules/expo-audio/android/.gradle/buildOutputCleanup/buildOutputCleanup.lock b/node_modules/expo-audio/android/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+new file mode 100644
+index 0000000..797d668
+Binary files /dev/null and b/node_modules/expo-audio/android/.gradle/buildOutputCleanup/buildOutputCleanup.lock differ
+diff --git a/node_modules/expo-audio/android/.gradle/buildOutputCleanup/cache.properties b/node_modules/expo-audio/android/.gradle/buildOutputCleanup/cache.properties
+new file mode 100644
+index 0000000..a3214dc
+--- /dev/null
++++ b/node_modules/expo-audio/android/.gradle/buildOutputCleanup/cache.properties
+@@ -0,0 +1,2 @@
++#Fri Jul 17 20:21:59 EDT 2026
++gradle.version=9.2.0
+diff --git a/node_modules/expo-audio/android/.gradle/vcs-1/gc.properties b/node_modules/expo-audio/android/.gradle/vcs-1/gc.properties
+new file mode 100644
+index 0000000..e69de29
+diff --git a/node_modules/expo-audio/ios/AudioRecordingRequester.swift b/node_modules/expo-audio/ios/AudioRecordingRequester.swift
+index 08c8711..95f800f 100644
+--- a/node_modules/expo-audio/ios/AudioRecordingRequester.swift
++++ b/node_modules/expo-audio/ios/AudioRecordingRequester.swift
+@@ -1,5 +1,12 @@
+ import ExpoModulesCore
+ 
++// Xcode 26.6: ExpoModulesCore no longer re-exports React's C helpers to Swift.
++// Private equivalents keep call sites unchanged; this path only fires when a
++// required Info.plist usage description is missing.
++private func RCTErrorWithMessage(_ message: String) -> String { message }
++private func RCTFatal(_ message: String) -> Never { fatalError(message) }
++
++
+ private let selector = ["request", "Record", "Permission", ":"]
+ 
+ public class AudioRecordingRequester: NSObject, EXPermissionsRequester {

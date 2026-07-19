@@ -1,0 +1,52 @@
+diff --git a/node_modules/expo-image-picker/android/.gradle/9.2.0/checksums/checksums.lock b/node_modules/expo-image-picker/android/.gradle/9.2.0/checksums/checksums.lock
+new file mode 100644
+index 0000000..ffe8797
+Binary files /dev/null and b/node_modules/expo-image-picker/android/.gradle/9.2.0/checksums/checksums.lock differ
+diff --git a/node_modules/expo-image-picker/android/.gradle/9.2.0/fileChanges/last-build.bin b/node_modules/expo-image-picker/android/.gradle/9.2.0/fileChanges/last-build.bin
+new file mode 100644
+index 0000000..f76dd23
+Binary files /dev/null and b/node_modules/expo-image-picker/android/.gradle/9.2.0/fileChanges/last-build.bin differ
+diff --git a/node_modules/expo-image-picker/android/.gradle/9.2.0/fileHashes/fileHashes.bin b/node_modules/expo-image-picker/android/.gradle/9.2.0/fileHashes/fileHashes.bin
+new file mode 100644
+index 0000000..22d8efc
+Binary files /dev/null and b/node_modules/expo-image-picker/android/.gradle/9.2.0/fileHashes/fileHashes.bin differ
+diff --git a/node_modules/expo-image-picker/android/.gradle/9.2.0/fileHashes/fileHashes.lock b/node_modules/expo-image-picker/android/.gradle/9.2.0/fileHashes/fileHashes.lock
+new file mode 100644
+index 0000000..313e55f
+Binary files /dev/null and b/node_modules/expo-image-picker/android/.gradle/9.2.0/fileHashes/fileHashes.lock differ
+diff --git a/node_modules/expo-image-picker/android/.gradle/9.2.0/gc.properties b/node_modules/expo-image-picker/android/.gradle/9.2.0/gc.properties
+new file mode 100644
+index 0000000..e69de29
+diff --git a/node_modules/expo-image-picker/android/.gradle/buildOutputCleanup/buildOutputCleanup.lock b/node_modules/expo-image-picker/android/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+new file mode 100644
+index 0000000..bceb792
+Binary files /dev/null and b/node_modules/expo-image-picker/android/.gradle/buildOutputCleanup/buildOutputCleanup.lock differ
+diff --git a/node_modules/expo-image-picker/android/.gradle/buildOutputCleanup/cache.properties b/node_modules/expo-image-picker/android/.gradle/buildOutputCleanup/cache.properties
+new file mode 100644
+index 0000000..0621fe6
+--- /dev/null
++++ b/node_modules/expo-image-picker/android/.gradle/buildOutputCleanup/cache.properties
+@@ -0,0 +1,2 @@
++#Fri Jul 17 20:22:08 EDT 2026
++gradle.version=9.2.0
+diff --git a/node_modules/expo-image-picker/android/.gradle/vcs-1/gc.properties b/node_modules/expo-image-picker/android/.gradle/vcs-1/gc.properties
+new file mode 100644
+index 0000000..e69de29
+diff --git a/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift b/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift
+index 41ec2e9..faabb67 100644
+--- a/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift
++++ b/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift
+@@ -3,6 +3,13 @@
+ import Photos
+ import ExpoModulesCore
+ 
++// Xcode 26.6: ExpoModulesCore no longer re-exports React's C helpers to Swift.
++// Private equivalents keep call sites unchanged; this path only fires when a
++// required Info.plist usage description is missing.
++private func RCTErrorWithMessage(_ message: String) -> String { message }
++private func RCTFatal(_ message: String) -> Never { fatalError(message) }
++
++
+ public class CameraPermissionRequester: NSObject, EXPermissionsRequester {
+   static public func permissionType() -> String {
+     return "camera"
