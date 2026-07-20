@@ -18,6 +18,7 @@ export interface PendingBillingAction {
   type: 'quick_scan';
   featureKey: string;
   itemId: string;
+  scanMode?: 'adaptive' | 'legacy';
   photo: PersistedCapturedPhoto;
   createdAt: number;
 }

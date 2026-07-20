@@ -80,6 +80,18 @@ type ShelfPricingJob = {
   generation: number;
 };
 
+type QuickScanRunOptions = {
+  skipPreflight?: boolean;
+  textHint?: string;
+  mode?: 'adaptive' | 'legacy';
+};
+
+const normalizeShelfQuery = (value: unknown): string =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
 // A job can report status 'completed' while some (or all) of its payload is empty
 // (backend partial failure). Validate PER ITEM so a partial response can't mark the
 // missing items as generated — those go to the retry lane, not a blank card.
@@ -193,7 +205,6 @@ import { CapturedPhoto } from '../components/camera/PhotoStack';
 import ViewPhotosModal from '../components/camera/ViewPhotosModal';
 import CameraControls from '../components/camera/CameraControls';
 import BusinessTemplateModal, { BusinessTemplate } from '../components/camera/BusinessTemplateModal';
-import ItemNavigationBar from '../components/camera/ItemNavigationBar';
 import QuickProductDetailSheet from '../components/QuickProductDetailSheet';
 import ManifestReviewSheet from '../components/ManifestReviewSheet';
 import ReceiptReviewSheet from '../components/ReceiptReviewSheet';
@@ -216,7 +227,7 @@ import { buildMatchAnalyzeProducts } from '../utils/buildMatchAnalyzeProducts';
 import { safeJson } from '../utils/safeJson';
 import { notifyListingReady } from '../utils/localNotify';
 import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../lib/quickScanStream';
-import { ShelfScanPlaceholderRow, ShelfScanProgressCard } from '../components/camera/ShelfScanProgressCard';
+import { ShelfScanPlaceholderRow } from '../components/camera/ShelfScanProgressCard';
 import BottomActionBar from '../components/BottomActionBar';
 import { BillingGateResponse, normalizeBillingGateResponse } from '../types/billingGate';
 import {
@@ -461,16 +472,14 @@ const getShelfProgressPresentation = (progress: ShelfProgressState) => {
       };
     case 'searching_matches':
       return {
-        title: progress.completedItems > 0 ? 'Streaming in matches' : 'Searching matches',
-        subtitle: progress.completedItems > 0
-          ? `Matched ${progress.completedItems} of ${Math.max(progress.totalItems, progress.completedItems)} detected items so far.`
-          : 'Looking up each detected item and filling the queue as matches land.',
+        title: progress.completedItems > 0 ? `${progress.completedItems} found` : 'Finding items…',
+        subtitle: 'Items appear as found.',
         instruction: 'searching' as CameraInstruction,
       };
     case 'finishing':
       return {
-        title: 'Finishing analysis',
-        subtitle: 'Wrapping up the last shelf results.',
+        title: progress.completedItems > 0 ? `${progress.completedItems} found` : 'Finding items…',
+        subtitle: 'Finishing scan.',
         instruction: 'searching' as CameraInstruction,
       };
     case 'inspecting_shelf':
@@ -693,6 +702,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     () => (__ds === 'shelfScanning' || __ds === 'shelfComplete') ? DS_SHELF_URI : null
   );
   const [isProcessingShelfScan, setIsProcessingShelfScan] = useState(() => __ds === 'shelfScanning');
+  const [isAdaptiveShelfScan, setIsAdaptiveShelfScan] = useState(false);
   const [shelfProgress, setShelfProgress] = useState<ShelfProgressState>(
     () => __ds === 'shelfScanning' ? dsShelfProgress('streaming')
       : __ds === 'shelfComplete' ? dsShelfProgress('completed')
@@ -994,6 +1004,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     [openFolderId, cartTree],
   );
 
+  const currentShelfFolder = useMemo(() => {
+    const folders = cartTree.filter((node): node is Extract<CartTreeNode, { kind: 'folder' }> => node.kind === 'folder');
+    if (folders.length === 0) return undefined;
+    return [...folders].reverse().find((folder) => folder.sourcePhotoUri === shelfPhotoUri) || folders[folders.length - 1];
+  }, [cartTree, shelfPhotoUri]);
+  const currentShelfItemCount = currentShelfFolder?.childCount || 0;
+
   // DEV: seed a shelf folder + open its page for visual QA.
   const devFolderSeededRef = useRef(false);
   useEffect(() => {
@@ -1275,12 +1292,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         quickScanStore={quickScanStore}
         confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
         itemLoadingStates={itemLoadingStates}
+        inventoryMatchByItemId={inventoryDedupByItemId}
+        shelfPricingPendingByItemId={shelfPricingPendingByItemId}
         onBack={() => setOpenFolderId(null)}
         onUngroup={() => {
           if (openFolderId) ungroupFolder(openFolderId);
           setOpenFolderId(null);
         }}
         onOpenItemPreview={handleOpenItem}
+        onOpenLocalMatch={openExistingInventoryMatch}
         onAddAllToCart={() => {
           const folder = openFolder;
           setOpenFolderId(null);
@@ -1300,7 +1320,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             return next;
           });
           if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
-          showNotificationMessage('Added shelf items to cart');
+          showNotificationMessage(`${folder.children.length} item${folder.children.length === 1 ? '' : 's'} added to cart`);
         }}
       />
     ) : null;
@@ -1333,13 +1353,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Job response state
   const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
   const quickScanCancelledRef = useRef(false);
-  const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string }>>([]);
+  const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string; options?: QuickScanRunOptions }>>([]);
   const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
   const activeShelfFolderIdRef = useRef<string | null>(null);
   const pendingShelfItemsByIdRef = useRef<Record<string, { id: string; title: string; quantity: number; added: boolean }>>({});
   const shelfPricingQueueRef = useRef<ShelfPricingJob[]>([]);
   const shelfPricingActiveRef = useRef(0);
   const shelfPricingGenerationRef = useRef(0);
+  const [shelfPricingPendingByItemId, setShelfPricingPendingByItemId] = useState<Record<string, boolean>>({});
   const shelfPricingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const shelfPricingPumpRef = useRef<() => void>(() => {});
   const hasTriggeredBulkModalFtuxRef = useRef(false);
@@ -1429,6 +1450,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         },
       };
     });
+    setShelfPricingPendingByItemId((prev) => {
+      if (!prev[job.itemId]) return prev;
+      return { ...prev, [job.itemId]: false };
+    });
   }, [setQuickScanStore]);
 
   const pumpShelfPricingQueue = useCallback(() => {
@@ -1453,6 +1478,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     shelfPricingQueueRef.current = shelfPricingQueueRef.current.filter(
       (queued) => queued.itemId !== job.itemId,
     );
+    setShelfPricingPendingByItemId((prev) => ({ ...prev, [job.itemId]: true }));
     shelfPricingQueueRef.current.push(job);
     shelfPricingPumpRef.current();
   }, []);
@@ -1462,6 +1488,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     shelfPricingQueueRef.current = [];
     for (const controller of shelfPricingAbortControllersRef.current.values()) controller.abort();
     shelfPricingAbortControllersRef.current.clear();
+    setShelfPricingPendingByItemId({});
   }, []);
 
   const resetShelfProgress = useCallback(() => {
@@ -1822,11 +1849,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
   }, []);
 
-  const persistPendingQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string) => {
+  const persistPendingQuickScan = useCallback(async (photo: CapturedPhoto, itemId: string, scanMode?: QuickScanRunOptions['mode']) => {
     const pendingAction: PendingBillingAction = {
       type: 'quick_scan',
       featureKey: 'ai_quick_scan',
       itemId,
+      scanMode,
       photo: {
         id: photo.id,
         uri: photo.uri,
@@ -1926,7 +1954,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const getInstructionText = (instruction: CameraInstruction): string => {
     // Throughput-first deterministic labels for intake lifecycle.
     if (cameraMode === 'camera' || cameraMode === 'shelf') {
-      if (cameraMode === 'shelf' && shelfProgress.status !== 'idle') {
+      if ((cameraMode === 'shelf' || isAdaptiveShelfScan) && shelfProgress.status !== 'idle') {
         return getShelfProgressPresentation(shelfProgress).title;
       }
       if (instruction === 'matches_found' || instruction === 'matched') return 'Matched';
@@ -1941,7 +1969,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         instruction === 'searching' ||
         instruction === 'recognizing'
       ) {
-        return cameraMode === 'shelf' ? 'Inspecting shelf' : 'Recognizing';
+        return cameraMode === 'shelf' || isAdaptiveShelfScan ? 'Finding items…' : 'Recognizing';
       }
       return 'Capturing';
     }
@@ -2041,6 +2069,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       });
 
       if (photo) {
+        const quickScanOptions: QuickScanRunOptions | undefined = cameraMode === 'camera'
+          ? { mode: 'adaptive' }
+          : undefined;
         const newPhoto: CapturedPhoto = {
           id: `photo-${Date.now()}`,
           uri: photo.uri,
@@ -2078,7 +2109,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             log.debug('[FIRST ITEM] Created first item with ID:', firstItem.id);
             setTimeout(() => {
               log.debug('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
-              performQuickScan(newPhoto, firstItem.id);
+              performQuickScan(newPhoto, firstItem.id, quickScanOptions);
             }, 500);
 
           } else {
@@ -2088,7 +2119,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 // First item
                 const firstId = `item-${Date.now()}`;
                 setActiveItemId(firstId);
-                setTimeout(() => performQuickScan(newPhoto, firstId), 500);
+                setTimeout(() => performQuickScan(newPhoto, firstId, quickScanOptions), 500);
                 return [{ id: firstId, photos: [newPhoto], title: undefined, isActive: true }];
               }
 
@@ -2103,7 +2134,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   // Scan ONLY on the cover (first) photo. Adding more gallery photos to an
                   // already-scanned item must NOT each fire a full (billable ~15s) re-match —
                   // re-check happens when the COVER changes (setBulkItemCoverPhoto), not per add.
-                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal), 500);
+                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal, quickScanOptions), 500);
                   return updated;
                 });
                 return next;
@@ -2116,7 +2147,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   const wasEmpty = prev[0].photos.length === 0;
                   setActiveItemId(fallbackId);
                   // Scan only when this is the item's cover (first) photo — not a gallery add.
-                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, fallbackId), 500);
+                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, fallbackId, quickScanOptions), 500);
                   return prev.map((it, idx) => {
                     if (idx === 0) {
                       return { ...it, isActive: true, photos: [...it.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] };
@@ -2128,7 +2159,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               }
               const newId = `item-${Date.now()}`;
               setActiveItemId(newId);
-              setTimeout(() => performQuickScan(newPhoto, newId), 500);
+              setTimeout(() => performQuickScan(newPhoto, newId, quickScanOptions), 500);
               return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
             });
           }
@@ -2246,8 +2277,394 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, []);
 
-  const handleShelfModeScan = useCallback(async (photo: CapturedPhoto) => {
+
+  const consumeShelfStreamEvent = useCallback((
+    parsed: QuickScanStreamEvent,
+    token: string,
+    shelfPricingGeneration: number,
+  ) => {
+    log.debug('[SHELF MODE] Stream event:', parsed.type);
+    const presentation = getShelfProgressPresentation({
+      phase: parsed.phase || 'inspecting_shelf',
+      progress: typeof parsed.progress === 'number' ? parsed.progress : 0,
+      elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : 0,
+      totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : 0,
+      completedItems: typeof parsed.completedItems === 'number' ? parsed.completedItems : 0,
+      stalled: false,
+      status: 'streaming',
+    });
+
+    if (parsed.type === 'START_ANALYSIS') {
+      setCurrentInstruction(presentation.instruction);
+      if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
+      setShowDeepSearchSheet(true);
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
+      setShelfProgress((prev) => ({
+        ...prev,
+        phase: parsed.phase || 'inspecting_shelf',
+        progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
+        totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : 0,
+        completedItems: 0,
+        stalled: false,
+        status: 'streaming',
+        reasonCode: undefined,
+        message: undefined,
+      }));
+      return;
+    }
+
+    if (parsed.type === 'EXTRACTED_ITEMS') {
+      const items = (parsed.items || []) as Array<string | { query: string; quantity?: number }>;
+      const ts = Date.now();
+      const folderItems = items.map((item, idx) => {
+        const query = typeof item === 'string' ? item : item.query;
+        const quantity = typeof item === 'object' && item.quantity != null ? item.quantity : 1;
+        return { id: `shelf-${ts}-${idx}`, title: query, quantity };
+      });
+
+      shelfQueryToItemIdRef.current = {};
+      pendingShelfItemsByIdRef.current = {};
+      items.forEach((item, idx) => {
+        const query = typeof item === 'string' ? item : item.query;
+        shelfQueryToItemIdRef.current[query] = folderItems[idx].id;
+        const normalizedQuery = normalizeShelfQuery(query);
+        if (normalizedQuery) shelfQueryToItemIdRef.current[normalizedQuery] = folderItems[idx].id;
+        pendingShelfItemsByIdRef.current[folderItems[idx].id] = {
+          ...folderItems[idx],
+          title: query,
+          added: false,
+        };
+      });
+
+      setIsBulkMode(true);
+      setCurrentInstruction('extracting');
+      setShelfProgress((prev) => ({
+        ...prev,
+        phase: parsed.phase || 'separating_items',
+        progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
+        totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : folderItems.length,
+        completedItems: 0,
+        stalled: false,
+        status: 'streaming',
+      }));
+      return;
+    }
+
+    if (parsed.type === 'OPTIMIZING_QUERIES' || parsed.type === 'SEARCHING_ITEMS') {
+      setCurrentInstruction(presentation.instruction);
+      setShelfProgress((prev) => ({
+        ...prev,
+        phase: parsed.phase || (parsed.type === 'OPTIMIZING_QUERIES' ? 'reading_labels' : 'searching_matches'),
+        progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
+        totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : prev.totalItems,
+        completedItems: prev.completedItems,
+        stalled: false,
+        status: 'streaming',
+      }));
+      return;
+    }
+
+    if (parsed.type === 'SEARCH_RESULT') {
+      const res = parsed.result;
+      let didLandItem = false;
+      const originalQuery = res?.extractedItem?.ocrText || res?.extractedItem?.paraphrases?.[0] || res?.extractedItem?.type || res?.usedQuery;
+      const resultKeys = [
+        parsed.itemKey,
+        res?.itemKey,
+        res?.extractedItem?.id,
+        originalQuery,
+        res?.usedQuery,
+      ].filter(Boolean);
+      let itemId = resultKeys
+        .map((key) => shelfQueryToItemIdRef.current[String(key)] || shelfQueryToItemIdRef.current[normalizeShelfQuery(key)])
+        .find(Boolean);
+
+      if (!itemId) {
+        const normalizedResults = resultKeys.map(normalizeShelfQuery).filter(Boolean);
+        itemId = Object.values(pendingShelfItemsByIdRef.current).find((pending) => {
+          if (pending.added) return false;
+          const pendingQuery = normalizeShelfQuery(pending.title);
+          return normalizedResults.some((resultQuery) => (
+            pendingQuery === resultQuery
+            || pendingQuery.includes(resultQuery)
+            || resultQuery.includes(pendingQuery)
+          ));
+        })?.id;
+      }
+
+      // Optimized search wording is not guaranteed to preserve the extracted text.
+      // Keep the stream progressive by assigning an otherwise-unmapped result to the
+      // next pending shelf item instead of deferring every such row until COMPLETE.
+      if (!itemId) {
+        itemId = Object.values(pendingShelfItemsByIdRef.current).find((pending) => !pending.added)?.id;
+      }
+
+      if (itemId) {
+        const quantity = typeof res?.quantity === 'number' ? res.quantity : 1;
+        const pendingItem = pendingShelfItemsByIdRef.current[itemId];
+        const folderId = activeShelfFolderIdRef.current;
+        if (folderId && pendingItem && !pendingItem.added) {
+          addShelfItemsToFolder(folderId, [{
+            id: itemId,
+            title: res?.usedQuery || pendingItem.title,
+            quantity,
+          }]);
+          pendingShelfItemsByIdRef.current[itemId] = { ...pendingItem, added: true };
+          didLandItem = true;
+          setActiveItemId((current) => current || itemId);
+        }
+        setBulkItems((prev) => prev.map((item) => item.id === itemId ? { ...item, title: res?.usedQuery || item.title, quantity } : item));
+
+        setItemLoadingStates((prev) => {
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
+
+        if (res?.matches && res.matches.length > 0) {
+          const livePricing = res?.livePricing;
+          const instantPricing = livePricing
+            ? {
+                low: livePricing.low,
+                high: livePricing.high,
+                median: livePricing.median,
+                recommended: livePricing.median,
+                sampleCount: livePricing.sampleCount,
+                samples: livePricing.samples,
+                livePricing,
+              }
+            : undefined;
+          const rankedCandidates = res.matches.map((match: any, index: number) => (
+            index === 0 && instantPricing && !match?.pricingResearch
+              ? { ...match, pricingResearch: instantPricing }
+              : match
+          ));
+
+          setQuickScanStore((prev) => ({
+            ...prev,
+            [itemId]: {
+              matchData: {
+                systemAction: 'show_multiple_matches',
+                confidence: res.confidence || 'medium',
+                rankedCandidates,
+                totalMatches: rankedCandidates.length,
+              },
+              matchRows: rankedCandidates,
+            },
+          }));
+
+          const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
+            totalMatches: rankedCandidates.length,
+            recommendedAction: 'show_multiple_matches',
+            rerankerConfidence: res.confidence === 'high' ? 0.9 : res.confidence === 'medium' ? 0.6 : 0.2,
+            topCandidateIsLocalMatch: Boolean(rankedCandidates[0]?.isLocalMatch),
+          });
+
+          if (shouldAutoConfirmTopMatch) {
+            const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(rankedCandidates);
+            setConfirmedQuickMatchByItemId((prev) => ({
+              ...prev,
+              [itemId]: {
+                matchRows: quickMatchHintCandidates,
+                preSelectedIndices: [0],
+                source: 'quick_scan_auto',
+                confidence: res.confidence === 'high' ? 0.9 : 0.6,
+              },
+            }));
+          }
+
+          const topTitle = String(rankedCandidates[0]?.title || res?.usedQuery || '').trim();
+          if (topTitle && token) {
+            enqueueShelfPricingResearch({
+              itemId,
+              title: topTitle,
+              token,
+              generation: shelfPricingGeneration,
+            });
+          } else {
+            // No searchable identity means enrichment cannot start. Store a terminal
+            // marker so tapping the row shows an honest empty state, never a spinner.
+            setQuickScanStore((prev) => {
+              const current = prev[itemId];
+              if (!current?.matchData?.rankedCandidates?.length) return prev;
+              const candidates = [...current.matchData.rankedCandidates];
+              candidates[0] = {
+                ...candidates[0],
+                pricingResearch: candidates[0]?.pricingResearch || {
+                  low: null,
+                  median: null,
+                  high: null,
+                  recommended: null,
+                  samples: [],
+                  error: 'no_searchable_title',
+                },
+              };
+              return {
+                ...prev,
+                [itemId]: {
+                  ...current,
+                  matchData: { ...current.matchData, rankedCandidates: candidates },
+                },
+              };
+            });
+          }
+        }
+
+        // Per-item inventory dedup signal (shelf/multi) — the "Already in Inventory" badge
+        // already renders off the prepended isLocalMatch candidate; this stores the explicit
+        // match so the badge tap can offer the Update-vs-Add-new choice with a clean id.
+        if (res?.alreadyInInventory && res?.inventoryMatch) {
+          setInventoryDedupByItemId((prev) => ({ ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } }));
+        }
+      }
+
+      setCurrentInstruction('searching');
+      setShelfProgress((prev) => ({
+        ...prev,
+        phase: parsed.phase || 'searching_matches',
+        progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
+        totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : prev.totalItems,
+        completedItems: didLandItem ? prev.completedItems + 1 : prev.completedItems,
+        stalled: false,
+        status: 'streaming',
+      }));
+      return;
+    }
+
+    if (parsed.type === 'COMPLETE') {
+      const folderId = activeShelfFolderIdRef.current;
+      const remainingItems = Object.values(pendingShelfItemsByIdRef.current).filter((item) => !item.added);
+      if (folderId && remainingItems.length > 0) {
+        addShelfItemsToFolder(folderId, remainingItems.map(({ id, title, quantity }) => ({ id, title, quantity })));
+        remainingItems.forEach((item) => {
+          pendingShelfItemsByIdRef.current[item.id] = { ...item, added: true };
+        });
+        setActiveItemId((current) => current || remainingItems[0]?.id || null);
+      }
+      stopShelfScan('completed', {
+        phase: 'finishing',
+        progress: 1,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
+        completedItems: Object.values(pendingShelfItemsByIdRef.current).filter((item) => item.added).length,
+      });
+      sheetTranslateY.value = withSpring(0, CART_SPRING);
+      return;
+    }
+
+    if (parsed.type === 'NO_ITEMS') {
+      resetShelfScanResults();
+      stopShelfScan('no_items', {
+        phase: 'finishing',
+        progress: 1,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
+        reasonCode: parsed.reasonCode,
+        message: parsed.message || 'Could not detect any items on this shelf.',
+      });
+      return;
+    }
+
+    if (parsed.type === 'TIMEOUT') {
+      stopShelfScan('timeout', {
+        phase: 'finishing',
+        progress: 1,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
+        reasonCode: parsed.reasonCode,
+        message: parsed.message || 'Shelf scan timed out before results came back.',
+      });
+      return;
+    }
+
+    if (parsed.type === 'ERROR') {
+      log.error('[SHELF MODE] Agent error:', parsed.message);
+      const parsedError = parseShelfScanErrorMessage(parsed.message);
+      stopShelfScan('error', {
+        phase: 'finishing',
+        progress: 1,
+        elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
+        reasonCode: parsed.reasonCode || parsedError.reasonCode,
+        message: parsedError.message || 'Error processing shelf scan.',
+      });
+    }
+  }, [addShelfItemsToFolder, enqueueShelfPricingResearch, resetShelfScanResults, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore, sheetTranslateY, stopShelfScan]);
+
+  const beginAdaptiveShelfScan = useCallback((
+    photo: CapturedPhoto,
+    placeholderItemId: string,
+    resolvedEvent: QuickScanStreamEvent,
+  ) => {
+    // The normal-camera item exists only as a single-scan placeholder. Do not create or
+    // mutate any folder state until the backend has explicitly resolved this photo to multi.
+    lastShelfScanPhotoRef.current = photo;
+    shelfPhotoUriForDraftRef.current = photo.uri;
+    setShelfPhotoUri(photo.uri);
+    setIsAdaptiveShelfScan(true);
+    setIsProcessingShelfScan(true);
+    setIsBulkMode(true);
+    setCurrentInstruction('searching');
+    setShelfProgress({
+      ...initialShelfProgressState(),
+      status: 'streaming',
+      phase: resolvedEvent.phase || 'separating_items',
+      progress: typeof resolvedEvent.progress === 'number' ? resolvedEvent.progress : 0.34,
+      elapsedMs: resolvedEvent.elapsedMs || 0,
+      totalItems: resolvedEvent.totalItems || 0,
+      completedItems: 0,
+    });
+
+    shelfQueryToItemIdRef.current = {};
+    pendingShelfItemsByIdRef.current = {};
+    setBulkItems((prev) => prev.filter((item) => item.id !== placeholderItemId));
+    setQuickScanStore((prev) => {
+      if (!prev[placeholderItemId]) return prev;
+      const next = { ...prev };
+      delete next[placeholderItemId];
+      return next;
+    });
+    setConfirmedQuickMatchByItemId((prev) => {
+      if (!prev[placeholderItemId]) return prev;
+      const next = { ...prev };
+      delete next[placeholderItemId];
+      return next;
+    });
+    setInventoryDedupByItemId((prev) => {
+      if (!prev[placeholderItemId]) return prev;
+      const next = { ...prev };
+      delete next[placeholderItemId];
+      return next;
+    });
+    setItemLoadingStates((prev) => {
+      if (!prev[placeholderItemId]) return prev;
+      const next = { ...prev };
+      delete next[placeholderItemId];
+      return next;
+    });
+    setActiveItemId((current) => current === placeholderItemId ? null : current);
+
+    const { folderId } = createShelfFolder({
+      sourcePhotoUri: photo.uri,
+      label: 'Shelf',
+      items: [],
+    });
+    activeShelfFolderIdRef.current = folderId;
+
+    if (cartCloseTimerRef.current) {
+      clearTimeout(cartCloseTimerRef.current);
+      cartCloseTimerRef.current = null;
+    }
+    setShowDeepSearchSheet(true);
+    sheetTranslateY.value = withSpring(0, CART_SPRING);
+  }, [createShelfFolder, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore, sheetTranslateY]);
+
+  const handleShelfModeScan = useCallback(async (
+    photo: CapturedPhoto,
+    options?: { preserveAdaptivePresentation?: boolean },
+  ) => {
     try {
+      setIsAdaptiveShelfScan(Boolean(options?.preserveAdaptivePresentation));
       closeShelfScanStream();
       lastShelfScanPhotoRef.current = photo;
       shelfPhotoUriForDraftRef.current = photo.uri;
@@ -2320,279 +2737,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           });
         },
         onEvent: (parsed: QuickScanStreamEvent) => {
-          log.debug('[SHELF MODE] Stream event:', parsed.type);
-          const presentation = getShelfProgressPresentation({
-            phase: parsed.phase || 'inspecting_shelf',
-            progress: typeof parsed.progress === 'number' ? parsed.progress : 0,
-            elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : 0,
-            totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : 0,
-            completedItems: typeof parsed.completedItems === 'number' ? parsed.completedItems : 0,
-            stalled: false,
-            status: 'streaming',
-          });
-
-          if (parsed.type === 'START_ANALYSIS') {
-            setCurrentInstruction(presentation.instruction);
-            if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
-            setShowDeepSearchSheet(true);
-            sheetTranslateY.value = withSpring(0, CART_SPRING);
-            setShelfProgress((prev) => ({
-              ...prev,
-              phase: parsed.phase || 'inspecting_shelf',
-              progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
-              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : 0,
-              completedItems: 0,
-              stalled: false,
-              status: 'streaming',
-              reasonCode: undefined,
-              message: undefined,
-            }));
-            return;
-          }
-
-          if (parsed.type === 'EXTRACTED_ITEMS') {
-            const items = (parsed.items || []) as Array<string | { query: string; quantity?: number }>;
-            const ts = Date.now();
-            const folderItems = items.map((item, idx) => {
-              const query = typeof item === 'string' ? item : item.query;
-              const quantity = typeof item === 'object' && item.quantity != null ? item.quantity : 1;
-              return { id: `shelf-${ts}-${idx}`, title: query, quantity };
-            });
-
-            shelfQueryToItemIdRef.current = {};
-            pendingShelfItemsByIdRef.current = {};
-            items.forEach((item, idx) => {
-              const query = typeof item === 'string' ? item : item.query;
-              shelfQueryToItemIdRef.current[query] = folderItems[idx].id;
-              pendingShelfItemsByIdRef.current[folderItems[idx].id] = {
-                ...folderItems[idx],
-                title: query,
-                added: false,
-              };
-            });
-
-            setIsBulkMode(true);
-            setCurrentInstruction('extracting');
-            setShelfProgress((prev) => ({
-              ...prev,
-              phase: parsed.phase || 'separating_items',
-              progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
-              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : folderItems.length,
-              completedItems: 0,
-              stalled: false,
-              status: 'streaming',
-            }));
-            return;
-          }
-
-          if (parsed.type === 'OPTIMIZING_QUERIES' || parsed.type === 'SEARCHING_ITEMS') {
-            setCurrentInstruction(presentation.instruction);
-            setShelfProgress((prev) => ({
-              ...prev,
-              phase: parsed.phase || (parsed.type === 'OPTIMIZING_QUERIES' ? 'reading_labels' : 'searching_matches'),
-              progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
-              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : prev.totalItems,
-              completedItems: typeof parsed.completedItems === 'number' ? parsed.completedItems : prev.completedItems,
-              stalled: false,
-              status: 'streaming',
-            }));
-            return;
-          }
-
-          if (parsed.type === 'SEARCH_RESULT') {
-            const res = parsed.result;
-            const originalQuery = res?.extractedItem?.ocrText || res?.extractedItem?.paraphrases?.[0] || res?.extractedItem?.type || res?.usedQuery;
-            const itemId = shelfQueryToItemIdRef.current[originalQuery] || shelfQueryToItemIdRef.current[res?.usedQuery];
-
-            if (itemId) {
-              const quantity = typeof res?.quantity === 'number' ? res.quantity : 1;
-              const pendingItem = pendingShelfItemsByIdRef.current[itemId];
-              const folderId = activeShelfFolderIdRef.current;
-              if (folderId && pendingItem && !pendingItem.added) {
-                addShelfItemsToFolder(folderId, [{
-                  id: itemId,
-                  title: res?.usedQuery || pendingItem.title,
-                  quantity,
-                }]);
-                pendingShelfItemsByIdRef.current[itemId] = { ...pendingItem, added: true };
-                setActiveItemId((current) => current || itemId);
-              }
-              setBulkItems((prev) => prev.map((item) => item.id === itemId ? { ...item, title: res?.usedQuery || item.title, quantity } : item));
-
-              setItemLoadingStates((prev) => {
-                const next = { ...prev };
-                delete next[itemId];
-                return next;
-              });
-
-              if (res?.matches && res.matches.length > 0) {
-                const livePricing = res?.livePricing;
-                const instantPricing = livePricing
-                  ? {
-                      low: livePricing.low,
-                      high: livePricing.high,
-                      median: livePricing.median,
-                      recommended: livePricing.median,
-                      sampleCount: livePricing.sampleCount,
-                      samples: livePricing.samples,
-                      livePricing,
-                    }
-                  : undefined;
-                const rankedCandidates = res.matches.map((match: any, index: number) => (
-                  index === 0 && instantPricing && !match?.pricingResearch
-                    ? { ...match, pricingResearch: instantPricing }
-                    : match
-                ));
-
-                setQuickScanStore((prev) => ({
-                  ...prev,
-                  [itemId]: {
-                    matchData: {
-                      systemAction: 'show_multiple_matches',
-                      confidence: res.confidence || 'medium',
-                      rankedCandidates,
-                      totalMatches: rankedCandidates.length,
-                    },
-                    matchRows: rankedCandidates,
-                  },
-                }));
-
-                const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
-                  totalMatches: rankedCandidates.length,
-                  recommendedAction: 'show_multiple_matches',
-                  rerankerConfidence: res.confidence === 'high' ? 0.9 : res.confidence === 'medium' ? 0.6 : 0.2,
-                  topCandidateIsLocalMatch: Boolean(rankedCandidates[0]?.isLocalMatch),
-                });
-
-                if (shouldAutoConfirmTopMatch) {
-                  const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(rankedCandidates);
-                  setConfirmedQuickMatchByItemId((prev) => ({
-                    ...prev,
-                    [itemId]: {
-                      matchRows: quickMatchHintCandidates,
-                      preSelectedIndices: [0],
-                      source: 'quick_scan_auto',
-                      confidence: res.confidence === 'high' ? 0.9 : 0.6,
-                    },
-                  }));
-                }
-
-                const topTitle = String(rankedCandidates[0]?.title || res?.usedQuery || '').trim();
-                if (topTitle && token) {
-                  enqueueShelfPricingResearch({
-                    itemId,
-                    title: topTitle,
-                    token,
-                    generation: shelfPricingGeneration,
-                  });
-                } else {
-                  // No searchable identity means enrichment cannot start. Store a terminal
-                  // marker so tapping the row shows an honest empty state, never a spinner.
-                  setQuickScanStore((prev) => {
-                    const current = prev[itemId];
-                    if (!current?.matchData?.rankedCandidates?.length) return prev;
-                    const candidates = [...current.matchData.rankedCandidates];
-                    candidates[0] = {
-                      ...candidates[0],
-                      pricingResearch: candidates[0]?.pricingResearch || {
-                        low: null,
-                        median: null,
-                        high: null,
-                        recommended: null,
-                        samples: [],
-                        error: 'no_searchable_title',
-                      },
-                    };
-                    return {
-                      ...prev,
-                      [itemId]: {
-                        ...current,
-                        matchData: { ...current.matchData, rankedCandidates: candidates },
-                      },
-                    };
-                  });
-                }
-              }
-
-              // Per-item inventory dedup signal (shelf/multi) — the "Already in Inventory" badge
-              // already renders off the prepended isLocalMatch candidate; this stores the explicit
-              // match so the badge tap can offer the Update-vs-Add-new choice with a clean id.
-              if (res?.alreadyInInventory && res?.inventoryMatch) {
-                setInventoryDedupByItemId((prev) => ({ ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } }));
-              }
-            }
-
-            setCurrentInstruction('searching');
-            setShelfProgress((prev) => ({
-              ...prev,
-              phase: parsed.phase || 'searching_matches',
-              progress: typeof parsed.progress === 'number' ? parsed.progress : prev.progress,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : prev.elapsedMs,
-              totalItems: typeof parsed.totalItems === 'number' ? parsed.totalItems : prev.totalItems,
-              completedItems: typeof parsed.completedItems === 'number' ? parsed.completedItems : Math.min(prev.totalItems || 1, prev.completedItems + 1),
-              stalled: false,
-              status: 'streaming',
-            }));
-            return;
-          }
-
-          if (parsed.type === 'COMPLETE') {
-            const folderId = activeShelfFolderIdRef.current;
-            const remainingItems = Object.values(pendingShelfItemsByIdRef.current).filter((item) => !item.added);
-            if (folderId && remainingItems.length > 0) {
-              addShelfItemsToFolder(folderId, remainingItems.map(({ id, title, quantity }) => ({ id, title, quantity })));
-              remainingItems.forEach((item) => {
-                pendingShelfItemsByIdRef.current[item.id] = { ...item, added: true };
-              });
-              setActiveItemId((current) => current || remainingItems[0]?.id || null);
-            }
-            stopShelfScan('completed', {
-              phase: 'finishing',
-              progress: 1,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
-              completedItems: parsed.data?.results?.length || shelfProgress.completedItems,
-            });
-            sheetTranslateY.value = withSpring(0, CART_SPRING);
-            return;
-          }
-
-          if (parsed.type === 'NO_ITEMS') {
-            resetShelfScanResults();
-            stopShelfScan('no_items', {
-              phase: 'finishing',
-              progress: 1,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
-              reasonCode: parsed.reasonCode,
-              message: parsed.message || 'Could not detect any items on this shelf.',
-            });
-            return;
-          }
-
-          if (parsed.type === 'TIMEOUT') {
-            stopShelfScan('timeout', {
-              phase: 'finishing',
-              progress: 1,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
-              reasonCode: parsed.reasonCode,
-              message: parsed.message || 'Shelf scan timed out before results came back.',
-            });
-            return;
-          }
-
-          if (parsed.type === 'ERROR') {
-            log.error('[SHELF MODE] Agent error:', parsed.message);
-            const parsedError = parseShelfScanErrorMessage(parsed.message);
-            stopShelfScan('error', {
-              phase: 'finishing',
-              progress: 1,
-              elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
-              reasonCode: parsed.reasonCode || parsedError.reasonCode,
-              message: parsedError.message || 'Error processing shelf scan.',
-            });
-          }
+          consumeShelfStreamEvent(parsed, token!, shelfPricingGeneration);
         },
       });
 
@@ -2605,7 +2750,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         reasonCode: 'client_preflight_failed',
       });
     }
-  }, [addShelfItemsToFolder, closeShelfScanStream, createShelfFolder, enqueueShelfPricingResearch, resetShelfScanResults, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore, shelfProgress.completedItems, sheetTranslateY, stopShelfScan]);
+  }, [closeShelfScanStream, consumeShelfStreamEvent, createShelfFolder, resetShelfScanResults, sheetTranslateY]);
 
   const runQuickScanTextSearch = useCallback(async (itemId: string, newQuery: string) => {
     try {
@@ -3165,7 +3310,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const performQuickScan = useCallback(async (
     photo: CapturedPhoto,
     itemId: string,
-    options?: { skipPreflight?: boolean; textHint?: string },
+    options?: QuickScanRunOptions,
   ) => {
     if (isAutoScanning) {
       if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
@@ -3174,7 +3319,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       const alreadyQueued = quickScanQueueRef.current.some(task => task.itemId === itemId && task.photo.id === photo.id);
       if (!alreadyQueued) {
-        quickScanQueueRef.current.push({ photo, itemId });
+        quickScanQueueRef.current.push({ photo, itemId, options });
       }
       log.debug('[QUICK SCAN] Scan in progress, queued follow-up scan');
       return;
@@ -3182,6 +3327,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     // New scan starts – clear any previous cancellation
     quickScanCancelledRef.current = false;
+    if (options?.mode === 'adaptive') setIsAdaptiveShelfScan(false);
 
     setIsAutoScanning(true);
     setCurrentInstruction('processing');
@@ -3224,7 +3370,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const gate = await preflightAIGate('ai_quick_scan', 1);
 
         if (gate.code === 'credits_exhausted_but_invoiceable') {
-          await persistPendingQuickScan(photo, itemId);
+          await persistPendingQuickScan(photo, itemId, options?.mode);
           const decision = await presentBillingGateSheet(gate);
 
           if (decision === 'billing') {
@@ -3239,7 +3385,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
           await clearPendingQuickScan();
         } else if (!gate.canProceed) {
-          await persistPendingQuickScan(photo, itemId);
+          await persistPendingQuickScan(photo, itemId, options?.mode);
           const decision = await presentBillingGateSheet(gate);
           scanErrorMessage = gate.message;
           return;
@@ -3268,7 +3414,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // 402, so a payment failure surfaces as a connection error (rare — preflight catches it).
       quickScanStreamRef.current?.close();
       quickScanStreamRef.current = null;
-      const streamResult = await new Promise<{
+      type SingleStreamResult = {
+        kind: 'single';
         matches: any[];
         confidence: any;
         livePricing?: any;
@@ -3279,11 +3426,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         rerankerAnalysis?: any;
         alreadyInInventory?: boolean;
         inventoryMatch?: any;
-      } | null>((resolve, reject) => {
+      };
+      type StreamResult = SingleStreamResult | { kind: 'multi' };
+
+      let adaptiveResolution: 'single' | 'multi' | null = null;
+      let shelfPricingGeneration = shelfPricingGenerationRef.current;
+      const runMatchStream = (streamMode: 'adaptive' | 'ocr-vlm-search') => new Promise<StreamResult | null>((resolve, reject) => {
         let latestMatches: any[] = [];
         let latestConfidence: any = 'medium';
         let latestLivePricing: any = null;
-        let latestVerdict: { canAutoConfirm?: boolean; confidenceState?: string; confidenceScore?: number; reasonCode?: string; rerankerAnalysis?: any; alreadyInInventory?: boolean; inventoryMatch?: any } = {};
+        let latestVerdict: Omit<SingleStreamResult, 'kind' | 'matches' | 'confidence' | 'livePricing'> = {};
         let settled = false;
         const finish = (run: () => void) => {
           if (settled) return;
@@ -3293,11 +3445,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           quickScanStreamRef.current = null;
           run();
         };
-        // Cancellation settles the promise even when the stream is closed externally (a delete /
-        // teardown calls stream.close(), which fires NO event) — without this the await would hang.
         const cancelWatcher = setInterval(() => {
           if (quickScanCancelledRef.current) finish(() => resolve(null));
         }, 400);
+
         quickScanStreamRef.current = openQuickScanStream({
           url: `${API_BASE_URL}/api/products/orchestrate/quick-scan-stream`,
           token,
@@ -3305,17 +3456,47 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             images: [{ url: publicImageUrl, metadata: { id: photo.id, timestamp: photo.timestamp, width: photo.width, height: photo.height } }],
             ...(options?.textHint ? { textQuery: options.textHint } : {}),
             targetSites: ['general', 'ebay.com'],
-            mode: 'ocr-vlm-search',
+            mode: streamMode,
+          },
+          onStallChange: (stalled) => {
+            if (streamMode === 'adaptive' && adaptiveResolution === null && stalled) {
+              finish(() => reject(new Error('Adaptive scan stalled before mode resolution.')));
+              return;
+            }
+            if (adaptiveResolution === 'multi') {
+              setShelfProgress((prev) => ({ ...prev, stalled }));
+            }
           },
           onEvent: (evt) => {
-            if (quickScanCancelledRef.current) { finish(() => resolve(null)); return; }
-            // Surface the agent's human-readable progress message as the card's live stage text.
+            if (quickScanCancelledRef.current) {
+              finish(() => resolve(null));
+              return;
+            }
+
+            if (streamMode === 'adaptive' && evt.type === 'MODE_RESOLVED') {
+              if (evt.detected === 'multi') {
+                adaptiveResolution = 'multi';
+                shelfPricingGeneration = shelfPricingGenerationRef.current;
+                beginAdaptiveShelfScan(photo, itemId, evt);
+              } else {
+                adaptiveResolution = 'single';
+                setIsAdaptiveShelfScan(false);
+              }
+              return;
+            }
+
+            if (adaptiveResolution === 'multi') {
+              consumeShelfStreamEvent(evt, token, shelfPricingGeneration);
+              if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
+                finish(() => resolve({ kind: 'multi' }));
+              }
+              return;
+            }
+
+            // The resolved-single branch intentionally stays on today's result path.
             if (evt.message && evt.type !== 'COMPLETE') {
               setItemLoadingStates(prev => ({ ...prev, [itemId]: { isLoading: true, stage: evt.message as string, error: undefined } }));
             }
-            // Matches arrive either in an intermediate SEARCH_RESULT (evt.result.matches) OR in
-            // the terminal payload (evt.data.results[].matches — where this backend actually puts
-            // the final list). Capture whichever we see, preferring the latest non-empty.
             const fromResult = Array.isArray(evt.result?.matches) ? evt.result.matches : null;
             const fromData = Array.isArray(evt.data?.results) ? evt.data.results.flatMap((r: any) => r?.matches || []) : null;
             const seen = (fromResult && fromResult.length) ? fromResult : ((fromData && fromData.length) ? fromData : null);
@@ -3323,11 +3504,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               latestMatches = seen;
               latestConfidence = evt.result?.confidence ?? evt.data?.overallConfidence ?? latestConfidence;
             }
-            // Free live price range the match already computed from its eBay results.
             if (evt.result?.livePricing) latestLivePricing = evt.result.livePricing;
             else if (evt.data?.results?.[0]?.livePricing) latestLivePricing = evt.data.results[0].livePricing;
-            // Backend's structured quality verdict (the single source of truth) — prefer the rich
-            // SEARCH_RESULT, fall back to the terminal mappedResults[0] / COMPLETE data.
+
             const verdictSrc = (evt.result && typeof evt.result.canAutoConfirm === 'boolean') ? evt.result
               : (evt.data?.results?.[0] && typeof evt.data.results[0].canAutoConfirm === 'boolean') ? evt.data.results[0]
               : (typeof evt.data?.canAutoConfirm === 'boolean' ? evt.data : null);
@@ -3342,17 +3521,52 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 inventoryMatch: verdictSrc.inventoryMatch ?? latestVerdict.inventoryMatch,
               };
             }
-            // Resolve on a terminal event (COMPLETE / NO_ITEMS) or as soon as a terminal data
-            // payload (evt.data.results) lands — even under a non-standard terminal type.
+
             if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || Array.isArray(evt.data?.results)) {
-              finish(() => resolve({ matches: latestMatches, confidence: latestConfidence, livePricing: latestLivePricing, ...latestVerdict }));
+              finish(() => resolve({
+                kind: 'single',
+                matches: latestMatches,
+                confidence: latestConfidence,
+                livePricing: latestLivePricing,
+                ...latestVerdict,
+              }));
             } else if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
               finish(() => reject(new Error(evt.message || 'Match failed.')));
             }
           },
-          onConnectionError: (message) => { finish(() => reject(new Error(message || 'Connection failed.'))); },
+          onConnectionError: (message) => {
+            if (adaptiveResolution === 'multi') {
+              const parsedError = parseShelfScanErrorMessage(message);
+              stopShelfScan('error', {
+                phase: 'finishing',
+                progress: 1,
+                message: parsedError.message,
+                reasonCode: parsedError.reasonCode || 'stream_disconnected',
+              });
+              finish(() => resolve({ kind: 'multi' }));
+              return;
+            }
+            finish(() => reject(new Error(message || 'Connection failed.')));
+          },
         });
       });
+
+      const requestedMode = options?.mode === 'adaptive' ? 'adaptive' : 'ocr-vlm-search';
+      let streamResult: StreamResult | null;
+      try {
+        streamResult = await runMatchStream(requestedMode);
+      } catch (streamError) {
+        if (
+          requestedMode === 'adaptive'
+          && adaptiveResolution === null
+          && !quickScanCancelledRef.current
+        ) {
+          log.warn('[QUICK SCAN] Adaptive stream failed before resolution; retrying legacy single scan.');
+          streamResult = await runMatchStream('ocr-vlm-search');
+        } else {
+          throw streamError;
+        }
+      }
 
       // Cancelled (or the stream was closed out from under us): bail without mutating state.
       if (quickScanCancelledRef.current || !streamResult) return;
@@ -3360,6 +3574,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // The match ran — count usage + clear any persisted billing-pending scan.
       incrementLocalUsage();
       await clearPendingQuickScan();
+
+      // Multi results have already streamed through the shared shelf consumer and the
+      // normal-camera placeholder item was replaced by a folder at MODE_RESOLVED.
+      if (streamResult.kind === 'multi') return;
 
       // Skip writing results for an item the user deleted mid-match — avoids resurrecting an
       // orphaned quickScanStore/confirmed entry for an item that no longer exists.
@@ -3654,7 +3872,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       const nextQueued = quickScanQueueRef.current.shift();
       if (nextQueued && !quickScanCancelledRef.current) {
-        setTimeout(() => performQuickScan(nextQueued.photo, nextQueued.itemId), 120);
+        setTimeout(() => performQuickScan(nextQueued.photo, nextQueued.itemId, nextQueued.options), 120);
       } else if (!nextQueued) {
         setCurrentInstruction('ready');
       }
@@ -3671,6 +3889,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     persistPendingQuickScan,
     presentBillingGateSheet,
     clearPendingQuickScan,
+    beginAdaptiveShelfScan,
+    consumeShelfStreamEvent,
+    stopShelfScan,
   ]);
 
   // Re-research an item from a typed correction (the "Wrong item?" detail box or a cart
@@ -3775,7 +3996,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         showNotificationMessage('Resuming pending scan...', 1800);
 
         try {
-          await performQuickScan(pending.photo as CapturedPhoto, pending.itemId, { skipPreflight: true });
+          await performQuickScan(pending.photo as CapturedPhoto, pending.itemId, {
+            skipPreflight: true,
+            mode: pending.scanMode,
+          });
         } finally {
           if (active) {
             isResumingPendingBillingRef.current = false;
@@ -4787,7 +5011,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           cardBottomOffset={CAMERA_BOTTOM_GAP + 44}
           onSwipeItem={stepActiveItem}
           onPress={
-            cameraMode === 'shelf' && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
+            (cameraMode === 'shelf' || isAdaptiveShelfScan) && !showDeepSearchSheet && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
               ? openBulkItemsSheet
               : handleMatchIndicatorPress
           }
@@ -4827,6 +5051,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         cameraMode={cameraMode}
         onSetCameraMode={(mode) => {
           setCameraMode(mode);
+          setIsAdaptiveShelfScan(false);
           setScannedBarcode(null);
           setCurrentInstruction('ready');
         }}
@@ -4839,6 +5064,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onSelectItem={(id) => setActiveItemId(id)}
         matchedItemsCount={matchedItemsCount}
         maxItems={MAX_BATCH_ITEMS}
+        shelfItemCount={currentShelfItemCount}
+        isShelfStreaming={shelfProgress.status === 'streaming'}
+        isShelfHandling={isAdaptiveShelfScan}
         onNewItem={addNewBulkItem}
         onOpenBarcodeEntry={
           cameraMode === 'barcode'
@@ -4851,7 +5079,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
         showDeepSearchSheet={showDeepSearchSheet}
         onOpenSheet={
-          cameraMode === 'shelf' && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
+          (cameraMode === 'shelf' || isAdaptiveShelfScan) && (isProcessingShelfScan || bulkItems.length > 0 || shelfPhotoUri)
             ? openBulkItemsSheet
             : undefined
         }
@@ -4939,15 +5167,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   connectedPlatformKeys={connectedPlatformKeys}
                   currentInstruction={currentInstruction}
                   onOpenLocalMatch={openExistingInventoryMatch}
+                  inventoryMatchByItemId={inventoryDedupByItemId}
+                  shelfPricingPendingByItemId={shelfPricingPendingByItemId}
                   shelfPhotoUri={shelfPhotoUri}
                   shelfProgress={shelfProgress}
                   onRetryShelfScan={() => {
                     const lastPhoto = lastShelfScanPhotoRef.current;
                     if (!lastPhoto) return;
-                    void handleShelfModeScan(lastPhoto);
+                    void handleShelfModeScan(lastPhoto, {
+                      preserveAdaptivePresentation: isAdaptiveShelfScan,
+                    });
                   }}
                   onRetakeShelfScan={clearShelfScanForRetake}
-                  cameraMode={cameraMode}
+                  cameraMode={isAdaptiveShelfScan ? 'shelf' : cameraMode}
                   onSubmitItemsForProcessing={markItemsSubmittedForMatch}
                   onSaveDraft={() => {
                     if (

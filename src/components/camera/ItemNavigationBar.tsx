@@ -15,6 +15,9 @@ interface ItemNavigationBarProps {
     onContinue: () => void;
     onDeleteItem?: (itemId: string) => void;
     matchesStore?: Record<string, { matchData: any }>;
+    cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
+    shelfItemCount?: number;
+    isShelfStreaming?: boolean;
 }
 
 export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
@@ -24,15 +27,24 @@ export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
     onNewItem,
     onContinue,
     onDeleteItem,
-    matchesStore
+    matchesStore,
+    cameraMode = 'camera',
+    shelfItemCount = 0,
+    isShelfStreaming = false,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
     const totalItems = items.length;
     const totalPhotos = items.reduce((sum, item) => sum + item.photos.length, 0);
     const hasPhotos = totalPhotos > 0;
+    const hasShelfState = cameraMode === 'shelf' && (isShelfStreaming || shelfItemCount > 0);
+    const canContinue = hasPhotos || hasShelfState;
 
     // Determine the continue button text (item count, not photo count, for clarity)
     const getContinueText = () => {
+        if (cameraMode === 'shelf') {
+            if (isShelfStreaming) return shelfItemCount > 0 ? `${shelfItemCount} found` : 'Finding items…';
+            if (shelfItemCount > 0) return `${shelfItemCount} item${shelfItemCount === 1 ? '' : 's'} on your shelf`;
+        }
         if (!hasPhotos) return 'Take a photo to get started';
         if (totalItems > 0) return `Manage ${totalItems} Item${totalItems === 1 ? '' : 's'}`;
         return 'Manage Items';
@@ -68,11 +80,11 @@ export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
                         <TouchableOpacity
                             style={[
                                 styles.continueButton,
-                                !hasPhotos && styles.continueButtonEmpty
+                                !canContinue && styles.continueButtonEmpty
                             ]}
-                            onPress={hasPhotos ? onContinue : undefined}
-                            disabled={!hasPhotos}
-                            activeOpacity={hasPhotos ? 0.8 : 1}
+                            onPress={canContinue ? onContinue : undefined}
+                            disabled={!canContinue}
+                            activeOpacity={canContinue ? 0.8 : 1}
                         >
                             {hasPhotos && totalItems > 1 && (
                                 <Text style={styles.itemIndicator}>
@@ -81,7 +93,7 @@ export const ItemNavigationBar: React.FC<ItemNavigationBarProps> = ({
                             )}
                             <Text style={[
                                 styles.continueButtonText,
-                                !hasPhotos && styles.continueButtonTextEmpty
+                                !canContinue && styles.continueButtonTextEmpty
                             ]}>
                                 {getContinueText()}
                             </Text>

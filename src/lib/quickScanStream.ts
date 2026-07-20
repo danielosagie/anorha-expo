@@ -9,6 +9,7 @@ export type QuickScanPhase =
 
 export type QuickScanEventType =
   | 'START_ANALYSIS'
+  | 'MODE_RESOLVED'
   | 'EXTRACTED_ITEMS'
   | 'OPTIMIZING_QUERIES'
   | 'SEARCHING_ITEMS'
@@ -28,6 +29,7 @@ export type QuickScanStreamEvent = {
   totalItems?: number;
   completedItems?: number;
   count?: number;
+  detected?: 'single' | 'multi';
   itemKey?: string;
   items?: Array<string | { query: string; quantity?: number }>;
   result?: any;

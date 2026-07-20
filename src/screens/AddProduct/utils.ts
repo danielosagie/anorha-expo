@@ -61,16 +61,14 @@ export const getShelfProgressPresentation = (progress: ShelfProgressState) => {
       };
     case 'searching_matches':
       return {
-        title: progress.completedItems > 0 ? 'Streaming in matches' : 'Searching matches',
-        subtitle: progress.completedItems > 0
-          ? `Matched ${progress.completedItems} of ${Math.max(progress.totalItems, progress.completedItems)} detected items so far.`
-          : 'Looking up each detected item and filling the queue as matches land.',
+        title: progress.completedItems > 0 ? `${progress.completedItems} found` : 'Finding items…',
+        subtitle: 'Items appear as found.',
         instruction: 'searching' as CameraInstruction,
       };
     case 'finishing':
       return {
-        title: 'Finishing analysis',
-        subtitle: 'Wrapping up the last shelf results.',
+        title: progress.completedItems > 0 ? `${progress.completedItems} found` : 'Finding items…',
+        subtitle: 'Finishing scan.',
         instruction: 'searching' as CameraInstruction,
       };
     case 'inspecting_shelf':

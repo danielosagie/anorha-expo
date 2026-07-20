@@ -33,6 +33,9 @@ export const BottomControls: React.FC<{
   onOpenSheet?: () => void;
   matchedItemsCount?: number;
   maxItems?: number;
+  shelfItemCount?: number;
+  isShelfStreaming?: boolean;
+  isShelfHandling?: boolean;
 }> = ({
   onCapture,
   isCapturing,
@@ -53,9 +56,13 @@ export const BottomControls: React.FC<{
   onOpenSheet,
   matchedItemsCount = 0,
   maxItems = MAX_BATCH_ITEMS,
+  shelfItemCount = 0,
+  isShelfStreaming = false,
+  isShelfHandling = false,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
     const totalItems = items.length;
+    const shelfHandling = cameraMode === 'shelf' || isShelfHandling;
     // Drag-to-select logic using simple state
     const [hoveredMode, setHoveredMode] = useState<CameraMode | null>(null);
     const [showModePopup, setShowModePopup] = useState(false);
@@ -169,6 +176,10 @@ export const BottomControls: React.FC<{
           ? `Process ${photosCount} receipt${photosCount > 1 ? 's' : ''}`
           : 'Capture receipt';
       }
+      if (shelfHandling) {
+        if (isShelfStreaming) return shelfItemCount > 0 ? `${shelfItemCount} found` : 'Finding items…';
+        if (shelfItemCount > 0) return `${shelfItemCount} item${shelfItemCount === 1 ? '' : 's'} on your shelf`;
+      }
       if (photosCount === 0) return 'Take a photo to get started';
       return 'Cart';
     };
@@ -261,7 +272,7 @@ export const BottomControls: React.FC<{
           </View>
         </Animated.View>
 
-        {((cameraMode === 'shelf' && !showDeepSearchSheet && items.length > 0 && onOpenSheet) || (cameraMode !== 'shelf' && (cameraMode === 'barcode' || photosCount >= 1 || items.some((i) => i.title)))) && (
+        {((shelfHandling && !showDeepSearchSheet && (isShelfStreaming || shelfItemCount > 0 || items.length > 0) && onOpenSheet) || (!shelfHandling && (cameraMode === 'barcode' || photosCount >= 1 || items.some((i) => i.title)))) && (
           <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
             {cameraMode === 'barcode' ? (
               hasBarcodeResult ? (
@@ -314,9 +325,9 @@ export const BottomControls: React.FC<{
                     Shelf prefers the bulk-items sheet when available. */}
                 <TouchableOpacity
                   style={styles.continueButton}
-                  onPress={cameraMode === 'shelf' && onOpenSheet ? onOpenSheet : onContinue}
+                  onPress={shelfHandling && onOpenSheet ? onOpenSheet : onContinue}
                 >
-                  {photosCount > 0 && <Icon name="cart-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />}
+                  {(photosCount > 0 || shelfItemCount > 0) && <Icon name="cart-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />}
                   <Text style={styles.continueButtonText} numberOfLines={1}>
                     {getContinueText()}
                   </Text>
