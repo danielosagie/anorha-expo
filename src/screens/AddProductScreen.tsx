@@ -1998,6 +1998,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   };
 
+  // The center overlay reflects the item the user is LOOKING AT, not the global scan
+  // machine: swapping to (or creating) an item that isn't scanning must not keep showing
+  // another item's "Searching for your item…" state. No active item (pre-first-photo,
+  // shelf/adaptive folder streaming) keeps the global instruction.
+  const SCAN_INSTRUCTION_SET = ['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'];
+  const activeItemScanning = !activeItemId || !!itemLoadingStates[activeItemId]?.isLoading;
+  const overlayInstruction = (!activeItemScanning && SCAN_INSTRUCTION_SET.includes(currentInstruction))
+    ? 'ready'
+    : currentInstruction;
+
   // Handle focus tap
   const handleFocusTap = useCallback((event: any) => {
     const { locationX, locationY } = event.nativeEvent;
@@ -3118,6 +3128,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       log.debug('[IMAGE UPLOAD] Adding', assets.length, 'uploaded image(s)');
 
+      // Gallery uploads in normal camera mode go through the same hidden-adaptive route as
+      // captures: one photo of several things becomes a shelf folder, one thing stays single.
+      // Explicit corrections (targetItemId from wrong-item / add-details) stay single-scan.
+      const uploadScanOptions: QuickScanRunOptions | undefined = cameraMode === 'camera'
+        ? { mode: 'adaptive' }
+        : undefined;
       // Build CapturedPhoto for each selected asset (no crop frame)
       const newPhotos: CapturedPhoto[] = assets.map((asset, idx) => ({
         id: `upload-${Date.now()}-${idx}`,
@@ -3150,7 +3166,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setActiveItemId(firstItem.id);
         setCapturedPhotos(prev => [...prev, ...newPhotos]);
         if (newPhotos[0]) {
-          setTimeout(() => performQuickScan(newPhotos[0], firstItem.id), 500);
+          setTimeout(() => performQuickScan(newPhotos[0], firstItem.id, uploadScanOptions), 500);
         }
       } else if ((targetItemId ?? activeItemId)) {
         // targetItemId (passed by the wrong-item / add-details flows) wins over activeItemId,
@@ -3168,7 +3184,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // Plain multi-photo gallery imports to an already-matched item don't each fire a full
         // (~15s, billable) re-match — that was a cost regression from dropping the old gate.
         if (newPhotos[0] && (!!targetItemId || wasEmpty)) {
-          setTimeout(() => performQuickScan(newPhotos[0], effectiveItemId), 500);
+          setTimeout(() => performQuickScan(newPhotos[0], effectiveItemId, targetItemId ? undefined : uploadScanOptions), 500);
         }
       } else {
         if (!canAddAnotherItem(bulkItems.length)) {
@@ -3184,7 +3200,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setActiveItemId(newItem.id);
         setCapturedPhotos(prev => [...prev, ...newPhotos]);
         if (newPhotos[0]) {
-          setTimeout(() => performQuickScan(newPhotos[0], newItem.id), 500);
+          setTimeout(() => performQuickScan(newPhotos[0], newItem.id, uploadScanOptions), 500);
         }
       }
     }
@@ -5021,8 +5037,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           stays pinned to the card's bottom edge while the cart opens. */}
       <Animated.View style={[StyleSheet.absoluteFill, cameraCardSlideStyle]} pointerEvents="box-none">
         <CenterOverlay
-          instruction={getInstructionText(currentInstruction)}
-          isProcessing={['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'].includes(currentInstruction)}
+          instruction={getInstructionText(overlayInstruction)}
+          isProcessing={SCAN_INSTRUCTION_SET.includes(overlayInstruction)}
           cameraMode={cameraMode}
           scannedBarcode={scannedBarcode}
           onCopyBarcode={copyBarcodeToClipboard}
@@ -5034,7 +5050,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               ? openBulkItemsSheet
               : handleMatchIndicatorPress
           }
-          totalPhotos={bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
+          totalPhotos={activeItemId
+            ? (bulkItems.find((it) => it.id === activeItemId)?.photos.length ?? 0)
+            : bulkItems.reduce((sum, sumItem) => sum + sumItem.photos.length, 0)}
         />
       </Animated.View>
 
