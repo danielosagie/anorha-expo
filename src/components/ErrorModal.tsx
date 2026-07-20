@@ -10,6 +10,7 @@ import {
     Dimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { CHAT_COLORS } from '../design/chatGlass';
 
 const { width } = Dimensions.get('window');
 
@@ -22,8 +23,16 @@ interface ErrorModalProps {
     message: string;
     buttonText?: string;
     onClose: () => void;
+    onPrimaryPress?: () => void;
+    primaryColor?: string;
+    primaryTextColor?: string;
+    accentColor?: string;
+    accentBackgroundColor?: string;
     secondaryButtonText?: string;
     onSecondaryPress?: () => void;
+    quietButtonText?: string;
+    onQuietPress?: () => void;
+    messageNumberOfLines?: number;
 }
 
 const getTypeConfig = (type: ModalType) => {
@@ -68,8 +77,16 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
     message,
     buttonText = 'Got It',
     onClose,
+    onPrimaryPress,
+    primaryColor,
+    primaryTextColor,
+    accentColor,
+    accentBackgroundColor,
     secondaryButtonText,
     onSecondaryPress,
+    quietButtonText,
+    onQuietPress,
+    messageNumberOfLines,
 }) => {
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const scaleAnim = useRef(new Animated.Value(0.9)).current;
@@ -130,43 +147,67 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
                             <View
                                 style={[
                                     styles.iconContainer,
-                                    { backgroundColor: config.backgroundColor },
+                                    { backgroundColor: accentBackgroundColor || config.backgroundColor },
                                 ]}
                             >
-                                <Icon name={config.icon} size={32} color={config.color} />
+                                <Icon name={config.icon} size={32} color={accentColor || config.color} />
                             </View>
 
                             {/* Title */}
                             <Text style={styles.title}>{title}</Text>
 
                             {/* Message */}
-                            <Text style={styles.message}>{message}</Text>
+                            <Text style={styles.message} numberOfLines={messageNumberOfLines}>{message}</Text>
 
                             {/* Buttons */}
-                            <View style={styles.buttonContainer}>
-                                {secondaryButtonText && onSecondaryPress && (
+                            {quietButtonText && onQuietPress ? (
+                                <View style={styles.stackedButtonContainer}>
                                     <TouchableOpacity
-                                        style={styles.secondaryButton}
-                                        onPress={onSecondaryPress}
-                                        activeOpacity={0.7}
+                                        style={[styles.primaryButton, styles.buttonFull, { backgroundColor: primaryColor || CHAT_COLORS.brand }]}
+                                        onPress={onPrimaryPress || onClose}
+                                        activeOpacity={0.8}
                                     >
-                                        <Text style={styles.secondaryButtonText}>
-                                            {secondaryButtonText}
-                                        </Text>
+                                        <Text style={[styles.primaryButtonText, primaryTextColor ? { color: primaryTextColor } : null]}>{buttonText}</Text>
                                     </TouchableOpacity>
-                                )}
-                                <TouchableOpacity
-                                    style={[
-                                        styles.primaryButton,
-                                        { backgroundColor: config.color },
-                                        secondaryButtonText ? styles.buttonWithSecondary : styles.buttonFull,
-                                    ]}
-                                    onPress={onClose}
-                                    activeOpacity={0.8}
-                                >
-                                    <Text style={styles.primaryButtonText}>{buttonText}</Text>
-                                </TouchableOpacity>
-                            </View>
+                                    {secondaryButtonText && onSecondaryPress ? (
+                                        <TouchableOpacity
+                                            style={[styles.secondaryButton, styles.buttonFull]}
+                                            onPress={onSecondaryPress}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Text style={styles.secondaryButtonText}>{secondaryButtonText}</Text>
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <TouchableOpacity style={styles.quietButton} onPress={onQuietPress} activeOpacity={0.65}>
+                                        <Text style={styles.quietButtonText}>{quietButtonText}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            ) : (
+                                <View style={styles.buttonContainer}>
+                                    {secondaryButtonText && onSecondaryPress && (
+                                        <TouchableOpacity
+                                            style={styles.secondaryButton}
+                                            onPress={onSecondaryPress}
+                                            activeOpacity={0.7}
+                                        >
+                                            <Text style={styles.secondaryButtonText}>
+                                                {secondaryButtonText}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.primaryButton,
+                                            { backgroundColor: primaryColor || config.color },
+                                            secondaryButtonText ? styles.buttonWithSecondary : styles.buttonFull,
+                                        ]}
+                                        onPress={onPrimaryPress || onClose}
+                                        activeOpacity={0.8}
+                                    >
+                                        <Text style={[styles.primaryButtonText, primaryTextColor ? { color: primaryTextColor } : null]}>{buttonText}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
                         </Animated.View>
                     </TouchableWithoutFeedback>
                 </View>
@@ -224,6 +265,10 @@ const styles = StyleSheet.create({
         gap: 12,
         width: '100%',
     },
+    stackedButtonContainer: {
+        width: '100%',
+        gap: 10,
+    },
     primaryButton: {
         borderRadius: 12,
         paddingVertical: 14,
@@ -254,6 +299,16 @@ const styles = StyleSheet.create({
     secondaryButtonText: {
         color: '#666',
         fontSize: 16,
+        fontFamily: 'Inter_600SemiBold',
+    },
+    quietButton: {
+        minHeight: 40,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    quietButtonText: {
+        color: CHAT_COLORS.dim,
+        fontSize: 15,
         fontFamily: 'Inter_600SemiBold',
     },
 });

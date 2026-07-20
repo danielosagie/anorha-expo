@@ -180,6 +180,7 @@ export const BottomControls: React.FC<{
         if (isShelfStreaming) return shelfItemCount > 0 ? `${shelfItemCount} found` : 'Finding items…';
         if (shelfItemCount > 0) return `${shelfItemCount} item${shelfItemCount === 1 ? '' : 's'} on your shelf`;
       }
+      if (totalItems > 0) return 'Cart';
       if (photosCount === 0) return 'Take a photo to get started';
       return 'Cart';
     };
@@ -272,7 +273,7 @@ export const BottomControls: React.FC<{
           </View>
         </Animated.View>
 
-        {((shelfHandling && !showDeepSearchSheet && (isShelfStreaming || shelfItemCount > 0 || items.length > 0) && onOpenSheet) || (!shelfHandling && (cameraMode === 'barcode' || photosCount >= 1 || items.some((i) => i.title)))) && (
+        {((shelfHandling && !showDeepSearchSheet && (isShelfStreaming || shelfItemCount > 0 || items.length > 0) && onOpenSheet) || (!shelfHandling && (cameraMode === 'barcode' || photosCount >= 1 || items.length > 0))) && (
           <Animated.View entering={SlideInDown.delay(700)} style={styles.continueButtonContainer}>
             {cameraMode === 'barcode' ? (
               hasBarcodeResult ? (
@@ -327,7 +328,7 @@ export const BottomControls: React.FC<{
                   style={styles.continueButton}
                   onPress={shelfHandling && onOpenSheet ? onOpenSheet : onContinue}
                 >
-                  {(photosCount > 0 || shelfItemCount > 0) && <Icon name="cart-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />}
+                  {(totalItems > 0 || photosCount > 0 || shelfItemCount > 0) && <Icon name="cart-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />}
                   <Text style={styles.continueButtonText} numberOfLines={1}>
                     {getContinueText()}
                   </Text>

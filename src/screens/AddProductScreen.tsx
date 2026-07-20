@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config/env';
 import { BRAND_PRIMARY } from '../design/tokens';
+import { CHAT_COLORS } from '../design/chatGlass';
 import type {
   UnicodeSpinnerDefinition,
   CameraMode,
@@ -25,6 +26,7 @@ import { useBulkItems } from './AddProduct/hooks/useBulkItems';
 import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
 import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
 import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
+import ErrorModal from '../components/ErrorModal';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
@@ -84,6 +86,14 @@ type QuickScanRunOptions = {
   skipPreflight?: boolean;
   textHint?: string;
   mode?: 'adaptive' | 'legacy';
+};
+
+type InventoryDedupDialogState = {
+  itemId: string;
+  match: any;
+  title: string;
+  fallbackInstruction?: CameraInstruction;
+  onAddAsNew?: () => void;
 };
 
 const normalizeShelfQuery = (value: unknown): string =>
@@ -528,10 +538,13 @@ const getSelectedQuickMatchCandidate = (
 ) => {
   if (matchInfo && Array.isArray(matchInfo.matchRows) && matchInfo.preSelectedIndices?.length) {
     const selectedIndex = matchInfo.preSelectedIndices[0];
-    return {
-      candidate: matchInfo.matchRows[selectedIndex] ?? null,
-      isConfirmed: true,
-    };
+    const confirmedCandidate = matchInfo.matchRows[selectedIndex];
+    if (confirmedCandidate) {
+      return {
+        candidate: confirmedCandidate,
+        isConfirmed: true,
+      };
+    }
   }
 
   return {
@@ -682,6 +695,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Keyed by itemId so it works for single scans and per-item in shelf/multi. fallbackInstruction
   // is the verdict the banner would otherwise show, restored when the user picks "Add as new".
   const [inventoryDedupByItemId, setInventoryDedupByItemId] = useState<Record<string, { match: any; fallbackInstruction: CameraInstruction }>>({});
+  const [inventoryDedupDialog, setInventoryDedupDialog] = useState<InventoryDedupDialogState | null>(null);
   const [barcodeSearching, setBarcodeSearching] = useState(false);
   const [showBarcodeResultModal, setShowBarcodeResultModal] = useState(false);
   const [platformLocations, setPlatformLocations] = useState<{ id: string; name: string; platformType?: string; connectionId: string }[]>([]);
@@ -925,7 +939,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // confirmedQuickMatchByItemId / itemStageById / processedItemIds / activeItemId.
   const {
     bulkItems, setBulkItems,
-    activeItemId, setActiveItemId,
+    activeItemId, setActiveItemId: setActiveItemIdState,
     quickScanStore, setQuickScanStore,
     confirmedQuickMatchByItemId, setConfirmedQuickMatchByItemId,
     itemStageById, setItemStageById,
@@ -938,6 +952,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     itemStageById: params?.itemStageById || {},
     processedItemIds: params?.processedItemIds || [],
   }));
+
+  // cart$ updates synchronously, while the hook snapshot reaches callback closures on the
+  // next render. Mirror every local active-item write immediately so a New → Upload/Capture
+  // sequence cannot resolve its target from the previous render's active id.
+  const activeItemIdRef = useRef<string | null>(activeItemId);
+  activeItemIdRef.current = activeItemId;
+  const setActiveItemId = useCallback((next: React.SetStateAction<string | null>) => {
+    const resolved = typeof next === 'function'
+      ? (next as (current: string | null) => string | null)(activeItemIdRef.current)
+      : next;
+    activeItemIdRef.current = resolved;
+    setActiveItemIdState(resolved);
+  }, [setActiveItemIdState]);
 
   // Live mirror of bulkItems for callbacks (performQuickScan / stream handlers) that must read
   // the CURRENT items without taking bulkItems as a dependency. Used to skip writing scan
@@ -1677,7 +1704,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const isFocused = useIsFocused();
 
   // "Creating your listings" → "Ready to review" card flow (post-checkout).
-  const [creatingListings, setCreatingListings] = useState<{ photoUri?: string | null; count: number } | null>(null);
+  const [creatingListings, setCreatingListings] = useState<{ photoUri?: string | null; count: number; itemIds?: string[] } | null>(null);
   const [listingsReady, setListingsReady] = useState<{ count: number } | null>(null);
   // "Done" hides the processing CARD but creation keeps running (so the ready card +
   // notification still fire) — so we track dismissal separately from the creation state.
@@ -1690,11 +1717,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // covers the away case). The sawLoading guard avoids firing before loading is observed.
   useEffect(() => {
     if (!creatingListings) { listingsReadyShownRef.current = false; sawCreationLoadingRef.current = false; return; }
-    const anyLoading = Object.values(itemLoadingStates || {}).some((s) => s?.isLoading);
+    const creationIds = creatingListings.itemIds ?? [];
+    const anyLoading = creationIds.length > 0
+      ? creationIds.some((id) => itemLoadingStates[id]?.isLoading)
+      : Object.values(itemLoadingStates || {}).some((s) => s?.isLoading);
     if (anyLoading) { sawCreationLoadingRef.current = true; return; }
     if (sawCreationLoadingRef.current && !listingsReadyShownRef.current) {
       listingsReadyShownRef.current = true;
-      const anyGenerated = Object.values(itemStageById || {}).some((s) => s === 'generated');
+      const anyGenerated = creationIds.length > 0
+        ? creationIds.some((id) => itemStageById[id] === 'generated')
+        : Object.values(itemStageById || {}).some((s) => s === 'generated');
       const count = creatingListings.count;
       setCreatingListings(null);
       if (anyGenerated && isFocusedRef.current && AppState.currentState === 'active') {
@@ -2102,12 +2134,28 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return updated;
         });
 
-        if (cameraMode === 'shelf' && bulkItems.length === 0) {
+        const liveItems = bulkItemsRef.current;
+        const liveActiveId = activeItemIdRef.current;
+        const targetItem = liveActiveId
+          ? (liveItems.find((item) => item.id === liveActiveId) ?? selectItem(liveActiveId))
+          : liveItems.find((item) => item.isActive);
+
+        if (cameraMode === 'shelf' && liveItems.length === 0 && !targetItem) {
           setShelfPhotoUri(newPhoto.uri);
           handleShelfModeScan(newPhoto);
         } else {
-          // SIMPLIFIED: Always create real items, regardless of mode
-          if (bulkItems.length === 0) {
+          if (targetItem) {
+            // The destination is resolved once from live refs. Attach and scan with that exact
+            // id so a rapid New → shutter sequence cannot split the photo and its result.
+            const targetId = targetItem.id;
+            const wasEmpty = (targetItem.photos?.length ?? 0) === 0;
+            setBulkItems(prev => prev.map((item) => (
+              item.id === targetId
+                ? { ...item, isActive: true, photos: [...item.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] }
+                : { ...item, isActive: false }
+            )));
+            if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, targetId, quickScanOptions), 500);
+          } else if (liveItems.length === 0) {
             // Very first photo ever - create first item
             log.debug('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
             const firstItem = {
@@ -2128,56 +2176,27 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               performQuickScan(newPhoto, firstItem.id, quickScanOptions);
             }, 500);
 
+          } else if (!canAddAnotherItem(liveItems.length)) {
+            const fallback = liveItems[0];
+            if (fallback) {
+              const fallbackId = fallback.id;
+              const wasEmpty = fallback.photos.length === 0;
+              setActiveItemId(fallbackId);
+              setBulkItems(prev => prev.map((item) => (
+                item.id === fallbackId
+                  ? { ...item, isActive: true, photos: [...item.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] }
+                  : { ...item, isActive: false }
+              )));
+              if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, fallbackId, quickScanOptions), 500);
+            }
           } else {
-            // Use current state (prev) to avoid stale closures. Prefer active item by isActive flag.
-            setBulkItems(prev => {
-              if (prev.length === 0) {
-                // First item
-                const firstId = `item-${Date.now()}`;
-                setActiveItemId(firstId);
-                setTimeout(() => performQuickScan(newPhoto, firstId, quickScanOptions), 500);
-                return [{ id: firstId, photos: [newPhoto], title: undefined, isActive: true }];
-              }
-
-              const activeIndex = prev.findIndex(it => it.isActive);
-              if (activeIndex >= 0) {
-                const activeItemIdLocal = prev[activeIndex].id;
-                const wasEmpty = prev[activeIndex].photos.length === 0;
-                const next = prev.map((it, idx) => {
-                  if (idx !== activeIndex) return it;
-                  // First photo of the item is its cover; later snaps are gallery shots.
-                  const updated = { ...it, photos: [...it.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] };
-                  // Scan ONLY on the cover (first) photo. Adding more gallery photos to an
-                  // already-scanned item must NOT each fire a full (billable ~15s) re-match —
-                  // re-check happens when the COVER changes (setBulkItemCoverPhoto), not per add.
-                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, activeItemIdLocal, quickScanOptions), 500);
-                  return updated;
-                });
-                return next;
-              }
-
-              // No active item flagged; create a new active item
-              if (!canAddAnotherItem(prev.length)) {
-                if (prev[0]) {
-                  const fallbackId = prev[0].id;
-                  const wasEmpty = prev[0].photos.length === 0;
-                  setActiveItemId(fallbackId);
-                  // Scan only when this is the item's cover (first) photo — not a gallery add.
-                  if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, fallbackId, quickScanOptions), 500);
-                  return prev.map((it, idx) => {
-                    if (idx === 0) {
-                      return { ...it, isActive: true, photos: [...it.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] };
-                    }
-                    return { ...it, isActive: false };
-                  });
-                }
-                return prev;
-              }
-              const newId = `item-${Date.now()}`;
-              setActiveItemId(newId);
-              setTimeout(() => performQuickScan(newPhoto, newId, quickScanOptions), 500);
-              return [...prev.map(it => ({ ...it, isActive: false })), { id: newId, photos: [newPhoto], title: undefined, isActive: true }];
-            });
+            const newId = `item-${Date.now()}`;
+            setActiveItemId(newId);
+            setBulkItems(prev => [
+              ...prev.map(item => ({ ...item, isActive: false })),
+              { id: newId, photos: [{ ...newPhoto, isCover: true }], title: undefined, isActive: true },
+            ]);
+            setTimeout(() => performQuickScan(newPhoto, newId, quickScanOptions), 500);
           }
 
           setCurrentInstruction('ready');
@@ -3144,9 +3163,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         isCover: false,
       }));
 
+      // Resolve the destination exactly once from live state after the picker returns. The
+      // same id is used for both the photo mutation and performQuickScan below.
+      const liveItems = bulkItemsRef.current;
+      const effectiveItemId = targetItemId ?? activeItemIdRef.current;
+      const effectiveItem = effectiveItemId
+        ? (liveItems.find((item) => item.id === effectiveItemId) ?? selectItem(effectiveItemId))
+        : null;
+
       // SHELF MODE: Route uploaded image to shelf extraction instead of normal bulkItems
       // ONLY if we don't already have items. If we have items, we are likely adding photos to one of them.
-      if (cameraMode === 'shelf' && newPhotos.length > 0 && bulkItems.length === 0) {
+      if (cameraMode === 'shelf' && newPhotos.length > 0 && liveItems.length === 0 && !effectiveItem) {
         log.debug('[IMAGE UPLOAD] Shelf mode - routing to handleShelfModeScan');
         const shelfPhoto = newPhotos[0];
         setCapturedPhotos(prev => [...prev, shelfPhoto]);
@@ -3155,24 +3182,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
 
-      if (bulkItems.length === 0) {
-        const firstItem = {
-          id: `item-${Date.now()}`,
-          photos: newPhotos.map((p, i) => ({ ...p, isCover: i === 0 })),
-          title: undefined,
-          isActive: true
-        };
-        setBulkItems([firstItem]);
-        setActiveItemId(firstItem.id);
-        setCapturedPhotos(prev => [...prev, ...newPhotos]);
-        if (newPhotos[0]) {
-          setTimeout(() => performQuickScan(newPhotos[0], firstItem.id, uploadScanOptions), 500);
-        }
-      } else if ((targetItemId ?? activeItemId)) {
-        // targetItemId (passed by the wrong-item / add-details flows) wins over activeItemId,
-        // which can be stale right after setActiveItemId — so the photo lands on the right item.
-        const effectiveItemId = (targetItemId ?? activeItemId) as string;
-        const wasEmpty = (bulkItems.find(i => i.id === effectiveItemId)?.photos.length ?? 0) === 0;
+      if (effectiveItemId && effectiveItem) {
+        const wasEmpty = (effectiveItem.photos?.length ?? 0) === 0;
         setBulkItems(prev => prev.map(item => {
           if (item.id !== effectiveItemId) return item;
           const added = newPhotos.map((p, i) => ({ ...p, isCover: wasEmpty && i === 0 }));
@@ -3186,8 +3197,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (newPhotos[0] && (!!targetItemId || wasEmpty)) {
           setTimeout(() => performQuickScan(newPhotos[0], effectiveItemId, targetItemId ? undefined : uploadScanOptions), 500);
         }
+      } else if (liveItems.length === 0) {
+        const firstItem = {
+          id: `item-${Date.now()}`,
+          photos: newPhotos.map((p, i) => ({ ...p, isCover: i === 0 })),
+          title: undefined,
+          isActive: true
+        };
+        setBulkItems([firstItem]);
+        setActiveItemId(firstItem.id);
+        setCapturedPhotos(prev => [...prev, ...newPhotos]);
+        if (newPhotos[0]) {
+          setTimeout(() => performQuickScan(newPhotos[0], firstItem.id, uploadScanOptions), 500);
+        }
       } else {
-        if (!canAddAnotherItem(bulkItems.length)) {
+        if (!canAddAnotherItem(liveItems.length)) {
           return;
         }
         const newItem = {
@@ -3204,7 +3228,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
       }
     }
-  }, [bulkItems, activeItemId, cameraMode, canAddAnotherItem]);
+  }, [cameraMode, canAddAnotherItem, handleShelfModeScan, setActiveItemId, setBulkItems]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -4118,23 +4142,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const promptInventoryDedup = useCallback((itemId: string, match: any, opts?: { fallbackInstruction?: CameraInstruction; onAddAsNew?: () => void }) => {
     if (!match) return;
     const title = String(match.title || 'this item').slice(0, 60);
-    Alert.alert(
-      'Already in your inventory',
-      `You already have "${title}". Update the existing item, or add this as a new product?`,
-      [
-        { text: 'Update inventory', onPress: () => openInventoryEditor(itemId, match) },
-        {
-          text: 'Add as new',
-          onPress: () => {
-            setInventoryDedupByItemId(prev => { const next = { ...prev }; delete next[itemId]; return next; });
-            if (opts?.onAddAsNew) opts.onAddAsNew();
-            else if (opts?.fallbackInstruction) setCurrentInstruction(opts.fallbackInstruction);
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
-  }, [openInventoryEditor]);
+    setInventoryDedupDialog({
+      itemId,
+      match,
+      title,
+      fallbackInstruction: opts?.fallbackInstruction,
+      onAddAsNew: opts?.onAddAsNew,
+    });
+  }, []);
 
   // Shelf/cart "Already in Inventory" badge tap (onOpenLocalMatch). Resolve the match from the explicit
   // dedup signal if present, else the stored local candidate, then present the SAME Update-vs-Add-new
@@ -4728,6 +4743,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setShowMatchSheet(false);
         setShowBarcodeResultModal(false);
         setShowDeepSearchSheet(false);
+        setInventoryDedupDialog(null);
+        setCreatingListings(null);
+        setProcessingCardDismissed(false);
         cancelAnimation(sheetTranslateY);
         sheetTranslateY.value = SCREEN_HEIGHT;
       };
@@ -5037,6 +5055,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           stays pinned to the card's bottom edge while the cart opens. */}
       <Animated.View style={[StyleSheet.absoluteFill, cameraCardSlideStyle]} pointerEvents="box-none">
         <CenterOverlay
+          key={activeItemId ?? 'no-active-item'}
           instruction={getInstructionText(overlayInstruction)}
           isProcessing={SCAN_INSTRUCTION_SET.includes(overlayInstruction)}
           cameraMode={cameraMode}
@@ -5200,6 +5219,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   setItemLoadingStates={setItemLoadingStates}
                   itemStageById={itemStageById}
                   onListingCreationStarted={(info) => { listingsReadyShownRef.current = false; sawCreationLoadingRef.current = false; setListingsReady(null); setProcessingCardDismissed(false); setCreatingListings(info); }}
+                  onListingCreationFinished={() => { setCreatingListings(null); setProcessingCardDismissed(false); }}
                   confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
                   connectedPlatformKeys={connectedPlatformKeys}
                   currentInstruction={currentInstruction}
@@ -5593,6 +5613,40 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           </View>
         </View>
       </Modal>
+
+      <ErrorModal
+        visible={!!inventoryDedupDialog}
+        type="info"
+        title="Already in inventory"
+        message={inventoryDedupDialog?.title || 'Item'}
+        messageNumberOfLines={1}
+        buttonText="Update item"
+        primaryColor={CHAT_COLORS.brand}
+        primaryTextColor={CHAT_COLORS.ink}
+        accentColor={CHAT_COLORS.brandDeep}
+        accentBackgroundColor={CHAT_COLORS.brandSoft}
+        onPrimaryPress={() => {
+          const decision = inventoryDedupDialog;
+          setInventoryDedupDialog(null);
+          if (decision) openInventoryEditor(decision.itemId, decision.match);
+        }}
+        secondaryButtonText="Add new"
+        onSecondaryPress={() => {
+          const decision = inventoryDedupDialog;
+          setInventoryDedupDialog(null);
+          if (!decision) return;
+          setInventoryDedupByItemId(prev => {
+            const next = { ...prev };
+            delete next[decision.itemId];
+            return next;
+          });
+          if (decision.onAddAsNew) decision.onAddAsNew();
+          else if (decision.fallbackInstruction) setCurrentInstruction(decision.fallbackInstruction);
+        }}
+        quietButtonText="Cancel"
+        onQuietPress={() => setInventoryDedupDialog(null)}
+        onClose={() => setInventoryDedupDialog(null)}
+      />
 
       {/* Post-checkout: "Creating your listings" → "Ready to review" cards. */}
       <ListingProcessingCard

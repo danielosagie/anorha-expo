@@ -10,7 +10,6 @@ import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import BottomActionBar from '../../components/BottomActionBar';
 import { CapturedPhoto } from '../../components/camera/PhotoStack';
-import { ShelfScanPlaceholderRow } from '../../components/camera/ShelfScanProgressCard';
 import { UnicodeSpinner } from './UnicodeSpinner';
 import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
@@ -77,6 +76,7 @@ const FolderCartRow = React.memo(function FolderCartRow({
   shelfPricingPendingByItemId,
   expanded,
   onToggleExpanded,
+  onOpenItem,
   onOpenLocalMatch,
 }: {
   entry: Extract<RenderEntry, { kind: 'folderCard' }>;
@@ -89,6 +89,7 @@ const FolderCartRow = React.memo(function FolderCartRow({
   shelfPricingPendingByItemId?: Record<string, boolean>;
   expanded: boolean;
   onToggleExpanded: (folderId: string) => void;
+  onOpenItem?: (itemId: string) => void;
   onOpenLocalMatch?: (itemId: string) => void;
 }) {
   const isStreaming = shelfProgress?.status === 'streaming';
@@ -116,11 +117,11 @@ const FolderCartRow = React.memo(function FolderCartRow({
     <Animated.View layout={FOLDER_LAYOUT} style={styles.folderCard} accessibilityLabel={`Shelf folder, ${stateLabel}`}>
       <View style={styles.folderCardHeader}>
         <Pressable
-          style={styles.folderCardToggle}
-          onPress={() => onToggleExpanded(entry.id)}
+          style={styles.folderCardMain}
+          onPress={() => onOpen?.(entry.id)}
+          disabled={!onOpen}
           accessibilityRole="button"
-          accessibilityState={{ expanded }}
-          accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${entry.label || 'shelf'}`}
+          accessibilityLabel={`Open ${entry.label || 'shelf'}`}
         >
           <View style={styles.folderCardThumbWrap}>
             {entry.sourcePhotoUri ? (
@@ -142,21 +143,19 @@ const FolderCartRow = React.memo(function FolderCartRow({
               <Text style={[styles.folderCardSub, hasError && styles.folderCardSubError]} numberOfLines={1}>{stateLabel}</Text>
             </View>
           </View>
-          <Animated.View style={[styles.folderToggleChevron, chevronStyle]}>
+        </Pressable>
+        <Pressable
+          style={styles.folderToggleChevron}
+          onPress={() => onToggleExpanded(entry.id)}
+          hitSlop={4}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${entry.label || 'shelf'}`}
+        >
+          <Animated.View style={chevronStyle} pointerEvents="none">
             <Icon name="chevron-down" size={21} color={CHAT_COLORS.dim} />
           </Animated.View>
         </Pressable>
-        {onOpen ? (
-          <Pressable
-            style={styles.folderOpenButton}
-            onPress={() => onOpen(entry.id)}
-            hitSlop={6}
-            accessibilityRole="button"
-            accessibilityLabel={`Open ${entry.label || 'shelf'}`}
-          >
-            <Text style={styles.folderOpenText}>Open</Text>
-          </Pressable>
-        ) : null}
       </View>
 
       {expanded ? (
@@ -197,7 +196,14 @@ const FolderCartRow = React.memo(function FolderCartRow({
             const pricingPending = Boolean(shelfPricingPendingByItemId?.[item.id]);
 
             return (
-              <Animated.View key={item.id} entering={isStreaming ? SHELF_ITEM_ENTERING : undefined} style={styles.folderItemRow}>
+              <Animated.View key={item.id} entering={isStreaming ? SHELF_ITEM_ENTERING : undefined}>
+                <Pressable
+                  style={styles.folderItemRow}
+                  onPress={() => onOpenItem?.(item.id)}
+                  disabled={!onOpenItem}
+                  accessibilityRole={onOpenItem ? 'button' : undefined}
+                  accessibilityLabel={`Open ${title}`}
+                >
                 {imageUri ? (
                   <Image source={{ uri: imageUri }} style={styles.folderItemThumb} resizeMode="cover" />
                 ) : (
@@ -209,7 +215,10 @@ const FolderCartRow = React.memo(function FolderCartRow({
                   <Text style={styles.folderItemTitle} numberOfLines={1}>{title}</Text>
                   <Pressable
                     style={styles.folderItemStatusRow}
-                    onPress={isInventoryMatch && onOpenLocalMatch ? () => onOpenLocalMatch(item.id) : undefined}
+                    onPress={isInventoryMatch && onOpenLocalMatch ? (event) => {
+                      event.stopPropagation();
+                      onOpenLocalMatch(item.id);
+                    } : undefined}
                     disabled={!isInventoryMatch || !onOpenLocalMatch}
                     hitSlop={4}
                     accessibilityRole={isInventoryMatch && onOpenLocalMatch ? 'button' : undefined}
@@ -235,17 +244,17 @@ const FolderCartRow = React.memo(function FolderCartRow({
                     ) : null}
                   </View>
                 ) : null}
+                </Pressable>
               </Animated.View>
             );
           })}
-
-        {isStreaming ? (
-          <View style={styles.folderReceivingRow}>
-            <ActivityIndicator size="small" color={CHAT_COLORS.brand} />
-            <Text style={styles.folderReceivingText}>{entry.childCount > 0 ? `${entry.childCount} found` : 'Finding items…'}</Text>
-          </View>
-        ) : null}
         </Animated.View>
+      ) : null}
+      {isStreaming ? (
+        <View style={styles.folderReceivingRow}>
+          <ActivityIndicator size="small" color={CHAT_COLORS.brand} />
+          <Text style={styles.folderReceivingText}>{entry.childCount > 0 ? `${entry.childCount} found` : 'Finding items…'}</Text>
+        </View>
       ) : null}
     </Animated.View>
   );
@@ -258,7 +267,6 @@ const BulkCartRow = React.memo(function BulkCartRow({
   matchInfo,
   quickScanData,
   scannedEarlierThisSession,
-  currentInstruction,
   isGenerated,
   navigation,
   onGenerate,
@@ -277,7 +285,6 @@ const BulkCartRow = React.memo(function BulkCartRow({
   matchInfo?: QuickMatchSelection;
   quickScanData?: { matchData: MatchResponse; matchRows: any[] };
   scannedEarlierThisSession: boolean;
-  currentInstruction?: string | null;
   isGenerated: boolean;
   navigation: any;
   onGenerate: (item: BulkCartItem) => void;
@@ -318,24 +325,6 @@ const BulkCartRow = React.memo(function BulkCartRow({
               : selectedMatch
                 ? `${matchCount} match${matchCount === 1 ? '' : 'es'} found`
                 : null;
-
-  if (currentInstruction === 'extracting' || currentInstruction === 'optimizing') {
-    return (
-      <ShelfScanPlaceholderRow
-        title={item.title || `Item ${index + 1}`}
-        subtitle={currentInstruction === 'optimizing' ? 'Refining the best search wording.' : 'Splitting the shelf into distinct packages.'}
-      />
-    );
-  }
-
-  if (currentInstruction === 'searching' && !quickScanData && !loadingState?.isLoading) {
-    return (
-      <ShelfScanPlaceholderRow
-        title={item.title || `Item ${index + 1}`}
-        subtitle="Searching matches and streaming results into this row."
-      />
-    );
-  }
 
   return (
     <Swipeable
@@ -501,7 +490,8 @@ export const BulkItemsSheet: React.FC<{
   onSaveDraft?: () => void;
   /** Fired when the seller taps the checkout button to create listings — drives the
    *  "Creating your listings" card on the parent. */
-  onListingCreationStarted?: (info: { photoUri?: string | null; count: number }) => void;
+  onListingCreationStarted?: (info: { photoUri?: string | null; count: number; itemIds?: string[] }) => void;
+  onListingCreationFinished?: () => void;
   cameraMode?: 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
   /** Item ids set aside via "Save for later" (excluded from list/subtotal/checkout). */
   savedForLaterIds?: string[];
@@ -512,7 +502,7 @@ export const BulkItemsSheet: React.FC<{
   freemium?: { usageCount: number; freeLimit: number; exhausted: boolean } | null;
   onUpgrade?: () => void;
   onAddCredits?: () => void;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, inventoryMatchByItemId = {}, shelfPricingPendingByItemId = {}, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, inventoryMatchByItemId = {}, shelfPricingPendingByItemId = {}, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, onListingCreationFinished, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
 
 
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
@@ -531,7 +521,7 @@ export const BulkItemsSheet: React.FC<{
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [folderExpansionById, setFolderExpansionById] = useState<Record<string, boolean>>({});
   const toggleFolderExpanded = useCallback((folderId: string) => {
-    setFolderExpansionById((prev) => ({ ...prev, [folderId]: !(prev[folderId] ?? true) }));
+    setFolderExpansionById((prev) => ({ ...prev, [folderId]: !(prev[folderId] ?? false) }));
   }, []);
   const selectionActive = selectedIds.size > 0;
   const toggleSelect = (id: string) =>
@@ -692,6 +682,24 @@ export const BulkItemsSheet: React.FC<{
   const hasAnyPhotos = displayItems.some(item => item.photos.length > 0);
   const hasAnyItems = totalItems > 0;
   const isAnalyzeInFlightRef = React.useRef(false);
+  const [isListingCreationSubmitting, setIsListingCreationSubmitting] = useState(false);
+  const [listingCreationItemIds, setListingCreationItemIds] = useState<string[]>([]);
+  const hasCreatingListingItems = listingCreationItemIds.some((id) => itemLoadingStates[id]?.isLoading);
+  const isListingCreationActive = isListingCreationSubmitting || hasCreatingListingItems;
+  const listingCreationSawLoadingRef = useRef(false);
+  useEffect(() => {
+    if (listingCreationItemIds.length === 0) {
+      listingCreationSawLoadingRef.current = false;
+      return;
+    }
+    if (hasCreatingListingItems) {
+      listingCreationSawLoadingRef.current = true;
+      return;
+    }
+    if (!isListingCreationSubmitting && listingCreationSawLoadingRef.current) {
+      setListingCreationItemIds([]);
+    }
+  }, [hasCreatingListingItems, isListingCreationSubmitting, listingCreationItemIds.length]);
   const shouldShowBottomActions =
     viewMode === 'cart' && (
       cameraMode === 'shelf'
@@ -802,7 +810,10 @@ export const BulkItemsSheet: React.FC<{
   // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections).
   // keepSheetOpen: swipe-to-generate fires this per-card and the cart stays up so the
   // row's in-place spinner is visible (in-place async; nothing navigates away).
-  const handleAnalyzeAndNavigate = React.useCallback(async (itemsOverride?: typeof bulkItems, opts?: { keepSheetOpen?: boolean }) => {
+  const handleAnalyzeAndNavigate = React.useCallback(async (
+    itemsOverride?: typeof bulkItems,
+    opts?: { keepSheetOpen?: boolean; listingCreation?: { photoUri?: string | null; count: number } },
+  ) => {
     if (isAnalyzeInFlightRef.current) {
       return;
     }
@@ -818,6 +829,14 @@ export const BulkItemsSheet: React.FC<{
       Alert.alert('No Photos', 'Please take some photos first before searching.');
       isAnalyzeInFlightRef.current = false;
       return;
+    }
+
+    let listingCreationHandedOff = false;
+    if (opts?.listingCreation) {
+      const creationItemIds = targetItems.filter((item) => item.photos.length > 0).map((item) => item.id);
+      setIsListingCreationSubmitting(true);
+      setListingCreationItemIds(creationItemIds);
+      onListingCreationStarted?.({ ...opts.listingCreation, itemIds: creationItemIds });
     }
 
     onStartBroadSearch();
@@ -916,6 +935,7 @@ export const BulkItemsSheet: React.FC<{
             .filter((entry) => submittedItemIds.includes(entry.item.id))
             .map((entry) => ({ itemId: entry.item.id, jobId: directJobId, processType: 'generate' as const })),
         );
+        listingCreationHandedOff = true;
         return;
       }
 
@@ -956,6 +976,7 @@ export const BulkItemsSheet: React.FC<{
             .filter((entry) => submittedDirectItemIds.includes(entry.item.id))
             .map((entry) => ({ itemId: entry.item.id, jobId: directJobId as string, processType: 'generate' as const })),
         );
+        listingCreationHandedOff = true;
         return;
       }
 
@@ -977,6 +998,7 @@ export const BulkItemsSheet: React.FC<{
             : []),
           ...analyzeEntries.map((entry) => ({ itemId: entry.item.id, jobId, processType: 'match' as const })),
         ]);
+        listingCreationHandedOff = true;
       } else {
         Alert.alert('Error', 'Failed to start analysis. Please try again.');
       }
@@ -994,6 +1016,11 @@ export const BulkItemsSheet: React.FC<{
       Alert.alert('Error', 'Failed to start analysis. Please try again.');
     } finally {
       isAnalyzeInFlightRef.current = false;
+      setIsListingCreationSubmitting(false);
+      if (opts?.listingCreation && !listingCreationHandedOff) {
+        setListingCreationItemIds([]);
+        onListingCreationFinished?.();
+      }
     }
   }, [
     bulkItems,
@@ -1008,6 +1035,8 @@ export const BulkItemsSheet: React.FC<{
     onSaveDraft,
     onClose,
     submitDirectGenerateJob,
+    onListingCreationStarted,
+    onListingCreationFinished,
   ]);
 
   const handleGenerateItem = useCallback((item: BulkCartItem) => {
@@ -1022,6 +1051,10 @@ export const BulkItemsSheet: React.FC<{
     (onOpenItemPreview || onSelectItem)?.(itemId);
   }, [onOpenItemPreview, onOpenLocalMatch, onSelectItem]);
 
+  const handleOpenFolderItem = useCallback((itemId: string) => {
+    (onOpenItemPreview || onOpenQuickMatches || onSelectItem)?.(itemId);
+  }, [onOpenItemPreview, onOpenQuickMatches, onSelectItem]);
+
   const renderCartEntry = useCallback(({ item: entry }: { item: RenderEntry }) => {
     if (entry.kind === 'folderCard') {
       return (
@@ -1034,8 +1067,9 @@ export const BulkItemsSheet: React.FC<{
           confirmedQuickMatchByItemId={confirmedQuickMatchByItemId}
           inventoryMatchByItemId={inventoryMatchByItemId}
           shelfPricingPendingByItemId={shelfPricingPendingByItemId}
-          expanded={folderExpansionById[entry.id] ?? true}
+          expanded={folderExpansionById[entry.id] ?? false}
           onToggleExpanded={toggleFolderExpanded}
+          onOpenItem={handleOpenFolderItem}
           onOpenLocalMatch={onOpenLocalMatch}
         />
       );
@@ -1049,7 +1083,6 @@ export const BulkItemsSheet: React.FC<{
         matchInfo={confirmedQuickMatchByItemId[item.id]}
         quickScanData={quickScanStore?.[item.id]}
         scannedEarlierThisSession={Boolean(sessionDupOwnerByItemId[item.id])}
-        currentInstruction={viewMode === 'cart' ? currentInstruction : undefined}
         isGenerated={itemStageById?.[item.id] === 'generated'}
         navigation={navigation}
         onGenerate={handleGenerateItem}
@@ -1069,6 +1102,7 @@ export const BulkItemsSheet: React.FC<{
     currentInstruction,
     handleGenerateItem,
     handleOpenCartItem,
+    handleOpenFolderItem,
     folderExpansionById,
     inventoryMatchByItemId,
     itemLoadingStates,
@@ -1294,7 +1328,7 @@ export const BulkItemsSheet: React.FC<{
                     statusLabel={shelfPresentation?.title || 'Inspecting shelf'}
                     inventoryMatchByItemId={inventoryMatchByItemId}
                     shelfPricingPendingByItemId={shelfPricingPendingByItemId}
-                    expanded={folderExpansionById['pending-shelf'] ?? true}
+                    expanded={folderExpansionById['pending-shelf'] ?? false}
                     onToggleExpanded={toggleFolderExpanded}
                     onOpenLocalMatch={onOpenLocalMatch}
                   />
@@ -1318,7 +1352,7 @@ export const BulkItemsSheet: React.FC<{
                       statusLabel="Inspecting shelf"
                       inventoryMatchByItemId={inventoryMatchByItemId}
                       shelfPricingPendingByItemId={shelfPricingPendingByItemId}
-                      expanded={folderExpansionById['pending-shelf'] ?? true}
+                      expanded={folderExpansionById['pending-shelf'] ?? false}
                       onToggleExpanded={toggleFolderExpanded}
                       onOpenLocalMatch={onOpenLocalMatch}
                     />
@@ -1411,14 +1445,15 @@ export const BulkItemsSheet: React.FC<{
                   // Direct transition from shelf to camera mode
                   onStartBroadSearch(); // We'll hijack this prop or close modal
                 } else {
-                  // Tell the parent to show the "Creating your listings" card.
-                  onListingCreationStarted?.({ photoUri: ungeneratedTargets[0]?.photos?.[0]?.uri ?? null, count: checkoutCount });
                   // Create listings IN PLACE — keep the cart open so the items show their
                   // own "Creating listing" spinner; nothing pushes the view up/away.
                   // Already-generated items are excluded so we never re-create them.
                   handleAnalyzeAndNavigate(
                     bulkItems.filter((i) => !savedSet.has(i.id) && itemStageById?.[i.id] !== 'generated' && (!selectionActive || selectedIds.has(i.id))),
-                    { keepSheetOpen: true },
+                    {
+                      keepSheetOpen: true,
+                      listingCreation: { photoUri: ungeneratedTargets[0]?.photos?.[0]?.uri ?? null, count: checkoutCount },
+                    },
                   );
                 }
               }}
@@ -1437,7 +1472,7 @@ export const BulkItemsSheet: React.FC<{
                     : cameraMode !== 'shelf' && totalItems === 0
                       ? 'Take a photo to continue'
                       : hasLoadingItems
-                        ? 'Creating listing'
+                        ? (isListingCreationActive ? 'Creating listing' : 'Finding match')
                         : allGenerated
                           ? 'Listing created'
                           : checkoutCount === 1
@@ -1545,7 +1580,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   folderCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  folderCardToggle: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  folderCardMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
   folderCardThumbWrap: { width: 64, height: 64, position: 'relative' },
   folderCardThumb: { width: 64, height: 64, borderRadius: 16, backgroundColor: '#F1F1EE' },
   folderCardThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
@@ -1570,16 +1605,7 @@ const styles = StyleSheet.create({
   folderCardStatusDotError: { backgroundColor: '#F59E0B' },
   folderCardSub: { flex: 1, fontSize: 13, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
   folderCardSubError: { color: '#A2611A' },
-  folderToggleChevron: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
-  folderOpenButton: {
-    minHeight: 36,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 18,
-    backgroundColor: CHAT_COLORS.surfaceAlt,
-  },
-  folderOpenText: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
+  folderToggleChevron: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   folderContents: {
     marginTop: 14,
     paddingTop: 10,
@@ -1630,7 +1656,7 @@ const styles = StyleSheet.create({
   folderCompsRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   folderCompsSpinner: { transform: [{ scale: 0.62 }], marginHorizontal: -3 },
   folderCompsText: { fontSize: 11, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim, marginTop: 2 },
-  folderReceivingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 5 },
+  folderReceivingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingTop: 10, paddingBottom: 2 },
   folderReceivingText: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
   detailChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 12, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: 'rgba(245,158,11,0.12)' },
   detailChipText: { fontSize: 13, color: '#A2611A', fontWeight: '600' },
