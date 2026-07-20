@@ -190,7 +190,7 @@ export const BottomControls: React.FC<{
       <View style={styles.bottomControls}>
         <Animated.View entering={FadeIn.delay(500)} style={styles.controlsRow}>
           <View style={{ gap: 4, justifyContent: "center" }}>
-            <TouchableOpacity style={[styles.galleryButton, { gap: 4 }]} onPress={onImageUpload}>
+            <TouchableOpacity style={[styles.galleryButton, { gap: 4 }]} onPress={() => onImageUpload()}>
               <Icon name="image-multiple-outline" size={24} color="white" />
             </TouchableOpacity>
             <Text style={{ color: "#FFF", fontSize: 12, fontWeight: 500, textAlign: "center" }}>Upload</Text>

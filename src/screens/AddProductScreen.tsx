@@ -1348,6 +1348,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Auto-scan state
   const [isAutoScanning, setIsAutoScanning] = useState(false);
+  // Concurrency guard for performQuickScan. MUST be a ref, not the state above: handlers
+  // capture performQuickScan by identity, and a stale closure reading isAutoScanning=true
+  // after the scan finished queues follow-up scans that nothing ever drains (item stuck
+  // on "Searching…", every later upload wedged behind it).
+  const isAutoScanningRef = useRef(false);
   const [quickScanResults, setQuickScanResults] = useState<any[]>([]);
 
   // Job response state
@@ -1608,6 +1613,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     setActiveItemId((prev) => (prev && processedIdsForStage.includes(prev) ? null : prev));
     setCurrentInstruction('ready');
+    isAutoScanningRef.current = false;
     setIsAutoScanning(false);
     setShowProgressBar(false);
     quickScanCancelledRef.current = true;
@@ -3077,6 +3083,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async (targetItemId?: string) => {
+    // Some call sites wire this straight into onPress, which passes the press event as the
+    // first arg. Anything that isn't a string means "no target item", never a target.
+    if (typeof targetItemId !== 'string') targetItemId = undefined;
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission needed', 'We need camera roll permissions to upload images.');
@@ -3312,7 +3321,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     itemId: string,
     options?: QuickScanRunOptions,
   ) => {
-    if (isAutoScanning) {
+    // Guard against non-string ids: several call sites are (or were) wired straight into
+    // onPress, which passes the GestureResponderEvent. An event-object id attaches photos
+    // to nothing and gets every result discarded as "item removed mid-match".
+    if (typeof itemId !== 'string') {
+      log.warn('[QUICK SCAN] Ignoring scan with non-string itemId:', typeof itemId);
+      return;
+    }
+    if (isAutoScanningRef.current) {
       if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
         log.debug('[QUICK SCAN] Queue limit reached, dropping oldest queued scan');
         quickScanQueueRef.current.shift();
@@ -3329,6 +3345,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     quickScanCancelledRef.current = false;
     if (options?.mode === 'adaptive') setIsAdaptiveShelfScan(false);
 
+    isAutoScanningRef.current = true;
     setIsAutoScanning(true);
     setCurrentInstruction('processing');
 
@@ -3359,6 +3376,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         log.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
         showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
         scanErrorMessage = 'Sign in required';
+        isAutoScanningRef.current = false;
         setIsAutoScanning(false);
         return;
       }
@@ -3856,6 +3874,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // return) so we never leak a live EventSource.
       quickScanStreamRef.current?.close();
       quickScanStreamRef.current = null;
+      isAutoScanningRef.current = false;
       setIsAutoScanning(false);
       if (scanErrorMessage) {
         setItemLoadingStates(prev => ({
@@ -3883,7 +3902,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     candidatesToMatchRows,
     quickScanStore,
     showNotificationMessage,
-    isAutoScanning,
     incrementLocalUsage,
     preflightAIGate,
     persistPendingQuickScan,
@@ -4632,6 +4650,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     quickScanQueueRef.current = [];
     quickScanStreamRef.current?.close();
     quickScanStreamRef.current = null;
+    isAutoScanningRef.current = false;
     setIsAutoScanning(false);
     stopProgressAnimation();
     setShowProgressBar(false);

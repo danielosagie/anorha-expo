@@ -10,6 +10,7 @@ export type QuickScanPhase =
 export type QuickScanEventType =
   | 'START_ANALYSIS'
   | 'MODE_RESOLVED'
+  | 'HEARTBEAT'
   | 'EXTRACTED_ITEMS'
   | 'OPTIMIZING_QUERIES'
   | 'SEARCHING_ITEMS'
