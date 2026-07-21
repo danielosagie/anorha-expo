@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import type { LegacyBulkItem } from '../../features/cart/types';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
+import { ShelfItemCrop } from './ShelfItemCrop';
 
 const GREEN = CHAT_COLORS.brand;
 const C = { bg: '#F2F2F7', card: CHAT_COLORS.white, hairline: '#E8E8ED', text: CHAT_COLORS.ink, label: CHAT_COLORS.dim };
@@ -166,7 +167,15 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
             const pricingPending = Boolean(shelfPricingPendingByItemId[it.id]);
             return (
               <TouchableOpacity key={it.id} style={styles.row} activeOpacity={0.7} onPress={() => onOpenItemPreview(it.id)}>
-                {thumb ? (
+                {sourcePhotoUri && it.shelfBox ? (
+                  <ShelfItemCrop
+                    uri={sourcePhotoUri}
+                    box={it.shelfBox}
+                    width={52}
+                    height={52}
+                    borderRadius={12}
+                  />
+                ) : thumb ? (
                   <Image source={{ uri: thumb }} style={styles.rowThumb} />
                 ) : (
                   <View style={[styles.rowThumb, styles.rowThumbEmpty]}>

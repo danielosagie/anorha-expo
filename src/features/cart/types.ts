@@ -50,6 +50,16 @@ export interface CartItemMatch {
   jobResult?: MatchJobResult;
 }
 
+/** Normalized crop of the shelf source photo that contains this item. */
+export interface ShelfItemBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
+}
+
 export interface CartItem {
   kind: 'single';
   id: string;
@@ -66,6 +76,8 @@ export interface CartItem {
   needsContextReason?: string;
   /** Preserved from legacy bulkItems for source pre-selection. */
   preSelectedSource?: any;
+  /** Crop within the parent shelf photo. Coordinates are normalized to 0...1. */
+  shelfBox?: ShelfItemBox;
   /** True when the match resolved to an existing inventory ProductVariant. */
   fromInventory?: boolean;
   /** The generate job whose result GenerateDetailsScreen fetches (durable across unmount). */
@@ -107,6 +119,7 @@ export interface LegacyBulkItem {
   isActive?: boolean;
   preSelectedSource?: any;
   quantity?: number;
+  shelfBox?: ShelfItemBox;
 }
 
 export interface CartState {

@@ -18,13 +18,15 @@ import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
 import { uploadProductImage } from '../../utils/uploadProductImage';
 import { createLogger } from '../../utils/logger';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
+import type { ShelfItemBox } from '../../features/cart/types';
+import { ShelfItemCrop } from './ShelfItemCrop';
 const log = createLogger('BulkItemsSheet');
 
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MAX_BATCH_ITEMS = 100;
 
-type BulkCartItem = { id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number };
+type BulkCartItem = { id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number; shelfBox?: ShelfItemBox };
 type RenderEntry =
   | { kind: 'folderCard'; id: string; label?: string; childCount: number; sourcePhotoUri?: string; childIds: string[]; children: BulkCartItem[] }
   | { kind: 'item'; item: BulkCartItem; index: number };
@@ -204,7 +206,15 @@ const FolderCartRow = React.memo(function FolderCartRow({
                   accessibilityRole={onOpenItem ? 'button' : undefined}
                   accessibilityLabel={`Open ${title}`}
                 >
-                {imageUri ? (
+                {entry.sourcePhotoUri && item.shelfBox ? (
+                  <ShelfItemCrop
+                    uri={entry.sourcePhotoUri}
+                    box={item.shelfBox}
+                    width={42}
+                    height={42}
+                    borderRadius={11}
+                  />
+                ) : imageUri ? (
                   <Image source={{ uri: imageUri }} style={styles.folderItemThumb} resizeMode="cover" />
                 ) : (
                   <View style={[styles.folderItemThumb, styles.folderItemThumbEmpty]}>

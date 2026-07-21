@@ -32,7 +32,8 @@ export type QuickScanStreamEvent = {
   count?: number;
   detected?: 'single' | 'multi';
   itemKey?: string;
-  items?: Array<string | { query: string; quantity?: number }>;
+  items?: Array<string | { query: string; quantity?: number; itemKey?: string }>;
+  box?: unknown;
   result?: any;
   data?: any;
 };

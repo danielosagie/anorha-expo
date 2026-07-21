@@ -26,7 +26,7 @@ import {
   ungroupFolder as storeUngroupFolder,
 } from '../../../features/cart/cartStore';
 import { isFolder } from '../../../features/cart/types';
-import type { CartItem, ItemStage, LegacyBulkItem } from '../../../features/cart/types';
+import type { CartItem, ItemStage, LegacyBulkItem, ShelfItemBox } from '../../../features/cart/types';
 import type { QuickMatchSelection } from '../types';
 
 type SetState<T> = T | ((prev: T) => T);
@@ -42,7 +42,7 @@ export type CartTreeNode =
 export interface ShelfFolderInput {
   sourcePhotoUri?: string;
   label?: string;
-  items: Array<{ id?: string; title?: string; quantity?: number }>;
+  items: Array<{ id?: string; title?: string; quantity?: number; shelfBox?: ShelfItemBox }>;
 }
 
 export interface BulkItemsInitial {
@@ -91,6 +91,7 @@ function deriveAll() {
     isActive: it.id === activeId,
     preSelectedSource: it.preSelectedSource,
     quantity: it.quantity,
+    shelfBox: it.shelfBox,
   });
   const cartTree: CartTreeNode[] = [];
   for (const e of selectTopLevelEntries()) {

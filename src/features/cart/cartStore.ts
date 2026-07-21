@@ -108,7 +108,7 @@ export function addSingleItem(
 export function addItemWithId(
   id: string,
   photos: CapturedPhoto[] = [],
-  opts: { title?: string; quantity?: number; status?: CartStatus; preSelectedSource?: any } = {},
+  opts: { title?: string; quantity?: number; status?: CartStatus; preSelectedSource?: any; shelfBox?: CartItem['shelfBox'] } = {},
 ): void {
   if (getEntry(id)) return;
   const ts = now();
@@ -121,6 +121,7 @@ export function addItemWithId(
     quantity: opts.quantity ?? 1,
     status: opts.status ?? (photos.length > 0 ? 'searching' : 'capturing'),
     preSelectedSource: opts.preSelectedSource,
+    shelfBox: opts.shelfBox,
     createdAt: ts,
     updatedAt: ts,
   });
@@ -306,7 +307,7 @@ export function createFolderFromShelf(input: {
   sourcePhotoUri?: string;
   label?: string;
   /** Items may carry an explicit id so callers (e.g. the shelf SSE stream) can address them later. */
-  items: Array<{ id?: string; title?: string; quantity?: number; photos?: CapturedPhoto[]; status?: CartStatus }>;
+  items: Array<{ id?: string; title?: string; quantity?: number; photos?: CapturedPhoto[]; status?: CartStatus; shelfBox?: CartItem['shelfBox'] }>;
 }): { folderId: string; childIds: string[] } {
   const ts = now();
   const folderId = newId();
@@ -323,6 +324,7 @@ export function createFolderFromShelf(input: {
       title: raw.title,
       quantity: raw.quantity ?? 1,
       status: raw.status ?? 'searching',
+      shelfBox: raw.shelfBox,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -347,7 +349,7 @@ export function createFolderFromShelf(input: {
 /** Add newly streamed shelf results to an existing folder without recreating it. */
 export function addItemsToFolder(
   folderId: string,
-  items: { id?: string; title?: string; quantity?: number; photos?: CapturedPhoto[]; status?: CartStatus }[],
+  items: { id?: string; title?: string; quantity?: number; photos?: CapturedPhoto[]; status?: CartStatus; shelfBox?: CartItem['shelfBox'] }[],
 ): string[] {
   const folder = getEntry(folderId);
   if (!isFolder(folder)) return [];
@@ -375,6 +377,7 @@ export function addItemsToFolder(
       title: raw.title,
       quantity: raw.quantity ?? 1,
       status: raw.status ?? 'searching',
+      shelfBox: raw.shelfBox,
       createdAt: ts,
       updatedAt: ts,
     });
@@ -487,6 +490,7 @@ export function selectLegacyBulkItems(): LegacyBulkItem[] {
       isActive: it.id === activeId,
       preSelectedSource: it.preSelectedSource,
       quantity: it.quantity,
+      shelfBox: it.shelfBox,
     }));
 }
 
@@ -525,6 +529,7 @@ export function reconcileBulkItems(prev: LegacyBulkItem[], next: LegacyBulkItem[
         title: n.title,
         quantity: n.quantity,
         preSelectedSource: n.preSelectedSource,
+        shelfBox: n.shelfBox,
       });
     } else {
       updateItem(n.id, {
@@ -532,6 +537,7 @@ export function reconcileBulkItems(prev: LegacyBulkItem[], next: LegacyBulkItem[
         title: n.title,
         quantity: n.quantity ?? 1,
         preSelectedSource: n.preSelectedSource,
+        shelfBox: n.shelfBox,
       });
     }
   }
@@ -605,6 +611,7 @@ export function seedCartFromLegacy(initial: {
       quantity: typeof b.quantity === 'number' ? b.quantity : 1,
       status: photos.length > 0 ? 'searching' : 'capturing',
       preSelectedSource: b.preSelectedSource,
+      shelfBox: b.shelfBox,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -676,6 +683,7 @@ export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }):
     preSelectedSource: it.preSelectedSource,
     quantity: it.quantity,
     parentId: it.parentId ?? null,
+    shelfBox: it.shelfBox,
   }));
 
   const matchContext: Record<string, any> = {};
@@ -727,6 +735,7 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
       status: photos.length ? 'searching' : 'capturing',
       match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows } : undefined,
       preSelectedSource: s.preSelectedSource,
+      shelfBox: s.shelfBox,
       createdAt: ts,
       updatedAt: ts,
     };

@@ -31,6 +31,7 @@ import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
 import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import {
   View,
@@ -101,6 +102,78 @@ const normalizeShelfQuery = (value: unknown): string =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+
+type ShelfSourceSize = { width: number; height: number };
+
+const finiteBoxNumber = (...values: unknown[]): number | undefined => {
+  for (const value of values) {
+    const numberValue = Number(value);
+    if (Number.isFinite(numberValue)) return numberValue;
+  }
+  return undefined;
+};
+
+const normalizeShelfItemBox = (rawBox: unknown, fallbackSize: ShelfSourceSize | null): ShelfItemBox | undefined => {
+  if (!rawBox) return undefined;
+
+  const raw: any = rawBox;
+  let x: number | undefined;
+  let y: number | undefined;
+  let width: number | undefined;
+  let height: number | undefined;
+
+  if (Array.isArray(raw) && raw.length >= 4) {
+    const [x1, y1, x2, y2] = raw.map(Number);
+    if ([x1, y1, x2, y2].every(Number.isFinite)) {
+      x = x1;
+      y = y1;
+      width = x2 - x1;
+      height = y2 - y1;
+    }
+  } else if (typeof raw === 'object') {
+    x = finiteBoxNumber(raw.x, raw.left, raw.xMin, raw.xmin, raw.x_min, raw.x1);
+    y = finiteBoxNumber(raw.y, raw.top, raw.yMin, raw.ymin, raw.y_min, raw.y1);
+    width = finiteBoxNumber(raw.width, raw.w);
+    height = finiteBoxNumber(raw.height, raw.h);
+    const right = finiteBoxNumber(raw.right, raw.xMax, raw.xmax, raw.x_max, raw.x2);
+    const bottom = finiteBoxNumber(raw.bottom, raw.yMax, raw.ymax, raw.y_max, raw.y2);
+    if (width == null && x != null && right != null) width = right - x;
+    if (height == null && y != null && bottom != null) height = bottom - y;
+  }
+
+  if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0) return undefined;
+
+  const rawSize = raw?.imageSize || raw?.sourceSize || raw?.dimensions || {};
+  const sourceWidth = finiteBoxNumber(raw?.imageWidth, raw?.image_width, raw?.sourceWidth, raw?.source_width, rawSize.width, fallbackSize?.width);
+  const sourceHeight = finiteBoxNumber(raw?.imageHeight, raw?.image_height, raw?.sourceHeight, raw?.source_height, rawSize.height, fallbackSize?.height);
+  const unit = String(raw?.unit || raw?.units || raw?.coordinateSpace || '').toLowerCase();
+  const explicitlyPixel = raw?.normalized === false || unit.includes('pixel') || unit === 'px';
+  const explicitlyNormalized = raw?.normalized === true || unit.includes('normal');
+  const looksNormalized = Math.max(x, y, width, height, x + width, y + height) <= 1.001;
+
+  if (!explicitlyNormalized && (explicitlyPixel || !looksNormalized)) {
+    if (!sourceWidth || !sourceHeight) return undefined;
+    x /= sourceWidth;
+    width /= sourceWidth;
+    y /= sourceHeight;
+    height /= sourceHeight;
+  }
+
+  const normalizedX = Math.max(0, Math.min(1, x));
+  const normalizedY = Math.max(0, Math.min(1, y));
+  const normalizedWidth = Math.max(0, Math.min(1 - normalizedX, width));
+  const normalizedHeight = Math.max(0, Math.min(1 - normalizedY, height));
+  if (normalizedWidth <= 0 || normalizedHeight <= 0) return undefined;
+
+  return {
+    x: normalizedX,
+    y: normalizedY,
+    width: normalizedWidth,
+    height: normalizedHeight,
+    sourceWidth,
+    sourceHeight,
+  };
+};
 
 // A job can report status 'completed' while some (or all) of its payload is empty
 // (backend partial failure). Validate PER ITEM so a partial response can't mark the
@@ -725,6 +798,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const shelfScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
   const quickScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
   const lastShelfScanPhotoRef = useRef<CapturedPhoto | null>(null);
+  const shelfScanSourceSizeRef = useRef<ShelfSourceSize | null>(null);
 
   // Fetch platform locations on mount (with platformType from connections)
   useEffect(() => {
@@ -1386,9 +1460,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
   const quickScanCancelledRef = useRef(false);
   const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string; options?: QuickScanRunOptions }>>([]);
-  const shelfQueryToItemIdRef = useRef<Record<string, string>>({});
+  const shelfQueryToItemIdsRef = useRef<Record<string, string[]>>({});
+  const shelfItemKeyToItemIdRef = useRef<Record<string, string>>({});
   const activeShelfFolderIdRef = useRef<string | null>(null);
-  const pendingShelfItemsByIdRef = useRef<Record<string, { id: string; title: string; quantity: number; added: boolean }>>({});
+  const pendingShelfItemsByIdRef = useRef<Record<string, { id: string; title: string; quantity: number; resolved: boolean }>>({});
+  const shelfUnknownItemSequenceRef = useRef(0);
   const shelfPricingQueueRef = useRef<ShelfPricingJob[]>([]);
   const shelfPricingActiveRef = useRef(0);
   const shelfPricingGenerationRef = useRef(0);
@@ -1533,8 +1609,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       removeEntry(activeShelfFolderIdRef.current);
       activeShelfFolderIdRef.current = null;
     }
-    shelfQueryToItemIdRef.current = {};
+    shelfQueryToItemIdsRef.current = {};
+    shelfItemKeyToItemIdRef.current = {};
     pendingShelfItemsByIdRef.current = {};
+    shelfUnknownItemSequenceRef.current = 0;
+    shelfScanSourceSizeRef.current = null;
     setBulkItems([]);
     setQuickScanStore({});
     setConfirmedQuickMatchByItemId({});
@@ -2350,7 +2429,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     if (parsed.type === 'EXTRACTED_ITEMS') {
-      const items = (parsed.items || []) as Array<string | { query: string; quantity?: number }>;
+      const items = (parsed.items || []) as Array<string | { query: string; quantity?: number; itemKey?: string }>;
       const ts = Date.now();
       const folderItems = items.map((item, idx) => {
         const query = typeof item === 'string' ? item : item.query;
@@ -2358,19 +2437,33 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return { id: `shelf-${ts}-${idx}`, title: query, quantity };
       });
 
-      shelfQueryToItemIdRef.current = {};
+      shelfQueryToItemIdsRef.current = {};
+      shelfItemKeyToItemIdRef.current = {};
       pendingShelfItemsByIdRef.current = {};
+      shelfUnknownItemSequenceRef.current = 0;
       items.forEach((item, idx) => {
         const query = typeof item === 'string' ? item : item.query;
-        shelfQueryToItemIdRef.current[query] = folderItems[idx].id;
+        const itemKey = typeof item === 'object' ? item.itemKey : undefined;
+        if (itemKey != null) shelfItemKeyToItemIdRef.current[String(itemKey)] = folderItems[idx].id;
         const normalizedQuery = normalizeShelfQuery(query);
-        if (normalizedQuery) shelfQueryToItemIdRef.current[normalizedQuery] = folderItems[idx].id;
+        for (const queryKey of [query, normalizedQuery].filter(Boolean)) {
+          const currentIds = shelfQueryToItemIdsRef.current[queryKey] || [];
+          if (!currentIds.includes(folderItems[idx].id)) {
+            shelfQueryToItemIdsRef.current[queryKey] = [...currentIds, folderItems[idx].id];
+          }
+        }
         pendingShelfItemsByIdRef.current[folderItems[idx].id] = {
           ...folderItems[idx],
           title: query,
-          added: false,
+          resolved: false,
         };
       });
+
+      const folderId = activeShelfFolderIdRef.current;
+      if (folderId && folderItems.length > 0) {
+        addShelfItemsToFolder(folderId, folderItems);
+        setActiveItemId((current) => current || folderItems[0].id);
+      }
 
       setIsBulkMode(true);
       setCurrentInstruction('extracting');
@@ -2406,52 +2499,49 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const res = parsed.result;
       let didLandItem = false;
       const originalQuery = res?.extractedItem?.ocrText || res?.extractedItem?.paraphrases?.[0] || res?.extractedItem?.type || res?.usedQuery;
-      const resultKeys = [
-        parsed.itemKey,
-        res?.itemKey,
-        res?.extractedItem?.id,
-        originalQuery,
-        res?.usedQuery,
-      ].filter(Boolean);
-      let itemId = resultKeys
-        .map((key) => shelfQueryToItemIdRef.current[String(key)] || shelfQueryToItemIdRef.current[normalizeShelfQuery(key)])
-        .find(Boolean);
+      const resultItemKey = parsed.itemKey ?? res?.itemKey ?? res?.extractedItem?.itemKey;
+      let itemId = resultItemKey != null ? shelfItemKeyToItemIdRef.current[String(resultItemKey)] : undefined;
 
       if (!itemId) {
-        const normalizedResults = resultKeys.map(normalizeShelfQuery).filter(Boolean);
-        itemId = Object.values(pendingShelfItemsByIdRef.current).find((pending) => {
-          if (pending.added) return false;
-          const pendingQuery = normalizeShelfQuery(pending.title);
-          return normalizedResults.some((resultQuery) => (
-            pendingQuery === resultQuery
-            || pendingQuery.includes(resultQuery)
-            || resultQuery.includes(pendingQuery)
-          ));
-        })?.id;
+        const exactQueryMatches = new Set<string>();
+        for (const resultQuery of [originalQuery, res?.usedQuery].filter(Boolean)) {
+          const normalizedResultQuery = normalizeShelfQuery(resultQuery);
+          for (const queryKey of [String(resultQuery), normalizedResultQuery].filter(Boolean)) {
+            for (const candidateId of shelfQueryToItemIdsRef.current[queryKey] || []) exactQueryMatches.add(candidateId);
+          }
+        }
+        if (exactQueryMatches.size === 1) itemId = Array.from(exactQueryMatches)[0];
       }
 
-      // Optimized search wording is not guaranteed to preserve the extracted text.
-      // Keep the stream progressive by assigning an otherwise-unmapped result to the
-      // next pending shelf item instead of deferring every such row until COMPLETE.
-      if (!itemId) {
-        itemId = Object.values(pendingShelfItemsByIdRef.current).find((pending) => !pending.added)?.id;
+      const quantity = typeof res?.quantity === 'number' ? res.quantity : 1;
+      const shelfBox = normalizeShelfItemBox(
+        parsed.box ?? res?.box ?? res?.extractedItem?.box,
+        shelfScanSourceSizeRef.current,
+      );
+      const folderId = activeShelfFolderIdRef.current;
+
+      if (!itemId && folderId) {
+        const sequence = shelfUnknownItemSequenceRef.current++;
+        itemId = `shelf-${Date.now()}-extra-${sequence}`;
+        const title = res?.usedQuery || originalQuery || 'Shelf item';
+        addShelfItemsToFolder(folderId, [{ id: itemId, title, quantity, shelfBox }]);
+        pendingShelfItemsByIdRef.current[itemId] = { id: itemId, title, quantity, resolved: false };
+        if (resultItemKey != null) shelfItemKeyToItemIdRef.current[String(resultItemKey)] = itemId;
       }
 
       if (itemId) {
-        const quantity = typeof res?.quantity === 'number' ? res.quantity : 1;
         const pendingItem = pendingShelfItemsByIdRef.current[itemId];
-        const folderId = activeShelfFolderIdRef.current;
-        if (folderId && pendingItem && !pendingItem.added) {
-          addShelfItemsToFolder(folderId, [{
-            id: itemId,
-            title: res?.usedQuery || pendingItem.title,
-            quantity,
-          }]);
-          pendingShelfItemsByIdRef.current[itemId] = { ...pendingItem, added: true };
+        if (folderId && pendingItem && !pendingItem.resolved) {
+          pendingShelfItemsByIdRef.current[itemId] = { ...pendingItem, resolved: true };
           didLandItem = true;
           setActiveItemId((current) => current || itemId);
         }
-        setBulkItems((prev) => prev.map((item) => item.id === itemId ? { ...item, title: res?.usedQuery || item.title, quantity } : item));
+        setBulkItems((prev) => prev.map((item) => item.id === itemId ? {
+          ...item,
+          title: res?.usedQuery || pendingItem?.title || item.title,
+          quantity,
+          ...(shelfBox ? { shelfBox } : {}),
+        } : item));
 
         setItemLoadingStates((prev) => {
           const next = { ...prev };
@@ -2571,20 +2661,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     if (parsed.type === 'COMPLETE') {
-      const folderId = activeShelfFolderIdRef.current;
-      const remainingItems = Object.values(pendingShelfItemsByIdRef.current).filter((item) => !item.added);
-      if (folderId && remainingItems.length > 0) {
-        addShelfItemsToFolder(folderId, remainingItems.map(({ id, title, quantity }) => ({ id, title, quantity })));
-        remainingItems.forEach((item) => {
-          pendingShelfItemsByIdRef.current[item.id] = { ...item, added: true };
-        });
-        setActiveItemId((current) => current || remainingItems[0]?.id || null);
-      }
+      const allItems = Object.values(pendingShelfItemsByIdRef.current);
+      setActiveItemId((current) => current || allItems[0]?.id || null);
       stopShelfScan('completed', {
         phase: 'finishing',
         progress: 1,
         elapsedMs: typeof parsed.elapsedMs === 'number' ? parsed.elapsedMs : undefined,
-        completedItems: Object.values(pendingShelfItemsByIdRef.current).filter((item) => item.added).length,
+        completedItems: allItems.filter((item) => item.resolved).length,
       });
       sheetTranslateY.value = withSpring(0, CART_SPRING);
       return;
@@ -2634,6 +2717,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // The normal-camera item exists only as a single-scan placeholder. Do not create or
     // mutate any folder state until the backend has explicitly resolved this photo to multi.
     lastShelfScanPhotoRef.current = photo;
+    shelfScanSourceSizeRef.current = { width: photo.width, height: photo.height };
     shelfPhotoUriForDraftRef.current = photo.uri;
     setShelfPhotoUri(photo.uri);
     setIsAdaptiveShelfScan(true);
@@ -2650,8 +2734,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       completedItems: 0,
     });
 
-    shelfQueryToItemIdRef.current = {};
+    shelfQueryToItemIdsRef.current = {};
+    shelfItemKeyToItemIdRef.current = {};
     pendingShelfItemsByIdRef.current = {};
+    shelfUnknownItemSequenceRef.current = 0;
     setBulkItems((prev) => prev.filter((item) => item.id !== placeholderItemId));
     setQuickScanStore((prev) => {
       if (!prev[placeholderItemId]) return prev;
@@ -2702,6 +2788,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setIsAdaptiveShelfScan(Boolean(options?.preserveAdaptivePresentation));
       closeShelfScanStream();
       lastShelfScanPhotoRef.current = photo;
+      shelfScanSourceSizeRef.current = { width: photo.width, height: photo.height };
       shelfPhotoUriForDraftRef.current = photo.uri;
       setShelfPhotoUri(photo.uri);
       setCurrentInstruction('processing');
@@ -2731,6 +2818,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         [{ resize: { width: 1200 } }], // Resize to max 1200px width
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG } // Compress aggressively to reduce payload
       );
+      shelfScanSourceSizeRef.current = { width: compressedImage.width, height: compressedImage.height };
 
       // Convert compressed image to base64
       const response = await fetch(compressedImage.uri);

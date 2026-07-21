@@ -1,47 +1,40 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  ActivityIndicator,
-  RefreshControl,
-  TouchableOpacity,
   Alert,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useAgentReports, type AgentReportRecord } from '../../hooks/useAgentReports';
 import ActivityTraySheet from '../../features/liquidationConversation/components/activity/ActivityTraySheet';
 import { useActivityTray } from '../../features/liquidationConversation/components/activity/useActivityTray';
-import ReportsAnalyticsHeader from './ReportsAnalyticsHeader';
-
-// Reports tab — every report Sprout has authored (chat reports, home insights,
-// campaign wrap-ups), org-wide. Tapping a row opens the same report bottom
-// sheet the chat uses, so a report is reviewable from anywhere, not only from
-// the message that carried it.
-
-const INK = '#18181B';
-const DIM = '#6B7280';
-const FONT = { regular: 'Inter_400Regular', medium: 'Inter_500Medium', semibold: 'Inter_600SemiBold', bold: 'Inter_700Bold' };
-
-const SOURCE_META: Record<AgentReportRecord['source'], { label: string; icon: string; bg: string; fg: string }> = {
-  chat: { label: 'Chat', icon: 'chat-outline', bg: '#E7F6D7', fg: '#4E6B12' },
-  insight: { label: 'Insight', icon: 'lightbulb-on-outline', bg: '#FBEAD2', fg: '#A2611A' },
-  digest: { label: 'Wrap-up', icon: 'flag-checkered', bg: '#E0E7FF', fg: '#3730A3' },
-  system: { label: 'System', icon: 'cog-outline', bg: '#F3F4F6', fg: '#4B5563' },
-};
+import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
+import { useAgentReports, type AgentReportRecord } from '../../hooks/useAgentReports';
+import ReportsAnalyticsHeader, { type ReportsSection } from './ReportsAnalyticsHeader';
 
 const relativeDate = (iso: string): string => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
-    ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const timestamp = Date.parse(iso);
+  if (!Number.isFinite(timestamp)) return '';
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(elapsed / 60000);
+  if (minutes < 1) return 'Now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  return new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
 const ReportsTab: React.FC = () => {
   const { reports, loading, error, refetch, archiveReport } = useAgentReports();
-  const [refreshing, setRefreshing] = React.useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeSection, setActiveSection] = useState<ReportsSection>('overview');
   const { openTray, trayProps } = useActivityTray();
+  const showReports = activeSection === 'overview' || activeSection === 'reports';
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -76,70 +69,61 @@ const ReportsTab: React.FC = () => {
     );
   }, [archiveReport]);
 
+  const emptyState = !showReports || loading ? null : (
+    <View style={styles.emptyState}>
+      <Text style={styles.emptyText}>
+        {error ? 'Reports could not load.' : 'No reports yet.'}
+      </Text>
+      {error ? (
+        <Pressable onPress={onRefresh} disabled={refreshing} hitSlop={8} accessibilityRole="button">
+          <Text style={styles.retryText}>{refreshing ? 'Trying again…' : 'Try again'}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+
   return (
-    <View style={{ flex: 1 }}>
+    <View style={styles.screen}>
       <FlatList
-        data={reports}
-        keyExtractor={(r) => r.id || r.documentId}
-        contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 140 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#93C822" />}
-        // Analytics live above the report rows: what happened (30d tiles +
-        // 14d revenue line), then every report the agent has authored.
-        ListHeaderComponent={<ReportsAnalyticsHeader />}
-        ListEmptyComponent={
-          loading ? (
-            <View style={styles.center}>
-              <ActivityIndicator color="#93C822" />
-            </View>
-          ) : (
-            <View style={styles.center}>
-              <Icon name="file-document-outline" size={44} color="#C7C7CC" />
-              <Text style={styles.emptyTitle}>{error ? 'Reports could not load' : 'No reports yet'}</Text>
-              <Text style={styles.emptySub}>
-                {error
-                  ? 'Check your connection and try again.'
-                  : 'Ask Sprout to audit your inventory or research the market, and the reports land here.'}
-              </Text>
-              {error ? (
-                <TouchableOpacity style={styles.retryBtn} onPress={onRefresh} disabled={refreshing} activeOpacity={0.8}>
-                  {refreshing ? (
-                    <ActivityIndicator color="#93C822" />
-                  ) : (
-                    <Text style={styles.retryText}>Retry</Text>
-                  )}
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          )
+        data={showReports ? reports : []}
+        keyExtractor={(report) => report.id || report.documentId}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={CHAT_COLORS.brand}
+          />
         }
-        ItemSeparatorComponent={() => <View style={styles.sep} />}
-        renderItem={({ item }) => {
-          const meta = SOURCE_META[item.source] || SOURCE_META.chat;
-          return (
-            <TouchableOpacity
-              style={styles.row}
-              activeOpacity={0.7}
-              onPress={() => openReport(item)}
-              onLongPress={() => confirmArchive(item)}
-            >
-              <View style={styles.leading}>
-                <Icon name="file-document-outline" size={20} color={INK} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
-                <Text style={styles.rowSub} numberOfLines={2}>
-                  {item.summary || relativeDate(item.updatedAt)}
-                </Text>
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                <Text style={styles.date}>{relativeDate(item.updatedAt)}</Text>
-                <View style={[styles.pill, { backgroundColor: meta.bg }]}>
-                  <Text style={[styles.pillText, { color: meta.fg }]} numberOfLines={1}>{meta.label}</Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-          );
-        }}
+        ListHeaderComponent={
+          <ReportsAnalyticsHeader
+            activeSection={activeSection}
+            onSectionChange={setActiveSection}
+            showReportsHeading={showReports}
+          />
+        }
+        ListEmptyComponent={emptyState}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        renderItem={({ item }) => (
+          <Pressable
+            style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
+            onPress={() => openReport(item)}
+            onLongPress={() => confirmArchive(item)}
+            accessibilityRole="button"
+            accessibilityLabel={`Open report ${item.title}`}
+          >
+            <View style={styles.leading}>
+              <Icon name="file-document-outline" size={19} color={CHAT_COLORS.brandDeep} />
+            </View>
+            <View style={styles.reportCopy}>
+              <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.rowSub} numberOfLines={1}>
+                {item.summary || 'Open report'}
+              </Text>
+            </View>
+            <Text style={styles.date}>{relativeDate(item.updatedAt)}</Text>
+          </Pressable>
+        )}
       />
       <ActivityTraySheet {...trayProps} />
     </View>
@@ -147,27 +131,27 @@ const ReportsTab: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  // Rendered inside the FlatList's empty slot (beneath the analytics header),
-  // so it centers with padding rather than flex-filling the screen.
-  center: { alignItems: 'center', justifyContent: 'center', padding: 24, paddingVertical: 48, gap: 8 },
-  emptyTitle: { fontSize: 17, fontFamily: FONT.semibold, color: INK, marginTop: 6 },
-  emptySub: { fontSize: 13, fontFamily: FONT.regular, color: DIM, textAlign: 'center' },
-  sep: { height: 1, backgroundColor: '#F1F2F4', marginLeft: 60 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 4 },
+  screen: { flex: 1, backgroundColor: CHAT_COLORS.white },
+  content: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 140 },
+  emptyState: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 18, paddingHorizontal: 4 },
+  emptyText: { color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular, fontSize: 13 },
+  retryText: { color: CHAT_COLORS.inkSoft, fontFamily: CHAT_FONT.semibold, fontSize: 13 },
+  separator: { height: 1, backgroundColor: CHAT_COLORS.divider, marginLeft: 52 },
+  row: { flexDirection: 'row', alignItems: 'center', minHeight: 62, paddingVertical: 10, paddingHorizontal: 4, borderRadius: 12 },
+  rowPressed: { backgroundColor: CHAT_COLORS.surface },
   leading: {
-    width: 40, height: 40, borderRadius: 12, backgroundColor: '#F4F4F1',
-    alignItems: 'center', justifyContent: 'center', marginRight: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: CHAT_COLORS.brandSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 11,
   },
-  rowTitle: { fontSize: 15, fontFamily: FONT.semibold, color: INK },
-  rowSub: { fontSize: 12.5, fontFamily: FONT.regular, color: DIM, marginTop: 2 },
-  date: { fontSize: 12, fontFamily: FONT.medium, color: DIM },
-  pill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
-  pillText: { fontSize: 11, fontFamily: FONT.semibold },
-  retryBtn: {
-    marginTop: 10, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 999,
-    borderWidth: 1.5, borderColor: '#93C822', minWidth: 96, alignItems: 'center',
-  },
-  retryText: { fontSize: 14, fontFamily: FONT.semibold, color: '#4E6B12' },
+  reportCopy: { flex: 1, minWidth: 0, marginRight: 10 },
+  rowTitle: { color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold, fontSize: 14 },
+  rowSub: { color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular, fontSize: 12, marginTop: 3 },
+  date: { color: CHAT_COLORS.faint, fontFamily: CHAT_FONT.regular, fontSize: 11.5, fontVariant: ['tabular-nums'] },
 });
 
 export default ReportsTab;
