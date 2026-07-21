@@ -6,6 +6,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import spinners from 'unicode-animations';
 import { UnicodeSpinner } from './UnicodeSpinner';
 import { CameraMode } from './types';
+import { resolveImageUri } from '../../utils/resolveImageUri';
 
 export const CenterOverlay: React.FC<{
   instruction: string;
@@ -119,6 +120,7 @@ export const CenterOverlay: React.FC<{
   }
 
   if (matchPreview && cameraMode !== 'barcode' && !isProcessing && !showCompletionPulse) {
+    const imageUri = resolveImageUri(matchPreview);
     // Clean Shop-style row: thumb, title, price — confirmed gets a check, pending
     // gets a quiet Review pill. No shouty caps label, no "tap to…" sentence.
     return (
@@ -136,8 +138,8 @@ export const CenterOverlay: React.FC<{
           <Animated.View style={{ width: '100%' }}>
             <TouchableOpacity style={{ width: '100%' }} onPress={onPress} activeOpacity={0.9}>
               <Animated.View entering={FadeIn} style={styles.centerOverlayMatchCard}>
-                {matchPreview.imageUrl ? (
-                  <Image source={{ uri: matchPreview.imageUrl }} style={styles.centerOverlayMatchImage} />
+                {imageUri ? (
+                  <Image source={{ uri: imageUri }} style={styles.centerOverlayMatchImage} />
                 ) : (
                   <View style={[styles.centerOverlayMatchImage, styles.centerOverlayMatchImageFallback]}>
                     <Icon name="image-outline" size={18} color="#64748B" />

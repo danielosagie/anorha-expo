@@ -33,6 +33,8 @@ import { use$ } from '@legendapp/state/react';
 import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
+import { enqueueShelfItemCrop } from '../features/cart/shelfItemCropPipeline';
+import { resolveImageUri, withResolvedImageUrl } from '../utils/resolveImageUri';
 import {
   View,
   Text,
@@ -627,26 +629,29 @@ const getSelectedQuickMatchCandidate = (
 };
 
 const rankedCandidatesToQuickMatchHintCandidates = (candidates: MatchCandidate[] = []): any[] => (
-  candidates.map((candidate, index) => ({
-    position: index + 1,
-    id: candidate.id,
-    productId: candidate.productId,
-    variantId: candidate.variantId,
-    title: candidate.title || 'Unknown Product',
-    description: candidate.description || '',
-    snippet: candidate.description || '',
-    link: candidate.productUrl || candidate.sourceUrl || '',
-    sourceUrl: candidate.sourceUrl || candidate.productUrl || '',
-    productUrl: candidate.productUrl || candidate.sourceUrl || '',
-    source: 'quickscan',
-    isLocalMatch: Boolean(candidate.isLocalMatch),
-    thumbnail: candidate.imageUrl || '',
-    image: candidate.imageUrl || '',
-    imageUrl: candidate.imageUrl || '',
-    price: typeof candidate.price === 'number'
-      ? { value: `$${candidate.price}`, extracted_value: candidate.price, currency: 'USD' }
-      : candidate.price,
-  }))
+  candidates.map((candidate, index) => {
+    const imageUrl = resolveImageUri(candidate) || '';
+    return ({
+      position: index + 1,
+      id: candidate.id,
+      productId: candidate.productId,
+      variantId: candidate.variantId,
+      title: candidate.title || 'Unknown Product',
+      description: candidate.description || '',
+      snippet: candidate.description || '',
+      link: candidate.productUrl || candidate.sourceUrl || '',
+      sourceUrl: candidate.sourceUrl || candidate.productUrl || '',
+      productUrl: candidate.productUrl || candidate.sourceUrl || '',
+      source: 'quickscan',
+      isLocalMatch: Boolean(candidate.isLocalMatch),
+      thumbnail: imageUrl,
+      image: imageUrl,
+      imageUrl,
+      price: typeof candidate.price === 'number'
+        ? { value: `$${candidate.price}`, extracted_value: candidate.price, currency: 'USD' }
+        : candidate.price,
+    });
+  })
 );
 
 const getLocalInventoryCandidateForItem = (
@@ -1087,7 +1092,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   price: s.price,
                   marketplace: 'Ebay',
                   condition: s.condition,
-                  imageUrl: s.imageUrl || s.thumbnail || s.image,
+                  imageUrl: resolveImageUri(s),
                   url: s.url,
                 }))
               : undefined,
@@ -1471,6 +1476,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [shelfPricingPendingByItemId, setShelfPricingPendingByItemId] = useState<Record<string, boolean>>({});
   const shelfPricingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const shelfPricingPumpRef = useRef<() => void>(() => {});
+  // consumeShelfStreamEvent is declared before the uploader callback. Late-bind it
+  // so streamed crop jobs can use the exact same upload path as camera photos.
+  const uploadImageToSupabaseRef = useRef<((localUri: string, photoId: string) => Promise<string>) | null>(null);
   const hasTriggeredBulkModalFtuxRef = useRef(false);
   // Deferred cart-Modal unmount after the close spring settles (cleared on reopen).
   const cartCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1510,6 +1518,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       priceData = response.ok
         ? await response.json()
         : { low: null, median: null, high: null, recommended: null, samples: [], error: 'request_failed' };
+      if (Array.isArray(priceData?.samples)) {
+        priceData = { ...priceData, samples: priceData.samples.map(withResolvedImageUrl) };
+      }
     } catch (error: any) {
       priceData = {
         low: null,
@@ -2048,6 +2059,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }>): any[] => {
     const out: any[] = [];
     candidates.forEach((c, idx) => {
+      const imageUrl = resolveImageUri(c) || '';
       out.push({
         position: idx + 1,
         id: c.id,
@@ -2059,8 +2071,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         source: 'quickscan',
         isLocalMatch: Boolean(c.isLocalMatch),
         source_icon: '',
-        thumbnail: c.imageUrl || '',
-        image: c.imageUrl || '',
+        thumbnail: imageUrl,
+        image: imageUrl,
+        imageUrl,
         price: typeof c.price === 'number' ? { value: `$${c.price}`, extracted_value: c.price, currency: 'USD' } : undefined,
       });
     });
@@ -2558,15 +2571,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 median: livePricing.median,
                 recommended: livePricing.median,
                 sampleCount: livePricing.sampleCount,
-                samples: livePricing.samples,
+                samples: Array.isArray(livePricing.samples)
+                  ? livePricing.samples.map(withResolvedImageUrl)
+                  : livePricing.samples,
                 livePricing,
               }
             : undefined;
-          const rankedCandidates = res.matches.map((match: any, index: number) => (
-            index === 0 && instantPricing && !match?.pricingResearch
-              ? { ...match, pricingResearch: instantPricing }
-              : match
-          ));
+          const rankedCandidates = res.matches.map((match: any, index: number) => {
+            const normalized = withResolvedImageUrl(match);
+            return index === 0 && instantPricing && !match?.pricingResearch
+              ? { ...normalized, pricingResearch: instantPricing }
+              : normalized;
+          });
 
           setQuickScanStore((prev) => ({
             ...prev,
@@ -2636,6 +2652,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               };
             });
           }
+        }
+
+        if (shelfBox && lastShelfScanPhotoRef.current?.uri) {
+          enqueueShelfItemCrop({
+            itemId,
+            sourceUri: lastShelfScanPhotoRef.current.uri,
+            box: shelfBox,
+            upload: async (localUri, photoId) => {
+              const upload = uploadImageToSupabaseRef.current;
+              if (!upload) throw new Error('Shelf crop uploader is not ready');
+              return upload(localUri, photoId);
+            },
+          });
         }
 
         // Per-item inventory dedup signal (shelf/multi) — the "Already in Inventory" badge
@@ -2916,10 +2945,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   matchData: {
                     systemAction: 'show_multiple_matches',
                     confidence: res.confidence || 'medium',
-                    rankedCandidates: res.matches,
+                    rankedCandidates: res.matches.map(withResolvedImageUrl),
                     totalMatches: res.matches.length,
                   },
-                  matchRows: res.matches.map((match: any) => ({ ...match, queryKey: newQuery })),
+                  matchRows: res.matches.map((match: any) => ({ ...withResolvedImageUrl(match), queryKey: newQuery })),
                 },
               }));
               // Drop the previously confirmed/auto-selected match so the fresh results actually
@@ -3442,6 +3471,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       throw error;
     }
   }, []);
+  uploadImageToSupabaseRef.current = uploadImageToSupabase;
 
   // Auto-quick scan when photo is captured
   const performQuickScan = useCallback(async (
@@ -3783,7 +3813,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             price: typeof match.price === 'number'
               ? match.price
               : Number(match.price?.extracted_value || match.price?.value || 0),
-            imageUrl: match.imageUrl || match.image || match.thumbnail || '',
+            imageUrl: resolveImageUri(match) || '',
             productUrl: match.productUrl || match.product_url || match.link || '',
             sourceUrl: (() => {
               const preferred = match.productUrl || match.product_url || match.link || '';
@@ -3805,7 +3835,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (lp && nextMatchData.rankedCandidates?.[0] && !nextMatchData.rankedCandidates[0].pricingResearch) {
           (nextMatchData.rankedCandidates[0] as any).pricingResearch = {
             low: lp.low, high: lp.high, median: lp.median, sampleCount: lp.sampleCount,
-            samples: lp.samples, livePricing: lp,
+            samples: Array.isArray(lp.samples) ? lp.samples.map(withResolvedImageUrl) : lp.samples,
+            livePricing: lp,
             // Exact product wasn't listed → these are SIMILAR-item comps; the card titles
             // the section "Couldn't find exact — similar item comps".
             isSimilar: !!lp.isSimilar,
@@ -4949,7 +4980,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   );
   const activeMatchCount = activeQuickMatchStore?.matchData?.totalMatches || 0;
   const centerOverlayMatchPreview = activeSelectedMatch ? {
-    imageUrl: activeSelectedMatch?.imageUrl || activeSelectedMatch?.image || activeSelectedMatch?.thumbnail || null,
+    imageUrl: resolveImageUri(activeSelectedMatch) || null,
     price: typeof activeSelectedMatch?.price === 'number'
       ? activeSelectedMatch.price
       : typeof activeSelectedMatch?.price?.extracted_value === 'number'

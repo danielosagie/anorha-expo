@@ -20,6 +20,7 @@ import { createLogger } from '../../utils/logger';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import type { ShelfItemBox } from '../../features/cart/types';
 import { ShelfItemCrop } from './ShelfItemCrop';
+import { resolveImageUri } from '../../utils/resolveImageUri';
 const log = createLogger('BulkItemsSheet');
 
 
@@ -182,7 +183,8 @@ const FolderCartRow = React.memo(function FolderCartRow({
             const scannedCandidate = scan?.matchData?.rankedCandidates?.[0];
             const candidate = confirmedRow || scannedCandidate;
             const matchCount = scan?.matchData?.totalMatches || scan?.matchData?.rankedCandidates?.length || 0;
-            const imageUri = candidate?.imageUrl || candidate?.image;
+            const imageUri = resolveImageUri(candidate);
+            const itemPhotoUri = resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0]);
             const price = extractPrice(candidate?.price);
             const title = candidate?.title || item.title || 'Shelf item';
             const isInventoryMatch = Boolean(inventoryMatchByItemId?.[item.id] || candidate?.isLocalMatch || candidate?.inInventory);
@@ -206,7 +208,9 @@ const FolderCartRow = React.memo(function FolderCartRow({
                   accessibilityRole={onOpenItem ? 'button' : undefined}
                   accessibilityLabel={`Open ${title}`}
                 >
-                {entry.sourcePhotoUri && item.shelfBox ? (
+                {itemPhotoUri ? (
+                  <Image source={{ uri: itemPhotoUri }} style={styles.folderItemThumb} resizeMode="cover" />
+                ) : entry.sourcePhotoUri && item.shelfBox ? (
                   <ShelfItemCrop
                     uri={entry.sourcePhotoUri}
                     box={item.shelfBox}
@@ -314,8 +318,8 @@ const BulkCartRow = React.memo(function BulkCartRow({
     : null;
   const selectedMatch = confirmedMatch || topMatch;
   const isLocalInventoryMatch = Boolean(selectedMatch?.isLocalMatch);
-  const thumbUri = selectedMatch?.imageUrl || selectedMatch?.image ||
-    item.photos.find((photo) => photo.isCover)?.uri || item.photos[0]?.uri;
+  const thumbUri = resolveImageUri(selectedMatch) ||
+    resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0]);
   const rowTitle = selectedMatch
     ? (selectedMatch.title || 'Selected match')
     : (item.title && !/^Item \d+$/.test(item.title) ? item.title : `Item ${index + 1}`);

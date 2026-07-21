@@ -12,6 +12,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import type { LegacyBulkItem } from '../../features/cart/types';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import { ShelfItemCrop } from './ShelfItemCrop';
+import { resolveImageUri } from '../../utils/resolveImageUri';
 
 const GREEN = CHAT_COLORS.brand;
 const C = { bg: '#F2F2F7', card: CHAT_COLORS.white, hairline: '#E8E8ED', text: CHAT_COLORS.ink, label: CHAT_COLORS.dim };
@@ -102,19 +103,19 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
         text: 'Already in inventory',
         price: money(selected?.price),
         title: selected?.title,
-        image: selected?.imageUrl || selected?.image,
+        image: resolveImageUri(selected),
         pricingResearch,
       };
     }
     if (selectedRow) {
-      return { kind: 'matched', text: 'Match found', price: money(selectedRow?.price), title: selectedRow?.title, image: selectedRow?.imageUrl || selectedRow?.image, pricingResearch };
+      return { kind: 'matched', text: 'Match found', price: money(selectedRow?.price), title: selectedRow?.title, image: resolveImageUri(selectedRow), pricingResearch };
     }
     const qs = quickScanStore[id];
     const cands = qs?.matchData?.rankedCandidates;
     const n = qs?.matchData?.totalMatches || cands?.length || 0;
     if (n > 0 && cands?.length) {
       const c: any = cands[0];
-      return { kind: 'candidates', text: `${n} match${n > 1 ? 'es' : ''}`, price: money(c?.price), title: c?.title, image: c?.imageUrl || c?.image, pricingResearch };
+      return { kind: 'candidates', text: `${n} match${n > 1 ? 'es' : ''}`, price: money(c?.price), title: c?.title, image: resolveImageUri(c), pricingResearch };
     }
     return { kind: 'needs', text: 'Needs more info' };
   };
@@ -160,14 +161,17 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
           {items.map((it) => {
             const s = statusFor(it.id);
             const matchImage = s.image;
-            const thumb = matchImage || it.photos?.find((p) => p.isCover)?.uri || it.photos?.[0]?.uri;
+            const itemPhoto = resolveImageUri(it.photos?.find((p) => p.isCover) || it.photos?.[0]);
+            const thumb = matchImage || itemPhoto;
             const title = s.title || it.title || 'Item';
             const price = s.price;
             const comps = soldCompCount(s.pricingResearch);
             const pricingPending = Boolean(shelfPricingPendingByItemId[it.id]);
             return (
               <TouchableOpacity key={it.id} style={styles.row} activeOpacity={0.7} onPress={() => onOpenItemPreview(it.id)}>
-                {sourcePhotoUri && it.shelfBox ? (
+                {itemPhoto ? (
+                  <Image source={{ uri: itemPhoto }} style={styles.rowThumb} resizeMode="cover" />
+                ) : sourcePhotoUri && it.shelfBox ? (
                   <ShelfItemCrop
                     uri={sourcePhotoUri}
                     box={it.shelfBox}

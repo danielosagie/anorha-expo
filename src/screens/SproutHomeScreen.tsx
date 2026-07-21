@@ -48,6 +48,7 @@ const CONVEX_TEMPLATE =
   'mobile';
 
 const BRAND = '#93C822';
+const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
 
 const FONT = {
   regular: 'Inter_400Regular',
@@ -73,6 +74,26 @@ const greetingForHour = (hour: number): string => {
 const currency = (value: number): string => {
   const rounded = Math.round(value * 100) / 100;
   return `$${rounded.toLocaleString(undefined, { minimumFractionDigits: rounded % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`;
+};
+
+const nextRecommendationLine = (
+  nextRefreshAt: string | null,
+  generatedAt: string | null,
+  now = Date.now(),
+): string | null => {
+  const explicitRefresh = nextRefreshAt ? Date.parse(nextRefreshAt) : NaN;
+  const generated = generatedAt ? Date.parse(generatedAt) : NaN;
+  const refreshTime = Number.isFinite(explicitRefresh)
+    ? explicitRefresh
+    : Number.isFinite(generated)
+      ? generated + RECOMMENDATION_REFRESH_MS
+      : NaN;
+
+  if (!Number.isFinite(refreshTime)) return null;
+  const remainingMinutes = Math.ceil((refreshTime - now) / (60 * 1000));
+  if (remainingMinutes <= 0) return 'New look soon';
+  if (remainingMinutes < 60) return `New look in ${remainingMinutes}m`;
+  return `New look in ${Math.ceil(remainingMinutes / 60)}h`;
 };
 
 type BriefingChip = 'SOLD' | 'OFFER' | 'REPRICE' | 'ASK' | 'LISTED';
@@ -345,10 +366,14 @@ const SproutHomeScreen: React.FC = () => {
   const revenue24h = controller.campaignOverview?.summary24h?.revenue || 0;
   const soldToday = controller.campaignOverview?.summary24h?.sold || 0;
 
-  // Periodic insight (LLM nudges, 6h cache) — the recommendation layer the home
+  // Periodic insight (LLM nudges) — the recommendation layer the home
   // blurb surfaces when there's no fresher digest/briefing to show.
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
-  const { insight } = useOrgNudges(!isOrgLoading ? currentOrg?.id : undefined);
+  const {
+    insight,
+    generatedAt: insightGeneratedAt,
+    nextRefreshAt: insightNextRefreshAt,
+  } = useOrgNudges(!isOrgLoading ? currentOrg?.id : undefined);
   const { liveConnections } = usePlatformConnections();
   const { productCount, loading: productCountLoading } = useProfileProductCount();
   // Setup state drives the empty dashboard: an established seller (has a platform
@@ -389,6 +414,10 @@ const SproutHomeScreen: React.FC = () => {
     ];
     return candidates.find((value) => typeof value === 'string' && value.trim())?.trim();
   }, [insight?.suggestionText, insight?.bottomDIN?.description, insight?.handoff?.prompt, insight?.reasoning]);
+  const insightNextCheckLine = useMemo(
+    () => nextRecommendationLine(insightNextRefreshAt, insightGeneratedAt),
+    [insightGeneratedAt, insightNextRefreshAt],
+  );
 
   // Insight handoff → chat. The backend scopes by StrategyId; mobile threads key on
   // session ids, so match against the loaded campaigns and fall back to the newest —
@@ -902,6 +931,9 @@ const SproutHomeScreen: React.FC = () => {
                     void openInsightReport();
                   }}
                 />
+              ) : null}
+              {!controller.loading && insightHeadline && insightNextCheckLine ? (
+                <Text style={[styles.nextReport, { color: THEME.faint }]}>{insightNextCheckLine}</Text>
               ) : null}
             </>
           )}

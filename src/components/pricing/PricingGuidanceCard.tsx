@@ -12,6 +12,7 @@ import { View, Text, Image, TouchableOpacity, StyleSheet, Linking, ActivityIndic
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PriceHistorySlider, HistoryPoint } from './PriceHistorySlider';
 import { CompsPriceChart } from './CompsPriceChart';
+import { resolveImageUri } from '../../utils/resolveImageUri';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -312,41 +313,44 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
             <Text style={styles.compsKicker}>{p.isSimilar ? `SIMILAR ITEM COMPS (${sampleCount})` : `RECENT COMPS (${sampleCount})`}</Text>
           )}
           <View style={styles.compsCard}>
-            {samples.map((c, i) => (
-              <TouchableOpacity
-                key={`comp-${i}`}
-                activeOpacity={0.65}
-                onPress={() => {
-                  if (onOpenComp) onOpenComp(c, i);
-                  else if (c.url) Linking.openURL(c.url).catch(() => undefined);
-                }}
-                style={[styles.compRow, i < samples.length - 1 && styles.compRowDivider]}
-              >
-                {c.imageUrl ? (
-                  <Image source={{ uri: c.imageUrl }} style={styles.compThumb} resizeMode="cover" />
-                ) : (
-                  <View style={[styles.compThumb, styles.compThumbEmpty]}>
-                    <Icon name="image-off-outline" size={18} color="#C7C7CC" />
+            {samples.map((c, i) => {
+              const imageUri = resolveImageUri(c);
+              return (
+                <TouchableOpacity
+                  key={`comp-${i}`}
+                  activeOpacity={0.65}
+                  onPress={() => {
+                    if (onOpenComp) onOpenComp(c, i);
+                    else if (c.url) Linking.openURL(c.url).catch(() => undefined);
+                  }}
+                  style={[styles.compRow, i < samples.length - 1 && styles.compRowDivider]}
+                >
+                  {imageUri ? (
+                    <Image source={{ uri: imageUri }} style={styles.compThumb} resizeMode="cover" />
+                  ) : (
+                    <View style={[styles.compThumb, styles.compThumbEmpty]}>
+                      <Icon name="image-off-outline" size={18} color="#C7C7CC" />
+                    </View>
+                  )}
+                  <View style={styles.compMid}>
+                    <Text style={styles.compTitle} numberOfLines={1}>
+                      {c.title || 'Listing'}
+                    </Text>
+                    <Text style={styles.compSub} numberOfLines={1}>
+                      {[
+                        c.marketplace,
+                        c.condition,
+                        typeof c.estimatedDaysToSell === 'number' ? `~${Math.round(c.estimatedDaysToSell)}d to sell` : null,
+                      ]
+                        .filter(Boolean)
+                        .join('  •  ')}
+                    </Text>
                   </View>
-                )}
-                <View style={styles.compMid}>
-                  <Text style={styles.compTitle} numberOfLines={1}>
-                    {c.title || 'Listing'}
-                  </Text>
-                  <Text style={styles.compSub} numberOfLines={1}>
-                    {[
-                      c.marketplace,
-                      c.condition,
-                      typeof c.estimatedDaysToSell === 'number' ? `~${Math.round(c.estimatedDaysToSell)}d to sell` : null,
-                    ]
-                      .filter(Boolean)
-                      .join('  •  ')}
-                  </Text>
-                </View>
-                <Text style={styles.compPrice}>{money(c.price)}</Text>
-                <Icon name="chevron-right" size={22} color="#5A5A5E" />
-              </TouchableOpacity>
-            ))}
+                  <Text style={styles.compPrice}>{money(c.price)}</Text>
+                  <Icon name="chevron-right" size={22} color="#5A5A5E" />
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </>
       )}

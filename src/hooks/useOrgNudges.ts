@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useContext } from 'react';
-import { supabase } from '../../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../../lib/supabase';
 import { SessionContext } from '../context/SessionContext';
 import { API_BASE_URL } from '../config/env';
@@ -22,6 +22,7 @@ export interface DashboardInsightChart {
 }
 
 export interface DashboardInsight {
+  id?: string;
   topDIN: {
     category: string;
     headline: string;
@@ -96,6 +97,10 @@ export interface NudgesResponse {
   insight: DashboardInsight;
   timestamp: string;
   cacheExpiresAt: string | null;
+  id?: string;
+  recommendationId?: string;
+  generatedAt?: string;
+  nextRefreshAt?: string;
 }
 
 interface UseOrgNudgesReturn {
@@ -104,10 +109,22 @@ interface UseOrgNudgesReturn {
   error: string | null;
   lastUpdated: string | null;
   cacheExpiresAt: string | null; // ISO timestamp for refresh timer
+  generatedAt: string | null;
+  nextRefreshAt: string | null;
   refetch: () => Promise<void>;
   forceRefresh: () => Promise<void>;
 }
 
+interface PersistedInsightSnapshot {
+  version: 1;
+  insight: DashboardInsight;
+  recommendationId: string | null;
+  contentHash: string;
+  generatedAt: string | null;
+  nextRefreshAt: string | null;
+}
+
+const INSIGHT_STORAGE_PREFIX = 'sssync:last-good-org-insight:v1';
 const ALLOWED_SEVERITIES = new Set<DashboardInsight['severity']>(['good', 'neutral', 'warning', 'critical']);
 const ALLOWED_URGENCIES = new Set<InsightUrgency>(['now', 'today', 'this-week']);
 
@@ -116,6 +133,30 @@ const coerceText = (value: unknown, fallback = ''): string => {
   if (typeof value === 'number') return String(value);
   return fallback;
 };
+
+const normalizeIsoDate = (value: unknown): string | null => {
+  const text = coerceText(value);
+  return text && Number.isFinite(Date.parse(text)) ? text : null;
+};
+
+const storageKeyFor = (userId: string, orgId: string): string =>
+  `${INSIGHT_STORAGE_PREFIX}:${encodeURIComponent(userId)}:${encodeURIComponent(orgId)}`;
+
+const hashText = (value: string): string => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const contentHashFor = (insight: DashboardInsight): string =>
+  hashText(
+    JSON.stringify(insight, (key, value) =>
+      key === 'timestamp' || key === 'documentId' ? undefined : value,
+    ),
+  );
 
 const normalizeMetric = (metric: any): DashboardInsightMetric | null => {
   const label = coerceText(metric?.label);
@@ -183,6 +224,7 @@ const normalizeSingleInsight = (raw: any): DashboardInsight | null => {
   const rawAffectedProducts = raw?.bottomDIN?.affectedProducts || raw?.affectedProducts;
 
   return {
+    id: coerceText(raw?.id || raw?.insightId || raw?.recommendationId) || undefined,
     topDIN: {
       category: coerceText(raw?.topDIN?.category, 'Priority'),
       headline,
@@ -248,22 +290,131 @@ const normalizeInsight = (raw: any): DashboardInsight | null => {
   return normalizeSingleInsight(raw);
 };
 
+const snapshotFromResponse = (
+  insight: DashboardInsight,
+  generatedAt: string | null,
+  nextRefreshAt: string | null,
+): PersistedInsightSnapshot => ({
+  version: 1,
+  insight,
+  recommendationId: insight.id || null,
+  contentHash: contentHashFor(insight),
+  generatedAt,
+  nextRefreshAt,
+});
+
+const normalizePersistedSnapshot = (raw: unknown): PersistedInsightSnapshot | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Partial<PersistedInsightSnapshot>;
+  const insight = normalizeInsight(record.insight);
+  if (!insight) return null;
+
+  return snapshotFromResponse(
+    insight,
+    normalizeIsoDate(record.generatedAt),
+    normalizeIsoDate(record.nextRefreshAt),
+  );
+};
+
+const resolveSnapshot = (
+  previous: PersistedInsightSnapshot | null,
+  incoming: PersistedInsightSnapshot,
+): PersistedInsightSnapshot => {
+  if (!previous) return incoming;
+
+  const previousTime = previous.generatedAt ? Date.parse(previous.generatedAt) : NaN;
+  const incomingTime = incoming.generatedAt ? Date.parse(incoming.generatedAt) : NaN;
+  if (Number.isFinite(previousTime) && Number.isFinite(incomingTime) && incomingTime < previousTime) {
+    return previous;
+  }
+
+  const identityChanged =
+    (incoming.recommendationId !== null && incoming.recommendationId !== previous.recommendationId) ||
+    incoming.contentHash !== previous.contentHash ||
+    (incoming.generatedAt !== null && incoming.generatedAt !== previous.generatedAt);
+
+  if (identityChanged) return incoming;
+
+  return {
+    ...previous,
+    generatedAt: incoming.generatedAt ?? previous.generatedAt,
+    nextRefreshAt: incoming.nextRefreshAt ?? previous.nextRefreshAt,
+  };
+};
+
 /**
  * Hook to fetch AI-generated dashboard insights for an organization
  * Handles idle → loading → error → success state flow
  */
 export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const session = useContext(SessionContext);
+  const userId = session?.user?.id;
+  const persistenceKey = userId && orgId ? storageKeyFor(userId, orgId) : null;
   const [insight, setInsight] = useState<DashboardInsight | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [cacheExpiresAt, setCacheExpiresAt] = useState<string | null>(null);
-  const prevOrgIdRef = useRef<string | undefined>(undefined);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [nextRefreshAt, setNextRefreshAt] = useState<string | null>(null);
+  const [hydratedStorageKey, setHydratedStorageKey] = useState<string | null>(null);
+  const activeStorageKeyRef = useRef<string | null>(null);
+  const snapshotRef = useRef<PersistedInsightSnapshot | null>(null);
+  const fetchSequenceRef = useRef(0);
+  const storageWriteRef = useRef<Promise<void>>(Promise.resolve());
+
+  const applySnapshot = useCallback((snapshot: PersistedInsightSnapshot) => {
+    snapshotRef.current = snapshot;
+    setInsight(snapshot.insight);
+    setGeneratedAt(snapshot.generatedAt);
+    setNextRefreshAt(snapshot.nextRefreshAt);
+    setLastUpdated(snapshot.generatedAt || snapshot.insight.timestamp || null);
+  }, []);
+
+  useEffect(() => {
+    activeStorageKeyRef.current = persistenceKey;
+    fetchSequenceRef.current += 1;
+    snapshotRef.current = null;
+    setInsight(null);
+    setGeneratedAt(null);
+    setNextRefreshAt(null);
+    setLastUpdated(null);
+    setCacheExpiresAt(null);
+    setError(null);
+    setHydratedStorageKey(null);
+
+    if (!persistenceKey) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    AsyncStorage.getItem(persistenceKey)
+      .then((stored) => {
+        if (cancelled || activeStorageKeyRef.current !== persistenceKey || !stored) return;
+        const persisted = normalizePersistedSnapshot(JSON.parse(stored));
+        if (persisted) applySnapshot(persisted);
+      })
+      .catch((storageError) => {
+        log.warn('[useOrgNudges] Failed to hydrate the last good insight:', storageError);
+      })
+      .finally(() => {
+        if (!cancelled && activeStorageKeyRef.current === persistenceKey) {
+          setHydratedStorageKey(persistenceKey);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (activeStorageKeyRef.current === persistenceKey) {
+        activeStorageKeyRef.current = null;
+        fetchSequenceRef.current += 1;
+      }
+    };
+  }, [applySnapshot, persistenceKey]);
 
   const fetchNudges = useCallback(async () => {
-    if (!orgId) {
-      setInsight(null);
+    if (!orgId || !persistenceKey || hydratedStorageKey !== persistenceKey) {
       setLoading(false);
       return;
     }
@@ -280,6 +431,8 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
     setLoading(true);
     setError(null);
+    const requestSequence = ++fetchSequenceRef.current;
+    const requestStorageKey = persistenceKey;
 
     try {
       const token = await ensureSupabaseJwt();
@@ -322,38 +475,73 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
       if (!normalizedInsight) {
         log.warn('[useOrgNudges] ⚠️ Response missing or invalid insight data');
-        throw new Error('Invalid response: missing insight');
+        return;
       }
 
-      setInsight(normalizedInsight);
-      const resolvedTimestamp = coerceText(data?.timestamp, normalizedInsight.timestamp || new Date().toISOString());
+      if (
+        requestSequence !== fetchSequenceRef.current ||
+        activeStorageKeyRef.current !== requestStorageKey
+      ) {
+        return;
+      }
+
+      const rawInsight = data?.insight as { generatedAt?: unknown; nextRefreshAt?: unknown } | undefined;
+      const responseInsightId = coerceText(data?.id || data?.recommendationId);
+      const identifiedInsight = responseInsightId && !normalizedInsight.id
+        ? { ...normalizedInsight, id: responseInsightId }
+        : normalizedInsight;
+      const incoming = snapshotFromResponse(
+        identifiedInsight,
+        normalizeIsoDate(data?.generatedAt ?? rawInsight?.generatedAt),
+        normalizeIsoDate(data?.nextRefreshAt ?? rawInsight?.nextRefreshAt),
+      );
+      const resolved = resolveSnapshot(snapshotRef.current, incoming);
+      applySnapshot(resolved);
+      const resolvedTimestamp = coerceText(data?.timestamp, identifiedInsight.timestamp || new Date().toISOString());
       setLastUpdated(resolvedTimestamp);
       setCacheExpiresAt(coerceText(data?.cacheExpiresAt) || null);
       setError(null);
+
+      const write = storageWriteRef.current
+        .catch(() => undefined)
+        .then(() => AsyncStorage.setItem(requestStorageKey, JSON.stringify(resolved)));
+      storageWriteRef.current = write;
+      try {
+        await write;
+      } catch (storageError) {
+        log.warn('[useOrgNudges] Failed to persist the last good insight:', storageError);
+      }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'Failed to fetch insights';
       const isSoftError = errorMessage.includes('syncing for this workspace');
       if (!isSoftError) {
         log.error('[useOrgNudges] ❌ Fetch error:', errorMessage);
       }
-      setError(errorMessage);
-      setInsight(null);
+      if (
+        requestSequence === fetchSequenceRef.current &&
+        activeStorageKeyRef.current === requestStorageKey
+      ) {
+        setError(errorMessage);
+      }
     } finally {
-      setLoading(false);
+      if (
+        requestSequence === fetchSequenceRef.current &&
+        activeStorageKeyRef.current === requestStorageKey
+      ) {
+        setLoading(false);
+      }
     }
-  }, [orgId, session?.bridgeReady]);
+  }, [applySnapshot, hydratedStorageKey, orgId, persistenceKey, session?.bridgeReady]);
 
   useEffect(() => {
-    if (orgId) {
+    if (orgId && persistenceKey && hydratedStorageKey === persistenceKey) {
       if (!session?.bridgeReady) {
         setLoading(false);
         return;
       }
-      fetchNudges();
+      void fetchNudges();
     }
-
-    prevOrgIdRef.current = orgId;
-  }, [orgId, fetchNudges, session?.bridgeReady]);
+  }, [fetchNudges, hydratedStorageKey, orgId, persistenceKey, session?.bridgeReady]);
 
   const forceRefresh = useCallback(async () => {
     if (!orgId) return;
@@ -399,6 +587,8 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     error,
     lastUpdated,
     cacheExpiresAt,
+    generatedAt,
+    nextRefreshAt,
     refetch: fetchNudges,
     forceRefresh,
   };
