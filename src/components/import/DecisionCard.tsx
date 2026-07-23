@@ -1,7 +1,7 @@
 // DecisionCard — the body that rides inside a TinderShell swipe card.
 //
 // The deck chrome (header, swipe stack, undo · secondary · primary · redo bar,
-// drag-down-to-ignore) is TinderShell's. This is ONLY the content: the item's
+// swipe-up-to-ignore) is TinderShell's. This is ONLY the content: the item's
 // identity plus the one adaptive decision zone, driven by the SyncItem the
 // async resolver already returns. Three shapes, one card:
 //   • has candidates  → pick which of yours to link to (candidate grid)
@@ -20,12 +20,16 @@
 // side-by-side. Taps clear SwipeCard's pan thresholds, so neither affordance
 // fights the swipe or the select.
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, Image } from 'react-native';
+import Animated, { FadeOut } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { SyncItem, CanonicalRef } from '../../types/syncItem';
 import { RC } from '../resolve/ResolveKit';
 import CompareSheet from './CompareSheet';
-import { fetchImportCandidateDetails } from '../../lib/importCandidateDetails';
+import {
+  fetchImportCandidateDetails,
+  incomingItemDetailsFromPayload,
+} from '../../lib/importCandidateDetails';
 import { getPlatform } from '../../config/platforms';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import { createLogger } from '../../utils/logger';
@@ -66,14 +70,32 @@ function ProductImage({
 export default function DecisionCard({
   item,
   platformName,
+  sourceLabel,
+  draftId,
+  groupedItems = [],
+  showHints = false,
   selectedId,
   onSelect,
+  onLink,
+  onCreate,
+  onSkip,
+  onIgnore,
+  disabled = false,
 }: {
   item: SyncItem;
   platformName?: string;
+  sourceLabel: string;
+  draftId?: string | null;
+  groupedItems?: SyncItem[];
+  showHints?: boolean;
   /** Currently-picked candidate id (deck-owned so it survives re-render). */
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onLink: () => void;
+  onCreate: () => void;
+  onSkip: () => void;
+  onIgnore: () => void;
+  disabled?: boolean;
 }) {
   const thinCandidates = item.candidates ?? EMPTY_CANDIDATES;
   const [candidateDetails, setCandidateDetails] = useState<Record<string, CanonicalRef>>({});
@@ -108,7 +130,12 @@ export default function DecisionCard({
     [thinCandidates, candidateDetails],
   );
 
-  const meta = [item.sku, money(item.price)].filter(Boolean).join(' · ');
+  const meta = [item.sku && !/^DRAFT(?:\s*[-_]|\s)/i.test(item.sku) ? item.sku : null, money(item.price)]
+    .filter(Boolean)
+    .join(' · ');
+  const hasCandidates = candidates.length > 0;
+  const canLink = hasCandidates && !!selectedId && !disabled;
+  const inspectableGroup = groupedItems.length > 1 ? groupedItems : [];
 
   // Compare sheet — null candidate = single-column detail of the incoming item.
   const [compareOpen, setCompareOpen] = useState(false);
@@ -124,6 +151,62 @@ export default function DecisionCard({
 
   return (
     <View style={styles.wrap}>
+      {showHints ? (
+        <Animated.View exiting={FadeOut.duration(160)} style={styles.hints} pointerEvents="none">
+          <Text style={styles.hintText}>← Skip</Text>
+          <Text style={styles.hintText}>↑ Ignore</Text>
+          <Text style={styles.hintText}>{hasCandidates ? 'Link →' : 'Add →'}</Text>
+        </Animated.View>
+      ) : null}
+
+      <View style={styles.actionGrid}>
+        {hasCandidates ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={!canLink}
+            onPress={onLink}
+            style={({ pressed }) => [styles.action, styles.actionPrimary, (!canLink || pressed) && styles.actionDim]}
+          >
+            <Text style={styles.actionPrimaryText}>Link</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            disabled={disabled}
+            onPress={onCreate}
+            style={({ pressed }) => [styles.action, styles.actionPrimary, (disabled || pressed) && styles.actionDim]}
+          >
+            <Text style={styles.actionPrimaryText}>Add as new</Text>
+          </Pressable>
+        )}
+        {hasCandidates ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={disabled}
+            onPress={onCreate}
+            style={({ pressed }) => [styles.action, (disabled || pressed) && styles.actionDim]}
+          >
+            <Text style={styles.actionText}>New</Text>
+          </Pressable>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={onSkip}
+          style={({ pressed }) => [styles.action, (disabled || pressed) && styles.actionDim]}
+        >
+          <Text style={styles.actionText}>Skip</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={onIgnore}
+          style={({ pressed }) => [styles.action, styles.actionIgnore, (disabled || pressed) && styles.actionDim]}
+        >
+          <Text style={styles.actionIgnoreText}>Ignore</Text>
+        </Pressable>
+      </View>
+
       {/* INCOMING — large image on top; tap the block (or ⓘ) for full detail.
           The big product title lives in the card header above, so it is not
           repeated here; only the source caption + meta ride under the image. */}
@@ -134,12 +217,33 @@ export default function DecisionCard({
             <MaterialCommunityIcons name="information-outline" size={18} color={RC.muted} />
           </View>
         </View>
-        {!!platformName && <Text style={styles.from} numberOfLines={1}>From {platformName}</Text>}
+        <Text style={styles.from} numberOfLines={1}>From {sourceLabel}</Text>
+        {!!draftId && <Text style={styles.draftId} numberOfLines={1}>{draftId}</Text>}
         {!!meta && <Text style={styles.meta} numberOfLines={1}>{meta}</Text>}
       </TouchableOpacity>
 
-      {/* Why we're being asked (e.g. "Two close matches in your catalog") */}
-      {!!item.reason && <Text style={styles.reason} numberOfLines={2}>{item.reason}</Text>}
+      {inspectableGroup.length > 0 ? (
+        <View style={styles.group}>
+          <Text style={styles.groupLabel}>{inspectableGroup.length} grouped rows</Text>
+          {inspectableGroup.map((row) => {
+            const details = incomingItemDetailsFromPayload(row, platformName);
+            const rowMeta = [row.sku && !/^DRAFT(?:\s*[-_]|\s)/i.test(row.sku) ? row.sku : null, money(row.price)]
+              .filter(Boolean)
+              .join(' · ');
+            return (
+              <View key={row.platformId} style={styles.groupRow}>
+                <ProductImage uri={details.imageUrl} imgStyle={styles.groupImage} emptyStyle={styles.imgEmpty} iconSize={15} />
+                <View style={styles.groupCopy}>
+                  <Text style={styles.groupTitle} numberOfLines={1}>{details.title}</Text>
+                  {!!rowMeta && <Text style={styles.groupMeta} numberOfLines={1}>{rowMeta}</Text>}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      ) : item.attention !== 'look_alike_group' && item.reason ? (
+        <Text style={styles.reason} numberOfLines={2}>{item.reason}</Text>
+      ) : null}
 
       {candidates.length > 0 ? (
         <View style={styles.zone}>
@@ -200,7 +304,7 @@ export default function DecisionCard({
         onClose={() => setCompareOpen(false)}
         incoming={item}
         candidate={compareCandidate}
-        platformName={platformName}
+        platformName={sourceLabel}
         onLink={(id) => {
           onSelect(id);
           setCompareOpen(false);
@@ -212,6 +316,20 @@ export default function DecisionCard({
 
 const styles = StyleSheet.create({
   wrap: { gap: 14 },
+  hints: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4, opacity: 0.72 },
+  hintText: { fontSize: 11.5, fontWeight: '600', color: RC.faint },
+  actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  action: {
+    minHeight: 38, minWidth: 72, flexGrow: 1, borderRadius: 19, borderWidth: 1,
+    borderColor: RC.line, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  actionPrimary: { backgroundColor: RC.green, borderColor: RC.green },
+  actionPrimaryText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  actionText: { fontSize: 13, fontWeight: '700', color: RC.muted },
+  actionIgnore: { borderColor: '#FECACA', backgroundColor: '#FEF2F2' },
+  actionIgnoreText: { fontSize: 13, fontWeight: '700', color: '#991B1B' },
+  actionDim: { opacity: 0.5 },
 
   // Incoming — image-led, vertical
   incoming: {},
@@ -224,10 +342,18 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   from: { fontSize: 13, color: RC.muted, marginTop: 10 },
+  draftId: { fontSize: 11.5, color: RC.faint, marginTop: 2 },
   meta: { fontSize: 13, color: RC.muted, marginTop: 2 },
 
   // Why we're being asked
   reason: { fontSize: 12.5, lineHeight: 17, color: RC.muted, marginTop: -2 },
+  group: { gap: 7, padding: 10, borderRadius: 12, borderWidth: 1, borderColor: RC.line, backgroundColor: RC.surface },
+  groupLabel: { fontSize: 11.5, fontWeight: '700', color: RC.faint, letterSpacing: 0.4, textTransform: 'uppercase' },
+  groupRow: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  groupImage: { width: 36, height: 36, borderRadius: 8, backgroundColor: RC.surface2 },
+  groupCopy: { flex: 1, minWidth: 0 },
+  groupTitle: { fontSize: 12.5, fontWeight: '600', color: RC.ink },
+  groupMeta: { fontSize: 11.5, color: RC.muted, marginTop: 1 },
 
   // Candidate grid — 2-up vertical cards (1 → single wider card, >2 → wraps)
   zone: { gap: 10 },

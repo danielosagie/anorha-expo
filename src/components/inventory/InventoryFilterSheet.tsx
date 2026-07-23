@@ -1,5 +1,5 @@
 // InventoryFilterSheet — one floating bottom sheet that combines the inventory
-// filters (Order/Sort, Location, Status) into a single column of rows, each a
+// filters (Order/Sort, Location, Partner, Status) into a single column of rows, each a
 // fully in-sheet subpage. Modeled on DateRangeSheet's look (grab handle, icon+
 // title header, drill rows). Location data is lifted in here (pools + platform
 // locations) so we no longer depend on PoolLocationCombobox.
@@ -7,12 +7,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SlidersHorizontal, ArrowUpDown, MapPin, Tag, ChevronRight, X, Check } from 'lucide-react-native';
+import { SlidersHorizontal, ArrowUpDown, MapPin, Tag, ChevronRight, X, Check, Handshake } from 'lucide-react-native';
 import { API_BASE_URL } from '../../config/env';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { useOrg } from '../../context/OrgContext';
+import PartnerBadge from '../PartnerBadge';
 
 export interface FilterChoice { value: string; label: string; }
+export interface PartnerFilterChoice extends FilterChoice {
+  count: number;
+  initials: string;
+  logoUrl?: string;
+}
 interface LocationOption { id: string; name: string; sub?: string }
 interface ConnectionLike { Id: string; DisplayName?: string; PlatformType?: string }
 
@@ -28,10 +34,13 @@ export interface InventoryFilterSheetProps {
   platformConnections: ConnectionLike[];
   selectedLocationIds: string[];
   onLocationChange: (ids: string[]) => void;
+  partnerOptions: PartnerFilterChoice[];
+  selectedPartnerId: string | null;
+  onPartnerChange: (id: string | null) => void;
   onReset: () => void;
 }
 
-type Page = 'main' | 'sort' | 'status' | 'location';
+type Page = 'main' | 'sort' | 'status' | 'location' | 'partner';
 
 const labelFor = (opts: FilterChoice[], value: string, fallback: string) =>
   opts.find((o) => o.value === value)?.label || fallback;
@@ -103,6 +112,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
   sortBy, sortOptions, onSortChange,
   filterStatus, statusOptions, onStatusChange,
   platformConnections, selectedLocationIds = [], onLocationChange,
+  partnerOptions, selectedPartnerId, onPartnerChange,
   onReset,
 }) => {
   const insets = useSafeAreaInsets();
@@ -111,6 +121,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
 
   const close = () => { setPage('main'); onClose(); };
   const locCount = selectedLocationIds.length;
+  const selectedPartnerName = partnerOptions.find((option) => option.value === selectedPartnerId)?.label;
 
   const toggleLocation = (id: string) => {
     onLocationChange(selectedLocationIds.includes(id)
@@ -159,6 +170,10 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
                 sub={labelFor(sortOptions, sortBy, 'Default')} onPress={() => setPage('sort')} />
               <DrillRow icon={<MapPin size={18} color="#43631A" />} title="Location"
                 sub={locCount > 0 ? `${locCount} selected` : 'All locations'} onPress={() => setPage('location')} />
+              {partnerOptions.length > 0 ? (
+                <DrillRow icon={<Handshake size={18} color="#43631A" />} title="Partner"
+                  sub={selectedPartnerName || 'All partners'} onPress={() => setPage('partner')} />
+              ) : null}
               <DrillRow icon={<Tag size={18} color="#43631A" />} title="Status"
                 sub={labelFor(statusOptions, filterStatus, 'All')} onPress={() => setPage('status')} />
             </>
@@ -166,7 +181,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
             renderOptionList('Order', sortOptions, sortBy, onSortChange)
           ) : page === 'status' ? (
             renderOptionList('Status', statusOptions, filterStatus, onStatusChange)
-          ) : (
+          ) : page === 'location' ? (
             <>
               <SubHeader title="Location" onBack={() => setPage('main')} />
               <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
@@ -191,6 +206,41 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
                 {!locationsLoading && locationOptions.length === 0 ? (
                   <Text style={styles.empty}>No locations connected yet.</Text>
                 ) : null}
+              </ScrollView>
+            </>
+          ) : (
+            <>
+              <SubHeader title="Partner" onBack={() => setPage('main')} />
+              <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.optionRow} activeOpacity={0.7} onPress={() => onPartnerChange(null)}>
+                  <Text style={[styles.optionText, selectedPartnerId === null && styles.optionActive]}>All partners</Text>
+                  {selectedPartnerId === null ? <Check size={18} color="#5A8F12" /> : null}
+                </TouchableOpacity>
+                {partnerOptions.map((option) => {
+                  const checked = option.value === selectedPartnerId;
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
+                      style={[styles.optionRow, styles.rowBorder]}
+                      activeOpacity={0.7}
+                      onPress={() => onPartnerChange(option.value)}
+                    >
+                      <View style={styles.partnerOption}>
+                        <PartnerBadge
+                          name={option.label}
+                          initials={option.initials}
+                          logoUrl={option.logoUrl}
+                          size={30}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.optionText, checked && styles.optionActive]}>{option.label}</Text>
+                          <Text style={styles.optionSub}>{option.count} {option.count === 1 ? 'item' : 'items'}</Text>
+                        </View>
+                      </View>
+                      {checked ? <Check size={18} color="#5A8F12" /> : null}
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             </>
           )}
@@ -243,6 +293,7 @@ const styles = StyleSheet.create({
   optionText: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_500Medium' },
   optionActive: { color: '#5A8F12', fontFamily: 'Inter_700Bold' },
   optionSub: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_400Regular', marginTop: 1 },
+  partnerOption: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   empty: { paddingVertical: 24, textAlign: 'center', color: '#9CA3AF', fontFamily: 'Inter_400Regular', fontSize: 14 },
 });
 

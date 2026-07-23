@@ -11,6 +11,7 @@ import { useTheme } from '../context/ThemeContext';
 import PlaceholderImage from './PlaceholderImage';
 import ShadowSurface from './ui/ShadowSurface';
 import PlatformAvatar from './PlatformAvatar';
+import PartnerBadge from './PartnerBadge';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInLeft, FadeOutLeft, Layout } from 'react-native-reanimated';
 
@@ -30,6 +31,9 @@ interface InventoryListCardProps {
   imageUrl?: string;
   totalQuantity?: number;
   platformNames?: string[];
+  partnerName?: string;
+  partnerInitials?: string;
+  partnerLogoUrl?: string;
   lastSyncedAt?: string | null;
   isStale?: boolean;
   matchLocations?: MatchLocation[];
@@ -57,6 +61,9 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   imageUrl,
   totalQuantity,
   platformNames = [],
+  partnerName,
+  partnerInitials,
+  partnerLogoUrl,
   lastSyncedAt,
   isStale = false,
   matchLocations,
@@ -252,6 +259,15 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
                     />
                   </View>
                 ))}
+                {partnerName ? (
+                  <View style={styles.avatarWrapper}>
+                    <PartnerBadge
+                      name={partnerName}
+                      initials={partnerInitials}
+                      logoUrl={partnerLogoUrl}
+                    />
+                  </View>
+                ) : null}
               </View>
             </View>
 

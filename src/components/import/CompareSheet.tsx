@@ -197,6 +197,7 @@ export default function CompareSheet({
   const inBarcode = incoming.barcode || '—';
   const inPrice = money(incoming.price) || '—';
   const inImage = incoming.imageUrl;
+  const inDesc = (incoming as SyncItem & { description?: string | null }).description;
 
   // Candidate side — prefer the fetched detail, fall back to the thin CanonicalRef.
   const candTitle = detail?.title ?? candidate?.title ?? candidate?.sku ?? '—';
@@ -264,7 +265,7 @@ export default function CompareSheet({
         {failed && (
           <View style={styles.failNote}>
             <MaterialCommunityIcons name="cloud-off-outline" size={14} color={RC.warnInk} />
-            <Text style={styles.failNoteText}>Couldn’t load full details — showing what we have.</Text>
+            <Text style={styles.failNoteText}>Couldn’t load full details. Showing what we have.</Text>
           </View>
         )}
 
@@ -300,7 +301,7 @@ export default function CompareSheet({
         {twoCol && (
           <FieldRow
             label="DESCRIPTION"
-            left={<Text style={[styles.value, styles.valueMuted]}>—</Text>}
+            left={<Text style={[styles.value, !inDesc && styles.valueMuted]}>{inDesc || 'No description'}</Text>}
             right={
               candDesc === '' && loading ? (
                 <ActivityIndicator size="small" color={RC.faint} style={styles.inlineSpin} />

@@ -7,7 +7,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, InteractionManager, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor, Inbox } from 'lucide-react-native';
+import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
@@ -26,6 +26,8 @@ import { useImportHub } from '../hooks/useImportHub';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import PartnerBadge from '../components/PartnerBadge';
+import { buildPartnerInventoryOrigins, PartnerInventoryOrigin } from '../lib/partnerInventory';
 
 const statusOf = (raw?: string, enabled = true): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -83,32 +85,15 @@ const ConnectionsScreen = () => {
     [liveConnections]
   );
 
-  // Import inbox aggregate — drives the top "Import inbox" row badge and the
-  // per-connection "N need you" pills (no forced deck routing).
+  // Import attention remains on each connection row; there is no aggregate card.
   const hub = useImportHub();
   const attentionByConn = useMemo(() => {
     const m: Record<string, number> = {};
     for (const b of hub.lanes.matches.byConnection) m[b.connectionId] = b.count;
     return m;
   }, [hub.lanes.matches.byConnection]);
-  const inboxPlatformDetail = useMemo(() => {
-    return hub.connections
-      .filter((connection) =>
-        connection.needsAttention > 0 ||
-        connection.state === 'scanning' ||
-        connection.state === 'syncing',
-      )
-      .map((connection) => {
-        const label =
-          getPlatform(connection.platformType)?.label ||
-          normalizeDisplayName(connection.platformName || connection.platformType || 'Platform');
-        if (connection.needsAttention > 0) return `${label} ${connection.needsAttention}`;
-        return `${label} ${connection.state === 'scanning' ? 'scanning' : 'syncing'}`;
-      })
-      .join(' · ');
-  }, [hub.connections]);
-
   const [pools, setPools] = useState<Pool[]>([]);
+  const [partners, setPartners] = useState<PartnerInventoryOrigin[]>([]);
   const [managing, setManaging] = useState(false);
   // CSV pick/parse failures surface in an ErrorModal (native Alert stays for the
   // pre-existing platform flows).
@@ -251,11 +236,13 @@ const ConnectionsScreen = () => {
     setPoolsLoading(true);
     try {
       const token = await ensureSupabaseJwt();
-      const res = await fetch(`${API_BASE_URL}/api/pools/org/${currentOrg.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return;
-      const data = await res.json();
+      const headers = { Authorization: `Bearer ${token}` };
+      const [poolsResponse, partnershipsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/pools/org/${currentOrg.id}`, { headers }),
+        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${currentOrg.id}`, { headers }),
+      ]);
+      const data = poolsResponse.ok ? await poolsResponse.json() : [];
+      const partnershipData = partnershipsResponse.ok ? await partnershipsResponse.json() : {};
       let list: any[] = Array.isArray(data) ? data : [];
       // Non-admins with EXPLICIT pool assignments only see those. An empty list
       // means unrestricted — filtering on it would hide even pools they create.
@@ -268,6 +255,11 @@ const ConnectionsScreen = () => {
         list = list.filter((p) => allowed.has(p.id));
       }
       setPools(list.map((p) => ({ id: p.id, name: p.name, description: p.description, isPartnerPool: p.isPartnerPool })));
+      setPartners(buildPartnerInventoryOrigins(
+        partnershipData?.partnerships || [],
+        list,
+        currentOrg.id,
+      ));
     } catch {
       // keep whatever we had — pools are a convenience view here
     } finally {
@@ -292,39 +284,6 @@ const ConnectionsScreen = () => {
         showsVerticalScrollIndicator={false}
       >
         <PageHeader title="Connections" onBack={() => navigation.goBack()} />
-
-        {/* Import inbox — the one discoverable place imports live now. Passive:
-            a count you visit on your own time, never a forced deck. */}
-        <TouchableOpacity
-          style={styles.inboxRow}
-          activeOpacity={0.85}
-          onPress={() => navigation.navigate('ImportHub')}
-        >
-          <View style={styles.inboxIcon}>
-            <Inbox size={22} color="#43631A" />
-          </View>
-          <View style={styles.rowInfo}>
-            <Text style={styles.rowTitle}>Import inbox</Text>
-            <Text style={[styles.rowSub, hub.totalNeedsYou === 0 && styles.inboxSubMuted]} numberOfLines={2}>
-              {hub.error
-                ? 'Couldn’t verify import status'
-                : hub.connections.some((connection) => connection.state === 'error')
-                  ? 'An import needs attention'
-                  : inboxPlatformDetail
-                    ? inboxPlatformDetail
-                    : hub.totalNeedsYou > 0
-                ? `${hub.totalNeedsYou} ${hub.totalNeedsYou === 1 ? 'item needs' : 'items need'} you`
-                : 'All caught up'}
-            </Text>
-          </View>
-          {hub.totalNeedsYou > 0 ? (
-            <View style={styles.inboxBadge}>
-              <Text style={styles.inboxBadgeText}>{hub.totalNeedsYou}</Text>
-            </View>
-          ) : (
-            <ChevronRight size={20} color="#D4D4D8" />
-          )}
-        </TouchableOpacity>
 
         {/* Selling platforms — Manage flips rows into refresh/remove */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
@@ -425,6 +384,38 @@ const ConnectionsScreen = () => {
           <Plus size={18} color="#FFFFFF" />
           <Text style={styles.connectText}>Connect a platform</Text>
         </TouchableOpacity>
+
+        {partners.length > 0 ? (
+          <>
+            <Text style={[styles.section, { marginTop: 26 }]}>Partners</Text>
+            <View style={styles.card}>
+              {partners.map((partner, index) => (
+                <TouchableOpacity
+                  key={partner.id}
+                  style={[styles.row, index > 0 && styles.rowBorder]}
+                  activeOpacity={0.7}
+                  onPress={() => navigation.navigate('PartnershipDetail', { partnership: partner.partnership })}
+                >
+                  <PartnerBadge
+                    name={partner.name}
+                    initials={partner.initials}
+                    logoUrl={partner.logoUrl}
+                    size={44}
+                  />
+                  <View style={styles.rowInfo}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{partner.name}</Text>
+                    <Text style={styles.rowSub} numberOfLines={1}>
+                      {partner.productCount !== undefined
+                        ? `${partner.productCount} shared ${partner.productCount === 1 ? 'item' : 'items'}`
+                        : 'Shared inventory'}
+                    </Text>
+                  </View>
+                  <ChevronRight size={20} color="#D4D4D8" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        ) : null}
 
         {/* Computers — the linked desktop(s) that post to Facebook for you. Tap a
             row (or "Link a computer") to check status / set one up. */}
@@ -607,16 +598,6 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: '#ECEBE6' },
   loadingRow: { paddingVertical: 26, alignItems: 'center' },
   empty: { paddingVertical: 22, textAlign: 'center', color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingHorizontal: 8, lineHeight: 19 },
-
-  inboxRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: '#FFFFFF', borderRadius: 20, borderWidth: 1, borderColor: '#ECEBE6',
-    paddingHorizontal: 16, paddingVertical: 15, marginTop: 4, marginBottom: 4,
-  },
-  inboxIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
-  inboxSubMuted: { color: '#9CA3AF' },
-  inboxBadge: { minWidth: 26, height: 26, borderRadius: 13, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
-  inboxBadgeText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
   rowBorder: { borderTopWidth: 1, borderTopColor: '#F1F1EE' },

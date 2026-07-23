@@ -47,13 +47,18 @@ import BaseModal from '../components/BaseModal';
 import { SmartCommandInput } from '../components/SmartCommandInput';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import SortByDropdown, { DEFAULT_SORT_OPTIONS } from '../components/SortByDropdown';
-import InventoryFilterSheet from '../components/inventory/InventoryFilterSheet';
+import InventoryFilterSheet, { PartnerFilterChoice } from '../components/inventory/InventoryFilterSheet';
 import { CameraView } from 'expo-camera';
 import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/useProductVariantRealtime';
 import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
 import { getVariantPlatforms } from '../lib/platforms';
+import {
+  buildPartnerInventoryOrigins,
+  PartnerInventoryOrigin,
+  resolvePartnerInventoryOrigin,
+} from '../lib/partnerInventory';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 const log = createLogger('InventoryOrdersScreen');
@@ -88,6 +93,13 @@ type EnrichedProductVariant = ProductVariantData & {
   isStale?: boolean;
   matchLocations?: MatchLocation[]; // Where the search query matched
   matchSnippet?: string; // Snippet of text where match occurred
+  partnerOrigin?: PartnerInventoryOrigin;
+};
+
+type SharedProductLinkInfo = {
+  quantity: number;
+  poolId?: string;
+  link: any;
 };
 
 interface MockOrderItemData {
@@ -124,6 +136,7 @@ const InventoryOrdersScreen = observer(() => {
   const [filterStatus, setFilterStatus] = useState('active');
   const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
+  const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(null);
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [priceMax, setPriceMax] = useState<number | null>(null);
   const [presetVariantIds, setPresetVariantIds] = useState<string[] | null>(null);
@@ -596,8 +609,38 @@ const InventoryOrdersScreen = observer(() => {
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
-  const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, { quantity: number; poolId?: string }>>({});
+  const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
+  const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
   const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt';
+
+  const loadPartnerOrigins = useCallback(async () => {
+    if (!currentOrg?.id) {
+      setPartnerOrigins([]);
+      return;
+    }
+
+    try {
+      const token = await ensureSupabaseJwt();
+      const headers = { Authorization: `Bearer ${token}` };
+      const [partnershipsResponse, poolsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/cross-org/partnerships?orgId=${currentOrg.id}`, { headers }),
+        fetch(`${API_BASE_URL}/api/pools/org/${currentOrg.id}`, { headers }),
+      ]);
+      const partnershipPayload = partnershipsResponse.ok ? await partnershipsResponse.json() : {};
+      const poolPayload = poolsResponse.ok ? await poolsResponse.json() : [];
+      setPartnerOrigins(buildPartnerInventoryOrigins(
+        partnershipPayload?.partnerships || [],
+        Array.isArray(poolPayload) ? poolPayload : [],
+        currentOrg.id,
+      ));
+    } catch (error) {
+      log.warn('[InventoryOrdersScreen] Could not load partner metadata:', error);
+    }
+  }, [currentOrg?.id]);
+
+  useEffect(() => {
+    void loadPartnerOrigins();
+  }, [loadPartnerOrigins]);
 
   const fetchAllProductVariants = useCallback(async (userId: string) => {
     const pageSize = 200;
@@ -650,19 +693,20 @@ const InventoryOrdersScreen = observer(() => {
               if (variantIds.length > 0) {
                 const { data: linksData, error: linksError } = await supabase
                   .from('CrossOrgProductLinks')
-                  .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+                  .select('*')
                   .in('TargetVariantId', variantIds)
                   .eq('Status', 'active');
 
                 if (linksError) {
                   log.warn('[InventoryScreen - Direct Fetch] Error fetching shared links:', linksError);
                 } else {
-                  const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+                  const linkMap: Record<string, SharedProductLinkInfo> = {};
                   (linksData || []).forEach((link: any) => {
                     if (link.TargetVariantId) {
                       linkMap[link.TargetVariantId] = {
                         quantity: link.AvailableQuantity || 0,
                         poolId: link.TargetPoolId || undefined,
+                        link,
                       };
                     }
                   });
@@ -721,6 +765,7 @@ const InventoryOrdersScreen = observer(() => {
         if (!legendState?.userId) return;
 
         log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
+        void loadPartnerOrigins();
 
         try {
           // Always refetch products to get latest data (covers both new AND updated products)
@@ -739,19 +784,20 @@ const InventoryOrdersScreen = observer(() => {
             if (variantIds.length > 0) {
               const { data: linksData, error: linksError } = await supabase
                 .from('CrossOrgProductLinks')
-                .select('TargetVariantId, AvailableQuantity, TargetPoolId, Status')
+                .select('*')
                 .in('TargetVariantId', variantIds)
                 .eq('Status', 'active');
 
               if (linksError) {
                 log.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
               } else {
-                const linkMap: Record<string, { quantity: number; poolId?: string }> = {};
+                const linkMap: Record<string, SharedProductLinkInfo> = {};
                 (linksData || []).forEach((link: any) => {
                   if (link.TargetVariantId) {
                     linkMap[link.TargetVariantId] = {
                       quantity: link.AvailableQuantity || 0,
                       poolId: link.TargetPoolId || undefined,
+                      link,
                     };
                   }
                 });
@@ -782,7 +828,7 @@ const InventoryOrdersScreen = observer(() => {
       };
 
       refreshOnFocus();
-    }, [fetchAllProductVariants, legendState?.userId])
+    }, [fetchAllProductVariants, legendState?.userId, loadPartnerOrigins])
   );
 
 
@@ -846,6 +892,15 @@ const InventoryOrdersScreen = observer(() => {
     });
     return index;
   }, [inventoryLevelsWithShared]);
+
+  const partnerOriginByVariantId = useMemo(() => {
+    const index = new Map<string, PartnerInventoryOrigin>();
+    Object.entries(sharedLinkQuantities).forEach(([variantId, info]) => {
+      const origin = resolvePartnerInventoryOrigin(info.link, partnerOrigins, currentOrg?.id);
+      if (origin) index.set(variantId, origin);
+    });
+    return index;
+  }, [sharedLinkQuantities, partnerOrigins, currentOrg?.id]);
 
   const imagesByVariantId = useMemo(() => {
     const index = new Map<string, ProductImage[]>();
@@ -915,6 +970,15 @@ const InventoryOrdersScreen = observer(() => {
         optionVariantsByProduct.get(productId)!.push({ id: variantId, variant });
       }
     });
+
+    const partnerOriginForVariant = (variantId: string): PartnerInventoryOrigin | undefined => {
+      const variant = variants[variantId];
+      if (!variant) return undefined;
+      const optionVariants = optionVariantsByProduct.get(variant.ProductId) || [];
+      return [variantId, ...optionVariants.map((option) => option.id)]
+        .map((id) => partnerOriginByVariantId.get(id))
+        .find((origin): origin is PartnerInventoryOrigin => !!origin);
+    };
 
     /**
      * CRITICAL FIX: Helper to get inventory levels for a variant from PRIMARY platform only.
@@ -1078,7 +1142,8 @@ const InventoryOrdersScreen = observer(() => {
         if (!v) return false;
         const isLive = v.OnShopify === true || v.OnSquare === true || v.OnClover === true
           || v.OnAmazon === true || v.OnEbay === true || v.OnFacebook === true;
-        return filterStatus === 'active' ? isLive : !isLive;
+        const isPartnerShared = !!partnerOriginForVariant(variantId);
+        return filterStatus === 'active' ? (isLive || isPartnerShared) : (!isLive && !isPartnerShared);
       });
     }
 
@@ -1179,6 +1244,7 @@ const InventoryOrdersScreen = observer(() => {
       const platformNames: string[] = getVariantPlatforms(variant);
 
       const variantIdsForSync = [variantId, ...optionVariants.map(ov => ov.id)];
+      const partnerOrigin = partnerOriginForVariant(variantId);
       const syncTimestamps = variantIdsForSync
         .flatMap((id) => mappingsByVariantId.get(id) || [])
         .filter((mapping) => mapping.IsEnabled !== false)
@@ -1205,6 +1271,7 @@ const InventoryOrdersScreen = observer(() => {
         IsArchived: variantWithType.IsArchived,
         optionVariantCount: optionVariants.length,
         CreatedAt: variant.CreatedAt, // Pass through for date sorting
+        partnerOrigin,
       };
     });
 
@@ -1217,12 +1284,16 @@ const InventoryOrdersScreen = observer(() => {
     });
 
     return Array.from(uniqueVariants.values());
-  }, [activeProductVariants, imagesByVariantId, levelsByVariantId, mappingsByVariantId, platformConnections, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
+  }, [activeProductVariants, imagesByVariantId, levelsByVariantId, mappingsByVariantId, partnerOriginByVariantId, platformConnections, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
     // CRITICAL FIX: Clone the array to ensure reference changes for useMemo
     let filtered = [...enrichedProductVariants];
+
+    if (selectedPartnerId) {
+      filtered = filtered.filter((item) => item.partnerOrigin?.id === selectedPartnerId);
+    }
 
     // Search across multiple fields: title, description, sku, barcode, tags
     if (searchQuery) {
@@ -1337,7 +1408,7 @@ const InventoryOrdersScreen = observer(() => {
     }
 
     return filtered;
-  }, [enrichedProductVariants, searchQuery, scannedBarcode, sortBy, lowStockOnly, presetVariantIds, priceMax]);
+  }, [enrichedProductVariants, selectedPartnerId, searchQuery, scannedBarcode, sortBy, lowStockOnly, presetVariantIds, priceMax]);
 
   // Bulk action modal: apply filter query to current list and set match IDs (used inside modal)
   const applyBulkActionModalFilter = useCallback((query: string): string[] => {
@@ -1483,6 +1554,9 @@ const InventoryOrdersScreen = observer(() => {
         imageUrl={item.imageUrl}
         totalQuantity={item.totalQuantity}
         platformNames={item.platformNames}
+        partnerName={item.partnerOrigin?.name}
+        partnerInitials={item.partnerOrigin?.initials}
+        partnerLogoUrl={item.partnerOrigin?.logoUrl}
         lastSyncedAt={item.lastSyncedAt}
         isStale={item.isStale}
         matchLocations={item.matchLocations}
@@ -1542,6 +1616,25 @@ const InventoryOrdersScreen = observer(() => {
       };
     })
     .filter(p => p.connectionCount > 0);
+
+  const partnerOptions = useMemo<PartnerFilterChoice[]>(() => {
+    const counts = new Map<string, { origin: PartnerInventoryOrigin; count: number }>();
+    enrichedProductVariants.forEach((item) => {
+      const origin = item.partnerOrigin;
+      if (!origin) return;
+      const current = counts.get(origin.id);
+      counts.set(origin.id, { origin, count: (current?.count || 0) + 1 });
+    });
+    return Array.from(counts.values())
+      .sort((a, b) => a.origin.name.localeCompare(b.origin.name))
+      .map(({ origin, count }) => ({
+        value: origin.id,
+        label: origin.name,
+        count,
+        initials: origin.initials,
+        logoUrl: origin.logoUrl,
+      }));
+  }, [enrichedProductVariants]);
 
   return (
     <View style={[styles.background]}>
@@ -1695,7 +1788,7 @@ const InventoryOrdersScreen = observer(() => {
                   ) : (
                     <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
                       No products found.
-                      {selectedPlatformType && ` Try selecting a different platform or location.`}
+                      {(selectedPlatformType || selectedPartnerId) && ` Try selecting a different source or location.`}
                     </Text>
                   )
                 }
@@ -2198,7 +2291,7 @@ const InventoryOrdersScreen = observer(() => {
         </View>
       </Modal>
 
-      {/* Unified filter sheet (Order / Location / Status) */}
+      {/* Unified filter sheet (Order / Location / Partner / Status) */}
       <InventoryFilterSheet
         visible={filterSheetOpen}
         onClose={() => setFilterSheetOpen(false)}
@@ -2211,7 +2304,15 @@ const InventoryOrdersScreen = observer(() => {
         platformConnections={platformConnections}
         selectedLocationIds={selectedLocationIds}
         onLocationChange={setSelectedLocationIds}
-        onReset={() => { setSortBy('date'); setFilterStatus('active'); setSelectedLocationIds([]); }}
+        partnerOptions={partnerOptions}
+        selectedPartnerId={selectedPartnerId}
+        onPartnerChange={setSelectedPartnerId}
+        onReset={() => {
+          setSortBy('date');
+          setFilterStatus('active');
+          setSelectedLocationIds([]);
+          setSelectedPartnerId(null);
+        }}
       />
 
       {/* More Actions Modal - Cleaner "Lowkey" Design */}

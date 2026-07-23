@@ -1,19 +1,34 @@
-// MatchReviewDeck — the revived Match deck, driven by the async resolver.
+// MatchReviewDeck renders one resolver item at a time with explicit actions.
 //
-// Same chrome the old deck had (TinderShell: header · swipe stack · undo ·
-// secondary · primary · redo · drag-down-to-ignore) — the ONLY thing that
-// changed is what rides inside each card: a DecisionCard over one `SyncItem`.
-// The three outcomes the async inbox exposes map straight onto the bar:
-//   primary   → link (to the picked candidate)  ·  or "Add as new" when nothing matches
-//   secondary → New (create)                    ·  hidden when there's nothing to link to
-//   ignore    → drag the card down              ·  resolve('ignore')
-// Decisions commit per-card via resolve(); undo steps back so you can re-decide
-// (a re-decision overwrites server-side). Redo is intentionally inert for now.
+// Candidates present:
+//   right = link, left = skip for later, up = ignore, plus a New button.
+// No candidates:
+//   right = add as new, left = skip for later, up = ignore.
+//
+// Decisions stay local until the final Save. The backend resolve endpoint has
+// no unresolve operation, so staging is what makes undo and redo truthful for
+// every choice, including durable Ignore.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { SyncItem, ResolveChoice } from '../../types/syncItem';
 import { TinderShell, DeckChrome, RC } from '../resolve/ResolveKit';
 import DecisionCard from './DecisionCard';
+import { SwipeLabelsContext } from './SwipeCard';
+import {
+  fetchImportIncomingItemDetails,
+  incomingItemDetailsFromPayload,
+  type IncomingItemDetails,
+} from '../../lib/importCandidateDetails';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('MatchReviewDeck');
+
+type DeckChoice = ResolveChoice | 'skip';
+type Decision = { item: SyncItem; choice: DeckChoice; canonicalId?: string };
+type SavedDecision = { item: SyncItem; choice: ResolveChoice; canonicalId?: string };
+type Outcome = { attempt: number; status: 'pending' | 'success' | 'failed' };
+type Ending = { kind: 'review' | 'waiting' | 'done' | 'failed'; count?: number };
 
 export default function MatchReviewDeck({
   items,
@@ -27,77 +42,150 @@ export default function MatchReviewDeck({
   platformName?: string;
   resolve: (platformId: string, choice: ResolveChoice, canonicalId?: string) => Promise<unknown>;
   resolving: string | null;
-  // Optional session tally so the caller can show a real ending ("X linked ·
-  // Y added · Z ignored"). Called with no arg when the user backs out mid-deck.
   onDone?: (sessionCounts?: { linked: number; created: number; ignored: number }) => void;
   topInset?: number;
 }) {
   type DeckEntry = { item: SyncItem; key: string };
-  // Snapshot the queue so the resolver optimistically removing items doesn't
-  // reshuffle the stack under the user's thumb. Each attempt has its own key:
-  // SwipeCard owns Reanimated "gone" state, so reusing it for the next item
-  // leaves the new card translated off-screen after a successful swipe.
-  const [deck, setDeck] = useState<DeckEntry[]>(() =>
-    items.map((item, index) => ({ item, key: `${item.platformId}:${index}:0` })),
+  const [deck] = useState<DeckEntry[]>(() =>
+    items.map((item, index) => ({ item, key: `${item.platformId}:${index}` })),
   );
   const total = deck.length;
   const [pos, setPos] = useState(0);
   const posRef = useRef(0);
-  const retryKeyRef = useRef(0);
   const committedCardRef = useRef<string | null>(null);
-  // Picked candidate per item — pre-seeded to the resolver's recommendation so
-  // the primary button is always ready without an extra tap.
-  const [picks, setPicks] = useState<Record<string, string>>(() => {
-    const m: Record<string, string> = {};
-    for (const { item: it } of deck) {
-      const rec = it.resolution.kind === 'link' ? it.resolution.canonical.id : null;
-      const first = it.candidates?.[0]?.id;
-      const seed = rec ?? first;
-      if (seed) m[it.platformId] = seed;
-    }
-    return m;
-  });
-  type Decision = { choice: ResolveChoice; canonicalId?: string };
-  type Outcome = { attempt: number; status: 'pending' | 'success' | 'failed' };
+  const [interacted, setInteracted] = useState(false);
 
-  // Latest decision and outcome per item. Attempt tokens keep a slow, older
-  // re-decision from overwriting the result of the choice the user saw last.
-  const decisionsRef = useRef<Record<string, Decision>>({});
+  const [picks, setPicks] = useState<Record<string, string>>(() => {
+    const seeded: Record<string, string> = {};
+    for (const { item } of deck) {
+      const recommended = item.resolution.kind === 'link' ? item.resolution.canonical.id : null;
+      const first = item.candidates?.[0]?.id;
+      if (recommended || first) seeded[item.platformId] = recommended ?? first!;
+    }
+    return seeded;
+  });
+
+  const [detailsByPlatform, setDetailsByPlatform] = useState<Record<string, IncomingItemDetails>>(() => {
+    const details: Record<string, IncomingItemDetails> = {};
+    for (const { item } of deck) {
+      details[item.platformId] = incomingItemDetailsFromPayload(item, platformName);
+    }
+    return details;
+  });
+
+  const [history, setHistory] = useState<Decision[]>([]);
+  const historyRef = useRef<Decision[]>([]);
+  const decisionsRef = useRef<Record<string, SavedDecision>>({});
   const outcomesRef = useRef<Record<string, Outcome>>({});
   const pendingRef = useRef<Record<string, Promise<void>>>({});
-  const [ending, setEnding] = useState<{ kind: 'waiting' | 'done' | 'failed'; count?: number }>({ kind: 'waiting' });
+  const [ending, setEnding] = useState<Ending>({ kind: 'review' });
 
   const curEntry = deck[pos];
-  const cur = curEntry?.item;
+  const rawCur = curEntry?.item;
+  const groupEntries = useMemo(() => {
+    if (!rawCur?.groupId) return rawCur ? [rawCur] : [];
+    return deck
+      .map((entry) => entry.item)
+      .filter((item) => item.groupId === rawCur.groupId);
+  }, [deck, rawCur]);
+  useEffect(() => {
+    if (groupEntries.length === 0) return;
+    let alive = true;
+    void Promise.all(
+      groupEntries.map(async (item) => {
+        try {
+          return [item.platformId, await fetchImportIncomingItemDetails(item, platformName)] as const;
+        } catch (error) {
+          log.warn('incoming hydration failed', item.platformId, error);
+          return [item.platformId, incomingItemDetailsFromPayload(item, platformName)] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!alive) return;
+      setDetailsByPlatform((current) => ({ ...current, ...Object.fromEntries(entries) }));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [groupEntries, platformName]);
 
-  const launchResolve = useCallback((item: SyncItem, decision: Decision) => {
-    const platformId = item.platformId;
+  useEffect(() => {
+    committedCardRef.current = null;
+  }, [curEntry?.key]);
+
+  const currentDetails = rawCur
+    ? detailsByPlatform[rawCur.platformId] ?? incomingItemDetailsFromPayload(rawCur, platformName)
+    : null;
+  const cur = rawCur && currentDetails
+    ? ({
+        ...rawCur,
+        title: currentDetails.title,
+        imageUrl: currentDetails.imageUrl,
+        description: currentDetails.description,
+      } as SyncItem)
+    : rawCur;
+  const groupedItems = groupEntries.map((item) => {
+    const details = detailsByPlatform[item.platformId] ?? incomingItemDetailsFromPayload(item, platformName);
+    return { ...item, title: details.title, imageUrl: details.imageUrl } as SyncItem;
+  });
+
+  const commit = useCallback((choice: DeckChoice, canonicalId?: string) => {
+    if (!rawCur || !curEntry || committedCardRef.current === curEntry.key) return;
+    committedCardRef.current = curEntry.key;
+    setInteracted(true);
+    const decision: Decision = { item: rawCur, choice, canonicalId };
+    setHistory((current) => {
+      const next = current.slice(0, posRef.current);
+      next[posRef.current] = decision;
+      historyRef.current = next;
+      return next;
+    });
+    setPos((current) => {
+      const next = current + 1;
+      posRef.current = next;
+      return next;
+    });
+  }, [rawCur, curEntry]);
+
+  const undo = useCallback(() => {
+    setPos((current) => {
+      const next = Math.max(0, current - 1);
+      posRef.current = next;
+      committedCardRef.current = null;
+      return next;
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setPos((current) => {
+      if (!historyRef.current[current]) return current;
+      const next = Math.min(total, current + 1);
+      posRef.current = next;
+      committedCardRef.current = null;
+      return next;
+    });
+  }, [total]);
+
+  const launchResolve = useCallback((decision: Decision) => {
+    if (decision.choice === 'skip') return Promise.resolve();
+    const platformId = decision.item.platformId;
+    const savedDecision = decision as SavedDecision;
     const attempt = (outcomesRef.current[platformId]?.attempt ?? 0) + 1;
-    decisionsRef.current[platformId] = decision;
+    decisionsRef.current[platformId] = savedDecision;
     outcomesRef.current[platformId] = { attempt, status: 'pending' };
 
     let tracked: Promise<void>;
     tracked = Promise.resolve()
-      .then(() => resolve(platformId, decision.choice, decision.canonicalId))
+      .then(() => resolve(platformId, savedDecision.choice, savedDecision.canonicalId))
       .then(() => {
         if (outcomesRef.current[platformId]?.attempt === attempt) {
           outcomesRef.current[platformId] = { attempt, status: 'success' };
         }
       })
-      .catch(() => {
+      .catch((error) => {
+        log.warn('resolve failed', platformId, error);
         if (outcomesRef.current[platformId]?.attempt === attempt) {
           outcomesRef.current[platformId] = { attempt, status: 'failed' };
-          // The card already advanced optimistically. Put a failed save at the
-          // end unless an undo has made that same item pending again.
-          setDeck((queue) => {
-            const alreadyPending = queue
-              .slice(posRef.current)
-              .some((entry) => entry.item.platformId === platformId);
-            if (alreadyPending) return queue;
-            retryKeyRef.current += 1;
-            return [...queue, { item, key: `${platformId}:retry:${retryKeyRef.current}` }];
-          });
-          setEnding({ kind: 'waiting' });
         }
       })
       .finally(() => {
@@ -107,86 +195,70 @@ export default function MatchReviewDeck({
     return tracked;
   }, [resolve]);
 
-  const commit = useCallback((choice: ResolveChoice, canonicalId?: string) => {
-    if (!cur || !curEntry || committedCardRef.current === curEntry.key) return;
-    committedCardRef.current = curEntry.key;
-    void launchResolve(cur, { choice, canonicalId });
-    setPos((p) => {
-      const next = p + 1;
-      posRef.current = next;
-      return next;
-    });
-  }, [cur, curEntry, launchResolve]);
-
-  const tallyCounts = useCallback(() => {
-    const c = { linked: 0, created: 0, ignored: 0 };
-    for (const [platformId, decision] of Object.entries(decisionsRef.current)) {
-      if (outcomesRef.current[platformId]?.status !== 'success') continue;
-      if (decision.choice === 'link') c.linked += 1;
-      else if (decision.choice === 'create') c.created += 1;
-      else if (decision.choice === 'ignore') c.ignored += 1;
-    }
-    return c;
-  }, []);
-
-  const settleEnding = useCallback(async () => {
-    setEnding({ kind: 'waiting' });
-    const pending = Object.values(pendingRef.current);
-    if (pending.length > 0) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const settled = await Promise.race([
-        Promise.all(pending).then(() => true),
-        new Promise<boolean>((done) => { timer = setTimeout(() => done(false), 10000); }),
-      ]);
-      if (timer) clearTimeout(timer);
-      if (!settled) {
-        for (const outcome of Object.values(outcomesRef.current)) {
-          if (outcome.status === 'pending') outcome.status = 'failed';
-        }
+  const settleSaves = useCallback(async (pending: Promise<void>[]) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      Promise.all(pending).then(() => true),
+      new Promise<boolean>((done) => {
+        timer = setTimeout(() => done(false), 12000);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!settled) {
+      for (const outcome of Object.values(outcomesRef.current)) {
+        if (outcome.status === 'pending') outcome.status = 'failed';
       }
     }
-
     const failed = Object.values(outcomesRef.current).filter((outcome) => outcome.status !== 'success').length;
     setEnding(failed > 0 ? { kind: 'failed', count: failed } : { kind: 'done' });
   }, []);
 
-  useEffect(() => {
-    if (pos >= total) void settleEnding();
-  }, [pos, total, settleEnding]);
-
-  const retryFailed = useCallback(async () => {
-    const failedIds = Object.keys(decisionsRef.current).filter(
-      (platformId) => outcomesRef.current[platformId]?.status !== 'success',
-    );
+  const saveDecisions = useCallback(() => {
     setEnding({ kind: 'waiting' });
-    for (const platformId of failedIds) {
-      const item = deck.find((entry) => entry.item.platformId === platformId)?.item;
-      if (item) void launchResolve(item, decisionsRef.current[platformId]);
+    decisionsRef.current = {};
+    outcomesRef.current = {};
+    pendingRef.current = {};
+    const pending = historyRef.current
+      .filter((decision) => decision.choice !== 'skip')
+      .map(launchResolve);
+    if (pending.length === 0) {
+      setEnding({ kind: 'done' });
+      return;
     }
-    await settleEnding();
-  }, [deck, launchResolve, settleEnding]);
+    void settleSaves(pending);
+  }, [launchResolve, settleSaves]);
 
-  const undo = useCallback(() => {
-    setPos((p) => {
-      const next = Math.max(0, p - 1);
-      posRef.current = next;
-      return next;
-    });
+  const retryFailed = useCallback(() => {
+    setEnding({ kind: 'waiting' });
+    const failed = Object.keys(decisionsRef.current)
+      .filter((platformId) => outcomesRef.current[platformId]?.status !== 'success')
+      .map((platformId) => launchResolve(decisionsRef.current[platformId]));
+    void settleSaves(failed);
+  }, [launchResolve, settleSaves]);
+
+  const tallyCounts = useCallback(() => {
+    const counts = { linked: 0, created: 0, ignored: 0 };
+    for (const [platformId, decision] of Object.entries(decisionsRef.current)) {
+      if (outcomesRef.current[platformId]?.status !== 'success') continue;
+      if (decision.choice === 'link') counts.linked += 1;
+      else if (decision.choice === 'create') counts.created += 1;
+      else if (decision.choice === 'ignore') counts.ignored += 1;
+    }
+    return counts;
   }, []);
 
   const chrome = useMemo(
     () => ({
       onUndo: undo,
       canUndo: pos > 0,
-      onRedo: undefined,
-      canRedo: false,
+      onRedo: redo,
+      canRedo: !!history[pos],
       onIgnore: () => commit('ignore'),
     }),
-    [undo, pos, commit],
+    [undo, redo, pos, history, commit],
   );
 
-  // Deck exhausted: hold the ending until every optimistic swipe is confirmed.
-  if (!cur) {
+  if (!cur || !currentDetails || !curEntry) {
     if (ending.kind === 'waiting') {
       return (
         <View style={[styles.done, { paddingTop: topInset + 40 }]}>
@@ -195,7 +267,6 @@ export default function MatchReviewDeck({
         </View>
       );
     }
-
     if (ending.kind === 'failed') {
       return (
         <View style={[styles.done, { paddingTop: topInset + 40 }]}>
@@ -206,14 +277,37 @@ export default function MatchReviewDeck({
         </View>
       );
     }
-
+    if (ending.kind === 'done') {
+      return (
+        <View style={[styles.done, { paddingTop: topInset + 40 }]}>
+          <Text style={styles.doneTitle}>All caught up</Text>
+          <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={() => onDone?.(tallyCounts())}>
+            <Text style={styles.doneBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
     return (
-      <View style={[styles.done, { paddingTop: topInset + 40 }]}>
-        <Text style={styles.doneTitle}>All caught up</Text>
-        <Text style={styles.doneSub}>Every flagged item is sorted. Everything else matched on its own.</Text>
-        <TouchableOpacity style={styles.doneBtn} activeOpacity={0.9} onPress={() => onDone?.(tallyCounts())}>
-          <Text style={styles.doneBtnText}>Done</Text>
-        </TouchableOpacity>
+      <View style={[styles.review, { paddingTop: topInset + 40 }]}>
+        <View style={styles.reviewCopy}>
+          <Text style={styles.doneTitle}>Ready to save</Text>
+          <Text style={styles.doneSub}>You can undo the last decision before saving.</Text>
+        </View>
+        <View style={styles.reviewBar}>
+          <TouchableOpacity
+            onPress={pos > 0 ? undo : undefined}
+            disabled={pos === 0}
+            style={[styles.circleBtn, pos === 0 && styles.circleBtnDim]}
+          >
+            <MaterialCommunityIcons name="undo-variant" size={20} color={pos > 0 ? RC.muted : RC.faint} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.saveBtn} activeOpacity={0.88} onPress={saveDecisions}>
+            <Text style={styles.doneBtnText}>Save decisions</Text>
+          </TouchableOpacity>
+          <TouchableOpacity disabled style={[styles.circleBtn, styles.circleBtnDim]}>
+            <MaterialCommunityIcons name="redo-variant" size={20} color={RC.faint} />
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -221,49 +315,74 @@ export default function MatchReviewDeck({
   const candidates = cur.candidates ?? [];
   const hasCandidates = candidates.length > 0;
   const picked = picks[cur.platformId] ?? null;
-
-  // Bar labels/actions, adapted from the item's shape.
-  const primaryLabel = hasCandidates ? (candidates.length > 1 ? 'Link this one' : 'Link') : 'Add as new';
-  const onPrimary = () => (hasCandidates && picked ? commit('link', picked) : commit('create'));
-  const altLabel = hasCandidates ? 'New' : undefined;
-  const onAlt = hasCandidates ? () => commit('create') : undefined;
+  const primaryLabel = hasCandidates ? 'Link' : 'Add as new';
+  const onPrimary = () => {
+    if (hasCandidates) {
+      if (picked) commit('link', picked);
+    } else {
+      commit('create');
+    }
+  };
+  const onSkip = () => commit('skip');
 
   return (
     <DeckChrome.Provider value={chrome}>
-      <TinderShell
-        key={curEntry.key}
-        idx={pos + 1}
-        total={total}
-        title={cur.title}
-        note="Link matches your existing item. New creates one."
-        onBack={() => onDone?.()}
-        primary={primaryLabel}
-        primaryReady={resolving !== cur.platformId}
-        alt={altLabel}
-        onPrimary={onPrimary}
-        onAlt={onAlt}
-        onIgnore={() => commit('ignore')}
-        topInset={topInset}
-        scroll
-      >
-        <DecisionCard
-          item={cur}
-          platformName={platformName}
-          selectedId={picked}
-          onSelect={(id) => setPicks((m) => ({ ...m, [cur.platformId]: id }))}
-        />
-      </TinderShell>
+      <SwipeLabelsContext.Provider value={{ right: primaryLabel, left: 'Skip', up: 'Ignore' }}>
+        <TinderShell
+          key={curEntry.key}
+          idx={pos + 1}
+          total={total}
+          title={cur.title}
+          onBack={() => onDone?.()}
+          primary={primaryLabel}
+          primaryReady={resolving !== cur.platformId && (!hasCandidates || !!picked)}
+          alt="Skip"
+          onPrimary={onPrimary}
+          onAlt={onSkip}
+          onIgnore={() => commit('ignore')}
+          topInset={topInset}
+          scroll
+        >
+          <DecisionCard
+            item={cur}
+            platformName={platformName}
+            sourceLabel={currentDetails.sourceLabel}
+            draftId={currentDetails.draftId}
+            groupedItems={groupedItems}
+            showHints={pos === 0 && !interacted}
+            selectedId={picked}
+            onSelect={(id) => setPicks((current) => ({ ...current, [cur.platformId]: id }))}
+            onLink={onPrimary}
+            onCreate={() => commit('create')}
+            onSkip={onSkip}
+            onIgnore={() => commit('ignore')}
+            disabled={resolving === cur.platformId}
+          />
+        </TinderShell>
+      </SwipeLabelsContext.Provider>
     </DeckChrome.Provider>
   );
 }
 
 const styles = StyleSheet.create({
   done: { flex: 1, alignItems: 'center', paddingHorizontal: 32, gap: 8 },
-  doneTitle: { fontSize: 20, fontWeight: '700', color: RC.ink },
+  doneTitle: { fontSize: 20, fontWeight: '700', color: RC.ink, textAlign: 'center' },
   doneSub: { fontSize: 14, lineHeight: 20, color: RC.muted, textAlign: 'center' },
   doneBtn: {
     marginTop: 16, height: 50, borderRadius: 999, backgroundColor: RC.green,
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40,
   },
   doneBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  review: { flex: 1, paddingHorizontal: 16, justifyContent: 'space-between', paddingBottom: 24 },
+  reviewCopy: { alignItems: 'center', gap: 8 },
+  reviewBar: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  circleBtn: {
+    width: 54, height: 54, borderRadius: 27, borderWidth: 1.5, borderColor: RC.line,
+    backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center',
+  },
+  circleBtnDim: { opacity: 0.4 },
+  saveBtn: {
+    flex: 1, height: 54, borderRadius: 27, backgroundColor: RC.green,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });
