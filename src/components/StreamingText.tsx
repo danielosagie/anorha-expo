@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { StyleProp, StyleSheet, Text, TextStyle } from 'react-native';
+import { StyleProp, StyleSheet, Text, TextProps, TextStyle } from 'react-native';
 import { DiaTextReveal } from './DiaTextReveal';
 
 export interface StreamingTextProps {
@@ -12,6 +12,7 @@ export interface StreamingTextProps {
     revealFrom?: string;
     revealTo?: string;
     numberOfLines?: number;
+    ellipsizeMode?: TextProps['ellipsizeMode'];
 }
 
 /**
@@ -28,6 +29,7 @@ export const StreamingText: React.FC<StreamingTextProps> = React.memo(({
     revealFrom = 'rgba(255,255,255,0.16)',
     revealTo,
     numberOfLines,
+    ellipsizeMode,
 }) => {
     const completedKeyRef = useRef<string | null>(null);
     const complete = useCallback(() => {
@@ -46,7 +48,7 @@ export const StreamingText: React.FC<StreamingTextProps> = React.memo(({
         return undefined;
     }, [complete, shouldStream, text]);
 
-    if (!shouldStream) return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
+    if (!shouldStream) return <Text style={style} numberOfLines={numberOfLines} ellipsizeMode={ellipsizeMode}>{text}</Text>;
 
     const resolvedColor = revealTo ?? StyleSheet.flatten(style)?.color;
     const duration = Math.min(1400, Math.max(520, text.length * Math.max(3, speed * 0.15)));
@@ -55,6 +57,7 @@ export const StreamingText: React.FC<StreamingTextProps> = React.memo(({
             text={text}
             style={style}
             numberOfLines={numberOfLines}
+            ellipsizeMode={ellipsizeMode}
             revealFrom={revealFrom}
             revealTo={typeof resolvedColor === 'string' ? resolvedColor : '#111827'}
             duration={duration}

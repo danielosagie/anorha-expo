@@ -6,6 +6,7 @@ import {
   StyleProp,
   StyleSheet,
   Text,
+  TextProps,
   TextStyle,
   View,
 } from 'react-native';
@@ -16,6 +17,7 @@ type Props = {
   text: string;
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
+  ellipsizeMode?: TextProps['ellipsizeMode'];
   revealFrom?: string;
   revealTo?: string;
   duration?: number;
@@ -29,6 +31,7 @@ export function DiaTextReveal({
   text,
   style,
   numberOfLines,
+  ellipsizeMode,
   revealFrom = '#FAFAF8',
   revealTo = '#71717A',
   duration = 480,
@@ -92,7 +95,7 @@ export function DiaTextReveal({
   }, [delay, duration, layoutReady, progress, reduceMotion, resolvedAnimationKey]);
 
   if (reduceMotion) {
-    return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
+    return <Text style={style} numberOfLines={numberOfLines} ellipsizeMode={ellipsizeMode}>{text}</Text>;
   }
 
   const translateX = progress.interpolate({
@@ -105,6 +108,7 @@ export function DiaTextReveal({
       <Text
         style={[style, styles.measure]}
         numberOfLines={numberOfLines}
+        ellipsizeMode={ellipsizeMode}
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
           setSize((current) => current.width === width && current.height === height ? current : { width, height });
@@ -116,7 +120,7 @@ export function DiaTextReveal({
       {size.width > 0 && size.height > 0 ? (
         <MaskedView
           style={[StyleSheet.absoluteFill, { width: size.width, height: size.height }]}
-          maskElement={<Text style={style} numberOfLines={numberOfLines}>{text}</Text>}
+          maskElement={<Text style={style} numberOfLines={numberOfLines} ellipsizeMode={ellipsizeMode}>{text}</Text>}
           pointerEvents="none"
         >
           <Animated.View style={{ width: size.width * 2, height: size.height, transform: [{ translateX }] }}>

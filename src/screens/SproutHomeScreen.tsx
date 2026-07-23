@@ -40,7 +40,11 @@ import ActivityTraySheet from '../features/liquidationConversation/components/ac
 import { useActivityTray } from '../features/liquidationConversation/components/activity/useActivityTray';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
-import { compactDisplayText, sanitizeDisplayText } from '../features/liquidationConversation/displayText';
+import {
+  compactDisplayText,
+  compactHeroBodyText,
+  sanitizeDisplayText,
+} from '../features/liquidationConversation/displayText';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -49,6 +53,10 @@ const CONVEX_TEMPLATE =
 
 const BRAND = '#93C822';
 const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
+
+// 375-390pt screens leave 339-354pt after the hero's 18pt side padding.
+// Inter Semibold 16.5 averages about 7.92pt per prose character, or 43-45 chars/line.
+// 110 characters therefore fits safely inside the three-line clamp.
 
 const FONT = {
   regular: 'Inter_400Regular',
@@ -94,6 +102,23 @@ const nextRecommendationLine = (
   if (remainingMinutes <= 0) return 'New look soon';
   if (remainingMinutes < 60) return `New look in ${remainingMinutes}m`;
   return `New look in ${Math.ceil(remainingMinutes / 60)}h`;
+};
+
+const differsMeaningfully = (left: string, right: string): boolean => {
+  const words = (value: string) => sanitizeDisplayText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const leftWords = new Set(words(left));
+  const rightWords = new Set(words(right));
+  if (!leftWords.size || !rightWords.size) return false;
+
+  let shared = 0;
+  for (const word of leftWords) {
+    if (rightWords.has(word)) shared += 1;
+  }
+  return shared / Math.min(leftWords.size, rightWords.size) < 0.7;
 };
 
 type BriefingChip = 'SOLD' | 'OFFER' | 'REPRICE' | 'ASK' | 'LISTED';
@@ -405,15 +430,29 @@ const SproutHomeScreen: React.FC = () => {
     !(pastSetup && isOnboardingNudge)
       ? rawHeadline
       : undefined;
+  const insightBody = useMemo(
+    () => compactHeroBodyText(insight?.bottomDIN?.description),
+    [insight?.bottomDIN?.description],
+  );
+  const isActionableInsight = Boolean(insight?.report || insight?.reportId);
   const insightSolution = useMemo(() => {
     const candidates = [
       insight?.suggestionText,
-      insight?.bottomDIN?.description,
       insight?.handoff?.prompt,
       insight?.reasoning,
+      insight?.bottomDIN?.description,
     ];
     return candidates.find((value) => typeof value === 'string' && value.trim())?.trim();
   }, [insight?.suggestionText, insight?.bottomDIN?.description, insight?.handoff?.prompt, insight?.reasoning]);
+  const insightSupportLine = useMemo(() => {
+    if (!isActionableInsight || !insightBody || !insightSolution) return null;
+    if (!differsMeaningfully(insightBody, insightSolution)) return null;
+    return compactDisplayText(insightSolution, {
+      maxChars: 150,
+      maxSentences: 1,
+      preserveStructuredText: false,
+    });
+  }, [insightBody, insightSolution, isActionableInsight]);
   const insightNextCheckLine = useMemo(
     () => nextRecommendationLine(insightNextRefreshAt, insightGeneratedAt),
     [insightGeneratedAt, insightNextRefreshAt],
@@ -460,14 +499,16 @@ const SproutHomeScreen: React.FC = () => {
   //    back it renders instantly and never replays — exactly like a normal chat app.
   const heroMessage = useMemo<{ id: string; text: string } | null>(() => {
     if (DEMO) return null; // demo has its own scripted body
-    if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: compactDisplayText(latestDigest.text, { maxChars: 230, maxSentences: 2 }) };
+    if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: compactHeroBodyText(latestDigest.text) };
     if (controller.loading) return null; // don't stream the transient "Catching you up…"
-    if (insightHeadline) return { id: `insight:${insightHeadline}`, text: sanitizeDisplayText(insightHeadline) };
+    if (insightHeadline && insightBody) {
+      return { id: `insight:${insight?.id || insightHeadline}:${insightBody}`, text: insightBody };
+    }
     return {
       id: isNight ? 'quiet:night' : 'quiet:day',
       text: isNight ? 'All quiet while you slept. Sprout is watching.' : 'All quiet so far. Sprout is watching.',
     };
-  }, [DEMO, latestDigest, controller.loading, insightHeadline, isNight]);
+  }, [DEMO, latestDigest, controller.loading, insight?.id, insightBody, insightHeadline, isNight]);
 
   const [seenLoaded, setSeenLoaded] = useState(false);
   const [lastSeenMsgId, setLastSeenMsgId] = useState<string | null>(null);
@@ -478,6 +519,7 @@ const SproutHomeScreen: React.FC = () => {
       .catch(() => { if (alive) setSeenLoaded(true); });
     return () => { alive = false; };
   }, []);
+  const isShowingInsight = Boolean(seenLoaded && !latestDigest && !controller.loading && insightHeadline && insightBody);
   const shouldStreamHero = seenLoaded && !!heroMessage && heroMessage.id !== lastSeenMsgId;
   const markHeroSeen = useCallback(() => {
     if (!heroMessage) return;
@@ -872,14 +914,16 @@ const SproutHomeScreen: React.FC = () => {
               ) : latestDigest && !DEMO && seenLoaded ? (
                 // No ledger rows — the scheduled digest stands in, typed only when new.
                 <StreamingText
-                  text={compactDisplayText(latestDigest.text, { maxChars: 230, maxSentences: 2 })}
+                  text={compactHeroBodyText(latestDigest.text)}
                   shouldStream={shouldStreamHero}
                   onComplete={markHeroSeen}
                   speed={42}
+                  numberOfLines={3}
+                  ellipsizeMode="tail"
                   style={[styles.briefingProse, { color: THEME.strong }]}
                 />
               ) : null}
-              {(DEMO || controller.campaigns.length > 0) && (
+              {(DEMO || controller.campaigns.length > 0) && !insight && (
                 <ReportPreviewCard
                   title={reportTitle}
                   subtitle="Changes and next steps."
@@ -902,41 +946,58 @@ const SproutHomeScreen: React.FC = () => {
               {controller.loading ? (
                 <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>Catching you up…</Text>
               ) : seenLoaded && heroMessage ? (
-                <StreamingText
-                  text={heroMessage.text}
-                  shouldStream={shouldStreamHero}
-                  onComplete={markHeroSeen}
-                  speed={42}
-                  style={[styles.briefingProse, { color: THEME.strong }]}
-                />
+                <>
+                  {isShowingInsight ? (
+                    <Text
+                      style={[styles.briefingHeadline, { color: THEME.strong }]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {sanitizeDisplayText(insightHeadline)}
+                    </Text>
+                  ) : null}
+                  <StreamingText
+                    text={heroMessage.text}
+                    shouldStream={shouldStreamHero}
+                    onComplete={markHeroSeen}
+                    speed={42}
+                    numberOfLines={3}
+                    ellipsizeMode="tail"
+                    style={[styles.briefingProse, { color: THEME.strong }]}
+                  />
+                </>
               ) : null}
-              {!controller.loading && insightHeadline && insightSolution ? (
-                <Text style={[styles.briefingSupport, { color: THEME.faint }]}>
-                  {compactDisplayText(insightSolution, { maxChars: 150, maxSentences: 1 })}
+              {isShowingInsight && insightSupportLine ? (
+                <Text
+                  style={[styles.briefingSupport, { color: THEME.faint }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {insightSupportLine}
                 </Text>
               ) : null}
-              {!controller.loading && lastActivityLine && (
+              {!isShowingInsight && !controller.loading && lastActivityLine && (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
               )}
-              {/* The insight's backing report — opens the report sheet right here,
-                  no chat detour. Shown whether the document rides embedded on the
-                  insight or only as a persisted reportId (resolved on tap). */}
-              {!controller.loading && (insight?.report?.sections?.length || insight?.reportId) ? (
-                <ReportPreviewCard
-                  title={insightReportTitle}
-                  chip="Report"
-                  borderColor={THEME.cardBorder}
-                  onPress={() => {
-                    tap();
-                    void openInsightReport();
-                  }}
-                />
-              ) : null}
-              {!controller.loading && insightHeadline && insightNextCheckLine ? (
-                <Text style={[styles.nextReport, { color: THEME.faint }]}>{insightNextCheckLine}</Text>
-              ) : null}
             </>
           )}
+
+          {/* Actionable insights always keep their report destination, including
+              while campaign data reloads or a digest occupies the prose area. */}
+          {isActionableInsight ? (
+            <ReportPreviewCard
+              title={insightReportTitle}
+              chip="Report"
+              borderColor={THEME.cardBorder}
+              onPress={() => {
+                tap();
+                void openInsightReport();
+              }}
+            />
+          ) : null}
+          {isShowingInsight && insightNextCheckLine ? (
+            <Text style={[styles.nextReport, { color: THEME.faint }]}>{insightNextCheckLine}</Text>
+          ) : null}
 
           {/* Divider + today's numbers only when there's something below the fold —
               a brand-new seller with 0 sales sees the greeting + recap, nothing dead. */}
