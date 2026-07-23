@@ -33,6 +33,8 @@ type Props = {
   onRemoveContextAttachment?: () => void;
   /** Increment to focus an already-mounted composer. */
   focusRequestKey?: number;
+  /** Hide attachment controls when the surface only accepts text or voice. */
+  hideAttach?: boolean;
 };
 
 const BRAND = '#93C822';
@@ -69,6 +71,7 @@ export const MessageComposer = ({
   contextAttachment,
   onRemoveContextAttachment,
   focusRequestKey = 0,
+  hideAttach = false,
 }: Props) => {
   // Metering on, so the waveform reacts to the seller's actual voice level (Claude-style)
   // instead of a canned pulse.
@@ -101,7 +104,7 @@ export const MessageComposer = ({
   const attachProgress = useSharedValue(0);
 
   const hasText = value.trim().length > 0;
-  const canSend = hasText || imageUris.length > 0;
+  const canSend = hasText || (!hideAttach && imageUris.length > 0);
 
   const tap = (s: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) =>
     Haptics.impactAsync(s).catch(() => undefined);
@@ -110,6 +113,12 @@ export const MessageComposer = ({
     if (timerRef.current) clearInterval(timerRef.current);
     if (meterRef.current) clearInterval(meterRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!hideAttach) return;
+    setAttachMenuOpen(false);
+    setImageUris([]);
+  }, [hideAttach]);
 
   useEffect(() => {
     AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => undefined);
@@ -453,47 +462,51 @@ export const MessageComposer = ({
         </View>
       ) : (
         <View style={styles.row}>
-          <Animated.View
-            pointerEvents={attachMenuOpen ? 'auto' : 'none'}
-            style={[styles.attachMenu, attachMenuStyle]}
-            accessibilityViewIsModal={attachMenuOpen}
-          >
-            <Pressable
-              style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
-              onPress={() => runAttachAction(() => void pickFromCamera())}
-              accessibilityRole="button"
-              accessibilityLabel="Open camera"
-            >
-              <View style={styles.attachOptionIcon}><Camera size={20} color="#3F3F46" strokeWidth={2} /></View>
-              <Text style={styles.attachOptionText}>Camera</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
-              onPress={() => runAttachAction(() => void pickFromLibrary())}
-              accessibilityRole="button"
-              accessibilityLabel="Choose photos"
-            >
-              <View style={styles.attachOptionIcon}><Images size={20} color="#3F3F46" strokeWidth={2} /></View>
-              <Text style={styles.attachOptionText}>Photos</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
-              onPress={() => runAttachAction(() => void pickFile())}
-              accessibilityRole="button"
-              accessibilityLabel="Choose files"
-            >
-              <View style={styles.attachOptionIcon}><Paperclip size={20} color="#3F3F46" strokeWidth={2} /></View>
-              <Text style={styles.attachOptionText}>Files</Text>
-            </Pressable>
-          </Animated.View>
-
-          <Pressable onPress={toggleAttachMenu} accessibilityRole="button" accessibilityLabel={attachMenuOpen ? 'Close attachment menu' : 'Add to chat'}>
-            {({ pressed }) => (
-              <Animated.View style={[styles.attachBtn, attachButtonStyle, pressed && styles.attachBtnPressed]}>
-                <Plus size={22} color="#18181B" strokeWidth={2.2} />
+          {!hideAttach ? (
+            <>
+              <Animated.View
+                pointerEvents={attachMenuOpen ? 'auto' : 'none'}
+                style={[styles.attachMenu, attachMenuStyle]}
+                accessibilityViewIsModal={attachMenuOpen}
+              >
+                <Pressable
+                  style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+                  onPress={() => runAttachAction(() => void pickFromCamera())}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open camera"
+                >
+                  <View style={styles.attachOptionIcon}><Camera size={20} color="#3F3F46" strokeWidth={2} /></View>
+                  <Text style={styles.attachOptionText}>Camera</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+                  onPress={() => runAttachAction(() => void pickFromLibrary())}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose photos"
+                >
+                  <View style={styles.attachOptionIcon}><Images size={20} color="#3F3F46" strokeWidth={2} /></View>
+                  <Text style={styles.attachOptionText}>Photos</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+                  onPress={() => runAttachAction(() => void pickFile())}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose files"
+                >
+                  <View style={styles.attachOptionIcon}><Paperclip size={20} color="#3F3F46" strokeWidth={2} /></View>
+                  <Text style={styles.attachOptionText}>Files</Text>
+                </Pressable>
               </Animated.View>
-            )}
-          </Pressable>
+
+              <Pressable onPress={toggleAttachMenu} accessibilityRole="button" accessibilityLabel={attachMenuOpen ? 'Close attachment menu' : 'Add to chat'}>
+                {({ pressed }) => (
+                  <Animated.View style={[styles.attachBtn, attachButtonStyle, pressed && styles.attachBtnPressed]}>
+                    <Plus size={22} color="#18181B" strokeWidth={2.2} />
+                  </Animated.View>
+                )}
+              </Pressable>
+            </>
+          ) : null}
 
           <View style={styles.card}>
             {contextAttachment ? (

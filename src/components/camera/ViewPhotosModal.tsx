@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Image,
   Modal,
-  ScrollView,
   Alert,
   Dimensions,
   Animated,
@@ -39,6 +38,7 @@ interface ViewPhotosModalProps {
   onRemovePhoto: (photoId: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onSelectItem: (itemId: string) => void;
+  onTakePhoto: () => void;
   onImageUpload: () => void;
   items: Array<{ id: string; photos: CapturedPhoto[] }>;
 }
@@ -54,6 +54,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
   onRemovePhoto,
   onReorder,
   onSelectItem,
+  onTakePhoto,
   onImageUpload,
   items,
 }) => {
@@ -74,10 +75,9 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
   }, [photos, visible]);
 
   const handleDragEnd = useCallback(
-    ({ data, from, to }: { data: Array<CapturedPhoto | { id: string; type: 'add' }>; from: number; to: number }) => {
-      const photosOnly = data.filter((x): x is CapturedPhoto => !('type' in x && x.type === 'add'));
-      setLocalPhotos(photosOnly);
-      if (from < photosOnly.length && to < photosOnly.length) {
+    ({ data, from, to }: { data: CapturedPhoto[]; from: number; to: number }) => {
+      setLocalPhotos(data);
+      if (from < data.length && to < data.length) {
         onReorder(from, to);
       }
     },
@@ -154,7 +154,30 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
           </View>
           <Text style={styles.dragHint}>Swipe for other items. Hold a photo to reorder, tap to set cover.</Text>
 
-          {/* Photo grid — long-press drag reorders; horizontal swipe hops items.
+          {localPhotos.length < 12 ? (
+            <View style={styles.addActions}>
+              <TouchableOpacity
+                style={[styles.addActionButton, styles.takePhotoButton]}
+                onPress={onTakePhoto}
+                accessibilityRole="button"
+                accessibilityLabel="Take photo"
+              >
+                <Icon name="camera-plus-outline" size={20} color="#334155" />
+                <Text style={styles.addActionText}>Take photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.addActionButton}
+                onPress={onImageUpload}
+                accessibilityRole="button"
+                accessibilityLabel="Upload photo"
+              >
+                <Icon name="image-plus" size={20} color="#334155" />
+                <Text style={styles.addActionText}>Upload</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* Photo grid: long-press drag reorders; horizontal swipe hops items.
               The swipe pan only claims clearly-horizontal moves (activeOffsetX),
               so vertical scrolls and an in-flight drag pass through untouched. */}
           <PanGestureHandler
@@ -168,29 +191,14 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
             }}
           >
           <View style={styles.scrollView}>
-            <DraggableFlatList<CapturedPhoto | { id: string; type: 'add' }>
-              data={[
-                ...localPhotos,
-                ...(localPhotos.length < 12 ? [{ id: '__add__', type: 'add' as const }] : []),
-              ]}
+            <DraggableFlatList<CapturedPhoto>
+              data={localPhotos}
               keyExtractor={(item) => item.id}
               onDragEnd={handleDragEnd}
               numColumns={NUM_COLUMNS}
               contentContainerStyle={styles.scrollContent}
               columnWrapperStyle={styles.columnWrapper}
-              renderItem={({ item, drag, isActive, getIndex }: RenderItemParams<CapturedPhoto | { id: string; type: 'add' }>) => {
-                if ('type' in item && item.type === 'add') {
-                  return (
-                    <TouchableOpacity
-                      style={[styles.addPhotoButton, { width: PHOTO_SIZE, height: PHOTO_SIZE }]}
-                      onPress={onImageUpload}
-                    >
-                      <Icon name="camera-plus-outline" size={28} color="#999" />
-                      <Text style={styles.addPhotoText}>Add to item</Text>
-                    </TouchableOpacity>
-                  );
-                }
-                const photo = item as CapturedPhoto;
+              renderItem={({ item: photo, drag, isActive, getIndex }: RenderItemParams<CapturedPhoto>) => {
                 const index = getIndex() ?? localPhotos.indexOf(photo);
                 return (
                   <ScaleDecorator>
@@ -323,6 +331,30 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingHorizontal: 16,
   },
+  addActions: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+  },
+  addActionButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  takePhotoButton: {
+    backgroundColor: 'rgba(147, 200, 34, 0.16)',
+  },
+  addActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#334155',
+  },
   scrollView: {
     maxHeight: 320,
   },
@@ -395,21 +427,6 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  addPhotoButton: {
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#D9D9DE',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  addPhotoText: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#999',
-    textAlign: 'center',
   },
 });
 

@@ -81,6 +81,8 @@ const FolderCartRow = React.memo(function FolderCartRow({
   onToggleExpanded,
   onOpenItem,
   onOpenLocalMatch,
+  isSavedForLater,
+  onToggleSavedForLater,
 }: {
   entry: Extract<RenderEntry, { kind: 'folderCard' }>;
   onOpen?: (folderId: string) => void;
@@ -94,6 +96,8 @@ const FolderCartRow = React.memo(function FolderCartRow({
   onToggleExpanded: (folderId: string) => void;
   onOpenItem?: (itemId: string) => void;
   onOpenLocalMatch?: (itemId: string) => void;
+  isSavedForLater?: boolean;
+  onToggleSavedForLater?: (id: string, saved: boolean) => void;
 }) {
   const isStreaming = shelfProgress?.status === 'streaming';
   const hasError = shelfProgress?.status === 'error' || shelfProgress?.status === 'timeout' || shelfProgress?.status === 'no_items';
@@ -147,18 +151,31 @@ const FolderCartRow = React.memo(function FolderCartRow({
             </View>
           </View>
         </Pressable>
-        <Pressable
-          style={styles.folderToggleChevron}
-          onPress={() => onToggleExpanded(entry.id)}
-          hitSlop={4}
-          accessibilityRole="button"
-          accessibilityState={{ expanded }}
-          accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${entry.label || 'shelf'}`}
-        >
-          <Animated.View style={chevronStyle} pointerEvents="none">
-            <Icon name="chevron-down" size={21} color={CHAT_COLORS.dim} />
-          </Animated.View>
-        </Pressable>
+        <View style={styles.folderHeaderActions}>
+          {onToggleSavedForLater ? (
+            <Pressable
+              style={styles.folderBookmarkButton}
+              onPress={() => onToggleSavedForLater(entry.id, !isSavedForLater)}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel={isSavedForLater ? 'Move to cart' : 'Save for later'}
+            >
+              <Icon name={isSavedForLater ? 'bookmark' : 'bookmark-outline'} size={19} color="#52525B" />
+            </Pressable>
+          ) : null}
+          <Pressable
+            style={styles.folderToggleChevron}
+            onPress={() => onToggleExpanded(entry.id)}
+            hitSlop={4}
+            accessibilityRole="button"
+            accessibilityState={{ expanded }}
+            accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${entry.label || 'shelf'}`}
+          >
+            <Animated.View style={chevronStyle} pointerEvents="none">
+              <Icon name="chevron-down" size={21} color={CHAT_COLORS.dim} />
+            </Animated.View>
+          </Pressable>
+        </View>
       </View>
 
       {expanded ? (
@@ -290,6 +307,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
   onDeleteItem,
   onUpdateItemQuantity,
   onToggleSavedForLater,
+  onCapturePhoto,
   isSavedForLater,
   onRetryItemScan,
 }: {
@@ -308,6 +326,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
   onDeleteItem: (itemId: string) => void;
   onUpdateItemQuantity?: (itemId: string, quantity: number) => void;
   onToggleSavedForLater?: (itemId: string, saved: boolean) => void;
+  onCapturePhoto?: (itemId: string) => void;
   isSavedForLater?: boolean;
   onRetryItemScan?: (itemId: string) => void;
 }) {
@@ -320,8 +339,11 @@ const BulkCartRow = React.memo(function BulkCartRow({
     : null;
   const selectedMatch = confirmedMatch || topMatch;
   const isLocalInventoryMatch = Boolean(selectedMatch?.isLocalMatch);
-  const thumbUri = resolveImageUri(selectedMatch) ||
-    resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0]);
+  const hasPhotos = item.photos.length > 0;
+  const thumbUri = hasPhotos
+    ? resolveImageUri(selectedMatch) ||
+      resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0])
+    : null;
   const rowTitle = selectedMatch
     ? (selectedMatch.title || 'Selected match')
     : (item.title && !/^Item \d+$/.test(item.title) ? item.title : `Item ${index + 1}`);
@@ -367,7 +389,13 @@ const BulkCartRow = React.memo(function BulkCartRow({
           <TouchableOpacity
             style={styles.cartThumbWrap}
             activeOpacity={0.8}
-            onPress={(event) => { event.stopPropagation?.(); onOpenPhotoModal?.(item.id); }}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              if (hasPhotos) onOpenPhotoModal?.(item.id);
+              else onCapturePhoto?.(item.id);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={hasPhotos ? 'View photos' : 'Take photo'}
           >
             {thumbUri ? (
               <Image source={{ uri: thumbUri }} style={styles.cartThumb} />
@@ -397,10 +425,27 @@ const BulkCartRow = React.memo(function BulkCartRow({
         </View>
 
         {!selectedMatch && !loadingState?.isLoading && !isGenerated ? (
-          <TouchableOpacity style={styles.detailChip} activeOpacity={0.7} onPress={(event) => { event.stopPropagation?.(); onOpenAddDetails?.(item.id); }}>
-            <Icon name="tag-plus-outline" size={15} color="#64748B" />
-            <Text style={styles.detailChipText}>No match yet · add a detail</Text>
-          </TouchableOpacity>
+          <View style={styles.detailActionsRow}>
+            <TouchableOpacity style={styles.detailChip} activeOpacity={0.7} onPress={(event) => { event.stopPropagation?.(); onOpenAddDetails?.(item.id); }}>
+              <Icon name="tag-plus-outline" size={15} color="#64748B" />
+              <Text style={styles.detailChipText} numberOfLines={1}>No match yet · add a detail</Text>
+            </TouchableOpacity>
+            {!retryableError && onRetryItemScan ? (
+              <TouchableOpacity
+                style={styles.retryChip}
+                activeOpacity={0.7}
+                onPress={(event) => {
+                  event.stopPropagation?.();
+                  onRetryItemScan(item.id);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Retry scan"
+              >
+                <Icon name="refresh" size={15} color="#52525B" />
+                <Text style={styles.retryChipText}>Retry</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : null}
 
         <View style={styles.cartActions}>
@@ -512,13 +557,14 @@ export const BulkItemsSheet: React.FC<{
   /** Item ids set aside via "Save for later" (excluded from list/subtotal/checkout). */
   savedForLaterIds?: string[];
   onToggleSavedForLater?: (itemId: string, saved: boolean) => void;
+  onCapturePhoto?: (itemId: string) => void;
   /** Open the Add-details page for an item that needs more context. */
   onOpenAddDetails?: (itemId: string) => void;
   /** Free-tier usage; when exhausted the cart doubles as the upgrade surface. */
   freemium?: { usageCount: number; freeLimit: number; exhausted: boolean } | null;
   onUpgrade?: () => void;
   onAddCredits?: () => void;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, inventoryMatchByItemId = {}, shelfPricingPendingByItemId = {}, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, onListingCreationFinished, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, inventoryMatchByItemId = {}, shelfPricingPendingByItemId = {}, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, onListingCreationFinished, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onCapturePhoto, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
 
 
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
@@ -526,8 +572,14 @@ export const BulkItemsSheet: React.FC<{
   // their own view and are excluded from counts, subtotal, select-all, and checkout
   // (everything downstream reads displayItems).
   const savedSet = useMemo(() => new Set(savedForLaterIds ?? []), [savedForLaterIds]);
-  const savedItems = useMemo(() => bulkItems.filter((item) => savedSet.has(item.id)), [bulkItems, savedSet]);
-  const displayItems = useMemo(() => bulkItems.filter((item) => !savedSet.has(item.id)), [bulkItems, savedSet]);
+  const savedFolderChildIds = useMemo(() => new Set(
+    (cartTree ?? [])
+      .filter((node): node is Extract<CartTreeNode, { kind: 'folder' }> => node.kind === 'folder' && savedSet.has(node.id))
+      .flatMap((node) => node.children.map((child) => child.id)),
+  ), [cartTree, savedSet]);
+  const savedItemSet = useMemo(() => new Set([...savedSet, ...savedFolderChildIds]), [savedFolderChildIds, savedSet]);
+  const savedItems = useMemo(() => bulkItems.filter((item) => savedItemSet.has(item.id)), [bulkItems, savedItemSet]);
+  const displayItems = useMemo(() => bulkItems.filter((item) => !savedItemSet.has(item.id)), [bulkItems, savedItemSet]);
   const [viewMode, setViewMode] = useState<'cart' | 'saved'>('cart');
 
   // One close per pull gesture on the items list.
@@ -561,7 +613,9 @@ export const BulkItemsSheet: React.FC<{
       let index = 0;
       for (const node of cartTree) {
         if (node.kind === 'folder') {
-          entries.push({ kind: 'folderCard', id: node.id, label: node.label, childCount: node.childCount, sourcePhotoUri: node.sourcePhotoUri, childIds: node.children.map((child) => child.id), children: node.children });
+          if (!savedSet.has(node.id)) {
+            entries.push({ kind: 'folderCard', id: node.id, label: node.label, childCount: node.childCount, sourcePhotoUri: node.sourcePhotoUri, childIds: node.children.map((child) => child.id), children: node.children });
+          }
         } else if (!savedSet.has(node.item.id)) {
           entries.push({ kind: 'item', item: node.item, index: index++ });
         }
@@ -571,11 +625,23 @@ export const BulkItemsSheet: React.FC<{
     }
     return entries;
   }, [cartTree, displayItems, savedSet]);
-  const savedRenderList = useMemo<RenderEntry[]>(
-    () => savedItems.map((item, index) => ({ kind: 'item', item, index })),
-    [savedItems],
-  );
+  const savedRenderList = useMemo<RenderEntry[]>(() => {
+    const entries: RenderEntry[] = [];
+    let index = 0;
+    for (const node of cartTree ?? []) {
+      if (node.kind === 'folder' && savedSet.has(node.id)) {
+        entries.push({ kind: 'folderCard', id: node.id, label: node.label, childCount: node.childCount, sourcePhotoUri: node.sourcePhotoUri, childIds: node.children.map((child) => child.id), children: node.children });
+      } else if (node.kind === 'single' && savedSet.has(node.item.id)) {
+        entries.push({ kind: 'item', item: node.item, index: index++ });
+      }
+    }
+    if (!cartTree?.length) {
+      savedItems.forEach((item) => entries.push({ kind: 'item', item, index: index++ }));
+    }
+    return entries;
+  }, [cartTree, savedItems, savedSet]);
   const activeRenderList = viewMode === 'saved' ? savedRenderList : renderList;
+  const savedCount = savedRenderList.length;
 
   const totalItems = displayItems.length;
   // Checkout target = the selection (if any) else the whole active cart.
@@ -1087,6 +1153,8 @@ export const BulkItemsSheet: React.FC<{
           onToggleExpanded={toggleFolderExpanded}
           onOpenItem={handleOpenFolderItem}
           onOpenLocalMatch={onOpenLocalMatch}
+          isSavedForLater={viewMode === 'saved'}
+          onToggleSavedForLater={onToggleSavedForLater}
         />
       );
     }
@@ -1108,6 +1176,7 @@ export const BulkItemsSheet: React.FC<{
         onDeleteItem={onDeleteItem}
         onUpdateItemQuantity={onUpdateItemQuantity}
         onToggleSavedForLater={onToggleSavedForLater}
+        onCapturePhoto={onCapturePhoto}
         isSavedForLater={viewMode === 'saved'}
         onRetryItemScan={onRetryItemScan}
       />
@@ -1129,6 +1198,7 @@ export const BulkItemsSheet: React.FC<{
     onOpenFolder,
     onOpenLocalMatch,
     onOpenPhotoModal,
+    onCapturePhoto,
     onRetryItemScan,
     onToggleSavedForLater,
     onUpdateItemQuantity,
@@ -1216,7 +1286,7 @@ export const BulkItemsSheet: React.FC<{
                         : 'Cart'}
                 </Text>
                 <Text style={styles.sheetCount}>
-                  {viewMode === 'saved' ? savedItems.length : totalItems} item{(viewMode === 'saved' ? savedItems.length : totalItems) === 1 ? '' : 's'}
+                  {viewMode === 'saved' ? savedCount : totalItems} item{(viewMode === 'saved' ? savedCount : totalItems) === 1 ? '' : 's'}
                 </Text>
               </View>
 
@@ -1228,10 +1298,10 @@ export const BulkItemsSheet: React.FC<{
                       style={styles.headerBookmarkButton}
                       hitSlop={10}
                       accessibilityRole="button"
-                      accessibilityLabel={`Saved for later, ${savedItems.length} item${savedItems.length === 1 ? '' : 's'}`}
+                      accessibilityLabel={`Saved for later, ${savedCount} item${savedCount === 1 ? '' : 's'}`}
                     >
-                      <Icon name={savedItems.length > 0 ? 'bookmark' : 'bookmark-outline'} size={17} color="#18181B" />
-                      {savedItems.length > 0 ? <Text style={styles.headerBookmarkCount}>{savedItems.length}</Text> : null}
+                      <Icon name={savedCount > 0 ? 'bookmark' : 'bookmark-outline'} size={17} color="#18181B" />
+                      {savedCount > 0 ? <Text style={styles.headerBookmarkCount}>{savedCount}</Text> : null}
                     </Pressable>
                     <TouchableOpacity
                       onPress={() => {
@@ -1621,6 +1691,8 @@ const styles = StyleSheet.create({
   folderCardStatusDotError: { backgroundColor: '#F59E0B' },
   folderCardSub: { flex: 1, fontSize: 13, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
   folderCardSubError: { color: '#A2611A' },
+  folderHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  folderBookmarkButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   folderToggleChevron: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   folderContents: {
     marginTop: 14,
@@ -1674,8 +1746,11 @@ const styles = StyleSheet.create({
   folderCompsText: { fontSize: 11, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim, marginTop: 2 },
   folderReceivingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingTop: 10, paddingBottom: 2 },
   folderReceivingText: { fontSize: 12, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.dim },
-  detailChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 12, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: 'rgba(245,158,11,0.12)' },
-  detailChipText: { fontSize: 13, color: '#A2611A', fontWeight: '600' },
+  detailActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  detailChip: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: 'rgba(245,158,11,0.12)' },
+  detailChipText: { flexShrink: 1, fontSize: 13, color: '#A2611A', fontWeight: '600' },
+  retryChip: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0, paddingVertical: 8, paddingHorizontal: 11, borderRadius: 999, backgroundColor: '#F1F1EE' },
+  retryChipText: { fontSize: 13, color: '#52525B', fontWeight: '600' },
   detailEditor: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   detailInput: { flex: 1, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14, color: '#18181B' },
   detailIconBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#F1F1EE', alignItems: 'center', justifyContent: 'center' },
@@ -1685,7 +1760,7 @@ const styles = StyleSheet.create({
   cartRowTop: { flexDirection: 'row', alignItems: 'center' },
   cartThumbWrap: { marginLeft: 10, position: 'relative' },
   cartThumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#F1F1EE' },
-  cartThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  cartThumbEmpty: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: '#C6D6A4', backgroundColor: '#F5F8EE' },
   cartThumbBadge: { position: 'absolute', top: -6, right: -6, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
   cartThumbBadgeText: { fontSize: 11, fontWeight: '700', color: '#0A0A0B' },
   cartRowMid: { flex: 1, marginHorizontal: 12 },

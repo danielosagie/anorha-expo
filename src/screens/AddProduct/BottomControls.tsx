@@ -36,6 +36,7 @@ export const BottomControls: React.FC<{
   shelfItemCount?: number;
   isShelfStreaming?: boolean;
   isShelfHandling?: boolean;
+  unseenResultsCount?: number;
 }> = ({
   onCapture,
   isCapturing,
@@ -59,6 +60,7 @@ export const BottomControls: React.FC<{
   shelfItemCount = 0,
   isShelfStreaming = false,
   isShelfHandling = false,
+  unseenResultsCount = 0,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
     const totalItems = items.length;
@@ -325,7 +327,7 @@ export const BottomControls: React.FC<{
                 {/* Center - Cart button (opens the cart; reachability lift).
                     Shelf prefers the bulk-items sheet when available. */}
                 <TouchableOpacity
-                  style={styles.continueButton}
+                  style={[styles.continueButton, styles.cartButton]}
                   onPress={shelfHandling && onOpenSheet ? onOpenSheet : onContinue}
                 >
                   {(totalItems > 0 || photosCount > 0 || shelfItemCount > 0) && <Icon name="cart-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />}
@@ -337,6 +339,11 @@ export const BottomControls: React.FC<{
                       <Text style={styles.itemCountBadgeText}>{totalItems}</Text>
                     </View>
                   )}
+                  {unseenResultsCount > 0 ? (
+                    <View style={styles.unseenResultsBadge}>
+                      <Text style={styles.unseenResultsBadgeText}>{unseenResultsCount}</Text>
+                    </View>
+                  ) : null}
                 </TouchableOpacity>
 
                 {/* Right Arrow/New Item */}
@@ -510,6 +517,28 @@ const styles = StyleSheet.create({
   },
   continueButtonContainer: {
     paddingHorizontal: 20,
+  },
+  cartButton: {
+    position: 'relative',
+  },
+  unseenResultsBadge: {
+    position: 'absolute',
+    top: -7,
+    right: -7,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: '#93C822',
+    borderWidth: 2,
+    borderColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unseenResultsBadgeText: {
+    color: '#0A0A0B',
+    fontSize: 10,
+    fontWeight: '800',
   },
   barcodeActionsRow: {
     flexDirection: 'row',

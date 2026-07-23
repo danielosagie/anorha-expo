@@ -138,7 +138,7 @@ export interface CartState {
   /** Sparse map of processed item id → lifecycle stage. Mirrors legacy `itemStageById`. */
   itemStageById: Record<string, ItemStage>;
   /**
-   * Ids of items the user set aside ("Save for later"). Saved items stay in
+   * Ids of items or folders the user set aside ("Save for later"). Saved entries stay in
    * `entries` but are excluded from the active cart list, subtotal, and checkout.
    */
   savedForLaterIds: string[];
@@ -150,6 +150,7 @@ export interface CartDraftPayload {
   matchContext: Record<string, any>;
   itemStageById: Record<string, ItemStage>;
   processedItemIds: string[];
+  savedForLaterIds?: string[];
   shelfPhotoUri?: string | null;
   activeItemId?: string | null;
 }

@@ -30,7 +30,7 @@ import ErrorModal from '../components/ErrorModal';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { setItemGenerate, selectItem, selectAllItems, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import { enqueueShelfItemCrop } from '../features/cart/shelfItemCropPipeline';
@@ -89,6 +89,19 @@ type QuickScanRunOptions = {
   skipPreflight?: boolean;
   textHint?: string;
   mode?: 'adaptive' | 'legacy';
+};
+
+type QuickScanTask = {
+  photo: CapturedPhoto;
+  itemId: string;
+  options?: QuickScanRunOptions;
+  epoch: number;
+};
+
+type QuickScanActiveHandle = {
+  close: () => void;
+  photoId: string;
+  startedAt: number;
 };
 
 type BillingGateDecision = 'continue' | 'plans' | 'credits' | 'dismiss';
@@ -331,6 +344,7 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
 const MAX_BATCH_ITEMS = 100;
 const QUICK_SCAN_QUEUE_LIMIT = 100;
+const SCAN_POOL_LIMIT = 8;
 const QUICK_MATCH_AUTO_SELECT_CONFIDENCE = 0.72;
 
 // Shop-style capture chrome: the photo strip rides the top black bar and the camera
@@ -399,6 +413,7 @@ const toQuickScanSessionBody = (p: {
   activeItemId?: string | null;
   itemStageById?: Record<string, ItemStage>;
   processedItemIds?: string[];
+  savedForLaterIds?: string[];
 }) => ({
   scannedItems: stripLocalOnlyPhotos(labelScannedItems(p.scannedItems, p.matchContext)),
   matchContext: writeQuickScanClientState(p.matchContext, {
@@ -407,6 +422,7 @@ const toQuickScanSessionBody = (p: {
   }),
   shelfPhotoUri: p.shelfPhotoUri ?? undefined,
   activeItemId: p.activeItemId ?? undefined,
+  savedForLaterIds: p.savedForLaterIds,
 });
 
 type AddProductScreenProps = StackScreenProps<AppStackParamList, 'AddProduct'>;
@@ -803,7 +819,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         : initialShelfProgressState()
   );
   const shelfScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
-  const quickScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
   const lastShelfScanPhotoRef = useRef<CapturedPhoto | null>(null);
   const shelfScanSourceSizeRef = useRef<ShelfSourceSize | null>(null);
 
@@ -879,6 +894,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const activeId = session.ActiveItemId ?? session.activeItemId ?? null;
         const stageById = (clientState.itemStageById ?? session.ItemStageById ?? session.itemStageById ?? {}) as Record<string, ItemStage>;
         const processedIds = clientState.processedItemIds ?? session.ProcessedItemIds ?? session.processedItemIds ?? [];
+        const savedIds = session.SavedForLaterIds ?? session.savedForLaterIds ?? [];
         if (items.length > 0 && !cancelled) {
           const retryableHydratedIds = items
             .filter((item: any) => Array.isArray(item?.photos) && item.photos.length > 0 && !matchCtx[item.id])
@@ -897,8 +913,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             };
           });
 
-          setBulkItems(items);
-          setQuickScanStore(hydratedMatchCtx);
+          hydrateCartFromDraft({
+            scannedItems: items,
+            matchContext: hydratedMatchCtx,
+            shelfPhotoUri: shelfUri,
+            activeItemId: activeId || items[0]?.id || null,
+            itemStageById: (stageById && typeof stageById === 'object') ? stageById : {},
+            processedItemIds: Array.isArray(processedIds) ? processedIds : [],
+            savedForLaterIds: Array.isArray(savedIds) ? savedIds : [],
+          });
           if (retryableHydratedIds.length > 0) {
             retryableHydratedIds.forEach((itemId: string) => {
               transitionItem(itemId, 'error', { error: 'Scan stopped before completing' });
@@ -916,9 +939,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             });
           }
           setShelfPhotoUri(shelfUri);
-          setActiveItemId(activeId || items[0]?.id || null);
-          setItemStageById((stageById && typeof stageById === 'object') ? stageById : {});
-          setProcessedItemIds(Array.isArray(processedIds) ? processedIds : []);
           setIsBulkMode(true);
           setCameraMode('shelf');
           if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
@@ -968,7 +988,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     Array.isArray(payload.scannedItems) && payload.scannedItems.length > 0, []);
 
   // Save draft to backend (create or update)
-  const ensureDraftSessionId = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[] }): Promise<string | null> => {
+  const ensureDraftSessionId = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[]; savedForLaterIds?: string[] }): Promise<string | null> => {
     if (sessionIdRef.current) return sessionIdRef.current;
     if (draftSessionCreatePromiseRef.current) return draftSessionCreatePromiseRef.current;
 
@@ -997,7 +1017,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, []);
 
-  const saveDraftToBackend = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[] }) => {
+  const saveDraftToBackend = useCallback(async (payload: { scannedItems: any[]; matchContext: Record<string, any>; shelfPhotoUri?: string | null; activeItemId?: string | null; itemStageById?: Record<string, ItemStage>; processedItemIds?: string[]; savedForLaterIds?: string[] }) => {
     if (isHydratingRef.current) return;
     try {
       const token = await ensureSupabaseJwt();
@@ -1489,31 +1509,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (saveDraftTimeoutRef.current) clearTimeout(saveDraftTimeoutRef.current);
     saveDraftTimeoutRef.current = setTimeout(() => {
       saveDraftTimeoutRef.current = null;
-      saveDraftToBackend({
-        scannedItems: bulkItems,
-        matchContext: quickScanStore,
+      saveDraftToBackend(serializeCartToDraft({
         shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
-        activeItemId,
-        itemStageById,
-        processedItemIds,
-      });
+      }));
     }, 800);
     return () => { if (saveDraftTimeoutRef.current) clearTimeout(saveDraftTimeoutRef.current); };
-  }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, shelfPhotoUri, saveDraftToBackend]);
+  }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, savedForLaterIds, shelfPhotoUri, saveDraftToBackend]);
 
   // Auto-scan state
-  const [isAutoScanning, setIsAutoScanning] = useState(false);
-  // Concurrency guard for performQuickScan. MUST be a ref, not the state above: handlers
-  // capture performQuickScan by identity, and a stale closure reading isAutoScanning=true
-  // after the scan finished queues follow-up scans that nothing ever drains (item stuck
-  // on "Searching…", every later upload wedged behind it).
-  const isAutoScanningRef = useRef(false);
   const [quickScanResults, setQuickScanResults] = useState<any[]>([]);
 
   // Job response state
   const [jobResponse, setJobResponse] = useState<JobResponse | null>(null);
-  const quickScanCancelledRef = useRef(false);
-  const quickScanQueueRef = useRef<Array<{ photo: CapturedPhoto; itemId: string; options?: QuickScanRunOptions }>>([]);
+  const quickScanCancelledItemIdsRef = useRef<Set<string>>(new Set());
+  const quickScanSessionEpochRef = useRef(0);
+  const quickScanActiveStreamsRef = useRef<Map<string, QuickScanActiveHandle>>(new Map());
+  const quickScanQueueRef = useRef<QuickScanTask[]>([]);
+  const quickScanDrainRunningRef = useRef(false);
+  const effectivePoolLimitRef = useRef(SCAN_POOL_LIMIT);
+  const quickScanFailureTimestampsRef = useRef<number[]>([]);
+  const lastQuickScanFailureAtRef = useRef(0);
+  const lastPoolRecoveryAtRef = useRef(0);
+  const quickScanStarterRef = useRef<(task: QuickScanTask) => void>(() => {});
+  const drainQuickScanQueueRef = useRef<() => void>(() => {});
+  const [unseenQuickScanResultIds, setUnseenQuickScanResultIds] = useState<Set<string>>(() => new Set());
+  const unseenQuickScanResultIdsRef = useRef<Set<string>>(new Set());
   const shelfQueryToItemIdsRef = useRef<Record<string, string[]>>({});
   const shelfItemKeyToItemIdRef = useRef<Record<string, string>>({});
   const activeShelfFolderIdRef = useRef<string | null>(null);
@@ -1542,6 +1562,86 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // presents the transparent cart Modal over the other tab and eats every touch.
   const cartReopenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFocusedRef = useRef(true);
+
+  const updateUnseenQuickScanResults = useCallback((updater: (current: Set<string>) => Set<string>) => {
+    const next = updater(unseenQuickScanResultIdsRef.current);
+    unseenQuickScanResultIdsRef.current = next;
+    setUnseenQuickScanResultIds(next);
+  }, []);
+
+  useEffect(() => {
+    if (!activeItemId) return;
+    updateUnseenQuickScanResults((current) => {
+      if (!current.has(activeItemId)) return current;
+      const next = new Set(current);
+      next.delete(activeItemId);
+      return next;
+    });
+  }, [activeItemId, updateUnseenQuickScanResults]);
+
+  useEffect(() => {
+    if (!showDeepSearchSheet || unseenQuickScanResultIdsRef.current.size === 0) return;
+    updateUnseenQuickScanResults(() => new Set());
+  }, [showDeepSearchSheet, updateUnseenQuickScanResults]);
+
+  const cancelQuickScansForItems = useCallback((itemIds: string[]) => {
+    if (itemIds.length === 0) return;
+    const cancelledIds = new Set(itemIds);
+    itemIds.forEach((id) => {
+      quickScanCancelledItemIdsRef.current.add(id);
+      const handle = quickScanActiveStreamsRef.current.get(id);
+      handle?.close();
+      if (handle) quickScanActiveStreamsRef.current.delete(id);
+    });
+    quickScanQueueRef.current = quickScanQueueRef.current.filter((task) => !cancelledIds.has(task.itemId));
+    updateUnseenQuickScanResults((current) => {
+      const next = new Set(current);
+      itemIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    drainQuickScanQueueRef.current();
+  }, [updateUnseenQuickScanResults]);
+
+  const cancelQuickScanSession = useCallback((clearLoadingState = true) => {
+    quickScanSessionEpochRef.current += 1;
+    quickScanQueueRef.current = [];
+    quickScanActiveStreamsRef.current.forEach((handle) => handle.close());
+    quickScanActiveStreamsRef.current.clear();
+    quickScanCancelledItemIdsRef.current.clear();
+    if (clearLoadingState) setItemLoadingStates({});
+  }, []);
+
+  const recordQuickScanTerminalFailure = useCallback((eventType: 'ERROR' | 'TIMEOUT') => {
+    const nowMs = Date.now();
+    const recent = quickScanFailureTimestampsRef.current
+      .filter((timestamp) => nowMs - timestamp <= 30_000);
+    recent.push(nowMs);
+    quickScanFailureTimestampsRef.current = recent;
+    lastQuickScanFailureAtRef.current = nowMs;
+    lastPoolRecoveryAtRef.current = nowMs;
+    if (recent.length === 3) {
+      const previousLimit = effectivePoolLimitRef.current;
+      effectivePoolLimitRef.current = Math.max(2, Math.floor(previousLimit / 2));
+      log.warn(`[QUICK SCAN] ${eventType} burst reduced pool ${previousLimit} -> ${effectivePoolLimitRef.current}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const recoveryTimer = setInterval(() => {
+      const nowMs = Date.now();
+      if (
+        effectivePoolLimitRef.current < SCAN_POOL_LIMIT
+        && nowMs - lastQuickScanFailureAtRef.current >= 60_000
+        && nowMs - lastPoolRecoveryAtRef.current >= 60_000
+      ) {
+        effectivePoolLimitRef.current += 1;
+        lastPoolRecoveryAtRef.current = nowMs;
+        log.info(`[QUICK SCAN] Restored pool limit to ${effectivePoolLimitRef.current}`);
+        drainQuickScanQueueRef.current();
+      }
+    }, 10_000);
+    return () => clearInterval(recoveryTimer);
+  }, []);
 
   const closeShelfScanStream = useCallback(() => {
     shelfScanStreamRef.current?.close();
@@ -1734,16 +1834,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const markItemsProcessed = useCallback((processedItems: Array<{ id: string }>, nextStage: ItemStage = 'submitted_for_match') => {
     const processedIdsForStage = processedItems.map((item) => item.id).filter(Boolean);
     if (processedIdsForStage.length === 0) return;
-    const submittedSet = new Set(processedIdsForStage);
-    const nextBulkItems = bulkItems.filter((item) => !submittedSet.has(item.id));
-    const nextQuickScanStore = Object.fromEntries(
-      Object.entries(quickScanStore).filter(([id]) => !submittedSet.has(id))
-    );
-    const nextStageById: Record<string, ItemStage> = { ...itemStageById };
-    processedIdsForStage.forEach((id) => {
-      nextStageById[id] = nextStage;
-    });
-    const nextProcessed = Array.from(new Set([...processedItemIds, ...processedIdsForStage]));
 
     setItemStageById((prev) => {
       const next = { ...prev };
@@ -1778,23 +1868,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
 
     setActiveItemId((prev) => (prev && processedIdsForStage.includes(prev) ? null : prev));
-    setCurrentInstruction('ready');
-    isAutoScanningRef.current = false;
-    setIsAutoScanning(false);
-    setShowProgressBar(false);
-    quickScanCancelledRef.current = true;
-    quickScanQueueRef.current = [];
-    quickScanStreamRef.current?.close();
-    quickScanStreamRef.current = null;
-    void saveDraftToBackend({
-      scannedItems: nextBulkItems,
-      matchContext: nextQuickScanStore,
+    cancelQuickScansForItems(processedIdsForStage);
+    if (processedIdsForStage.includes(activeItemId || '')) {
+      setCurrentInstruction('ready');
+      setShowProgressBar(false);
+    }
+    void saveDraftToBackend(serializeCartToDraft({
       shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
-      activeItemId: processedIdsForStage.includes(activeItemId || '') ? null : activeItemId,
-      itemStageById: nextStageById,
-      processedItemIds: nextProcessed,
-    });
-  }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, saveDraftToBackend, shelfPhotoUri]);
+    }));
+  }, [activeItemId, cancelQuickScansForItems, saveDraftToBackend, shelfPhotoUri]);
 
   const markItemsSubmittedForMatch = useCallback((submittedItems: Array<{ id: string }>) => {
     markItemsProcessed(submittedItems, 'submitted_for_match');
@@ -1899,7 +1981,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (sessionIdParam) { resumeHandledRef.current = true; setSnapshotArmed(true); return; }
       let cancelled = false;
       (async () => {
-        const inMem = selectAllItems().length;
+        const savedInMemory = new Set(cart$.savedForLaterIds.get());
+        const processedInMemory = new Set(cart$.processedItemIds.get());
+        const inMem = cart$.order.get().filter(
+          (id) => !savedInMemory.has(id) && !processedInMemory.has(id),
+        ).length;
         if (inMem > 0) {
           if (cancelled) return;
           resumeHandledRef.current = true;
@@ -1911,6 +1997,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         resumeHandledRef.current = true;
         if (snap && snap.count > 0) {
           setResumePrompt({ count: snap.count, source: 'snapshot' });
+        } else if (snap?.hasSaved) {
+          await hydrateCartSnapshot();
+          if (!cancelled) setSnapshotArmed(true);
         } else {
           setSnapshotArmed(true); // nothing to resume → start persisting from here
         }
@@ -1928,12 +2017,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       [
         // "Start fresh" clears the current in-memory cart and its durable session id so the
         // NEXT cart gets its own draft — the old draft is KEPT (resumable from Scan carts).
-        { text: 'Start fresh', style: 'destructive', onPress: () => { sessionIdRef.current = null; resetCart(); void clearCartSnapshot(); setResumePrompt(null); setSnapshotArmed(true); } },
+        {
+          text: 'Start fresh',
+          style: 'destructive',
+          onPress: async () => {
+            cancelQuickScanSession();
+            sessionIdRef.current = null;
+            if (resumePrompt.source === 'snapshot') await hydrateCartSnapshot();
+            resetCart({ preserveSaved: true });
+            await clearCartSnapshot({ repersistCurrent: true });
+            setResumePrompt(null);
+            setSnapshotArmed(true);
+          },
+        },
         { text: 'Resume', onPress: () => { if (resumePrompt.source === 'snapshot') { void hydrateCartSnapshot(); } setResumePrompt(null); setSnapshotArmed(true); } },
       ],
       { cancelable: false },
     );
-  }, [resumePrompt]);
+  }, [cancelQuickScanSession, resumePrompt]);
 
   // Stable item ID generator to prevent key collisions
   const itemIdCounterRef = useRef(0);
@@ -2274,10 +2375,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // another item's "Searching for your item…" state. No active item (pre-first-photo,
   // shelf/adaptive folder streaming) keeps the global instruction.
   const SCAN_INSTRUCTION_SET = ['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'];
-  const activeItemScanning = !activeItemId || !!itemLoadingStates[activeItemId]?.isLoading;
-  const overlayInstruction = (!activeItemScanning && SCAN_INSTRUCTION_SET.includes(currentInstruction))
-    ? 'ready'
-    : currentInstruction;
+  const activeItemScanning = !!activeItemId && !!itemLoadingStates[activeItemId]?.isLoading;
+  const overlayInstruction = activeItemScanning
+    ? 'processing'
+    : SCAN_INSTRUCTION_SET.includes(currentInstruction)
+      ? 'ready'
+      : currentInstruction;
+
+  useEffect(() => {
+    if (activeItemScanning) startProgressAnimation();
+    else stopProgressAnimation();
+  }, [activeItemScanning, startProgressAnimation, stopProgressAnimation]);
 
   // Handle focus tap
   const handleFocusTap = useCallback((event: any) => {
@@ -3642,78 +3750,103 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.warn('[QUICK SCAN] Ignoring scan with non-string itemId:', typeof itemId);
       return;
     }
-    if (isAutoScanningRef.current) {
+
+    const taskEpoch = quickScanSessionEpochRef.current;
+    const task: QuickScanTask = { photo, itemId, options, epoch: taskEpoch };
+    const existingHandle = quickScanActiveStreamsRef.current.get(itemId);
+    if (existingHandle) {
+      existingHandle.close();
+      quickScanActiveStreamsRef.current.delete(itemId);
+      log.debug('[QUICK SCAN] Replacing active scan for item:', itemId);
+    } else if (quickScanActiveStreamsRef.current.size >= effectivePoolLimitRef.current) {
       if (quickScanQueueRef.current.length >= QUICK_SCAN_QUEUE_LIMIT) {
         log.debug('[QUICK SCAN] Queue limit reached, dropping oldest queued scan');
-        quickScanQueueRef.current.shift();
+        const dropped = quickScanQueueRef.current.shift();
+        if (dropped) markQuickScanRetryable(dropped.itemId, 'Scan queue full');
       }
       const alreadyQueued = quickScanQueueRef.current.some(task => task.itemId === itemId && task.photo.id === photo.id);
       if (!alreadyQueued) {
-        quickScanQueueRef.current.push({ photo, itemId, options });
+        quickScanQueueRef.current.push(task);
+        setItemLoadingStates(prev => ({
+          ...prev,
+          [itemId]: { isLoading: true, stage: 'Queued', error: undefined },
+        }));
       }
-      log.debug('[QUICK SCAN] Scan in progress, queued follow-up scan');
+      log.debug('[QUICK SCAN] Pool full, queued scan');
       return;
     }
 
-    if (!options?.skipPreflight) {
-      const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
-        ? buildFreemiumBlockedGate()
-        : await preflightAIGate('ai_quick_scan', 1);
-
-      if (gate.code === 'credits_exhausted_but_invoiceable') {
-        await persistPendingQuickScan(photo, itemId, options?.mode);
-        const decision = await presentBillingGateSheet(gate);
-        if (decision !== 'continue') {
-          markQuickScanRetryable(itemId, gate.message);
-          return;
-        }
-        await clearPendingQuickScan();
-      } else if (!gate.canProceed) {
-        await persistPendingQuickScan(photo, itemId, options?.mode);
-        await presentBillingGateSheet(gate);
-        markQuickScanRetryable(itemId, gate.message);
-        return;
-      }
-    }
-
-    // New scan starts – clear any previous cancellation
-    quickScanCancelledRef.current = false;
-    if (options?.mode === 'adaptive') setIsAdaptiveShelfScan(false);
-
-    clearQuickScanRetryable(itemId);
-    isAutoScanningRef.current = true;
-    setIsAutoScanning(true);
-    setCurrentInstruction('processing');
-
-    // Set loading state for this item
-    setItemLoadingStates(prev => ({
-      ...prev,
-      [itemId]: { isLoading: true, stage: 'Searching…', error: undefined }
-    }));
-
-    // Drop any previously confirmed/auto-selected match for this item NOW, at the start of
-    // the (re-)match. previewData/the card prioritize confirmedQuickMatchByItemId, so leaving
-    // it set would keep showing the OLD (wrong) match for the ~10-15s the full match runs —
-    // exactly the "it didn't re-research" symptom on a Wrong-item correction. The end of this
-    // function re-confirms the new top match if confidence is high enough.
-    setConfirmedQuickMatchByItemId(prev => {
-      if (!prev[itemId]) return prev;
-      const next = { ...prev };
-      delete next[itemId];
-      return next;
-    });
+    quickScanCancelledItemIdsRef.current.delete(itemId);
+    const streamHandleRef = { current: null as ReturnType<typeof openQuickScanStream> | null };
+    const activeHandle: QuickScanActiveHandle = {
+      close: () => streamHandleRef.current?.close(),
+      photoId: photo.id,
+      startedAt: Date.now(),
+    };
+    quickScanActiveStreamsRef.current.set(itemId, activeHandle);
+    const isRunCancelled = () => (
+      quickScanCancelledItemIdsRef.current.has(itemId)
+      || taskEpoch !== quickScanSessionEpochRef.current
+      || quickScanActiveStreamsRef.current.get(itemId) !== activeHandle
+    );
 
     let scanErrorMessage: string | null = null;
+    let completedWithResult = false;
 
     try {
+      if (!options?.skipPreflight) {
+        const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
+          ? buildFreemiumBlockedGate()
+          : await preflightAIGate('ai_quick_scan', 1);
+
+        if (isRunCancelled()) return;
+
+        if (gate.code === 'credits_exhausted_but_invoiceable') {
+          await persistPendingQuickScan(photo, itemId, options?.mode);
+          const decision = await presentBillingGateSheet(gate);
+          if (decision !== 'continue') {
+            scanErrorMessage = gate.message;
+            return;
+          }
+          await clearPendingQuickScan();
+        } else if (!gate.canProceed) {
+          await persistPendingQuickScan(photo, itemId, options?.mode);
+          await presentBillingGateSheet(gate);
+          scanErrorMessage = gate.message;
+          return;
+        }
+      }
+
+      if (options?.mode === 'adaptive') setIsAdaptiveShelfScan(false);
+
+      clearQuickScanRetryable(itemId);
+      if (activeItemIdRef.current === itemId) setCurrentInstruction('processing');
+
+      // Set loading state for this item
+      setItemLoadingStates(prev => ({
+        ...prev,
+        [itemId]: { isLoading: true, stage: 'Searching…', error: undefined }
+      }));
+
+      // Drop any previously confirmed/auto-selected match for this item NOW, at the start of
+      // the (re-)match. previewData/the card prioritize confirmedQuickMatchByItemId, so leaving
+      // it set would keep showing the OLD (wrong) match for the ~10-15s the full match runs.
+      setConfirmedQuickMatchByItemId(prev => {
+        if (!prev[itemId]) return prev;
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+
       // Ensure auth bridge is ready and we have a Supabase JWT before any network calls
       const tokenMaybe = await ensureSupabaseJwt();
+      if (isRunCancelled()) return;
       if (!tokenMaybe) {
         log.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
-        showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
+        if (activeItemIdRef.current === itemId) {
+          showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
+        }
         scanErrorMessage = 'Sign in required';
-        isAutoScanningRef.current = false;
-        setIsAutoScanning(false);
         return;
       }
       log.debug('[QUICK SCAN] Starting quick scan for photo:', photo.id);
@@ -3723,6 +3856,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Upload image to Supabase Storage first
       log.debug('[QUICK SCAN] Uploading image to Supabase...');
       const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
+      if (isRunCancelled()) return;
       log.debug('[QUICK SCAN] Image uploaded to:', publicImageUrl);
 
       // Persist the uploaded URL onto the scanned item's photo so the saved scan session (and
@@ -3740,8 +3874,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // options.textHint fuses a typed correction with the photo for a combined image+text match.
       // Billing is gated UPFRONT by preflightAIGate above; the SSE endpoint can't return a clean
       // 402, so a payment failure surfaces as a connection error (rare — preflight catches it).
-      quickScanStreamRef.current?.close();
-      quickScanStreamRef.current = null;
       type SingleStreamResult = {
         kind: 'single';
         matches: any[];
@@ -3769,15 +3901,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (settled) return;
           settled = true;
           clearInterval(cancelWatcher);
-          quickScanStreamRef.current?.close();
-          quickScanStreamRef.current = null;
+          streamHandleRef.current?.close();
+          streamHandleRef.current = null;
           run();
         };
         const cancelWatcher = setInterval(() => {
-          if (quickScanCancelledRef.current) finish(() => resolve(null));
+          if (isRunCancelled()) finish(() => resolve(null));
         }, 400);
 
-        quickScanStreamRef.current = openQuickScanStream({
+        streamHandleRef.current = openQuickScanStream({
           url: `${API_BASE_URL}/api/products/orchestrate/quick-scan-stream`,
           token,
           body: {
@@ -3796,7 +3928,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             }
           },
           onEvent: (evt) => {
-            if (quickScanCancelledRef.current) {
+            if (isRunCancelled()) {
               finish(() => resolve(null));
               return;
             }
@@ -3816,6 +3948,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             if (adaptiveResolution === 'multi') {
               consumeShelfStreamEvent(evt, token, shelfPricingGeneration);
               if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
+                if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
+                  recordQuickScanTerminalFailure(evt.type);
+                }
                 finish(() => resolve({ kind: 'multi' }));
               }
               return;
@@ -3850,7 +3985,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               };
             }
 
-            if (evt.type === 'COMPLETE' || evt.type === 'NO_ITEMS' || Array.isArray(evt.data?.results)) {
+            if (evt.type === 'ERROR' || evt.type === 'TIMEOUT' || evt.type === 'NO_ITEMS') {
+              if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
+                recordQuickScanTerminalFailure(evt.type);
+              }
+              const fallbackMessage = evt.type === 'NO_ITEMS' ? 'No items found.' : 'Match failed.';
+              finish(() => reject(new Error(evt.message || fallbackMessage)));
+            } else if (evt.type === 'COMPLETE' || Array.isArray(evt.data?.results)) {
               finish(() => resolve({
                 kind: 'single',
                 matches: latestMatches,
@@ -3858,8 +3999,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 livePricing: latestLivePricing,
                 ...latestVerdict,
               }));
-            } else if (evt.type === 'ERROR' || evt.type === 'TIMEOUT') {
-              finish(() => reject(new Error(evt.message || 'Match failed.')));
             }
           },
           onConnectionError: (message) => {
@@ -3887,7 +4026,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (
           requestedMode === 'adaptive'
           && adaptiveResolution === null
-          && !quickScanCancelledRef.current
+          && !isRunCancelled()
         ) {
           log.warn('[QUICK SCAN] Adaptive stream failed before resolution; retrying legacy single scan.');
           streamResult = await runMatchStream('ocr-vlm-search');
@@ -3897,7 +4036,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
       // Cancelled (or the stream was closed out from under us): bail without mutating state.
-      if (quickScanCancelledRef.current || !streamResult) return;
+      if (isRunCancelled() || !streamResult) return;
 
       // The match ran — count usage + clear any persisted billing-pending scan.
       incrementLocalUsage();
@@ -3913,6 +4052,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         log.debug('[QUICK SCAN] Item removed mid-match; discarding results for', itemId);
         return;
       }
+      completedWithResult = true;
 
       const streamMatches: any[] = streamResult.matches || [];
       // Confidence is a string enum ('high'|'medium'|'low'); shouldAutoSelectQuickMatch compares
@@ -3938,7 +4078,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }],
       };
 
-      if (quickScanCancelledRef.current) return;
+      if (isRunCancelled()) return;
 
       log.debug('[QUICK SCAN] Received result for item:', itemId);
       log.debug('[QUICK SCAN] Full result:', JSON.stringify(result, null, 2));
@@ -4057,7 +4197,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         transitionItem(itemId, shouldAutoConfirmTopMatch ? 'matched' : 'needs_context');
 
         // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
-        setMatchData(nextMatchData);
+        if (activeItemIdRef.current === itemId) setMatchData(nextMatchData);
         // Backend not confident (needs-review / identified-but-not-exact, e.g. "Dell laptop charger"
         // with no exact listing) → 'needs_review', NOT 'matched'. The banner becomes an "add a detail"
         // CTA (tap → add-details for the tag) instead of dropping into a product as if it were found.
@@ -4068,20 +4208,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const dupMatch = (streamResult.alreadyInInventory && streamResult.inventoryMatch) ? streamResult.inventoryMatch : null;
         if (dupMatch) {
           setInventoryDedupByItemId(prev => ({ ...prev, [itemId]: { match: dupMatch, fallbackInstruction: realInstruction } }));
-          setCurrentInstruction('inventory_dedup');
-          showNotificationMessage(`You already have "${String(dupMatch.title || 'this item').slice(0, 40)}" — tap to update it or add as new.`, 4500);
-        } else {
+          if (activeItemIdRef.current === itemId) {
+            setCurrentInstruction('inventory_dedup');
+            showNotificationMessage(`You already have "${String(dupMatch.title || 'this item').slice(0, 40)}" - tap to update it or add as new.`, 4500);
+          }
+        } else if (activeItemIdRef.current === itemId) {
           setCurrentInstruction(realInstruction);
         }
-        if (!dupMatch && (looksUnidentified || needsReview)) {
+        if (activeItemIdRef.current === itemId && !dupMatch && (looksUnidentified || needsReview)) {
           const retakeState = backendState === 'NOT_RUN' || backendState === 'NO_PHOTO' || backendState === 'NO_CANDIDATES';
           const identity = String(nextMatchData.rankedCandidates?.[0]?.title || '').trim();
           showNotificationMessage(
             retakeState
-              ? 'Couldn’t identify this clearly — tap to add a clearer photo of the label.'
+              ? 'Couldn’t identify this clearly. Tap to add a clearer photo of the label.'
               : identity
-                ? `Likely a ${identity.slice(0, 40)} — tap to add a detail (model/tag) to confirm.`
-                : 'Add a little more detail to confirm — tap to add a photo of the label or a note.',
+                ? `Likely a ${identity.slice(0, 40)}. Tap to add a detail to confirm.`
+                : 'Add more detail to confirm. Tap to add a photo or note.',
             3800,
           );
         }
@@ -4161,50 +4303,57 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // 'provider_error' (LLM/search tool threw) — tell them to retry the same photo, not chase a
         // sharper one.
         const providerHiccup = streamResult.reasonCode === 'provider_error';
-        showNotificationMessage(
-          providerHiccup
-            ? 'Our image service hiccuped — try again in a moment.'
-            : 'No quick matches found. Added to review.',
-          3000,
-        );
+        if (activeItemIdRef.current === itemId) {
+          showNotificationMessage(
+            providerHiccup
+              ? 'Image service hiccup. Try again.'
+              : 'No matches found.',
+            3000,
+          );
+        }
         setConfirmedQuickMatchByItemId(prev => {
           if (!prev[itemId]) return prev;
           const next = { ...prev };
           delete next[itemId];
           return next;
         });
-        setCurrentInstruction('no_matches');
+        if (activeItemIdRef.current === itemId) setCurrentInstruction('no_matches');
       }
 
     } catch (error) {
       log.error('[QUICK SCAN] scan failed:', error);
       // Reality: there is no background retry — the item drops to an error state below
       // (its card shows the failure) and the seller retries it by hand. Say so honestly.
-      showNotificationMessage('Quick scan failed. Tap the item to try again.', 3000);
+      if (activeItemIdRef.current === itemId && !isRunCancelled()) {
+        showNotificationMessage('Scan failed. Tap to retry.', 3000);
+      }
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
       // Make sure the SSE connection is torn down on every exit (success, error, or early
       // return) so we never leak a live EventSource.
-      quickScanStreamRef.current?.close();
-      quickScanStreamRef.current = null;
-      isAutoScanningRef.current = false;
-      setIsAutoScanning(false);
-      if (scanErrorMessage) {
-        markQuickScanRetryable(itemId, scanErrorMessage);
-      } else {
-        // Clear loading state
-        setItemLoadingStates(prev => {
-          const { [itemId]: removed, ...rest } = prev;
-          return rest;
+      streamHandleRef.current?.close();
+      streamHandleRef.current = null;
+      const ownsPoolSlot = quickScanActiveStreamsRef.current.get(itemId) === activeHandle;
+      if (ownsPoolSlot) {
+        quickScanActiveStreamsRef.current.delete(itemId);
+        if (scanErrorMessage && !isRunCancelled()) {
+          markQuickScanRetryable(itemId, scanErrorMessage);
+        } else {
+          setItemLoadingStates(prev => {
+            const { [itemId]: removed, ...rest } = prev;
+            return rest;
+          });
+        }
+      }
+      if (completedWithResult) {
+        updateUnseenQuickScanResults((current) => {
+          const next = new Set(current);
+          if (activeItemIdRef.current === itemId || showDeepSearchSheetRef.current) next.delete(itemId);
+          else next.add(itemId);
+          return next;
         });
       }
-
-      const nextQueued = quickScanQueueRef.current.shift();
-      if (nextQueued && !quickScanCancelledRef.current) {
-        setTimeout(() => performQuickScan(nextQueued.photo, nextQueued.itemId, nextQueued.options), 120);
-      } else if (!nextQueued) {
-        setCurrentInstruction('ready');
-      }
+      drainQuickScanQueueRef.current();
     }
 
   }, [
@@ -4224,7 +4373,36 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     beginAdaptiveShelfScan,
     consumeShelfStreamEvent,
     stopShelfScan,
+    recordQuickScanTerminalFailure,
+    updateUnseenQuickScanResults,
   ]);
+
+  quickScanStarterRef.current = (task) => {
+    void performQuickScan(task.photo, task.itemId, task.options);
+  };
+  drainQuickScanQueueRef.current = () => {
+    if (quickScanDrainRunningRef.current) return;
+    quickScanDrainRunningRef.current = true;
+    try {
+      while (
+        quickScanActiveStreamsRef.current.size < effectivePoolLimitRef.current
+        && quickScanQueueRef.current.length > 0
+      ) {
+        const nextTask = quickScanQueueRef.current.shift();
+        if (!nextTask) break;
+        if (
+          nextTask.epoch !== quickScanSessionEpochRef.current
+          || quickScanCancelledItemIdsRef.current.has(nextTask.itemId)
+          || !bulkItemsRef.current.some((item) => item.id === nextTask.itemId)
+        ) {
+          continue;
+        }
+        quickScanStarterRef.current(nextTask);
+      }
+    } finally {
+      quickScanDrainRunningRef.current = false;
+    }
+  };
 
   // Re-research an item from a typed correction (the "Wrong item?" detail box or a cart
   // query edit). Runs the FULL match, not a text quick-scan: when the item still has its
@@ -4281,6 +4459,30 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     photoCapturePreflightGrantedRef.current = false;
     setPhotoCaptureTargetId(null);
   }, []);
+
+  const retryQuickScanForItem = useCallback((itemId: string) => {
+    const targetItem = bulkItemsRef.current.find((item) => item.id === itemId);
+    const primaryPhoto = targetItem?.photos.find((photo) => photo.isCover) || targetItem?.photos[0];
+    if (!primaryPhoto) {
+      void openPhotoCaptureForItem(itemId);
+      return;
+    }
+
+    // A retry must replace any queued task for this item. Otherwise the pool's
+    // item and photo dedup can treat the retry as already queued and drop it.
+    quickScanQueueRef.current = quickScanQueueRef.current.filter((task) => task.itemId !== itemId);
+    clearQuickScanRetryable(itemId);
+    void performQuickScan(primaryPhoto, itemId);
+  }, [clearQuickScanRetryable, openPhotoCaptureForItem, performQuickScan]);
+
+  const takePhotoFromPhotoModal = useCallback(() => {
+    const itemId = activeItemIdRef.current;
+    if (!itemId) return;
+    setShowViewPhotosModal(false);
+    setTimeout(() => {
+      void openPhotoCaptureForItem(itemId);
+    }, 250);
+  }, [openPhotoCaptureForItem]);
 
   // Take one shot in the overlay, attach it, and return to the prior surface.
   const handleOverlayCapture = useCallback(async () => {
@@ -4723,6 +4925,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Delete bulk item
   const deleteBulkItem = useCallback((itemId: string) => {
+    cancelQuickScansForItems([itemId]);
     setBulkItems(prev => {
       const next = prev.filter(item => item.id !== itemId);
       // If we deleted the active item, move focus to the nearest item (previous, else first, else null)
@@ -4743,7 +4946,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.debug('[DELETE ITEM] Cleaned up quickScanStore for item:', itemId);
       return rest;
     });
-  }, [activeItemId]);
+  }, [activeItemId, cancelQuickScansForItems]);
 
   // Move photo between items
   const movePhoto = useCallback((fromItemId: string, toItemId: string, photoId: string) => {
@@ -5011,20 +5214,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
-    // Cancel any in-progress quick scan so it doesn't reopen sheets
-    quickScanCancelledRef.current = true;
-    quickScanQueueRef.current = [];
-    quickScanStreamRef.current?.close();
-    quickScanStreamRef.current = null;
-    isAutoScanningRef.current = false;
-    setIsAutoScanning(false);
+    // Cancel the current pool session so late events cannot reopen sheets.
+    cancelQuickScanSession();
     stopProgressAnimation();
     setShowProgressBar(false);
     setCurrentInstruction('ready');
   }, [
+    cancelQuickScanSession,
     stopProgressAnimation,
     setCurrentInstruction,
-    setIsAutoScanning,
     setShowProgressBar,
     cameraMode,
     bulkItems,
@@ -5046,17 +5244,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
           !isHydratingRef.current
         ) {
-          saveDraftToBackend({
-            scannedItems: bulkItems,
-            matchContext: quickScanStore,
+          saveDraftToBackend(serializeCartToDraft({
             shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
-            activeItemId,
-            itemStageById,
-            processedItemIds,
-          });
+          }));
         }
       };
-    }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, shelfPhotoUri, saveDraftToBackend])
+    }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, savedForLaterIds, shelfPhotoUri, saveDraftToBackend])
   );
 
   // Real-blur-only cleanup (stable callback → fires only on blur/unmount, never on
@@ -5066,7 +5259,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useFocusEffect(
     useCallback(() => {
       return () => {
+        const queuedItemIds = new Set(quickScanQueueRef.current.map((task) => task.itemId));
         quickScanQueueRef.current = [];
+        if (queuedItemIds.size > 0) {
+          setItemLoadingStates((prev) => {
+            const next = { ...prev };
+            queuedItemIds.forEach((id) => {
+              if (!quickScanActiveStreamsRef.current.has(id)) delete next[id];
+            });
+            return next;
+          });
+        }
         if (cartReopenTimerRef.current) {
           clearTimeout(cartReopenTimerRef.current);
           cartReopenTimerRef.current = null;
@@ -5087,6 +5290,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
   );
+
+  useEffect(() => () => {
+    cancelQuickScanSession(false);
+  }, [cancelQuickScanSession]);
 
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
@@ -5411,7 +5618,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       </Animated.View>
 
       {/* Progress Bar */}
-      {showProgressBar && (
+      {showProgressBar && (activeItemScanning || isCapturing || isProcessingShelfScan) && (
         <ProgressBarOverlay
           progressWidth={progressWidth}
           spinRotation={spinRotation}
@@ -5458,6 +5665,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         shelfItemCount={currentShelfItemCount}
         isShelfStreaming={shelfProgress.status === 'streaming'}
         isShelfHandling={isAdaptiveShelfScan}
+        unseenResultsCount={unseenQuickScanResultIds.size}
         onNewItem={addNewBulkItem}
         onOpenBarcodeEntry={
           cameraMode === 'barcode'
@@ -5531,18 +5739,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   onQueueGeneration={handleQueueGeneration}
                   savedForLaterIds={savedForLaterIds}
                   onToggleSavedForLater={setItemSavedForLater}
+                  onCapturePhoto={openPhotoCaptureForItem}
                   onOpenAddDetails={(id) => setAddDetailsItemId(id)}
                   freemium={freemiumStatus && !freemiumStatus.hasSubscription
                     ? { usageCount: freemiumStatus.usageCount, freeLimit: freemiumStatus.freeLimit, exhausted: freemiumStatus.isFreeTierExhausted }
                     : null}
                   onUpgrade={openPlansSafely}
                   onAddCredits={openCreditsSafely}
-                  onRetryItemScan={(itemId) => {
-                    const targetItem = bulkItems.find(item => item.id === itemId);
-                    const firstPhoto = targetItem?.photos?.[0];
-                    if (!firstPhoto) return;
-                    performQuickScan(firstPhoto, itemId);
-                  }}
+                  onRetryItemScan={retryQuickScanForItem}
                   onOpenPhotoModal={(itemId) => {
                     selectActiveItem(itemId);
                     setShowViewPhotosModal(true);
@@ -5575,14 +5779,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                       (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
                       !isHydratingRef.current
                     ) {
-                      saveDraftToBackend({
-                        scannedItems: bulkItems,
-                        matchContext: quickScanStore,
+                      saveDraftToBackend(serializeCartToDraft({
                         shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
-                        activeItemId,
-                        itemStageById,
-                        processedItemIds,
-                      });
+                      }));
                     }
                   }}
                   onUpdateItemTitle={(id, newTitle) => {
@@ -5625,6 +5824,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onRemovePhoto={(photoId) => activeItemId && removeBulkItemPhoto(activeItemId, photoId)}
         onReorder={reorderPhotos}
         onSelectItem={selectActiveItem}
+        onTakePhoto={takePhotoFromPhotoModal}
         onImageUpload={handleImageUpload}
         items={bulkItems}
       />

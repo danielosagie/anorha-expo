@@ -115,7 +115,7 @@ export function openQuickScanStream(options: QuickScanStreamOptions): QuickScanS
         progress: 1,
         elapsedMs: hardTimeoutMs,
         reasonCode: 'client_timeout',
-        message: 'Shelf scan timed out before the stream finished.',
+        message: 'Scan timed out before the stream finished.',
       };
       onEvent(timeoutEvent);
       close();

@@ -4,6 +4,8 @@ import {
   Alert,
   Dimensions,
   Image,
+  Keyboard,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -24,8 +26,14 @@ import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import Animated, {
+  FadeInDown,
+  useAnimatedKeyboard,
+  useAnimatedStyle,
+} from 'react-native-reanimated';
 import { StreamingText } from '../components/StreamingText';
+import { FollowUpPrompts, type FollowUpSuggestion } from '../components/chat/FollowUpPrompts';
+import { MessageComposer } from '../components/chat/MessageComposer';
 import { UpNextRow, type IconName } from '../components/quest/LobbyKit';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
@@ -54,6 +62,8 @@ const CONVEX_TEMPLATE =
 
 const BRAND = '#93C822';
 const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
+const HOME_TAB_ROW_HEIGHT = 64;
+const HOME_COMPOSER_GAP = 8;
 
 // 375-390pt screens leave 339-354pt after the hero's 18pt side padding.
 // Inter Semibold 16.5 averages about 7.92pt per prose character, or 43-45 chars/line.
@@ -105,8 +115,21 @@ const nextRecommendationLine = (
   return `New look in ${Math.ceil(remainingMinutes / 60)}h`;
 };
 
+const normalizeComparableText = (value: string): string =>
+  sanitizeDisplayText(value).toLowerCase().replace(/\s+/g, ' ').trim();
+
 const differsMeaningfully = (left: string, right: string): boolean => {
-  const words = (value: string) => sanitizeDisplayText(value)
+  const normalizedLeft = normalizeComparableText(left);
+  const normalizedRight = normalizeComparableText(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (
+    normalizedLeft.includes(normalizedRight) ||
+    normalizedRight.includes(normalizedLeft)
+  ) {
+    return false;
+  }
+
+  const words = (value: string) => normalizeComparableText(value)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
@@ -120,6 +143,29 @@ const differsMeaningfully = (left: string, right: string): boolean => {
     if (rightWords.has(word)) shared += 1;
   }
   return shared / Math.min(leftWords.size, rightWords.size) < 0.7;
+};
+
+const reportOverviewText = (document: ReportDocument): string => {
+  const summary = document.summary?.trim();
+  if (summary) return summary;
+  const overview = document.sections.find(
+    (section) =>
+      section.kind === 'prose' &&
+      /executive summary|summary|overview|at a glance|in short|what this means/i.test(
+        section.heading || '',
+      ),
+  );
+  return overview?.kind === 'prose' ? overview.text.trim() : '';
+};
+
+const compactQuestion = (value: string): string => {
+  const words = sanitizeDisplayText(value)
+    .replace(/[?.!]+$/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 7);
+  return words.length ? `${words.join(' ')}?` : '';
 };
 
 type BriefingChip = 'SOLD' | 'OFFER' | 'REPRICE' | 'ASK' | 'LISTED';
@@ -361,6 +407,38 @@ const SproutHomeScreen: React.FC = () => {
   // that narrows the list by title on top of the active status filter.
   const [searchOpen, setSearchOpen] = useState(false);
   const [campaignQuery, setCampaignQuery] = useState('');
+  const [homeComposerText, setHomeComposerText] = useState('');
+  const [homeComposerHeight, setHomeComposerHeight] = useState(76);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const homeComposerBottom =
+    HOME_TAB_ROW_HEIGHT + Math.max(18, insets.bottom) + HOME_COMPOSER_GAP;
+  const keyboard = useAnimatedKeyboard();
+  const homeComposerLiftStyle = useAnimatedStyle(
+    () => ({
+      transform: [
+        {
+          translateY: -Math.max(
+            keyboard.height.value - homeComposerBottom + HOME_COMPOSER_GAP,
+            0,
+          ),
+        },
+      ],
+    }),
+    [homeComposerBottom],
+  );
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   // Create-campaign modal state
   const [createOpen, setCreateOpen] = useState(false);
@@ -402,6 +480,8 @@ const SproutHomeScreen: React.FC = () => {
     nextRefreshAt: insightNextRefreshAt,
     refetch: refetchInsight,
   } = useOrgNudges(!isOrgLoading ? currentOrg?.id : undefined);
+  const currentInsightRef = useRef(insight);
+  currentInsightRef.current = insight;
   const { liveConnections } = usePlatformConnections();
   const {
     productCount,
@@ -487,8 +567,46 @@ const SproutHomeScreen: React.FC = () => {
     const match = controller.campaigns.find((c) => c.id === h.campaignId);
     const campaignId = match?.id || controller.campaigns[0]?.id;
     if (!campaignId) return null;
-    return { campaignId, prompt: h.prompt, label: h.label || 'Dig in' };
+    return {
+      campaignId,
+      prompt: h.prompt.trim(),
+      label: h.label?.trim() || undefined,
+    };
   }, [insight?.handoff, controller.campaigns]);
+  const promptCampaignId =
+    handoffTarget?.campaignId || controller.campaigns[0]?.id;
+  const insightFollowUps = useMemo<FollowUpSuggestion[]>(() => {
+    const suggested = (insight?.suggestedQuestions || [])
+      .map((question) => compactQuestion(question))
+      .filter(Boolean)
+      .map((question) => ({ label: question, prompt: question }));
+    if (suggested.length) return suggested.slice(0, 3);
+    if (!handoffTarget?.prompt) return [];
+    const label =
+      sanitizeDisplayText(handoffTarget.label || '') ||
+      compactQuestion(handoffTarget.prompt);
+    return label
+      ? [{ label, prompt: handoffTarget.prompt }]
+      : [];
+  }, [handoffTarget?.label, handoffTarget?.prompt, insight?.suggestedQuestions]);
+  const openCampaignPrompt = useCallback(
+    (prompt: string): boolean => {
+      const initialPrompt = prompt.trim();
+      if (!promptCampaignId || !initialPrompt) return false;
+      navigation.navigate('CampaignThreadScreen', {
+        campaignId: promptCampaignId,
+        startNewChat: true,
+        initialPrompt,
+      });
+      return true;
+    },
+    [navigation, promptCampaignId],
+  );
+  const sendHomeComposer = useCallback(() => {
+    const prompt = homeComposerText.trim();
+    if (!prompt || !openCampaignPrompt(prompt)) return;
+    setHomeComposerText('');
+  }, [homeComposerText, openCampaignPrompt]);
 
   // Live pulse: when the briefing is quiet, show Sprout's most recent real action
   // so "Sprout is watching" is backed by evidence instead of vibes.
@@ -787,7 +905,7 @@ const SproutHomeScreen: React.FC = () => {
     const source = sanitizeDisplayText(insight?.report?.title || insightHeadline || 'Report');
     return compactDisplayText(source, { maxChars: 42, maxSentences: 1 }) || 'Report';
   }, [insight?.report?.title, insightHeadline]);
-  // Report bottom sheet — the same viewer the chat uses, mounted here so the
+  // Report bottom sheet, using the same viewer the chat uses, mounted here so the
   // home screen can open a report directly (no detour through a chat prompt).
   const { openTray, trayProps } = useActivityTray();
   const [reportHasHandoff, setReportHasHandoff] = useState(false);
@@ -809,7 +927,14 @@ const SproutHomeScreen: React.FC = () => {
     const hasSolution = doc.sections.some(
       (section) => section.kind === 'prose' && /solution|recommend|next move|next step|what to do|plan|approach|how to fix|action|honest take/i.test(section.heading || ''),
     );
-    if (hasSolution || !insightSolution) return doc;
+    const overview = reportOverviewText(doc);
+    if (
+      hasSolution ||
+      !insightSolution ||
+      (overview && !differsMeaningfully(overview, insightSolution))
+    ) {
+      return doc;
+    }
     return {
       ...doc,
       sections: [
@@ -826,17 +951,39 @@ const SproutHomeScreen: React.FC = () => {
       openReportDocument(prepareInsightReport(insight.report), true);
       return true;
     }
-    if (insight?.reportId) {
+    const reportId = insight?.reportId;
+    if (reportId && !insight?.report) {
       try {
         const token = await ensureSupabaseJwt();
         if (token) {
-          const res = await fetch(`${API_BASE_URL}/api/agent/reports/${encodeURIComponent(insight.reportId)}`, {
+          const res = await fetch(`${API_BASE_URL}/api/agent/reports/${encodeURIComponent(reportId)}`, {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           });
           if (res.ok) {
             const data = await res.json();
-            const doc = data?.report?.document;
-            if (doc && Array.isArray(doc.sections) && doc.sections.length) {
+            const persistedReport = data?.report;
+            const currentInsight = currentInsightRef.current;
+            const insightTime = Date.parse(currentInsight?.timestamp || '');
+            const reportTime = Date.parse(persistedReport?.updatedAt || '');
+            const isNotOlderThanInsight =
+              !Number.isFinite(insightTime) ||
+              (Number.isFinite(reportTime) && reportTime >= insightTime);
+            const isCurrentReport =
+              currentInsight === insight &&
+              !currentInsight?.report &&
+              currentInsight?.reportId === reportId &&
+              persistedReport?.status === 'active' &&
+              persistedReport?.source === 'insight' &&
+              isNotOlderThanInsight &&
+              (persistedReport?.documentId === reportId ||
+                persistedReport?.id === reportId);
+            const doc = persistedReport?.document;
+            if (
+              isCurrentReport &&
+              doc &&
+              Array.isArray(doc.sections) &&
+              doc.sections.length
+            ) {
               openReportDocument(prepareInsightReport(doc), true);
               return true;
             }
@@ -966,26 +1113,15 @@ const SproutHomeScreen: React.FC = () => {
               {controller.loading ? (
                 <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>Catching you up…</Text>
               ) : seenLoaded && heroMessage ? (
-                <>
-                  {isShowingInsight ? (
-                    <Text
-                      style={[styles.briefingHeadline, { color: THEME.strong }]}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {sanitizeDisplayText(insightHeadline)}
-                    </Text>
-                  ) : null}
-                  <StreamingText
-                    text={heroMessage.text}
-                    shouldStream={shouldStreamHero}
-                    onComplete={markHeroSeen}
-                    speed={42}
-                    numberOfLines={3}
-                    ellipsizeMode="tail"
-                    style={[styles.briefingProse, { color: THEME.strong }]}
-                  />
-                </>
+                <StreamingText
+                  text={heroMessage.text}
+                  shouldStream={shouldStreamHero}
+                  onComplete={markHeroSeen}
+                  speed={42}
+                  numberOfLines={3}
+                  ellipsizeMode="tail"
+                  style={[styles.briefingProse, { color: THEME.strong }]}
+                />
               ) : null}
               {isShowingInsight && insightSupportLine ? (
                 <Text
@@ -1015,8 +1151,17 @@ const SproutHomeScreen: React.FC = () => {
               }}
             />
           ) : null}
-          {isShowingInsight && insightNextCheckLine ? (
-            <Text style={[styles.nextReport, { color: THEME.faint }]}>{insightNextCheckLine}</Text>
+          {!showSproutMessage &&
+          isShowingInsight &&
+          promptCampaignId &&
+          insightFollowUps.length ? (
+            <FollowUpPrompts
+              suggestions={insightFollowUps}
+              onPress={openCampaignPrompt}
+              textColor={THEME.strong}
+              borderColor={THEME.cardBorder}
+              iconColor={THEME.faint}
+            />
           ) : null}
 
           {/* Divider + today's numbers only when there's something below the fold —
@@ -1105,7 +1250,9 @@ const SproutHomeScreen: React.FC = () => {
       <ScrollView
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
+        contentContainerStyle={{
+          paddingBottom: insets.bottom + 120 + homeComposerHeight,
+        }}
         refreshControl={
           <RefreshControl
             refreshing={homeRefreshing}
@@ -1348,6 +1495,46 @@ const SproutHomeScreen: React.FC = () => {
         } : undefined}
       />
 
+      {!selectMode ? (
+        <Animated.View
+          pointerEvents="box-none"
+          style={[
+            styles.homeComposerAvoider,
+            { bottom: homeComposerBottom },
+            homeComposerLiftStyle,
+          ]}
+        >
+          <View
+            onLayout={(event) =>
+              setHomeComposerHeight(event.nativeEvent.layout.height)
+            }
+          >
+            {!keyboardOpen &&
+            !homeComposerText.trim() &&
+            insightNextCheckLine ? (
+              <Text
+                style={[
+                  styles.homeCountdown,
+                  isNight && styles.homeCountdownNight,
+                ]}
+              >
+                {insightNextCheckLine}
+              </Text>
+            ) : null}
+            <MessageComposer
+              value={homeComposerText}
+              placeholder="Ask Sprout"
+              onChangeText={setHomeComposerText}
+              onSend={sendHomeComposer}
+              queuedCount={0}
+              isStreaming={false}
+              getAuthToken={ensureSupabaseJwt}
+              hideAttach
+            />
+          </View>
+        </Animated.View>
+      ) : null}
+
       {/* Selection action pill — floats in the navigator's spot on long-press
           (the tab bar hides while selecting). Bulk pause / delete. */}
       {selectMode ? (
@@ -1549,6 +1736,24 @@ const CampaignCard: React.FC<{
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F6F7F4' },
+  homeComposerAvoider: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 24,
+  },
+  homeCountdown: {
+    alignSelf: 'flex-end',
+    marginRight: 18,
+    marginBottom: 2,
+    color: '#71717A',
+    fontFamily: FONT.semibold,
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+  },
+  homeCountdownNight: {
+    color: 'rgba(244,244,238,0.72)',
+  },
 
   // ── Long-press selection ──────────────────────────────
   cardSelected: {

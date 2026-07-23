@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/quick-scan-session.contract.ts (sha256:8503e4adc563)
+// @generated from sssync-bknd/src/contracts/quick-scan-session.contract.ts (sha256:dbce2b510dbe)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * QUICK-SCAN SESSION CONTRACT — draft capture-session persistence seam.
@@ -33,6 +33,7 @@ export const zQuickScanSession = z.object({
   MatchContext: z.record(z.string(), z.any()),
   ShelfPhotoUri: z.string().nullable(),
   ActiveItemId: z.string().nullable(),
+  SavedForLaterIds: z.array(z.string()),
   CreatedAt: z.string(),
   UpdatedAt: z.string(),
 });
@@ -40,7 +41,7 @@ export type QuickScanSession = z.infer<typeof zQuickScanSession>;
 
 /**
  * POST /products/quick-scan-sessions and PUT /products/quick-scan-sessions/:id — request.
- * These four fields are ALL the backend accepts; anything else is dropped.
+ * These five fields are ALL the backend accepts; anything else is dropped.
  */
 export const zUpsertQuickScanSessionRequest = z.object({
   shelfPhotoUri: z.string().optional(),
@@ -48,6 +49,7 @@ export const zUpsertQuickScanSessionRequest = z.object({
   /** Open envelope — nest client flow state at matchContext.clientState. */
   matchContext: z.record(z.string(), z.any()).optional(),
   activeItemId: z.string().optional(),
+  savedForLaterIds: z.array(z.string()).optional(),
 });
 export type UpsertQuickScanSessionRequest = z.infer<typeof zUpsertQuickScanSessionRequest>;
 

@@ -17,6 +17,10 @@ import { sanitizeDisplayText } from '../displayText';
 import { useSystemNotifications } from '../../../context/SystemNotificationContext';
 import { SproutDisclaimer } from './SproutDisclaimer';
 import { DiaTextReveal } from '../../../components/DiaTextReveal';
+import {
+  FollowUpPrompts,
+  type FollowUpSuggestion,
+} from '../../../components/chat/FollowUpPrompts';
 
 // A tappable cart card the agent drops in after turning photos into draft listings.
 // Tapping it opens the AddProduct cart hydrated from the quick-scan session.
@@ -336,8 +340,6 @@ type Props = {
   onToggleNarration?: (messageId: string, text: string, title?: string) => void;
 };
 
-type FollowUpSuggestion = { label: string; prompt: string };
-
 const normalizeFollowUps = (message: ConversationMessage, activities: ActivityPayload[]): FollowUpSuggestion[] => {
   const metadata = (message.metadata ?? {}) as any;
   const authored = metadata.followUps ?? metadata.follow_ups ?? metadata.suggestedQuestions;
@@ -395,26 +397,6 @@ const normalizeFollowUps = (message: ConversationMessage, activities: ActivityPa
     { label: 'What is the biggest risk?', prompt: 'What is the biggest risk right now?' },
   ];
 };
-
-const FollowUpPrompts = ({ suggestions, onPress }: { suggestions: FollowUpSuggestion[]; onPress: (prompt: string) => void }) => (
-  <View style={styles.followUps} accessibilityLabel="Suggested follow-up questions">
-    {suggestions.map((suggestion, index) => (
-      <Pressable
-        key={`${suggestion.label}-${index}`}
-        style={({ pressed }) => [styles.followUpRow, pressed && styles.followUpRowPressed]}
-        onPress={() => {
-          Haptics.selectionAsync().catch(() => undefined);
-          onPress(suggestion.prompt);
-        }}
-        accessibilityRole="button"
-        accessibilityLabel={suggestion.label}
-      >
-        <Icon name="arrow-right" size={19} color="#A1A1AA" />
-        <Text style={styles.followUpText}>{suggestion.label}</Text>
-      </Pressable>
-    ))}
-  </View>
-);
 
 const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onFeedback, planItems, showDisclaimer = false, showFollowUps = false, onFollowUp, narrationState = 'idle', onToggleNarration }: Props) => {
   const isUser = message.role === 'user';
@@ -1031,29 +1013,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   actionIconActive: { backgroundColor: 'rgba(147,200,34,0.12)' },
-  followUps: {
-    marginTop: 8,
-  },
-  followUpRow: {
-    minHeight: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E7EB',
-    paddingHorizontal: 4,
-    paddingVertical: 10,
-  },
-  followUpRowPressed: {
-    opacity: 0.58,
-  },
-  followUpText: {
-    flex: 1,
-    color: '#27272A',
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 16,
-    lineHeight: 22,
-  },
   // Wide markdown tables — scroller wrapper + the bordered table container.
   mdTableScroll: {
     width: '100%',

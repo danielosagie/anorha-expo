@@ -76,6 +76,7 @@ export interface DashboardInsight {
     campaignId?: string;
     label?: string;
   };
+  suggestedQuestions?: string[];
   // Full report document backing this insight (same shape the chat's report
   // bottom sheet renders) plus its id in the org-wide reports list. When
   // present, the home card opens the report sheet directly — no chat handoff.
@@ -186,6 +187,26 @@ const normalizeAction = (action: any) => {
   };
 };
 
+const normalizeSuggestedQuestions = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const questions = value
+    .filter((question): question is string => typeof question === 'string')
+    .map((question) => question.trim())
+    .filter(Boolean)
+    .map((question) => {
+      const words = question
+        .replace(/[?.!]+$/g, '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 7);
+      return words.length ? `${words.join(' ')}?` : '';
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+  return questions.length ? questions : undefined;
+};
+
 const normalizeAffectedProduct = (product: any) => {
   const id = coerceText(product?.id);
   const name = coerceText(product?.name || product?.title);
@@ -263,6 +284,7 @@ const normalizeSingleInsight = (raw: any): DashboardInsight | null => {
           label: coerceText(raw?.handoff?.label) || undefined,
         }
       : undefined,
+    suggestedQuestions: normalizeSuggestedQuestions(raw?.suggestedQuestions),
     report:
       raw?.report && typeof raw.report === 'object' && Array.isArray(raw.report.sections) && raw.report.sections.length
         ? {

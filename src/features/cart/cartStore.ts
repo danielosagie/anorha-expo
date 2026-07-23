@@ -70,8 +70,29 @@ function recomputeFolderStatus(folderId: string) {
 
 // --- mutations -------------------------------------------------------------
 
-export function resetCart() {
-  cart$.set(emptyState());
+export function resetCart(opts?: { preserveSaved?: boolean }) {
+  if (!opts?.preserveSaved) {
+    cart$.set(emptyState());
+    return;
+  }
+
+  const currentEntries = cart$.entries.get();
+  const savedIds = cart$.savedForLaterIds.get().filter((id) => !!currentEntries[id]);
+  const keepIds = new Set(savedIds);
+  for (const id of savedIds) {
+    const entry = currentEntries[id];
+    if (isFolder(entry)) entry.childIds.forEach((childId) => keepIds.add(childId));
+  }
+  const entries = Object.fromEntries(
+    Object.entries(currentEntries).filter(([id]) => keepIds.has(id)),
+  );
+  const order = cart$.order.get().filter((id) => savedIds.includes(id));
+  cart$.set({
+    ...emptyState(),
+    entries,
+    order,
+    savedForLaterIds: savedIds,
+  });
 }
 
 export function addSingleItem(
@@ -254,13 +275,17 @@ export function setItemGenerate(itemId: string, patch: { generateJobId?: string;
   cart$.entries[itemId].assign({ ...patch, updatedAt: now() });
 }
 
-/** "Save for later" — set the item aside without losing it (excluded from checkout/subtotal). */
-export function setItemSavedForLater(itemId: string, saved: boolean) {
+/** Set an item or folder aside without losing it (excluded from checkout/subtotal). */
+export function setSavedForLater(id: string, saved: boolean) {
+  if (!getEntry(id)) return;
   const prev = cart$.savedForLaterIds.get();
-  const has = prev.includes(itemId);
-  if (saved && !has) cart$.savedForLaterIds.set([...prev, itemId]);
-  else if (!saved && has) cart$.savedForLaterIds.set(prev.filter(id => id !== itemId));
+  const has = prev.includes(id);
+  if (saved && !has) cart$.savedForLaterIds.set([...prev, id]);
+  else if (!saved && has) cart$.savedForLaterIds.set(prev.filter(savedId => savedId !== id));
 }
+
+export const setItemSavedForLater = setSavedForLater;
+export const setFolderSavedForLater = setSavedForLater;
 
 export function setItemNeedsContext(itemId: string, reason: string) {
   setItemStatus(itemId, 'needs_context', { needsContextReason: reason });
@@ -597,6 +622,8 @@ export function seedCartFromLegacy(initial: {
   processedItemIds?: string[];
 }) {
   const ts = now();
+  const previousEntries = cart$.entries.get();
+  const previousSavedIds = cart$.savedForLaterIds.get().filter((id) => !!previousEntries[id]);
   const entries: Record<string, CartEntry> = {};
   const order: string[] = [];
   for (const b of initial.bulkItems ?? []) {
@@ -617,14 +644,26 @@ export function seedCartFromLegacy(initial: {
     };
     order.push(b.id);
   }
+
+  for (const savedId of previousSavedIds) {
+    const savedEntry = previousEntries[savedId];
+    if (!savedEntry || entries[savedId]) continue;
+    entries[savedId] = savedEntry;
+    order.push(savedId);
+    if (isFolder(savedEntry)) {
+      for (const childId of savedEntry.childIds) {
+        const child = previousEntries[childId];
+        if (child) entries[childId] = child;
+      }
+    }
+  }
   cart$.set({
     entries,
     order,
     activeItemId: initial.activeItemId ?? null,
     processedItemIds: initial.processedItemIds ?? [],
     itemStageById: initial.itemStageById ?? {},
-    // Carry saved-for-later across reseeds for any items that survived.
-    savedForLaterIds: cart$.savedForLaterIds.get().filter((id) => !!entries[id]),
+    savedForLaterIds: previousSavedIds.filter((id) => !!entries[id]),
   });
 }
 
@@ -673,7 +712,17 @@ const FOLDERS_KEY = '__folders'; // reserved key inside matchContext for folder 
 export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }): CartDraftPayload {
   const activeItemId = cart$.activeItemId.get();
   const processed = selectProcessedSet();
-  const items = selectAllItems().filter(it => !processed.has(it.id));
+  const savedForLaterIds = cart$.savedForLaterIds.get().filter((id) => !!getEntry(id));
+  const savedSet = new Set(savedForLaterIds);
+  const savedFolderChildIds = new Set(
+    savedForLaterIds.flatMap((id) => {
+      const entry = getEntry(id);
+      return isFolder(entry) ? entry.childIds : [];
+    }),
+  );
+  const items = selectAllItems().filter(
+    (it) => !processed.has(it.id) || savedSet.has(it.id) || savedFolderChildIds.has(it.id),
+  );
 
   const scannedItems = items.map(it => ({
     id: it.id,
@@ -688,8 +737,12 @@ export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }):
 
   const matchContext: Record<string, any> = {};
   for (const it of items) {
-    if (it.match?.response || it.match?.matchRows) {
-      matchContext[it.id] = { matchData: it.match.response, matchRows: it.match.matchRows ?? [] };
+    if (it.match?.response || it.match?.matchRows || it.match?.confirmed) {
+      matchContext[it.id] = {
+        matchData: it.match.response,
+        matchRows: it.match.matchRows ?? [],
+        confirmed: it.match.confirmed,
+      };
     }
   }
 
@@ -703,6 +756,7 @@ export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }):
     matchContext,
     itemStageById: { ...cart$.itemStageById.get() },
     processedItemIds: [...cart$.processedItemIds.get()],
+    savedForLaterIds,
     shelfPhotoUri: extra?.shelfPhotoUri ?? null,
     activeItemId,
   };
@@ -732,8 +786,8 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
       photos,
       title: s.title,
       quantity: typeof s.quantity === 'number' ? s.quantity : 1,
-      status: photos.length ? 'searching' : 'capturing',
-      match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows } : undefined,
+      status: ctx ? 'matched' : photos.length ? 'searching' : 'capturing',
+      match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows, confirmed: ctx.confirmed } : undefined,
       preSelectedSource: s.preSelectedSource,
       shelfBox: s.shelfBox,
       createdAt: ts,
@@ -764,7 +818,9 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
     activeItemId: payload.activeItemId ?? null,
     processedItemIds: Array.isArray(payload.processedItemIds) ? payload.processedItemIds : [],
     itemStageById: payload.itemStageById ?? {},
-    savedForLaterIds: cart$.savedForLaterIds.get().filter((id) => !!entries[id]),
+    savedForLaterIds: Array.isArray(payload.savedForLaterIds)
+      ? payload.savedForLaterIds.filter((id) => !!entries[id])
+      : [],
   });
   for (const f of folders) if (entries[f.id]) recomputeFolderStatus(f.id);
 }
@@ -821,24 +877,31 @@ export function startCartSnapshotAutosave(): () => void {
 
 /** Peek the saved snapshot's UNFINISHED item count WITHOUT mutating cart$ — drives the
  *  resume prompt. Excludes already-processed items so an all-resolved cart doesn't re-prompt. */
-export async function peekCartSnapshot(): Promise<{ count: number } | null> {
+export async function peekCartSnapshot(): Promise<{ count: number; hasSaved: boolean } | null> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CartState;
     const order = Array.isArray(parsed?.order) ? parsed.order : Object.keys(parsed?.entries ?? {});
     const processed = new Set(Array.isArray(parsed?.processedItemIds) ? parsed.processedItemIds : []);
-    const count = order.filter((id) => !processed.has(id)).length;
-    return count > 0 ? { count } : null;
+    const saved = new Set(Array.isArray(parsed?.savedForLaterIds) ? parsed.savedForLaterIds : []);
+    const count = order.filter((id) => !processed.has(id) && !saved.has(id)).length;
+    const hasSaved = Array.from(saved).some((id) => !!parsed?.entries?.[id]);
+    return count > 0 || hasSaved ? { count, hasSaved } : null;
   } catch {
     return null;
   }
 }
 
 /** Drop the saved snapshot AND its backend draft-session id (used by "Start fresh"). */
-export async function clearCartSnapshot(): Promise<void> {
+export async function clearCartSnapshot(opts?: { repersistCurrent?: boolean }): Promise<void> {
   if (snapshotTimer) { clearTimeout(snapshotTimer); snapshotTimer = null; }
-  try { await AsyncStorage.multiRemove([STORAGE_KEY, SESSION_KEY]); } catch { /* best-effort */ }
+  try {
+    await AsyncStorage.multiRemove([STORAGE_KEY, SESSION_KEY]);
+    if (opts?.repersistCurrent) {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cart$.get()));
+    }
+  } catch { /* best-effort */ }
 }
 
 // --- durable backend draft-session id --------------------------------------
