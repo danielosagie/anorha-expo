@@ -5,6 +5,7 @@ import { API_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOptimizerQueues } from './useOptimizerQueues';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 const log = createLogger('useImportHub');
 
@@ -172,7 +173,7 @@ export function useImportHub(): ImportHubData {
   const { counts: optCounts, loading: optLoading, refresh: refreshOpt } = useOptimizerQueues();
 
   const enabled = useMemo(
-    () => (liveConnections || []).filter((c) => c.IsEnabled !== false),
+    () => (liveConnections || []).filter(isVisiblePlatformConnection),
     [liveConnections],
   );
   // Refetch only when the SET of connections changes, not on every status flip

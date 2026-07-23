@@ -11,7 +11,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, ActivityIndicator, StatusBar,
+  View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, ActivityIndicator, StatusBar, Alert,
 } from 'react-native';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -30,6 +30,7 @@ import PageHeader from '../components/ui/PageHeader';
 import PlatformAvatar from '../components/PlatformAvatar';
 import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 
 const log = createLogger('SyncRulesScreen');
 
@@ -92,6 +93,7 @@ const SyncRulesScreen = () => {
   const insets = useSafeAreaInsets();
   const { connectionId } = route.params;
   const routeParams = route.params as any;
+  const { connections, refresh, updateConnectionLocally } = usePlatformConnections();
 
   const [platformType, setPlatformType] = useState<string>(routeParams?.platformName || '');
   const [displayName, setDisplayName] = useState<string>('');
@@ -230,6 +232,8 @@ const SyncRulesScreen = () => {
 
   const disconnect = async () => {
     setDisconnectOpen(false);
+    const previous = connections.find(connection => connection.Id === connectionId);
+    updateConnectionLocally(connectionId, { IsEnabled: false, Status: 'inactive' });
     try {
       const { data: session } = await supabase.auth.getSession();
       const token = session?.session?.access_token;
@@ -241,10 +245,13 @@ const SyncRulesScreen = () => {
         body: JSON.stringify({ cleanupStrategy: 'keep' }),
       });
       if (!res.ok) throw new Error(`Failed (${res.status})`);
+      await refresh();
       navigation.goBack();
     } catch (e: any) {
       log.error('disconnect', e);
-      setSaveState('error');
+      if (previous) updateConnectionLocally(connectionId, previous);
+      else await refresh();
+      Alert.alert('Error', 'Failed to disconnect. Please try again.');
     }
   };
 

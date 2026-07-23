@@ -17,6 +17,7 @@ import { normalizeDisplayName } from '../config/platforms';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { createLogger } from '../utils/logger';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 const log = createLogger('PublishConfirmationModal');
 
 // Brand-coloured logo chips (white glyph on the platform's colour) — matches the
@@ -87,7 +88,7 @@ export default function PublishConfirmationModal({
     const platformGroups = React.useMemo(() => {
         const groups: Record<string, any[]> = {};
         allConnections.forEach((conn: any) => {
-            if (!conn.IsEnabled) return;
+            if (!isVisiblePlatformConnection(conn)) return;
             const platform = conn.PlatformType?.toLowerCase();
             if (!platform) return;
             (groups[platform] = groups[platform] || []).push(conn);

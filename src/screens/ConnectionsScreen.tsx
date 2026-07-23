@@ -25,6 +25,7 @@ import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformCon
 import { useImportHub } from '../hooks/useImportHub';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 const statusOf = (raw?: string, enabled = true): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -63,9 +64,24 @@ const APPS = [
 const ConnectionsScreen = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { liveConnections, loading, error: connectionsError, refresh } = usePlatformConnections();
+  const {
+    connections,
+    liveConnections,
+    loading,
+    error: connectionsError,
+    refresh,
+    updateConnectionLocally,
+  } = usePlatformConnections();
   const overlay = usePlatformPickerOverlay();
   const { currentOrg } = useOrg();
+
+  // Soft-disconnected rows (IsEnabled=false) stay in the API payload, but a
+  // platform the user disconnected must leave this list. Reconnecting goes
+  // through the real OAuth flow on ConnectPlatforms, not PATCH /enable.
+  const visibleConnections = useMemo(
+    () => (liveConnections || []).filter(isVisiblePlatformConnection),
+    [liveConnections]
+  );
 
   // Import inbox aggregate — drives the top "Import inbox" row badge and the
   // per-connection "N need you" pills (no forced deck routing).
@@ -169,6 +185,8 @@ const ConnectionsScreen = () => {
         text: 'Disconnect',
         style: 'destructive',
         onPress: async () => {
+          const previous = connections.find(connection => connection.Id === c.Id);
+          updateConnectionLocally(c.Id, { IsEnabled: false, Status: 'inactive' });
           try {
             const token = await ensureSupabaseJwt();
             const r = await fetch(`${API_BASE_URL}/api/platform-connections/${c.Id}/disconnect`, {
@@ -177,8 +195,10 @@ const ConnectionsScreen = () => {
               body: JSON.stringify({ cleanupStrategy: 'keep' }),
             });
             if (!r.ok) throw new Error(await r.text());
-            refresh?.();
+            await refresh?.();
           } catch {
+            if (previous) updateConnectionLocally(c.Id, previous);
+            else await refresh?.();
             Alert.alert('Error', 'Failed to disconnect. Please try again.');
           }
         },
@@ -293,7 +313,7 @@ const ConnectionsScreen = () => {
         {/* Selling platforms — Manage flips rows into refresh/remove */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Selling platforms</Text>
-          {(liveConnections?.length || 0) > 0 && (
+          {visibleConnections.length > 0 && (
             <TouchableOpacity
               style={[styles.managePill, managing && styles.managePillOn]}
               activeOpacity={0.8}
@@ -306,16 +326,16 @@ const ConnectionsScreen = () => {
           )}
         </View>
         <View style={styles.card}>
-          {loading && (liveConnections?.length || 0) === 0 ? (
+          {loading && visibleConnections.length === 0 ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
-          ) : connectionsError && (liveConnections?.length || 0) === 0 ? (
+          ) : connectionsError && visibleConnections.length === 0 ? (
             <TouchableOpacity style={styles.loadingRow} onPress={() => refresh?.()}>
               <Text style={styles.empty}>Couldn’t load your connections. Tap to retry.</Text>
             </TouchableOpacity>
-          ) : (liveConnections?.length || 0) === 0 ? (
+          ) : visibleConnections.length === 0 ? (
             <Text style={styles.empty}>No platforms connected yet.</Text>
           ) : (
-            liveConnections.map((c: any, i: number) => {
+            visibleConnections.map((c: any, i: number) => {
               const st = statusOf(c.Status, c.IsEnabled !== false);
               const attn = attentionByConn[c.Id] || 0;
               return (

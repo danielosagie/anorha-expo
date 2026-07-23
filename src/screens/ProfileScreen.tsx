@@ -45,6 +45,7 @@ import { AppDropdown } from '../components/ui/AppDropdown';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
 import { createLogger } from '../utils/logger';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 const log = createLogger('ProfileScreen');
 
 
@@ -338,7 +339,14 @@ const ProfileScreen = () => {
   const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
   const { resetLegendState } = useLegendStateControl();
-  const { toggles, liveConnections: platformConnections, refresh: refreshConnections, loading: isLoadingConnections } = usePlatformConnections();
+  const {
+    connections,
+    toggles,
+    liveConnections: platformConnections,
+    refresh: refreshConnections,
+    updateConnectionLocally,
+    loading: isLoadingConnections,
+  } = usePlatformConnections();
   // Use switchOrg from OrgContext for switching orgs
   const { currentOrg, switchOrg, availableOrgs } = useOrg();
   const { showAlert, showToast, showWelcome } = useSystemNotifications();
@@ -751,6 +759,8 @@ const ProfileScreen = () => {
 
   const performDisconnect = async () => {
     if (!disconnectTarget) return;
+    const previous = connections.find(connection => connection.Id === disconnectTarget.id);
+    updateConnectionLocally(disconnectTarget.id, { IsEnabled: false, Status: 'inactive' });
 
     try {
       setIsDisconnectingMobile(true);
@@ -791,6 +801,8 @@ const ProfileScreen = () => {
 
     } catch (err: any) {
       log.error('[ProfileScreen] Disconnect error:', err);
+      if (previous) updateConnectionLocally(disconnectTarget.id, previous);
+      else await refreshConnections();
       Alert.alert('Disconnect Error', err.message || 'Failed to disconnect. Please try again.');
     } finally {
       setIsDisconnectingMobile(false);
@@ -1720,10 +1732,9 @@ const ProfileScreen = () => {
           ) : (
             <View style={styles.integrationsContainer}>
               {(() => {
-                const filteredConnections = platformConnections; // Display all connections
-                if (!(platformConnections.length > 0)) {
-                } else {
-                }
+                // Soft-disconnected rows must not render as connected;
+                // reconnecting goes through the OAuth flow, not /enable.
+                const filteredConnections = platformConnections.filter(isVisiblePlatformConnection);
                 if (filteredConnections.length === 0) {
                   return null;
                 } else {
@@ -1743,7 +1754,7 @@ const ProfileScreen = () => {
               })()}
 
               {
-                platformConnections.length === 0 && (
+                !platformConnections.some(isVisiblePlatformConnection) && (
                   <Text style={styles.noConnectionsText}>No connections yet.</Text>
                 )
               }
@@ -1883,7 +1894,7 @@ const ProfileScreen = () => {
               selectedCount={0}
               selectedTemplate={null}
               selectedPlatforms={[]}
-              isConnected={(p) => platformConnections.some((c) => c.PlatformType === p && c.Status === 'active')}
+              isConnected={(p) => platformConnections.some((c) => c.PlatformType === p && c.Status === 'active' && isVisiblePlatformConnection(c))}
               platformActiveCounts={platformActiveCounts}
               onShowSelection={() => { }}
               onShowTemplates={() => { }}

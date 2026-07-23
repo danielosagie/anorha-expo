@@ -16,9 +16,21 @@ import {
 } from '../config/platforms';
 import type { PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 
-// Statuses that mean a connection row is NOT a live marker (mirrors the old
-// ConnectPlatformsScreen.connectedKeys set — kept identical on purpose).
-const NOT_CONNECTED = new Set(['disconnected', 'error', 'revoked', 'disabled', 'needs_reauth']);
+// Statuses that mean a connection row is NOT a live marker. This includes the
+// backend's soft-disconnect status even when the row remains in the payload.
+const NOT_CONNECTED = new Set(['inactive', 'disconnected', 'error', 'revoked', 'disabled', 'needs_reauth']);
+
+// Soft-disconnected rows remain in includeDisabled API responses. Lists and
+// publish pickers must omit those records while still retaining error rows that
+// need a reconnect action.
+const HIDDEN_CONNECTION_STATUSES = new Set(['inactive', 'disconnected', 'disabled']);
+
+export function isVisiblePlatformConnection(
+  connection: Pick<PlatformConnectionRow, 'IsEnabled' | 'Status'>,
+): boolean {
+  const status = (connection.Status || '').toLowerCase().trim();
+  return connection.IsEnabled !== false && !HIDDEN_CONNECTION_STATUSES.has(status);
+}
 
 /** Live computer-presence signal (from useFacebookJobStatus). */
 export interface ComputerPresence {

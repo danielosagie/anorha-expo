@@ -42,6 +42,7 @@ type ContextValue = {
   progressByConnectionId: Record<string, SyncProgressUpdate>;
   connectedByPlatform: Record<string, boolean>;
   isConnected: (platform: PlatformKey | string) => boolean;
+  updateConnectionLocally: (connectionId: string, patch: Partial<PlatformConnectionRow>) => void;
   refresh: () => Promise<void>;
   loading: boolean;
   error?: string;
@@ -214,6 +215,12 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   const liveConnections = useMemo(() => {
     if (connections.length === 0) return [];
     return connections.map((conn) => {
+      const storedStatus = normalizeStatus(conn.Status);
+      // A stale sync-progress event must never revive a row the disconnect
+      // endpoint has already marked inactive/disabled.
+      if (conn.IsEnabled === false || storedStatus === 'inactive' || storedStatus === 'disconnected' || storedStatus === 'disabled') {
+        return conn;
+      }
       const progress = progressByConnectionId[conn.Id];
       if (!progress) return conn;
       if (Date.now() - progress.receivedAt > PROGRESS_OVERRIDE_TTL_MS) return conn;
@@ -258,17 +265,26 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     return !!connectedByPlatform[key];
   }, [connectedByPlatform]);
 
+  // Immediate shared-store update for mutations such as disconnect. Callers keep
+  // the previous row and restore it if the request fails, then refresh on success.
+  const updateConnectionLocally = useCallback((connectionId: string, patch: Partial<PlatformConnectionRow>) => {
+    setConnections(prev =>
+      prev.map(connection => connection.Id === connectionId ? { ...connection, ...patch } : connection)
+    );
+  }, []);
+
   const value = useMemo<ContextValue>(() => ({
     connections,
     liveConnections,
     progressByConnectionId,
     connectedByPlatform,
     isConnected,
+    updateConnectionLocally,
     refresh: fetchConnections,
     loading,
     error,
     toggles,
-  }), [connections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, fetchConnections, loading, error, toggles]);
+  }), [connections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, updateConnectionLocally, fetchConnections, loading, error, toggles]);
 
   return (
     <PlatformConnectionsContext.Provider value={value}>

@@ -19,6 +19,7 @@ import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
 import { normalizeDisplayName } from '../config/platforms';
 import { useImportHub } from '../hooks/useImportHub';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 type Card = {
   key: string;
@@ -55,7 +56,7 @@ const SettingsScreen = () => {
 
   const displayName = user?.fullName || user?.firstName || 'Your account';
   const orgLine = currentOrg?.name || user?.primaryEmailAddress?.emailAddress || '';
-  const platformPreview = (liveConnections || []).slice(0, 4);
+  const platformPreview = (liveConnections || []).filter(isVisiblePlatformConnection).slice(0, 4);
   // Dev tools (dev builds only): the agent bundle + the raw auth token.
   const openDevTools = () => {
     Alert.alert('Developer', 'Tools for local development.', [
