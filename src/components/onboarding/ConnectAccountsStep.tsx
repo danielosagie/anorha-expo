@@ -20,7 +20,7 @@ import { listPlatforms } from '../../config/platforms';
 import { type ConnectablePlatform } from '../../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
 import { useFacebookJobStatus } from '../../hooks/useFacebookJobStatus';
-import { derivePlatformConnectStatus } from '../../lib/platformConnectStatus';
+import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../../lib/platformConnectStatus';
 
 const INK = '#1C1B17';
 const SUBTLE = '#8A887E';
@@ -98,7 +98,7 @@ export default function ConnectAccountsStep({
 
         {PLATFORMS.map((p, i) => {
           const connected = isFullyConnected(p.key);
-          const connection = liveConnections.find((item) => item.PlatformType.toLowerCase() === p.key && item.IsEnabled !== false);
+          const connection = liveConnections.find((item) => item.PlatformType.toLowerCase() === p.key && isVisiblePlatformConnection(item));
           const connectionStatus = String(connection?.Status || '').toLowerCase();
           const importing = ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync'].includes(connectionStatus);
           return (

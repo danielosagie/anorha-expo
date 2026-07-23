@@ -1,26 +1,26 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import BaseModal from './BaseModal';
-import Button from './Button';
 import { BillingGateResponse } from '../types/billingGate';
+import { BRAND_PRIMARY } from '../design/tokens';
 
 interface BillingGateSheetProps {
   visible: boolean;
   gate: BillingGateResponse | null;
   onClose: () => void;
-  onOpenBilling: () => void;
+  onSeePlans?: () => void;
+  onAddCredits?: () => void;
+  /** Backward-compatible alias used by design-export fixtures. */
+  onOpenBilling?: () => void;
   onContinue?: () => void;
-}
-
-function formatCurrency(cents: number) {
-  return `$${(Math.max(0, cents) / 100).toFixed(2)}`;
 }
 
 export default function BillingGateSheet({
   visible,
   gate,
   onClose,
+  onSeePlans,
+  onAddCredits,
   onOpenBilling,
   onContinue,
 }: BillingGateSheetProps) {
@@ -30,82 +30,55 @@ export default function BillingGateSheet({
 
   const invoiceable = gate.code === 'credits_exhausted_but_invoiceable';
   const unavailable = gate.code === 'billing_status_unavailable';
-  const blocked = !gate.canProceed;
   const title = unavailable
-    ? 'Billing check unavailable'
+    ? 'Could not check your scans'
     : invoiceable
-      ? 'This scan can still run'
-      : 'Billing needed to continue';
-  const primaryTitle = unavailable ? 'Try Again' : invoiceable ? 'Continue' : 'Open Billing';
+      ? 'This scan can continue'
+      : "You're out of free scans";
+  const body = unavailable
+    ? 'Check your connection, then try the scan again.'
+    : invoiceable
+      ? 'You can finish this scan now or review billing first.'
+      : typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number'
+        ? `${gate.freeUsageCount} of ${gate.freeLimit} free scans used.`
+        : 'Choose a plan or add credits to keep scanning.';
+  const seePlans = onSeePlans || onOpenBilling || onClose;
 
   return (
     <BaseModal visible={visible} onClose={onClose} position="bottom" containerStyle={styles.container}>
       <View style={styles.handle} />
-      <View style={styles.headerRow}>
-        <View style={styles.headerIcon}>
-          <Icon
-            name={invoiceable ? 'credit-card-outline' : unavailable ? 'wifi-alert' : 'shield-alert-outline'}
-            size={18}
-            color="#7C4A21"
-          />
-        </View>
-        <View style={styles.headerTextWrap}>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.subtitle}>{gate.message}</Text>
-        </View>
-      </View>
+      <Text style={styles.title}>{title}</Text>
+      <Text style={styles.subtitle}>{body}</Text>
 
-      <View style={styles.statGroup}>
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Estimated</Text>
-          <Text style={styles.statValue}>{formatCurrency(gate.estimatedCostCents)}</Text>
-        </View>
-        <View style={styles.separator} />
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Used</Text>
-          <Text style={styles.statValue}>{formatCurrency(gate.currentUsageCents)}</Text>
-        </View>
-        <View style={styles.separator} />
-        <View style={styles.statRow}>
-          <Text style={styles.statLabel}>Included</Text>
-          <Text style={styles.statValue}>{formatCurrency(gate.allowanceCents)}</Text>
-        </View>
-        {typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number' ? (
-          <>
-            <View style={styles.separator} />
-            <View style={styles.statRow}>
-              <Text style={styles.statLabel}>Free scans</Text>
-              <Text style={styles.statValue}>{gate.freeUsageCount}/{gate.freeLimit}</Text>
-            </View>
-          </>
-        ) : null}
-      </View>
-
-      <Text style={styles.footnote}>
-        {invoiceable
-          ? 'This work can finish now. New AI work will pause later if billing still needs attention.'
-          : blocked
-            ? 'Your current draft stays here and can resume after billing is updated.'
-            : 'Retry once your session reconnects.'}
-      </Text>
-
-      <Button
-        title={primaryTitle}
-        onPress={invoiceable ? (onContinue || onClose) : unavailable ? onClose : onOpenBilling}
+      <TouchableOpacity
+        onPress={invoiceable ? (onContinue || onClose) : unavailable ? onClose : seePlans}
         style={styles.primaryButton}
-        textStyle={styles.primaryButtonText}
-      />
+        activeOpacity={0.86}
+      >
+        <Text style={styles.primaryButtonText}>
+          {invoiceable ? 'Continue scan' : unavailable ? 'Try again' : 'See plans'}
+        </Text>
+      </TouchableOpacity>
 
-      {!unavailable ? (
+      {!unavailable && !invoiceable && onAddCredits ? (
         <TouchableOpacity
-          onPress={invoiceable ? onOpenBilling : onClose}
+          onPress={onAddCredits}
           style={styles.secondaryButton}
+          activeOpacity={0.75}
         >
-          <Text style={styles.secondaryButtonText}>
-            {invoiceable ? 'Open Billing' : 'Not now'}
-          </Text>
+          <Text style={styles.secondaryButtonText}>Add credits</Text>
         </TouchableOpacity>
       ) : null}
+
+      {!unavailable && invoiceable ? (
+        <TouchableOpacity onPress={seePlans} style={styles.secondaryButton} activeOpacity={0.75}>
+          <Text style={styles.secondaryButtonText}>See plans</Text>
+        </TouchableOpacity>
+      ) : null}
+
+      <TouchableOpacity onPress={onClose} style={styles.cancelButton} activeOpacity={0.7}>
+        <Text style={styles.cancelButtonText}>Cancel</Text>
+      </TouchableOpacity>
     </BaseModal>
   );
 }
@@ -115,6 +88,7 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 28,
     backgroundColor: '#FFFDF9',
+    alignItems: 'stretch',
   },
   handle: {
     width: 42,
@@ -124,89 +98,55 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 18,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 18,
-  },
-  headerIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F8E8D4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  headerTextWrap: {
-    flex: 1,
-  },
   title: {
-    fontSize: 19,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 4,
+    fontSize: 22,
+    fontFamily: 'Inter_700Bold',
+    color: '#18181B',
+    marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 14,
     lineHeight: 20,
-    color: '#6B7280',
-  },
-  statGroup: {
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    minWidth: "100%",
-    borderColor: '#EEE6DA',
-    overflow: 'hidden',
-    marginBottom: 14,
-  },
-  statRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minWidth: "100%",
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  statValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  separator: {
-    height: 1,
-    backgroundColor: '#F3EEE7',
-  },
-  footnote: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#6B7280',
-    marginBottom: 16,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
+    textAlign: 'center',
+    marginBottom: 22,
   },
   primaryButton: {
-    minWidth: "100%",
-    backgroundColor: '#8A5A2B',
-    borderRadius: 14,
-    paddingVertical: 21,
-  },
-  primaryButtonText: {
-    color: '#FFFDF9',
-    fontWeight: '700',
-  },
-  secondaryButton: {
-    minWidth: "100%",
+    width: '100%',
+    backgroundColor: BRAND_PRIMARY,
+    borderRadius: 16,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 21,
+    paddingHorizontal: 18,
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+  },
+  secondaryButton: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    marginTop: 4,
   },
   secondaryButtonText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#7C4A21',
+    fontFamily: 'Inter_600SemiBold',
+    color: '#3F6212',
+  },
+  cancelButton: {
+    alignSelf: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#71717A',
   },
 });

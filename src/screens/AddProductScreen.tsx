@@ -91,6 +91,8 @@ type QuickScanRunOptions = {
   mode?: 'adaptive' | 'legacy';
 };
 
+type BillingGateDecision = 'continue' | 'plans' | 'credits' | 'dismiss';
+
 type InventoryDedupDialogState = {
   itemId: string;
   match: any;
@@ -855,7 +857,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return;
         }
         const session = await res.json();
-        const items = session.ScannedItems ?? session.scannedItems ?? [];
+        const rawItems = session.ScannedItems ?? session.scannedItems ?? [];
+        const persistedPending = pendingBillingActionRef.current || await loadPendingBillingAction();
+        if (persistedPending) pendingBillingActionRef.current = persistedPending;
+        // A gate-stopped scan can predate the image upload, so the backend draft
+        // correctly omits its device-local URI. Reattach the locally persisted
+        // pending photo when its globally unique item id belongs to this cart.
+        const items = rawItems.map((item: any) => (
+          persistedPending?.type === 'quick_scan'
+          && persistedPending.itemId === item?.id
+          && (!Array.isArray(item?.photos) || item.photos.length === 0)
+            ? { ...item, photos: [persistedPending.photo] }
+            : item
+        ));
         const rawMatchCtx = (session.MatchContext ?? session.matchContext ?? {}) as Record<string, any>;
         // Client flow state rides inside MatchContext.clientState (see toQuickScanSessionBody);
         // strip the envelope before the rest of matchContext becomes the quick-scan store.
@@ -866,8 +880,41 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const stageById = (clientState.itemStageById ?? session.ItemStageById ?? session.itemStageById ?? {}) as Record<string, ItemStage>;
         const processedIds = clientState.processedItemIds ?? session.ProcessedItemIds ?? session.processedItemIds ?? [];
         if (items.length > 0 && !cancelled) {
+          const retryableHydratedIds = items
+            .filter((item: any) => Array.isArray(item?.photos) && item.photos.length > 0 && !matchCtx[item.id])
+            .map((item: any) => item.id as string);
+          const hydratedMatchCtx = { ...matchCtx };
+          retryableHydratedIds.forEach((itemId: string) => {
+            hydratedMatchCtx[itemId] = {
+              matchData: {
+                systemAction: 'fallback_to_manual',
+                confidence: 'low',
+                rankedCandidates: [],
+                totalMatches: 0,
+                scanError: 'Scan stopped before completing',
+              },
+              matchRows: [],
+            };
+          });
+
           setBulkItems(items);
-          setQuickScanStore(matchCtx);
+          setQuickScanStore(hydratedMatchCtx);
+          if (retryableHydratedIds.length > 0) {
+            retryableHydratedIds.forEach((itemId: string) => {
+              transitionItem(itemId, 'error', { error: 'Scan stopped before completing' });
+            });
+            setItemLoadingStates(prev => {
+              const next = { ...prev };
+              retryableHydratedIds.forEach((itemId: string) => {
+                next[itemId] = {
+                  isLoading: false,
+                  stage: 'Scan stopped',
+                  error: 'Scan stopped before completing',
+                };
+              });
+              return next;
+            });
+          }
           setShelfPhotoUri(shelfUri);
           setActiveItemId(activeId || items[0]?.id || null);
           setItemStageById((stageById && typeof stageById === 'object') ? stageById : {});
@@ -994,6 +1041,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [showMatchSheet, setShowMatchSheet] = useState(() => __ds === 'matchSheet');
   const [showViewPhotosModal, setShowViewPhotosModal] = useState(false);
   const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(() => __ds === 'shelfScanning' || __ds === 'shelfComplete');
+  const showDeepSearchSheetRef = useRef(showDeepSearchSheet);
+  showDeepSearchSheetRef.current = showDeepSearchSheet;
   const [hasSeenBulkModalFtux, setHasSeenBulkModalFtux] = useState<boolean | null>(null);
   const [matchData, setMatchData] = useState<MatchResponse | null>(() => __ds === 'matchSheet' ? DS_MATCH : null);
   // Quick scan / match sheet context
@@ -1778,7 +1827,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [showTierSelector, setShowTierSelector] = useState(false);
   const [billingGate, setBillingGate] = useState<BillingGateResponse | null>(null);
   const [billingGateVisible, setBillingGateVisible] = useState(false);
-  const billingGateResolverRef = useRef<((decision: 'continue' | 'billing' | 'dismiss') => void) | null>(null);
+  const billingGateResolverRef = useRef<((decision: BillingGateDecision) => void) | null>(null);
+  const billingGatePresentationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paywallActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingBillingActionRef = useRef<PendingBillingAction | null>(null);
   const isResumingPendingBillingRef = useRef(false);
 
@@ -1961,19 +2012,51 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }, duration);
   }, [notificationOpacity, notificationTranslateY]);
 
-  const closeBillingGateSheet = useCallback((decision: 'continue' | 'billing' | 'dismiss') => {
+  const closeBillingGateSheet = useCallback((decision: BillingGateDecision) => {
     setBillingGateVisible(false);
-    setBillingGate(null);
     const resolver = billingGateResolverRef.current;
     billingGateResolverRef.current = null;
     resolver?.(decision);
+    // Keep the sheet's content mounted through the native dismissal animation.
+    // Clearing it in the same commit as `visible=false` is the Fabric teardown
+    // pattern that already caused crashes in the cart modal.
+    if (billingGatePresentationTimerRef.current) {
+      clearTimeout(billingGatePresentationTimerRef.current);
+    }
+    billingGatePresentationTimerRef.current = setTimeout(() => {
+      billingGatePresentationTimerRef.current = null;
+      setBillingGate(null);
+    }, 320);
   }, []);
 
   const presentBillingGateSheet = useCallback((nextGate: BillingGateResponse) => {
+    if (billingGatePresentationTimerRef.current) {
+      clearTimeout(billingGatePresentationTimerRef.current);
+      billingGatePresentationTimerRef.current = null;
+    }
     setBillingGate(nextGate);
-    setBillingGateVisible(true);
-    return new Promise<'continue' | 'billing' | 'dismiss'>((resolve) => {
+    billingGateResolverRef.current?.('dismiss');
+    return new Promise<BillingGateDecision>((resolve) => {
       billingGateResolverRef.current = resolve;
+      const present = () => {
+        billingGatePresentationTimerRef.current = null;
+        // Never stack this native Modal over the cart Modal. If the cart could not
+        // dismiss (for example, a shelf stream is actively locking it), leave the
+        // scan blocked and let the retry remain available.
+        if (showDeepSearchSheetRef.current) {
+          billingGateResolverRef.current = null;
+          resolve('dismiss');
+          return;
+        }
+        setBillingGateVisible(true);
+      };
+
+      if (showDeepSearchSheetRef.current) {
+        closeBulkItemsSheetRef.current();
+        billingGatePresentationTimerRef.current = setTimeout(present, 500);
+      } else {
+        present();
+      }
     });
   }, []);
 
@@ -2014,6 +2097,70 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     freeUsageCount: freemiumStatus?.usageCount,
     freeLimit: freemiumStatus?.freeLimit,
   }), [freemiumStatus]);
+
+  const requestQuickScanAccess = useCallback(async (): Promise<boolean> => {
+    const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
+      ? buildFreemiumBlockedGate()
+      : await preflightAIGate('ai_quick_scan', 1);
+
+    if (gate.code === 'credits_exhausted_but_invoiceable') {
+      return (await presentBillingGateSheet(gate)) === 'continue';
+    }
+    if (!gate.canProceed) {
+      await presentBillingGateSheet(gate);
+      return false;
+    }
+    return true;
+  }, [buildFreemiumBlockedGate, freemiumStatus, preflightAIGate, presentBillingGateSheet]);
+
+  const markQuickScanRetryable = useCallback((itemId: string, errorMessage: string) => {
+    transitionItem(itemId, 'error', { error: errorMessage });
+    setItemLoadingStates(prev => ({
+      ...prev,
+      [itemId]: { isLoading: false, stage: 'Scan failed', error: errorMessage },
+    }));
+    // The cart status survives the local snapshot. The matchContext marker also
+    // survives backend draft hydration, including historical gate-stopped carts.
+    setQuickScanStore(prev => {
+      const existing = prev[itemId];
+      const fallback: MatchResponse = {
+        systemAction: 'fallback_to_manual',
+        confidence: 'low',
+        rankedCandidates: [],
+        totalMatches: 0,
+      };
+      return {
+        ...prev,
+        [itemId]: {
+          matchData: {
+            ...(existing?.matchData || fallback),
+            scanError: errorMessage,
+          } as MatchResponse,
+          matchRows: existing?.matchRows || [],
+        },
+      };
+    });
+  }, [setQuickScanStore]);
+
+  const clearQuickScanRetryable = useCallback((itemId: string) => {
+    transitionItem(itemId, 'searching');
+    setQuickScanStore(prev => {
+      const existing = prev[itemId];
+      if (!existing?.matchData || !(existing.matchData as any).scanError) return prev;
+      const { scanError: _scanError, ...matchData } = existing.matchData as MatchResponse & { scanError?: string };
+      return {
+        ...prev,
+        [itemId]: { ...existing, matchData: matchData as MatchResponse },
+      };
+    });
+  }, [setQuickScanStore]);
+
+  useEffect(() => () => {
+    if (billingGatePresentationTimerRef.current) clearTimeout(billingGatePresentationTimerRef.current);
+    if (paywallActionTimerRef.current) clearTimeout(paywallActionTimerRef.current);
+    billingGateResolverRef.current?.('dismiss');
+    billingGateResolverRef.current = null;
+  }, []);
 
   const canAddAnotherItem = useCallback((currentCount: number) => {
     if (currentCount < MAX_BATCH_ITEMS) return true;
@@ -2157,14 +2304,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
-    // Out of free scans → no blocking modal; the cart sheet opens and presents
-    // the usage limit with the upgrade stepper / add-credits options.
-    if (freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted) {
-      openBulkItemsSheetRef.current?.();
-      return;
-    }
-
     if (!cameraRef.current || isCapturing) return;
+
+    // Resolve quota before touching the camera, creating an item, showing scan
+    // progress, or opening a stream. A granted initiation is carried into the
+    // actual scan so an already-approved capture is never killed by a second gate.
+    if (!(await requestQuickScanAccess())) return;
 
     if ((cameraMode === 'manifest' || cameraMode === 'receipt')) {
       const documentPhotoCount = bulkItems.reduce((count, item) => count + item.photos.length, 0);
@@ -2210,8 +2355,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       if (photo) {
         const quickScanOptions: QuickScanRunOptions | undefined = cameraMode === 'camera'
-          ? { mode: 'adaptive' }
-          : undefined;
+          ? { mode: 'adaptive', skipPreflight: true }
+          : { skipPreflight: true };
         const newPhoto: CapturedPhoto = {
           id: `photo-${Date.now()}`,
           uri: photo.uri,
@@ -2234,7 +2379,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         if (cameraMode === 'shelf' && liveItems.length === 0 && !targetItem) {
           setShelfPhotoUri(newPhoto.uri);
-          handleShelfModeScan(newPhoto);
+          handleShelfModeScan(newPhoto, { skipPreflight: true });
         } else {
           if (targetItem) {
             // The destination is resolved once from live refs. Attach and scan with that exact
@@ -2304,7 +2449,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, freemiumStatus, cameraMode, bulkItems]);
+  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -2811,8 +2956,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const handleShelfModeScan = useCallback(async (
     photo: CapturedPhoto,
-    options?: { preserveAdaptivePresentation?: boolean },
+    options?: { preserveAdaptivePresentation?: boolean; skipPreflight?: boolean },
   ) => {
+    if (!options?.skipPreflight && !(await requestQuickScanAccess())) return;
+
     try {
       setIsAdaptiveShelfScan(Boolean(options?.preserveAdaptivePresentation));
       closeShelfScanStream();
@@ -2902,7 +3049,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         reasonCode: 'client_preflight_failed',
       });
     }
-  }, [closeShelfScanStream, consumeShelfStreamEvent, createShelfFolder, resetShelfScanResults, sheetTranslateY]);
+  }, [closeShelfScanStream, consumeShelfStreamEvent, createShelfFolder, requestQuickScanAccess, resetShelfScanResults, sheetTranslateY]);
 
   const runQuickScanTextSearch = useCallback(async (itemId: string, newQuery: string) => {
     try {
@@ -3232,6 +3379,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Some call sites wire this straight into onPress, which passes the press event as the
     // first arg. Anything that isn't a string means "no target item", never a target.
     if (typeof targetItemId !== 'string') targetItemId = undefined;
+
+    // Check quota before opening the picker. This is intentionally before any file
+    // selection, item mutation, upload, loading state, or stream creation.
+    if (!(await requestQuickScanAccess())) return;
+
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission needed', 'We need camera roll permissions to upload images.');
@@ -3268,8 +3420,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // captures: one photo of several things becomes a shelf folder, one thing stays single.
       // Explicit corrections (targetItemId from wrong-item / add-details) stay single-scan.
       const uploadScanOptions: QuickScanRunOptions | undefined = cameraMode === 'camera'
-        ? { mode: 'adaptive' }
-        : undefined;
+        ? { mode: 'adaptive', skipPreflight: true }
+        : { skipPreflight: true };
       // Build CapturedPhoto for each selected asset (no crop frame)
       const newPhotos: CapturedPhoto[] = assets.map((asset, idx) => ({
         id: `upload-${Date.now()}-${idx}`,
@@ -3295,7 +3447,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const shelfPhoto = newPhotos[0];
         setCapturedPhotos(prev => [...prev, shelfPhoto]);
         setShelfPhotoUri(shelfPhoto.uri);
-        handleShelfModeScan(shelfPhoto);
+        handleShelfModeScan(shelfPhoto, { skipPreflight: true });
         return;
       }
 
@@ -3312,7 +3464,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // Plain multi-photo gallery imports to an already-matched item don't each fire a full
         // (~15s, billable) re-match — that was a cost regression from dropping the old gate.
         if (newPhotos[0] && (!!targetItemId || wasEmpty)) {
-          setTimeout(() => performQuickScan(newPhotos[0], effectiveItemId, targetItemId ? undefined : uploadScanOptions), 500);
+          setTimeout(() => performQuickScan(
+            newPhotos[0],
+            effectiveItemId,
+            targetItemId ? { skipPreflight: true } : uploadScanOptions,
+          ), 500);
         }
       } else if (liveItems.length === 0) {
         const firstItem = {
@@ -3345,7 +3501,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
       }
     }
-  }, [cameraMode, canAddAnotherItem, handleShelfModeScan, setActiveItemId, setBulkItems]);
+  }, [cameraMode, canAddAnotherItem, handleShelfModeScan, requestQuickScanAccess, setActiveItemId, setBulkItems]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -3499,10 +3655,32 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    if (!options?.skipPreflight) {
+      const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
+        ? buildFreemiumBlockedGate()
+        : await preflightAIGate('ai_quick_scan', 1);
+
+      if (gate.code === 'credits_exhausted_but_invoiceable') {
+        await persistPendingQuickScan(photo, itemId, options?.mode);
+        const decision = await presentBillingGateSheet(gate);
+        if (decision !== 'continue') {
+          markQuickScanRetryable(itemId, gate.message);
+          return;
+        }
+        await clearPendingQuickScan();
+      } else if (!gate.canProceed) {
+        await persistPendingQuickScan(photo, itemId, options?.mode);
+        await presentBillingGateSheet(gate);
+        markQuickScanRetryable(itemId, gate.message);
+        return;
+      }
+    }
+
     // New scan starts – clear any previous cancellation
     quickScanCancelledRef.current = false;
     if (options?.mode === 'adaptive') setIsAdaptiveShelfScan(false);
 
+    clearQuickScanRetryable(itemId);
     isAutoScanningRef.current = true;
     setIsAutoScanning(true);
     setCurrentInstruction('processing');
@@ -3541,32 +3719,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.debug('[QUICK SCAN] Starting quick scan for photo:', photo.id);
       log.debug('[QUICK SCAN] Photo URI:', photo.uri);
       log.debug('[QUICK SCAN] Timestamp:', new Date().toISOString());
-
-      if (!options?.skipPreflight) {
-        const gate = await preflightAIGate('ai_quick_scan', 1);
-
-        if (gate.code === 'credits_exhausted_but_invoiceable') {
-          await persistPendingQuickScan(photo, itemId, options?.mode);
-          const decision = await presentBillingGateSheet(gate);
-
-          if (decision === 'billing') {
-            scanErrorMessage = gate.message;
-            return;
-          }
-
-          if (decision !== 'continue') {
-            scanErrorMessage = gate.message;
-            return;
-          }
-
-          await clearPendingQuickScan();
-        } else if (!gate.canProceed) {
-          await persistPendingQuickScan(photo, itemId, options?.mode);
-          const decision = await presentBillingGateSheet(gate);
-          scanErrorMessage = gate.message;
-          return;
-        }
-      }
 
       // Upload image to Supabase Storage first
       log.debug('[QUICK SCAN] Uploading image to Supabase...');
@@ -3902,6 +4054,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             },
           };
         });
+        transitionItem(itemId, shouldAutoConfirmTopMatch ? 'matched' : 'needs_context');
 
         // CRITICAL: Also update component-level matchData so getInstructionText displays correct count
         setMatchData(nextMatchData);
@@ -4002,6 +4155,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       } else {
         log.debug('[QUICK SCAN] No matches found');
+        transitionItem(itemId, 'needs_context', { needsContextReason: 'No matches found' });
         // Distinguish an AI/image-service OUTAGE from a genuine "couldn't identify it" so we don't
         // blame the user's photo when the provider hiccuped. Backend tags the abstain reasonCode
         // 'provider_error' (LLM/search tool threw) — tell them to retry the same photo, not chase a
@@ -4036,10 +4190,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       isAutoScanningRef.current = false;
       setIsAutoScanning(false);
       if (scanErrorMessage) {
-        setItemLoadingStates(prev => ({
-          ...prev,
-          [itemId]: { isLoading: false, stage: 'Scan failed', error: scanErrorMessage || 'Quick scan failed' },
-        }));
+        markQuickScanRetryable(itemId, scanErrorMessage);
       } else {
         // Clear loading state
         setItemLoadingStates(prev => {
@@ -4062,10 +4213,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     quickScanStore,
     showNotificationMessage,
     incrementLocalUsage,
+    freemiumStatus,
+    buildFreemiumBlockedGate,
     preflightAIGate,
     persistPendingQuickScan,
     presentBillingGateSheet,
     clearPendingQuickScan,
+    clearQuickScanRetryable,
+    markQuickScanRetryable,
     beginAdaptiveShelfScan,
     consumeShelfStreamEvent,
     stopShelfScan,
@@ -4089,7 +4244,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Attach a freshly captured photo to a specific item and re-run the full match. First
   // photo becomes the cover. Mirrors the live-camera capture branch, target-id explicit.
-  const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean }) => {
+  const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean; skipPreflight?: boolean }) => {
     const wasEmpty = (bulkItemsRef.current.find((i) => i.id === itemId)?.photos.length ?? 0) === 0;
     setBulkItems((prev) => prev.map((item) => {
       if (item.id !== itemId) return item;
@@ -4099,26 +4254,41 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setCapturedPhotos((prev) => [...prev, photo]);
     // Scan when this is the cover (first) photo OR an explicit correction/re-match (wrong-item,
     // add-details tag). A plain "add another photo" to an already-matched item does NOT re-match.
-    if (wasEmpty || opts?.rescan) setTimeout(() => performQuickScan(photo, itemId), 500);
+    if (wasEmpty || opts?.rescan) {
+      setTimeout(() => performQuickScan(photo, itemId, opts?.skipPreflight ? { skipPreflight: true } : undefined), 500);
+    }
   }, [performQuickScan]);
 
   // Open / close the inline capture overlay for a target item. `rescan` marks an explicit
   // correction (wrong-item / add-details tag) so the captured shot re-runs the full match;
   // a plain "add photo" leaves it false (gallery add → no re-match unless it's the cover).
   const photoCaptureRescanRef = useRef(false);
-  const openPhotoCaptureForItem = useCallback((itemId: string, opts?: { rescan?: boolean }) => {
+  const photoCapturePreflightGrantedRef = useRef(false);
+  const openPhotoCaptureForItem = useCallback(async (itemId: string, opts?: { rescan?: boolean }) => {
     if (photoCaptureTargetId) return; // overlay already open — ignore re-entrant taps
+    const targetNeedsScan =
+      !!opts?.rescan ||
+      (bulkItemsRef.current.find((item) => item.id === itemId)?.photos.length ?? 0) === 0;
+    if (targetNeedsScan && !(await requestQuickScanAccess())) return;
+
     photoCaptureRescanRef.current = !!opts?.rescan;
+    photoCapturePreflightGrantedRef.current = targetNeedsScan;
     setOverlayFacing('back');
     setOverlayFlash('off');
     setPhotoCaptureTargetId(itemId);
-  }, [photoCaptureTargetId]);
-  const closePhotoCaptureOverlay = useCallback(() => setPhotoCaptureTargetId(null), []);
+  }, [photoCaptureTargetId, requestQuickScanAccess]);
+  const closePhotoCaptureOverlay = useCallback(() => {
+    photoCapturePreflightGrantedRef.current = false;
+    setPhotoCaptureTargetId(null);
+  }, []);
 
   // Take one shot in the overlay, attach it, and return to the prior surface.
   const handleOverlayCapture = useCallback(async () => {
     const targetId = photoCaptureTargetId;
     if (!targetId || !captureOverlayRef.current || isOverlayCapturing) return;
+    const targetNeedsScan =
+      photoCaptureRescanRef.current ||
+      (bulkItemsRef.current.find((item) => item.id === targetId)?.photos.length ?? 0) === 0;
     try {
       setIsOverlayCapturing(true);
       const shot = await captureOverlayRef.current.takePictureAsync({ quality: 0.7, base64: false });
@@ -4130,7 +4300,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           height: shot.height || SCREEN_HEIGHT,
           timestamp: Date.now(),
           isCover: false,
-        }, { rescan: photoCaptureRescanRef.current });
+        }, {
+          rescan: photoCaptureRescanRef.current,
+          skipPreflight: targetNeedsScan && photoCapturePreflightGrantedRef.current,
+        });
+        photoCapturePreflightGrantedRef.current = false;
         setPhotoCaptureTargetId(null); // success only → dismiss back to where the user was
       }
     } catch (err) {
@@ -4681,6 +4855,48 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     sheetTranslateY.value = withSpring(0, CART_SPRING);
   }, [sheetTranslateY]);
   openBulkItemsSheetRef.current = openBulkItemsSheet;
+
+  const runAfterCartDismissal = useCallback((action: () => void) => {
+    if (paywallActionTimerRef.current) {
+      clearTimeout(paywallActionTimerRef.current);
+      paywallActionTimerRef.current = null;
+    }
+    if (!showDeepSearchSheetRef.current) {
+      action();
+      return;
+    }
+    closeBulkItemsSheetRef.current();
+    paywallActionTimerRef.current = setTimeout(() => {
+      paywallActionTimerRef.current = null;
+      if (!showDeepSearchSheetRef.current) action();
+    }, 500);
+  }, []);
+
+  const openPlansSafely = useCallback(() => {
+    runAfterCartDismissal(() => setShowTierSelector(true));
+  }, [runAfterCartDismissal]);
+
+  const openCreditsSafely = useCallback(() => {
+    runAfterCartDismissal(() => (navigation as any).navigate('Billing'));
+  }, [navigation, runAfterCartDismissal]);
+
+  const handleBillingGatePlans = useCallback(() => {
+    closeBillingGateSheet('plans');
+    if (paywallActionTimerRef.current) clearTimeout(paywallActionTimerRef.current);
+    paywallActionTimerRef.current = setTimeout(() => {
+      paywallActionTimerRef.current = null;
+      setShowTierSelector(true);
+    }, 340);
+  }, [closeBillingGateSheet]);
+
+  const handleBillingGateCredits = useCallback(() => {
+    closeBillingGateSheet('credits');
+    if (paywallActionTimerRef.current) clearTimeout(paywallActionTimerRef.current);
+    paywallActionTimerRef.current = setTimeout(() => {
+      paywallActionTimerRef.current = null;
+      (navigation as any).navigate('Billing');
+    }, 340);
+  }, [closeBillingGateSheet, navigation]);
 
   // Swipe DOWN anywhere on the capture screen → open the cart with the reachability
   // lift. The wrapping PanGestureHandler is configured (activeOffsetY) to ONLY claim
@@ -5319,11 +5535,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   freemium={freemiumStatus && !freemiumStatus.hasSubscription
                     ? { usageCount: freemiumStatus.usageCount, freeLimit: freemiumStatus.freeLimit, exhausted: freemiumStatus.isFreeTierExhausted }
                     : null}
-                  onUpgrade={() => setShowTierSelector(true)}
-                  onAddCredits={() => {
-                    setBillingGate(buildFreemiumBlockedGate());
-                    setBillingGateVisible(true);
-                  }}
+                  onUpgrade={openPlansSafely}
+                  onAddCredits={openCreditsSafely}
                   onRetryItemScan={(itemId) => {
                     const targetItem = bulkItems.find(item => item.id === itemId);
                     const firstPhoto = targetItem?.photos?.[0];
@@ -5658,10 +5871,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         visible={billingGateVisible}
         gate={billingGate}
         onClose={() => closeBillingGateSheet('dismiss')}
-        onOpenBilling={() => {
-          closeBillingGateSheet('billing');
-          (navigation as any).navigate('Billing');
-        }}
+        onSeePlans={handleBillingGatePlans}
+        onAddCredits={handleBillingGateCredits}
         onContinue={() => closeBillingGateSheet('continue')}
       />
 

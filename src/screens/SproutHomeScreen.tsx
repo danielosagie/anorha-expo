@@ -5,6 +5,7 @@ import {
   Dimensions,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -336,6 +337,7 @@ const SproutHomeScreen: React.FC = () => {
   );
 
   const controller = useLiquidationConversationController({ adapter });
+  const refreshCampaignData = controller.onRefresh;
   const refreshCampaignsRef = useRef(controller.onRefresh);
   useEffect(() => {
     refreshCampaignsRef.current = controller.onRefresh;
@@ -398,9 +400,27 @@ const SproutHomeScreen: React.FC = () => {
     insight,
     generatedAt: insightGeneratedAt,
     nextRefreshAt: insightNextRefreshAt,
+    refetch: refetchInsight,
   } = useOrgNudges(!isOrgLoading ? currentOrg?.id : undefined);
   const { liveConnections } = usePlatformConnections();
-  const { productCount, loading: productCountLoading } = useProfileProductCount();
+  const {
+    productCount,
+    loading: productCountLoading,
+    refresh: refreshProductCount,
+  } = useProfileProductCount();
+  const [homeRefreshing, setHomeRefreshing] = useState(false);
+  const refreshHome = useCallback(async () => {
+    setHomeRefreshing(true);
+    try {
+      await Promise.allSettled([
+        refetchInsight(),
+        refreshProductCount(),
+        refreshCampaignData(),
+      ]);
+    } finally {
+      setHomeRefreshing(false);
+    }
+  }, [refetchInsight, refreshCampaignData, refreshProductCount]);
   // Setup state drives the empty dashboard: an established seller (has a platform
   // AND items) who simply hasn't started a clearout should NOT see first-run
   // onboarding — only the "Start a clearout" CTA. `setupUnknown` suppresses the
@@ -1086,6 +1106,14 @@ const SproutHomeScreen: React.FC = () => {
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={homeRefreshing}
+            onRefresh={refreshHome}
+            tintColor={BRAND}
+            colors={[BRAND]}
+          />
+        }
       >
         {/* ── BODY ─────────────────────────────────────────────────── */}
         <View style={styles.body}>

@@ -313,6 +313,8 @@ const BulkCartRow = React.memo(function BulkCartRow({
 }) {
   const matchCount = quickScanData?.matchData?.totalMatches || 0;
   const topMatch = quickScanData?.matchData?.rankedCandidates?.[0];
+  const persistedScanError = (quickScanData?.matchData as (MatchResponse & { scanError?: string }) | undefined)?.scanError;
+  const retryableError = loadingState?.error || persistedScanError;
   const confirmedMatch = matchInfo?.matchRows && matchInfo.preSelectedIndices?.length
     ? matchInfo.matchRows[matchInfo.preSelectedIndices[0]]
     : null;
@@ -326,7 +328,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
   const matchPrice = extractPrice(selectedMatch?.price);
   const statusSubtitle = loadingState?.isLoading
     ? (loadingState.stage || 'Working…')
-    : loadingState?.error
+    : retryableError
       ? (confirmedMatch ? 'Generation failed · tap retry' : 'Match failed · tap retry')
       : isGenerated
         ? 'Details ready · tap to review'
@@ -385,7 +387,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
                 {loadingState?.isLoading ? (
                   <UnicodeSpinner spinner={(spinners.helix || spinners.dots) as UnicodeSpinnerDefinition} color="#93C822" size={11} />
                 ) : (
-                  <View style={[styles.cartStatusDot, { backgroundColor: loadingState?.error ? '#F87171' : isGenerated ? '#93C822' : isLocalInventoryMatch ? '#60A5FA' : confirmedMatch ? '#93C822' : '#94A3B8' }]} />
+                  <View style={[styles.cartStatusDot, { backgroundColor: retryableError ? '#F87171' : isGenerated ? '#93C822' : isLocalInventoryMatch ? '#60A5FA' : confirmedMatch ? '#93C822' : '#94A3B8' }]} />
                 )}
                 <Text style={styles.cartSub} numberOfLines={1}>{statusSubtitle}</Text>
               </View>
@@ -435,7 +437,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
             }}>
               <Text style={styles.cartReviewPillText}>Review listing</Text>
             </TouchableOpacity>
-          ) : loadingState?.error ? (
+          ) : retryableError ? (
             <TouchableOpacity style={styles.cartReviewPill} onPress={(event) => {
               event.stopPropagation?.();
               if (confirmedMatch) onGenerate(item);

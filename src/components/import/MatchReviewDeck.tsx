@@ -32,16 +32,24 @@ export default function MatchReviewDeck({
   onDone?: (sessionCounts?: { linked: number; created: number; ignored: number }) => void;
   topInset?: number;
 }) {
-  // Snapshot the queue ONCE so the resolver optimistically removing items
-  // doesn't reshuffle the stack under the user's thumb. New scans remount.
-  const [deck] = useState<SyncItem[]>(() => items);
+  type DeckEntry = { item: SyncItem; key: string };
+  // Snapshot the queue so the resolver optimistically removing items doesn't
+  // reshuffle the stack under the user's thumb. Each attempt has its own key:
+  // SwipeCard owns Reanimated "gone" state, so reusing it for the next item
+  // leaves the new card translated off-screen after a successful swipe.
+  const [deck, setDeck] = useState<DeckEntry[]>(() =>
+    items.map((item, index) => ({ item, key: `${item.platformId}:${index}:0` })),
+  );
   const total = deck.length;
   const [pos, setPos] = useState(0);
+  const posRef = useRef(0);
+  const retryKeyRef = useRef(0);
+  const committedCardRef = useRef<string | null>(null);
   // Picked candidate per item — pre-seeded to the resolver's recommendation so
   // the primary button is always ready without an extra tap.
   const [picks, setPicks] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {};
-    for (const it of deck) {
+    for (const { item: it } of deck) {
       const rec = it.resolution.kind === 'link' ? it.resolution.canonical.id : null;
       const first = it.candidates?.[0]?.id;
       const seed = rec ?? first;
@@ -59,9 +67,11 @@ export default function MatchReviewDeck({
   const pendingRef = useRef<Record<string, Promise<void>>>({});
   const [ending, setEnding] = useState<{ kind: 'waiting' | 'done' | 'failed'; count?: number }>({ kind: 'waiting' });
 
-  const cur = deck[pos];
+  const curEntry = deck[pos];
+  const cur = curEntry?.item;
 
-  const launchResolve = useCallback((platformId: string, decision: Decision) => {
+  const launchResolve = useCallback((item: SyncItem, decision: Decision) => {
+    const platformId = item.platformId;
     const attempt = (outcomesRef.current[platformId]?.attempt ?? 0) + 1;
     decisionsRef.current[platformId] = decision;
     outcomesRef.current[platformId] = { attempt, status: 'pending' };
@@ -77,6 +87,17 @@ export default function MatchReviewDeck({
       .catch(() => {
         if (outcomesRef.current[platformId]?.attempt === attempt) {
           outcomesRef.current[platformId] = { attempt, status: 'failed' };
+          // The card already advanced optimistically. Put a failed save at the
+          // end unless an undo has made that same item pending again.
+          setDeck((queue) => {
+            const alreadyPending = queue
+              .slice(posRef.current)
+              .some((entry) => entry.item.platformId === platformId);
+            if (alreadyPending) return queue;
+            retryKeyRef.current += 1;
+            return [...queue, { item, key: `${platformId}:retry:${retryKeyRef.current}` }];
+          });
+          setEnding({ kind: 'waiting' });
         }
       })
       .finally(() => {
@@ -87,10 +108,15 @@ export default function MatchReviewDeck({
   }, [resolve]);
 
   const commit = useCallback((choice: ResolveChoice, canonicalId?: string) => {
-    if (!cur) return;
-    void launchResolve(cur.platformId, { choice, canonicalId });
-    setPos((p) => p + 1);
-  }, [cur, launchResolve]);
+    if (!cur || !curEntry || committedCardRef.current === curEntry.key) return;
+    committedCardRef.current = curEntry.key;
+    void launchResolve(cur, { choice, canonicalId });
+    setPos((p) => {
+      const next = p + 1;
+      posRef.current = next;
+      return next;
+    });
+  }, [cur, curEntry, launchResolve]);
 
   const tallyCounts = useCallback(() => {
     const c = { linked: 0, created: 0, ignored: 0 };
@@ -134,12 +160,19 @@ export default function MatchReviewDeck({
     );
     setEnding({ kind: 'waiting' });
     for (const platformId of failedIds) {
-      void launchResolve(platformId, decisionsRef.current[platformId]);
+      const item = deck.find((entry) => entry.item.platformId === platformId)?.item;
+      if (item) void launchResolve(item, decisionsRef.current[platformId]);
     }
     await settleEnding();
-  }, [launchResolve, settleEnding]);
+  }, [deck, launchResolve, settleEnding]);
 
-  const undo = useCallback(() => setPos((p) => Math.max(0, p - 1)), []);
+  const undo = useCallback(() => {
+    setPos((p) => {
+      const next = Math.max(0, p - 1);
+      posRef.current = next;
+      return next;
+    });
+  }, []);
 
   const chrome = useMemo(
     () => ({
@@ -198,9 +231,11 @@ export default function MatchReviewDeck({
   return (
     <DeckChrome.Provider value={chrome}>
       <TinderShell
+        key={curEntry.key}
         idx={pos + 1}
         total={total}
         title={cur.title}
+        note="Link matches your existing item. New creates one."
         onBack={() => onDone?.()}
         primary={primaryLabel}
         primaryReady={resolving !== cur.platformId}

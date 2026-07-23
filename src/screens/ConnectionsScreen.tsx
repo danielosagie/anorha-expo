@@ -91,6 +91,22 @@ const ConnectionsScreen = () => {
     for (const b of hub.lanes.matches.byConnection) m[b.connectionId] = b.count;
     return m;
   }, [hub.lanes.matches.byConnection]);
+  const inboxPlatformDetail = useMemo(() => {
+    return hub.connections
+      .filter((connection) =>
+        connection.needsAttention > 0 ||
+        connection.state === 'scanning' ||
+        connection.state === 'syncing',
+      )
+      .map((connection) => {
+        const label =
+          getPlatform(connection.platformType)?.label ||
+          normalizeDisplayName(connection.platformName || connection.platformType || 'Platform');
+        if (connection.needsAttention > 0) return `${label} ${connection.needsAttention}`;
+        return `${label} ${connection.state === 'scanning' ? 'scanning' : 'syncing'}`;
+      })
+      .join(' · ');
+  }, [hub.connections]);
 
   const [pools, setPools] = useState<Pool[]>([]);
   const [managing, setManaging] = useState(false);
@@ -289,13 +305,13 @@ const ConnectionsScreen = () => {
           </View>
           <View style={styles.rowInfo}>
             <Text style={styles.rowTitle}>Import inbox</Text>
-            <Text style={[styles.rowSub, hub.totalNeedsYou === 0 && styles.inboxSubMuted]} numberOfLines={1}>
+            <Text style={[styles.rowSub, hub.totalNeedsYou === 0 && styles.inboxSubMuted]} numberOfLines={2}>
               {hub.error
                 ? 'Couldn’t verify import status'
                 : hub.connections.some((connection) => connection.state === 'error')
                   ? 'An import needs attention'
-                  : hub.scanning.length > 0
-                    ? 'Importing inventory…'
+                  : inboxPlatformDetail
+                    ? inboxPlatformDetail
                     : hub.totalNeedsYou > 0
                 ? `${hub.totalNeedsYou} ${hub.totalNeedsYou === 1 ? 'item needs' : 'items need'} you`
                 : 'All caught up'}
@@ -346,6 +362,10 @@ const ConnectionsScreen = () => {
                   onPress={() => {
                     if (c.IsEnabled === false || String(c.Status).toLowerCase() === 'inactive') {
                       void retryImport(c);
+                      return;
+                    }
+                    if (attn > 0) {
+                      navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType });
                       return;
                     }
                     navigation.navigate('SyncRules', { connectionId: c.Id, platformName: c.PlatformType });

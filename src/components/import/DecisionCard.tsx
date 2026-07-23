@@ -19,14 +19,20 @@
 // a trailing info icon (a separate hit target) opens that candidate's
 // side-by-side. Taps clear SwipeCard's pan thresholds, so neither affordance
 // fights the swipe or the select.
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { SyncItem, CanonicalRef } from '../../types/syncItem';
 import { RC } from '../resolve/ResolveKit';
 import CompareSheet from './CompareSheet';
+import { fetchImportCandidateDetails } from '../../lib/importCandidateDetails';
+import { getPlatform } from '../../config/platforms';
+import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
+import { createLogger } from '../../utils/logger';
 
 const HIT = { top: 12, bottom: 12, left: 12, right: 12 };
+const log = createLogger('DecisionCard');
+const EMPTY_CANDIDATES: CanonicalRef[] = [];
 
 function money(v: string | number | null): string {
   if (v == null || v === '') return '';
@@ -69,7 +75,38 @@ export default function DecisionCard({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const candidates = item.candidates ?? [];
+  const thinCandidates = item.candidates ?? EMPTY_CANDIDATES;
+  const [candidateDetails, setCandidateDetails] = useState<Record<string, CanonicalRef>>({});
+
+  // Resolution candidates are intentionally thin. A product created moments ago
+  // by another import can arrive with only its canonical id, so hydrate display
+  // fields and its source mapping before drawing the candidate card.
+  useEffect(() => {
+    let alive = true;
+    const ids = thinCandidates.map((candidate) => candidate.id).filter(Boolean);
+    if (ids.length === 0) {
+      setCandidateDetails({});
+      return;
+    }
+
+    void (async () => {
+      try {
+        const next = await fetchImportCandidateDetails(ids, platformName);
+        if (alive) setCandidateDetails(next);
+      } catch (error) {
+        log.warn('candidate hydration failed', error);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [item.platformId, platformName, thinCandidates]);
+
+  const candidates = useMemo(
+    () => thinCandidates.map((candidate) => ({ ...candidate, ...candidateDetails[candidate.id] })),
+    [thinCandidates, candidateDetails],
+  );
 
   const meta = [item.sku, money(item.price)].filter(Boolean).join(' · ');
 
@@ -97,7 +134,7 @@ export default function DecisionCard({
             <MaterialCommunityIcons name="information-outline" size={18} color={RC.muted} />
           </View>
         </View>
-        {!!platformName && <Text style={styles.from} numberOfLines={1}>from {platformName}</Text>}
+        {!!platformName && <Text style={styles.from} numberOfLines={1}>From {platformName}</Text>}
         {!!meta && <Text style={styles.meta} numberOfLines={1}>{meta}</Text>}
       </TouchableOpacity>
 
@@ -110,6 +147,11 @@ export default function DecisionCard({
           <View style={styles.grid}>
             {candidates.map((c) => {
               const on = selectedId === c.id;
+              const title = c.title || c.sku || c.id;
+              const detail = [c.sku || (!c.title ? c.id : null), money(c.price ?? null)].filter(Boolean).join(' · ');
+              const source = c.sourcePlatform
+                ? getPlatform(c.sourcePlatform)?.label ?? c.sourcePlatform
+                : 'your catalog';
               return (
                 <TouchableOpacity
                   key={c.id}
@@ -135,9 +177,10 @@ export default function DecisionCard({
                     </TouchableOpacity>
                   </View>
                   <Text style={[styles.candTitle, on && { color: RC.greenInk }]} numberOfLines={2}>
-                    {c.title ?? c.sku ?? 'Item'}
+                    {title}
                   </Text>
-                  {!!c.sku && <Text style={styles.candSku} numberOfLines={1}>{c.sku}</Text>}
+                  <Text style={styles.candSource} numberOfLines={1}>From {source}</Text>
+                  {!!detail && <Text style={styles.candSku} numberOfLines={1}>{detail}</Text>}
                 </TouchableOpacity>
               );
             })}
@@ -206,8 +249,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.92)', borderWidth: 1, borderColor: RC.line,
     alignItems: 'center', justifyContent: 'center',
   },
-  candTitle: { fontSize: 13.5, fontWeight: '700', color: RC.ink, lineHeight: 18 },
-  candSku: { fontSize: 12, color: RC.muted, marginTop: -3 },
+  candTitle: { fontSize: 13.5, fontFamily: CHAT_FONT.bold, color: CHAT_COLORS.ink, lineHeight: 18 },
+  candSource: { fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim, marginTop: -3 },
+  candSku: { fontSize: 12, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, marginTop: -4 },
 
   // Add-as-new (no candidate) — keeps the same image-led incoming block above
   newPrompt: {

@@ -3,17 +3,92 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth, useUser } from '@clerk/expo';
 import { API_BASE_URL } from '../config/env';
 import { getActiveThread } from '../lib/activeThread';
 import { createLogger } from '../utils/logger';
 const log = createLogger('usePushNotifications');
 
+const READY_JOB_IDS_KEY = 'notifications:ready-job-ids:v1';
+const READY_JOB_IDS_LIMIT = 100;
+let readyJobIdsPromise: Promise<{ ids: Set<string>; order: string[] }> | null = null;
+const readyFallbackAt = new Map<string, number>();
+const READY_FALLBACK_WINDOW_MS = 10 * 60 * 1000;
+
+function readyJobIdentity(notification: Notifications.Notification): { jobId: string | null; fallbackKey: string | null } | null {
+    const content = notification.request.content;
+    const data = (content.data || {}) as any;
+    const type = String(data?.type || '').toLowerCase();
+    const text = `${String(content.title || '')} ${String(content.body || '')}`.toLowerCase();
+    const isReady =
+        type === 'job_complete' ||
+        type === 'import_ready' ||
+        type === 'import_review_ready' ||
+        type === 'sync_ready' ||
+        (text.includes('ready') && text.includes('review'));
+    if (!isReady) return null;
+    const rawId = data?.jobId ?? data?.job_id ?? data?.importJobId ?? data?.import_id;
+    const jobId = rawId == null || String(rawId).trim() === '' ? null : String(rawId);
+    const importType = String(data?.importType || '').trim().toLowerCase();
+    return { jobId, fallbackKey: importType ? `import:${importType}` : null };
+}
+
+async function shouldSuppressReadyJob(notification: Notifications.Notification): Promise<boolean> {
+    const identity = readyJobIdentity(notification);
+    if (!identity) return false;
+    const { jobId, fallbackKey } = identity;
+
+    // Current backend import-ready payloads omit jobId. Keep a narrow in-memory
+    // fallback so repeated completion pushes for the same platform do not banner
+    // during one review session. Once jobId is present, the durable path below
+    // gives exact once-per-job behavior across launches.
+    if (!jobId) {
+        if (!fallbackKey) return false;
+        const now = Date.now();
+        const lastSeenAt = readyFallbackAt.get(fallbackKey) ?? 0;
+        readyFallbackAt.set(fallbackKey, now);
+        return now - lastSeenAt < READY_FALLBACK_WINDOW_MS;
+    }
+
+    if (!readyJobIdsPromise) {
+        readyJobIdsPromise = AsyncStorage.getItem(READY_JOB_IDS_KEY)
+            .then((raw) => {
+                const parsed = raw ? JSON.parse(raw) : [];
+                const order = Array.isArray(parsed) ? parsed.map(String).slice(-READY_JOB_IDS_LIMIT) : [];
+                return { ids: new Set(order), order };
+            })
+            .catch(() => ({ ids: new Set<string>(), order: [] }));
+    }
+
+    const seen = await readyJobIdsPromise;
+    if (seen.ids.has(jobId)) return true;
+    seen.ids.add(jobId);
+    seen.order.push(jobId);
+    if (seen.order.length > READY_JOB_IDS_LIMIT) {
+        const removed = seen.order.splice(0, seen.order.length - READY_JOB_IDS_LIMIT);
+        removed.forEach((id) => seen.ids.delete(id));
+    }
+    void AsyncStorage.setItem(READY_JOB_IDS_KEY, JSON.stringify(seen.order)).catch((error) => {
+        log.warn('[PushNotifications] Failed to persist ready-job dedupe:', error);
+    });
+    return false;
+}
+
 
 // Configure how notifications appear when app is in foreground
 Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
         const data = (notification?.request?.content?.data || {}) as any;
+        if (await shouldSuppressReadyJob(notification)) {
+            return {
+                shouldShowAlert: false,
+                shouldPlaySound: false,
+                shouldSetBadge: false,
+                shouldShowBanner: false,
+                shouldShowList: false,
+            };
+        }
         // Suppress the in-app banner for a Sprout reply when the seller is already in
         // that exact campaign thread (they're watching it land). Backgrounded pushes
         // bypass this handler entirely, so they still show; replies seen from Home or

@@ -9,7 +9,10 @@ export interface CanonicalRef {
   id: string;
   sku: string | null;
   title: string | null;
+  price?: string | number | null;
   imageUrl?: string | null;
+  /** Client-enriched from the candidate's platform mapping. */
+  sourcePlatform?: string | null;
 }
 
 export type SyncResolution =

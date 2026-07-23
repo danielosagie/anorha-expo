@@ -68,12 +68,15 @@ export function useResolution(connectionId: string | null | undefined) {
     async (platformId: string, choice: ResolveChoice, canonicalId?: string): Promise<ResolveResponse | null> => {
       if (!connectionId) return null;
       setResolving(platformId);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
       try {
         const token = await ensureSupabaseJwt();
         const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ platformId, choice, canonicalId }),
+          signal: controller.signal,
         });
         // 409 = the row's Version CAS was stale: another device/session resolved
         // this item concurrently. Nothing has been removed locally yet, so there
@@ -93,10 +96,11 @@ export function useResolution(connectionId: string | null | undefined) {
         );
         return (await res.json().catch(() => ({ success: true }))) as ResolveResponse;
       } catch (err: any) {
-        log.warn('resolve failed', err?.message);
+        log.warn('resolve failed', err?.name === 'AbortError' ? 'request timed out' : err?.message);
         await refresh(); // reconcile with the true server state (keeps the list visible)
         throw err;
       } finally {
+        clearTimeout(timer);
         setResolving(null);
       }
     },

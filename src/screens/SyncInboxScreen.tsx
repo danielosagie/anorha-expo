@@ -6,7 +6,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useResolution } from '../hooks/useResolution';
-import ErrorModal from '../components/ErrorModal';
 import MatchReviewDeck from '../components/import/MatchReviewDeck';
 import { RC } from '../components/resolve/ResolveKit';
 import { IC, InboxHeader, GroupRow, PillButton } from '../components/importinbox/InboxKit';
@@ -39,11 +38,6 @@ const SyncInboxScreen: React.FC = () => {
   const { connectionId, platformName } = route.params;
   const { result, loading, error, resolving, refresh, resolve } = useResolution(connectionId);
 
-  // A failed resolve rolls the row back (the hook refreshes), but the user still
-  // needs to know their tap didn't stick — same ErrorModal pattern as the other
-  // save paths (GenerateDetails / ProductDetail), never a native Alert.
-  const [resolveErrorVisible, setResolveErrorVisible] = useState(false);
-
   // The session's CONFIRMED-resolve tally and the source of truth for the
   // completion arc. Keyed by platformId (not a running counter) so an undo +
   // re-decide OVERWRITES the item's outcome instead of double-counting, and so
@@ -55,8 +49,8 @@ const SyncInboxScreen: React.FC = () => {
   const confirmedRef = useRef<Record<string, SyncItem['resolution']['kind']>>({});
   const resolveAttemptRef = useRef<Record<string, number>>({});
 
-  // A failed resolve refreshes+rolls back in the hook; surface it to the user
-  // too, and DON'T record it. Reaching the
+  // A failed resolve refreshes in the hook and the deck quietly puts the item at
+  // the end of its queue. Don't record it. Reaching the
   // line after `await resolve(...)` means the hook did NOT throw: the item is
   // settled and the row was removed. The caught-failure branch is excluded.
   const resolveSafe = useCallback(
@@ -70,7 +64,6 @@ const SyncInboxScreen: React.FC = () => {
       } catch (error) {
         if (resolveAttemptRef.current[platformId] === attempt) {
           delete confirmedRef.current[platformId];
-          setResolveErrorVisible(true);
         }
         throw error;
       }
@@ -301,14 +294,6 @@ const SyncInboxScreen: React.FC = () => {
           )}
         </>
       )}
-
-      <ErrorModal
-        visible={resolveErrorVisible}
-        type="error"
-        title="Couldn’t save"
-        message="Try again."
-        onClose={() => setResolveErrorVisible(false)}
-      />
     </View>
   );
 };
