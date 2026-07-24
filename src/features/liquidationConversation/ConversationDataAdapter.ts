@@ -12,12 +12,14 @@ import type {
   CreateThreadInput,
   DecisionPrompt,
   DecisionSubmission,
+  GlobalConversationTarget,
   NegotiationDecisionInput,
   QuestionPrompt,
   RunFlashCampaignInput,
 } from './types';
 
 export interface ConversationDataAdapter {
+  resolveGlobalThread(): Promise<GlobalConversationTarget>;
   listCampaigns(): Promise<CampaignSummary[]>;
   listThreads(campaignId: string): Promise<CampaignThreadSummary[]>;
   getMessages(campaignId: string, threadId: string): Promise<ConversationMessage[]>;

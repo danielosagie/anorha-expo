@@ -94,7 +94,16 @@ export function deriveActivities(message: ConversationMessage, isStreaming: bool
       // tool call BEFORE any reply text, so a real mid-text position is only used when
       // one genuinely exists (textAnchor > 0); otherwise the card falls to the end.
       const anchor = typeof step.textAnchor === 'number' && step.textAnchor > 0 ? step.textAnchor : textLen;
-      if (step.plan && typeof step.plan.title === 'string') {
+      if (step.selection && typeof step.selection.query === 'string') {
+        out.push({
+          kind: 'selection',
+          id: `${message.id}-selection-${i}`,
+          title: 'Select items',
+          status: step.status === 'failed' ? 'failed' : 'pending',
+          selection: step.selection,
+          anchor,
+        });
+      } else if (step.plan && typeof step.plan.title === 'string') {
         // A plan the agent proposed — its own approvable card (opens the plan sheet).
         out.push({
           kind: 'plan',

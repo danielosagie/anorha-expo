@@ -28,6 +28,7 @@ import type {
   CreateThreadInput,
   DecisionPrompt,
   DecisionSubmission,
+  GlobalConversationTarget,
   ItemStatus,
   NegotiationDecisionInput,
   QuestionPrompt,
@@ -150,6 +151,23 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
 
   constructor(options?: { getClerkToken?: () => Promise<string | null> }) {
     this.getClerkToken = options?.getClerkToken;
+  }
+
+  async resolveGlobalThread(): Promise<GlobalConversationTarget> {
+    const resolved = await this.requestNest<{
+      success: boolean;
+      sessionId: string;
+      threadId: string;
+      title?: string;
+    }>('/api/agent/global/resolve', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    return {
+      sessionId: resolved.sessionId,
+      threadId: resolved.threadId,
+      title: resolved.title || 'Sprout',
+    };
   }
 
   async listCampaigns(): Promise<CampaignSummary[]> {
@@ -455,6 +473,9 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 ...((payload as any).plan && typeof (payload as any).plan === 'object' && typeof (payload as any).plan.title === 'string'
                   ? { plan: (payload as any).plan }
                   : {}),
+                ...((payload as any).selection && typeof (payload as any).selection === 'object' && typeof (payload as any).selection.query === 'string'
+                  ? { selection: (payload as any).selection }
+                  : {}),
                 threadId,
               });
               break;
@@ -525,6 +546,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
             actionType: input.actionType,
             actionPayload: input.actionPayload,
             imageUrls: input.imageUrls,
+            contextAttachment: input.contextAttachment,
             kickoff: input.kickoff || undefined,
             useSharedMemory: getChatPreferencesSnapshot().sharedMemory,
           }),
@@ -766,10 +788,15 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     // Sprout re-plans. Keyed by planId (the pending-action id), not a thread.
     if (decision.planId) {
       if (decision.action === 'approve') {
-        await this.requestNest(`/api/agent/sessions/${campaignId}/pending-actions/${decision.planId}/approve`, {
+        const response = await this.requestNest<{ success: boolean; pendingAction?: { status?: string; executionResult?: any } }>(`/api/agent/sessions/${campaignId}/pending-actions/${decision.planId}/approve`, {
           method: 'POST',
-          body: JSON.stringify({ note: decision.content }),
+          body: JSON.stringify({ note: decision.content, retry: decision.retry === true }),
         });
+        if (response?.pendingAction?.status === 'failed') {
+          const execution = response.pendingAction.executionResult;
+          const message = execution?.error || execution?.result?.data?.error || execution?.result?.error;
+          throw new Error(message || 'The inventory changes could not be applied.');
+        }
         return;
       }
       // Drop the proposed plan (best-effort) before sending the seller's revision note below.
@@ -825,6 +852,23 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
 
     const planAction = actions.find((action) => action?.toolName === 'propose_plan' && action?.input?.title);
     const input = planAction?.input;
+    const execute = input?.execute && typeof input.execute === 'object' ? input.execute : undefined;
+    const inventoryArgs =
+      execute?.tool === 'inventory_bulk_action' && execute?.args && typeof execute.args === 'object'
+        ? execute.args
+        : undefined;
+    const inventoryAction =
+      inventoryArgs &&
+      ['archive', 'delete', 'add_tag'].includes(String(inventoryArgs.action)) &&
+      Array.isArray(inventoryArgs.variantIds)
+        ? {
+            action: String(inventoryArgs.action) as 'archive' | 'delete' | 'add_tag',
+            count: inventoryArgs.variantIds.length,
+            ...(typeof inventoryArgs.tag === 'string' && inventoryArgs.tag.trim()
+              ? { tag: inventoryArgs.tag.trim() }
+              : {}),
+          }
+        : undefined;
     const plan: DecisionPrompt | null = planAction
       ? {
           id: planAction.id,
@@ -843,6 +887,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                   detail: typeof step.detail === 'string' ? step.detail : undefined,
                 }))
             : undefined,
+          ...(inventoryAction ? { inventoryAction } : {}),
           strategyId: typeof input.strategyId === 'string' ? input.strategyId : undefined,
           approveLabel: 'Approve',
           reviseLabel: 'Revise',
@@ -1044,6 +1089,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         threadId: input.threadId,
         clientMessageId: input.clientMessageId,
         imageUrls: input.imageUrls,
+        contextAttachment: input.contextAttachment,
         useSharedMemory: getChatPreferencesSnapshot().sharedMemory,
       }),
     });

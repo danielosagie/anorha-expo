@@ -14,13 +14,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { interpolate, runOnJS, useAnimatedKeyboard, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
-import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import * as Haptics from 'expo-haptics';
 import { useNavigation, useRoute, useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { setActiveThread } from '../lib/activeThread';
 import { useAuth } from '@clerk/expo';
-import { CheckCircle2, ChevronRight, MessageCircle, Package, PanelLeft, Search, Settings, AlertCircle, X, SquarePen } from 'lucide-react-native';
+import { ChevronRight, MessageCircle, Package, PanelLeft, Search, Settings, X, SquarePen } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { ConversationComposer } from '../features/liquidationConversation/components/ConversationComposer';
@@ -33,18 +31,16 @@ import type { CampaignItem, CampaignThreadSummary, ConversationMessage, PlanPayl
 import { useLegendState } from '../context/LegendStateContext';
 import { loadInventoryCatalog } from '../lib/inventoryCatalog';
 import { NarrationPlayerHost } from '../context/NarrationContext';
+import {
+  ChatChromeHeader,
+  ChatComposerFooter,
+  ChatSurfaceWash,
+} from '../features/liquidationConversation/components/ChatChrome';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
   process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ||
   'mobile';
-
-const QUICK_CHIPS = [
-  { label: 'Find slow movers', action: 'find_slow_movers' },
-  { label: 'Lower floor', action: 'lower_floor' },
-  { label: 'Flash sale', action: 'run_flash_campaign' },
-  { label: 'Pause campaign', action: 'pause_campaign' },
-];
 
 const relativeTime = (iso?: string) => {
   if (!iso) return '';
@@ -491,15 +487,6 @@ const CampaignThreadScreen = () => {
     controller.dispatchAction({ actionType, title, payload }).catch(() => controller.setNotice(null));
   };
 
-  const handleQuickChip = (action: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    if (action === 'run_flash_campaign') {
-      sendAction('run_flash_campaign', 'Run flash campaign', { discountPercent: 15, durationHours: 24, reason: 'manual_run' });
-    } else {
-      sendAction(action, action.replace(/_/g, ' '));
-    }
-  };
-
   const handleFollowUp = useCallback((prompt: string) => {
     const activeController = controllerRef.current;
     void activeController.queueTextMessage(prompt).catch(() => {
@@ -556,12 +543,7 @@ const CampaignThreadScreen = () => {
   return (
     <View style={s.root}>
       <StatusBar barStyle="dark-content" />
-      <LinearGradient
-        pointerEvents="none"
-        colors={['rgba(147,200,34,0.14)', 'rgba(147,200,34,0.055)', 'rgba(255,255,255,0)']}
-        locations={[0, 0.5, 1]}
-        style={s.pageWash}
-      />
+      <ChatSurfaceWash />
       {/* Renders nothing — subscribes to live Convex messages for the open thread
           and feeds agent-initiated posts (digests, proactive updates) into the feed. */}
       <ConvexLiveMessages threadId={controller.activeThreadId} onMessages={controller.ingestLiveMessages} />
@@ -664,50 +646,13 @@ const CampaignThreadScreen = () => {
         )}
 
         {/* ── Bottom: floating glass composer (no border, progressive blur to white) ─ */}
-        <View style={[s.footer, { paddingBottom: (insets.bottom || 10) + 12 }]}>
-          {/* Progressive blur behind the composer: strongest at the bottom under the
-              input, fading to clear upward so chat content blurs into the bar as it
-              scrolls under it. Mirrors the header (rit3zh/expo-progressive-blur),
-              direction='up' so the strong edge is at the bottom. */}
-          <View pointerEvents="none" style={s.footerBlur}>
-            <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="up" />
-            <LinearGradient
-              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)', '#FFFFFF']}
-              locations={[0, 0.55, 1]}
-              style={StyleSheet.absoluteFill}
-            />
-          </View>
-          {controller.error ? (
-            <View style={s.errorBanner}>
-              <AlertCircle size={14} color="#EF4444" />
-              <Text style={s.errorText}>{controller.error}</Text>
-              <TouchableOpacity onPress={controller.onRefresh}><Text style={s.errorRetry}>Retry</Text></TouchableOpacity>
-            </View>
-          ) : null}
-          {controller.notice ? (
-            <View style={s.noticeBanner}>
-              <CheckCircle2 size={14} color="#5D7E16" />
-              <Text style={s.noticeText}>{controller.notice}</Text>
-              <TouchableOpacity onPress={() => controller.setNotice(null)}>
-                <X size={14} color="#5D7E16" />
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {/* Scroll Chips of quick options - Iceboxxed for now
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={s.chipsContent}
-          >
-            {QUICK_CHIPS.map(chip => (
-              <TouchableOpacity key={chip.action} style={s.quickChip} onPress={() => handleQuickChip(chip.action)} activeOpacity={0.7}>
-                <Text style={s.quickChipText}>{chip.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-          */}
+        <ChatComposerFooter
+          bottomPadding={(insets.bottom || 10) + 12}
+          error={controller.error}
+          onRetry={controller.onRefresh}
+          notice={controller.notice}
+          onDismissNotice={() => controller.setNotice(null)}
+        >
 
           <ConversationComposer
             value={controller.composerText}
@@ -727,63 +672,34 @@ const CampaignThreadScreen = () => {
             onRemoveContextAttachment={() => setEditingPlan(null)}
             focusRequestKey={composerFocusKey}
           />
-        </View>
+        </ChatComposerFooter>
         </View>
       </Animated.View>
 
       {/* ── Top: floating glass header (white at top → transparent, blur) ─ */}
-      <View
-        style={[s.header, { paddingTop: insets.top + 6 }]}
+      <ChatChromeHeader
+        title={campaignTitle}
+        subtitle={`${soldCount}/${itemCount} sold · ${daysLeftLabel}`}
+        topInset={insets.top}
         onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+        leftAction={{
+          icon: <PanelLeft size={17} color="#18181B" />,
+          label: 'Chat',
+          onPress: openDrawer,
+          accessibilityLabel: 'Open chat sidebar',
+        }}
+        rightAction={{
+          icon: <X size={21} color="#18181B" />,
+          onPress: () => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+              return;
+            }
+            navigation.navigate('SproutHomeScreen');
+          },
+          accessibilityLabel: 'Go back',
+        }}
       >
-        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-          {/* Progressive blur: strongest under the status bar / title, fading to clear
-              as content scrolls out the bottom (rit3zh/expo-progressive-blur technique). */}
-          <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="down" />
-          <LinearGradient
-            colors={['rgba(248,252,240,0.98)', 'rgba(252,253,249,0.86)', 'rgba(255,255,255,0)']}
-            locations={[0, 0.55, 1]}
-            style={StyleSheet.absoluteFill}
-          />
-        </View>
-        <View style={s.headerRow}>
-          <TouchableOpacity
-            style={s.chatPill}
-            onPress={openDrawer}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Open chat sidebar"
-          >
-            <PanelLeft size={17} color="#18181B" />
-            <Text style={s.chatPillText}>Chat</Text>
-          </TouchableOpacity>
-
-          <View style={s.titlePill}>
-            <Text style={s.pillTitle} numberOfLines={1}>{campaignTitle}</Text>
-            <Text style={s.pillSub} numberOfLines={1}>
-              {soldCount}/{itemCount} sold · {daysLeftLabel}
-            </Text>
-          </View>
-
-          <View style={s.headerLeft}>
-            <TouchableOpacity
-              style={s.navCircle}
-              onPress={() => {
-                if (navigation.canGoBack()) {
-                  navigation.goBack();
-                  return;
-                }
-                navigation.navigate('SproutHomeScreen');
-              }}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-            >
-              <X size={21} color="#18181B" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {hasPendingAsks && latestAsk ? (
           <TouchableOpacity
             style={s.ambientTray}
@@ -795,7 +711,7 @@ const CampaignThreadScreen = () => {
             <Text style={s.trayAction}>Review</Text>
           </TouchableOpacity>
         ) : null}
-      </View>
+      </ChatChromeHeader>
 
       {/* ── Threads drawer: pull right from the left edge ──────── */}
       <View style={[s.edgeSwipe, { top: insets.top + 50 }]} {...edgePan.panHandlers} />
@@ -829,43 +745,12 @@ const CampaignThreadScreen = () => {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFFFFF' },
-  pageWash: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 310,
-  },
   flex: { flex: 1 },
   // The composer's keyboard-avoider: absolute bottom anchor so behavior:'padding' lifts
   // the composer column with the keyboard (the feed is a full-bleed sibling behind it).
   composerAvoider: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   // Dim scrim shown behind a pending question/plan card.
   cardScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,17,17,0.28)' },
-
-  // Keep the navigation legible while history scrolls beneath it. The prior transparent
-  // fade left table cells and message text visibly colliding with the title controls.
-  header: {
-    position: 'absolute', top: 0, left: 0, right: 0,
-    paddingHorizontal: 14, paddingBottom: 10,
-    backgroundColor: 'transparent',
-  },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  headerLeft: { width: 88, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
-  navCircle: {
-    width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
-  },
-  titlePill: {
-    flexShrink: 1, alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 8,
-    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 12, shadowOffset: { width: 0, height: 3 }, elevation: 3,
-  },
-  pillTitle: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_700Bold' },
-  pillSub: { fontSize: 13, color: '#71717A', marginTop: 1, fontFamily: 'Inter_500Medium' },
-  closeCircle: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF',
-    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
-  },
 
   // Ambient "needs you" tray (floats under the pills)
   ambientTray: {
@@ -877,29 +762,23 @@ const s = StyleSheet.create({
   trayText: { fontSize: 13, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
   trayAction: { fontSize: 13, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
-  // Floating glass footer — transparent so the progressive blur shows through; the
-  // blur band (footerBlur) carries the white fade and obscures content scrolling under.
-  footer: { paddingTop: 6, backgroundColor: 'transparent' },
-  // Progressive-blur band behind the composer. Extends above the footer so the blur has
-  // room to fade to clear (top) before it sits solid under the input (bottom).
-  footerBlur: { position: 'absolute', left: 0, right: 0, top: -44, bottom: 0 },
-  errorBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 13 },
-  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 13 },
-  noticeBanner: { marginHorizontal: 12, marginBottom: 6, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 13 },
-  chipsContent: { paddingHorizontal: 12, gap: 8, flexDirection: 'row', paddingBottom: 8, paddingTop: 2 },
-  quickChip: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 16, backgroundColor: '#F4F4F1' },
-  quickChipText: { fontSize: 15, color: '#52525B', fontFamily: 'Inter_500Medium' },
-
   // Threads drawer
-  edgeSwipe: { position: 'absolute', left: 0, bottom: 0, width: 34 },
-  drawerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
+  edgeSwipe: { position: 'absolute', left: 0, bottom: 0, width: 34, zIndex: 20 },
+  drawerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+    zIndex: 21,
+  },
   drawerPanel: {
     position: 'absolute', top: 0, left: 0, bottom: 0,
     backgroundColor: '#F7F8F4', paddingHorizontal: 16,
     borderTopRightRadius: 20, borderBottomRightRadius: 20,
     shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 20, shadowOffset: { width: 5, height: 0 }, elevation: 14,
+    zIndex: 22,
   },
   drawerContent: { flex: 1 },
   drawerPrimaryNav: { gap: 4, marginBottom: 14 },
@@ -950,11 +829,6 @@ const s = StyleSheet.create({
   footerSettingsLabel: { fontSize: 15, color: '#3F3F46', fontFamily: 'Inter_600SemiBold' },
   footerNewChatButton: { height: 48, flex: 1.25, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 24, backgroundColor: '#FFFFFF', borderWidth: StyleSheet.hairlineWidth, borderColor: '#E4E4DF' },
   footerNewChatLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_700Bold' },
-  chatPill: {
-    width: 88, height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#FFFFFF', borderRadius: 22,
-    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 3,
-  },
-  chatPillText: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
 });
 
 export default CampaignThreadScreen;

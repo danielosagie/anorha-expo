@@ -13,7 +13,7 @@ import ShadowSurface from './ui/ShadowSurface';
 import PlatformAvatar from './PlatformAvatar';
 import PartnerBadge from './PartnerBadge';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import Animated, { FadeInLeft, FadeOutLeft, Layout } from 'react-native-reanimated';
+import Animated, { FadeInLeft, FadeOutLeft, Layout, ZoomIn } from 'react-native-reanimated';
 
 /*
   InventoryListCard - Matches "Needs Attention" design
@@ -164,11 +164,13 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
             layout={Layout.springify()}
             style={styles.selectionIndicatorContainer}
           >
-            <Icon
-              name={isSelected ? "check-circle" : "circle-outline"}
-              size={24}
-              color={isSelected ? "#84CC16" : "#C7C7CC"}
-            />
+            <Animated.View key={isSelected ? 'selected' : 'unselected'} entering={ZoomIn.duration(180)}>
+              <Icon
+                name={isSelected ? "check-circle" : "circle-outline"}
+                size={24}
+                color={isSelected ? "#84CC16" : "#C7C7CC"}
+              />
+            </Animated.View>
           </Animated.View>
         )}
 
@@ -215,14 +217,18 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
               </View>
             )}
 
+            {/*
             {hideSync ? null : lastSyncedAt ? (
               <Text style={[styles.syncText, { color: isStale ? '#B45309' : '#6B7280' }]}>
-                Last synced: {new Date(lastSyncedAt).toLocaleString()}
+                Last updated: {new Date(lastSyncedAt).toLocaleString()}
                 {isStale ? ' • Stale' : ''}
               </Text>
             ) : (
-              <Text style={[styles.syncText, { color: '#9CA3AF' }]}>Last synced: unavailable</Text>
+
+                <Text></Text>
+
             )}
+            */}
 
             {/* Match chips - only show when there's a search query and matches */}
             {searchQuery && matchLocations && matchLocations.length > 0 && (

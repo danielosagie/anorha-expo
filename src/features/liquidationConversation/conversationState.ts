@@ -367,7 +367,11 @@ export const mergeRemoteMessages = (
       continue;
     }
 
-    if (localMessage.deliveryState !== 'sent' || localMessage.kind !== 'text') {
+    if (
+      localMessage.deliveryState !== 'sent' ||
+      localMessage.kind !== 'text' ||
+      localMessage.metadata?.clientAuthored === true
+    ) {
       merged.push(localMessage);
     }
   }
@@ -446,6 +450,7 @@ export const toQueueItem = ({
   actionType,
   actionPayload,
   imageUrls,
+  contextAttachment,
 }: {
   campaignId: string;
   threadId: string;
@@ -455,6 +460,7 @@ export const toQueueItem = ({
   actionType?: string;
   actionPayload?: Record<string, unknown>;
   imageUrls?: string[];
+  contextAttachment?: ConversationQueueItem['contextAttachment'];
 }): ConversationQueueItem => ({
   id: createClientId('queue'),
   campaignId,
@@ -465,6 +471,7 @@ export const toQueueItem = ({
   actionType,
   actionPayload,
   imageUrls,
+  contextAttachment,
   createdAt: new Date().toISOString(),
 });
 

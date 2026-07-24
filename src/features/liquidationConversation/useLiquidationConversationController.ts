@@ -22,6 +22,7 @@ import {
   ensureAssistantPlaceholder,
   failTurn,
   markQueueItemSending,
+  mergeRemoteMessages,
   toQueueItem,
   updateMessage,
 } from './conversationState';
@@ -32,6 +33,7 @@ import type {
   CampaignSummary,
   CampaignThreadSummary,
   ConversationMessage,
+  ConversationContextAttachment,
   ConversationSurfaceState,
   ConversationThreadState,
   DecisionPrompt,
@@ -47,6 +49,7 @@ type DispatchActionInput = {
 type ControllerOptions = {
   adapter: ConversationDataAdapter;
   initialCampaignId?: string;
+  global?: boolean;
 };
 
 type ThreadStateMap = Record<string, ConversationThreadState>;
@@ -54,6 +57,7 @@ type ThreadStateMap = Record<string, ConversationThreadState>;
 export const useLiquidationConversationController = ({
   adapter,
   initialCampaignId,
+  global = false,
 }: ControllerOptions) => {
   const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
   const [threads, setThreads] = useState<CampaignThreadSummary[]>([]);
@@ -204,6 +208,21 @@ export const useLiquidationConversationController = ({
   }, []);
 
   const loadCampaigns = useCallback(async () => {
+    if (global) {
+      const target = await adapter.resolveGlobalThread();
+      const now = new Date().toISOString();
+      setCampaigns([{
+        id: target.sessionId,
+        title: target.title,
+        status: 'active',
+        updatedAt: now,
+        createdAt: now,
+        primaryThreadId: target.threadId,
+        inventoryScope: 'all',
+      }]);
+      setActiveCampaignId(target.sessionId);
+      return;
+    }
     const list = await adapter.listCampaigns();
     setCampaigns(list);
     if (!list.length) {
@@ -221,7 +240,7 @@ export const useLiquidationConversationController = ({
         list[0].id;
       return candidate;
     });
-  }, [adapter, initialCampaignId]);
+  }, [adapter, global, initialCampaignId]);
 
   const loadThreadIntoMemory = useCallback(async (campaignId: string, threadId: string) => {
     setIsLoadingMessages(true);
@@ -259,7 +278,7 @@ export const useLiquidationConversationController = ({
           ...state,
           campaignId,
           threadId,
-          messages: remoteMessages,
+          messages: mergeRemoteMessages(state.messages, remoteMessages),
         }), { immediate: true });
       })
       .catch((fetchError: any) => {
@@ -310,13 +329,18 @@ export const useLiquidationConversationController = ({
   }, [adapter]);
 
   const loadCampaignDetails = useCallback(async (campaignId: string) => {
+    if (global) {
+      setCampaignOverview(null);
+      setCampaignConfig(null);
+      return;
+    }
     const [overview, config] = await Promise.all([
       adapter.getCampaignOverview(campaignId).catch(() => null),
       adapter.getCampaignConfig(campaignId).catch(() => null),
     ]);
     setCampaignOverview(overview);
     setCampaignConfig(config);
-  }, [adapter]);
+  }, [adapter, global]);
 
   const bootstrap = useCallback(async () => {
     setLoading(true);
@@ -451,6 +475,7 @@ export const useLiquidationConversationController = ({
           actionType: item.actionType,
           actionPayload: item.actionPayload,
           imageUrls: item.imageUrls,
+          contextAttachment: item.contextAttachment,
         },
         {
           onMessageAck: ({ clientMessageId, serverMessageId }) => {
@@ -682,6 +707,7 @@ export const useLiquidationConversationController = ({
     clientMessageId: string,
     content: string,
     pending: string[],
+    contextAttachment?: ConversationContextAttachment,
   ) => {
     let urls: string[];
     try {
@@ -699,7 +725,15 @@ export const useLiquidationConversationController = ({
       );
       return;
     }
-    const queueItem = toQueueItem({ campaignId, threadId, clientMessageId, kind: 'message', content, imageUrls: urls });
+    const queueItem = toQueueItem({
+      campaignId,
+      threadId,
+      clientMessageId,
+      kind: 'message',
+      content,
+      imageUrls: urls,
+      contextAttachment,
+    });
     setThreadStateFor(threadId, current => ({
       ...updateMessage(current, clientMessageId, m => ({
         ...m,
@@ -717,6 +751,7 @@ export const useLiquidationConversationController = ({
     imageUrls?: string[],
     pendingImageUris?: string[],
     displayContent?: string,
+    contextAttachment?: ConversationContextAttachment,
   ) => {
     const campaignId = activeCampaignIdRef.current;
     if (!campaignId) {
@@ -739,9 +774,14 @@ export const useLiquidationConversationController = ({
       // in the public urls once uploaded, so the seller never watches an "uploading" box.
       imageUrls: hasPending ? pending : imageUrls,
     });
-    const message = displayContent && displayContent !== content
-      ? { ...baseMessage, metadata: { ...(baseMessage.metadata || {}), agentContent: content } }
-      : baseMessage;
+    const message = {
+      ...baseMessage,
+      metadata: {
+        ...(baseMessage.metadata || {}),
+        ...(displayContent && displayContent !== content ? { agentContent: content } : {}),
+        ...(contextAttachment ? { contextAttachment } : {}),
+      },
+    };
 
     const clearDraft = async () => {
       if (fromHome) {
@@ -759,7 +799,14 @@ export const useLiquidationConversationController = ({
       setActiveThreadId(threadId);
       setSurfaceState('chat_active');
       setNotice(null);
-      void uploadAndSendPhotos(campaignId, threadId, clientMessageId, content, pending);
+      void uploadAndSendPhotos(
+        campaignId,
+        threadId,
+        clientMessageId,
+        content,
+        pending,
+        contextAttachment,
+      );
       return;
     }
 
@@ -770,6 +817,7 @@ export const useLiquidationConversationController = ({
       kind: 'message',
       content,
       imageUrls,
+      contextAttachment,
     });
     setThreadStateFor(threadId, current => enqueueTurn(current, queueItem, message), { immediate: true });
     await clearDraft();
@@ -828,7 +876,15 @@ export const useLiquidationConversationController = ({
         { immediate: true },
       );
       const agentContent = (failed?.metadata as any)?.agentContent as string | undefined;
-      await uploadAndSendPhotos(campaignId, threadId, clientMessageId, agentContent || failed?.content || '', pending);
+      const contextAttachment = (failed?.metadata as any)?.contextAttachment as ConversationContextAttachment | undefined;
+      await uploadAndSendPhotos(
+        campaignId,
+        threadId,
+        clientMessageId,
+        agentContent || failed?.content || '',
+        pending,
+        contextAttachment,
+      );
       return;
     }
 
@@ -844,6 +900,49 @@ export const useLiquidationConversationController = ({
     }));
     void processQueue(threadId);
   }, [adapter, processQueue, setThreadStateFor, uploadAndSendPhotos]);
+
+  const appendClientAssistantMessage = useCallback((
+    content: string,
+    deliveryState: 'sent' | 'sending' | 'failed' = 'sent',
+  ): string | null => {
+    const campaignId = activeCampaignIdRef.current;
+    const threadId = activeThreadIdRef.current;
+    if (!campaignId || !threadId) return null;
+    const clientMessageId = createClientId('client-assistant');
+    const baseMessage = createTextMessage({
+      campaignId,
+      threadId,
+      clientMessageId,
+      role: 'assistant',
+      content,
+      deliveryState,
+    });
+    setThreadStateFor(
+      threadId,
+      current => appendMessage(current, {
+        ...baseMessage,
+        metadata: { clientAuthored: true },
+      }),
+      { immediate: true },
+    );
+    return clientMessageId;
+  }, [setThreadStateFor]);
+
+  const updateClientAssistantMessage = useCallback((
+    messageId: string,
+    patch: { content?: string; deliveryState?: 'sent' | 'sending' | 'failed' },
+  ) => {
+    const threadId = activeThreadIdRef.current;
+    if (!threadId) return;
+    setThreadStateFor(
+      threadId,
+      current => updateMessage(current, messageId, message => ({
+        ...message,
+        ...patch,
+      })),
+      { immediate: true },
+    );
+  }, [setThreadStateFor]);
 
   // Regenerate a finished assistant reply: re-send the user message that preceded it
   // as a fresh turn, so Sprout answers the same prompt again. (There's no server-side
@@ -970,7 +1069,11 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter, loadCampaigns]);
 
-  const sendComposer = useCallback(async (photos?: string[], contextPrefix?: string) => {
+  const sendComposer = useCallback(async (
+    photos?: string[],
+    contextPrefix?: string,
+    contextAttachment?: ConversationContextAttachment,
+  ) => {
     const content = composerText.trim();
     if (photos && photos.length) {
       // The photos are already sitting in the composer as thumbnails — send the message
@@ -980,12 +1083,12 @@ export const useLiquidationConversationController = ({
       const count = Math.min(photos.length, 8);
       const displayText = content || `added ${count} photo${count === 1 ? '' : 's'}`;
       const sentText = contextPrefix ? `${contextPrefix}\n\n${displayText}` : displayText;
-      await queueTextMessage(sentText, undefined, photos, displayText);
+      await queueTextMessage(sentText, undefined, photos, displayText, contextAttachment);
       return;
     }
     if (!content) return;
     const sentText = contextPrefix ? `${contextPrefix}\n\n${content}` : content;
-    await queueTextMessage(sentText, undefined, undefined, content);
+    await queueTextMessage(sentText, undefined, undefined, content, contextAttachment);
   }, [composerText, queueTextMessage, setComposerValue]);
 
   // Pull both pending prompt types in one request. This runs only on thread/message
@@ -1058,11 +1161,12 @@ export const useLiquidationConversationController = ({
 
   // Fire the kickoff once the active thread has finished loading and is genuinely empty.
   useEffect(() => {
+    if (global) return;
     if (!activeCampaignId || !activeThreadId || isLoadingMessages) return;
     if (surfaceState === 'home_overview') return;
     if ((activeThreadState?.messages.length || 0) > 0) return;
     void kickoffThread(activeCampaignId, activeThreadId);
-  }, [activeCampaignId, activeThreadId, isLoadingMessages, surfaceState, activeThreadState?.messages.length, kickoffThread]);
+  }, [activeCampaignId, activeThreadId, global, isLoadingMessages, surfaceState, activeThreadState?.messages.length, kickoffThread]);
 
   const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {
     const campaignId = activeCampaignIdRef.current;
@@ -1082,15 +1186,19 @@ export const useLiquidationConversationController = ({
     }
   }, [adapter, answeringQuestion, queueTextMessage]);
 
-  const submitDecision = useCallback(async (prompt: DecisionPrompt, action: 'approve' | 'revise' | 'follow_up') => {
+  const submitDecision = useCallback(async (
+    prompt: DecisionPrompt,
+    action: 'approve' | 'revise' | 'follow_up',
+    options?: { retry?: boolean },
+  ) => {
     const campaignId = activeCampaignIdRef.current;
     const threadId = activeThreadIdRef.current;
-    if (!campaignId || !threadId) return;
+    if (!campaignId || !threadId) return false;
     const decisionId = prompt.planId || prompt.strategyId || prompt.id;
-    if (decisionsInFlightRef.current.has(decisionId)) return;
+    if (decisionsInFlightRef.current.has(decisionId)) return false;
     if (resolvedDecisionIdsRef.current.has(decisionId)) {
       setNotice('This plan has already been handled.');
-      return;
+      return false;
     }
 
     decisionsInFlightRef.current.add(decisionId);
@@ -1107,7 +1215,7 @@ export const useLiquidationConversationController = ({
               : 'Hold the items I just added from photos in this clearout for now; I will decide later.';
         await queueTextMessage(instr);
         resolvedDecisionIdsRef.current.add(decisionId);
-        return;
+        return true;
       }
 
       await adapter.submitDecision(campaignId, threadId, {
@@ -1115,6 +1223,7 @@ export const useLiquidationConversationController = ({
         action,
         strategyId: prompt.strategyId,
         planId: prompt.planId,
+        retry: options?.retry,
       });
       // The mutation succeeded. Mark it resolved before any follow-up refresh so a
       // dropped connection cannot make a second tap execute the same plan again.
@@ -1135,16 +1244,18 @@ export const useLiquidationConversationController = ({
       if (remoteMessages) {
         setThreadStateFor(threadId, current => ({
           ...current,
-          messages: remoteMessages,
+          messages: mergeRemoteMessages(current.messages, remoteMessages),
         }), { immediate: true });
       }
       await loadCampaignDetails(campaignId).catch(() => undefined);
+      return true;
     } catch (decisionError: any) {
       setError(
         action === 'approve'
           ? decisionError?.message || 'The plan was not applied. Please try again.'
           : decisionError?.message || 'Failed to submit decision',
       );
+      return false;
     } finally {
       decisionsInFlightRef.current.delete(decisionId);
       setSubmittingDecisionId(current => current === decisionId ? null : current);
@@ -1261,6 +1372,8 @@ export const useLiquidationConversationController = ({
     sendComposer,
     dispatchAction,
     retryMessage,
+    appendClientAssistantMessage,
+    updateClientAssistantMessage,
     regenerateMessage,
     submitMessageFeedback,
     onRefresh,

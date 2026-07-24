@@ -77,12 +77,18 @@ export interface ActivityTraySheetProps {
   /** Send the seller's revision request for a report back to Sprout (revise_report). */
   onReviseDocument?: (documentId: string, title: string, note: string) => void;
   /** Approve / Revise / Follow-up a proposed plan (hits the pending-action endpoint). */
-  onApprovePlan?: (planId: string, action: 'approve' | 'revise' | 'follow_up') => void;
+  onApprovePlan?: (
+    planId: string,
+    action: 'approve' | 'revise' | 'follow_up',
+    plan?: PlanPayload,
+  ) => void;
   /** Close the tray and move this plan into the chat composer for revision. */
   onEditPlan?: (plan: PlanPayload) => void;
   submittingPlanId?: string | null;
   /** One report-specific next step. It renders after the evidence, never on Home. */
   documentAction?: { label: string; description?: string; onPress: () => void };
+  /** A quiet report-level dismissal exposed in the document overflow menu. */
+  documentDismiss?: { label?: string; onPress: () => void };
 }
 
 export default function ActivityTraySheet({
@@ -98,6 +104,7 @@ export default function ActivityTraySheet({
   onEditPlan,
   submittingPlanId,
   documentAction,
+  documentDismiss,
 }: ActivityTraySheetProps) {
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
@@ -294,6 +301,20 @@ export default function ActivityTraySheet({
                     <DocMenuItem icon="table-arrow-down" label="Export CSV" onPress={() => { setMenuOpen(false); void saveCsvFile(payload.document.title, payload.document); }} />
                   ) : null}
                   <DocMenuItem icon="share-variant" label="Share" onPress={() => { setMenuOpen(false); void shareMarkdown(payload.document.title, docDraft); }} />
+                  {documentDismiss ? (
+                    <>
+                      <View style={styles.menuDivider} />
+                      <DocMenuItem
+                        icon="close-circle-outline"
+                        label={documentDismiss.label || 'Dismiss'}
+                        onPress={() => {
+                          setMenuOpen(false);
+                          onClose();
+                          documentDismiss.onPress();
+                        }}
+                      />
+                    </>
+                  ) : null}
                 </View>
               </>
             ) : null}
@@ -343,7 +364,7 @@ export default function ActivityTraySheet({
               onApprovePlan={(action) => {
                 if (submittingPlanId) return;
                 if (payload.kind === 'plan' && payload.plan.pendingActionId) {
-                  onApprovePlan?.(payload.plan.pendingActionId, action);
+                  onApprovePlan?.(payload.plan.pendingActionId, action, payload.plan);
                 }
                 onClose();
               }}

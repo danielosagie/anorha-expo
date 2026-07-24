@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { listPlatforms } from '../config/platforms';
 import { API_BASE_URL } from '../config/env';
-import { BRAND_PRIMARY } from '../design/tokens';
 import {
   View,
   Text,
@@ -12,18 +11,24 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   TextInput,
-  View as KeyboardAvoidingView, // ALIASING KAV TO VIEW temporarily if needed, but no, I'll just import View
-  Platform,
-  Keyboard,
   PanResponder,
   PanResponderInstance,
   LayoutChangeEvent,
+  Pressable,
+  useWindowDimensions,
   Animated as RNAnimated,
   Easing
 } from 'react-native';
-import Animated, { FadeInUp, FadeInDown, SlideInDown, SlideOutDown } from 'react-native-reanimated';
+import Animated, {
+  FadeInUp,
+  FadeInDown,
+  SlideInDown,
+  SlideOutDown,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { useTheme } from '../context/ThemeContext';
 import { ListFilter } from 'lucide-react-native';
 import { ChevronsUpDownIcon } from 'lucide-react-native';
@@ -44,7 +49,6 @@ import PlatformFilterChips from '../components/PlatformFilterChips';
 import InventoryListCard from '../components/InventoryListCard';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import BaseModal from '../components/BaseModal';
-import { SmartCommandInput } from '../components/SmartCommandInput';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import SortByDropdown, { DEFAULT_SORT_OPTIONS } from '../components/SortByDropdown';
 import InventoryFilterSheet, { PartnerFilterChoice } from '../components/inventory/InventoryFilterSheet';
@@ -61,6 +65,12 @@ import {
 } from '../lib/partnerInventory';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
+import { AnorhaFace } from '../components/brand/AnorhaFace';
+import { closeQuickChat, openQuickChat } from '../components/sprout/quickChatStore';
+import type {
+  InventoryBulkAction,
+  InventorySelectionProposal,
+} from '../features/liquidationConversation/types';
 const log = createLogger('InventoryOrdersScreen');
 
 
@@ -68,6 +78,9 @@ const TAB_BAR_HEIGHT = 84;
 const TAB_BAR_BOTTOM_OFFSET = 18;
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
+const INVENTORY_CHAT_PEEK_RATIO = 0.38;
+
+type InventoryQuickChatMode = 'select' | 'edit';
 
 type InventoryOrdersScreenNavigationProp = StackNavigationProp<AppStackParamList, 'TabNavigator'>;
 
@@ -119,6 +132,7 @@ const InventoryOrdersScreen = observer(() => {
   const legendState: LegendStateObservables | null = useLegendState();
   const { currentOrg } = useOrg();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
   // Subscribe to real-time product variant and inventory changes
@@ -230,6 +244,13 @@ const InventoryOrdersScreen = observer(() => {
   // Bulk Selection State
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const selectedItemsRef = useRef(selectedItems);
+  selectedItemsRef.current = selectedItems;
+  const inventoryAgentStateRef = useRef<{
+    filteredInventory: EnrichedProductVariant[];
+    presetVariantIds: string[] | null;
+    context: Record<string, unknown>;
+  }>({ filteredInventory: [], presetVariantIds: null, context: {} });
   const [addToCampaign, setAddToCampaign] = useState<{ campaignId: string; title: string } | null>(null);
   const [addingToCampaign, setAddingToCampaign] = useState(false);
   const campaignAdapter = useMemo(() => new HybridConversationDataAdapter(), []);
@@ -251,30 +272,21 @@ const InventoryOrdersScreen = observer(() => {
     }
   }, [addToCampaign, selectedItems, addingToCampaign, campaignAdapter, navigation]);
 
-  // Bulk action modal: filter by type/voice, review, then apply Delete/Archive/Liquidate
-  const [bulkActionModalVisible, setBulkActionModalVisible] = useState(false);
-  const [bulkActionModalQuery, setBulkActionModalQuery] = useState('');
-  const [bulkActionModalMatchIds, setBulkActionModalMatchIds] = useState<string[] | null>(null);
+  const [activeInventoryChatMode, setActiveInventoryChatMode] = useState<InventoryQuickChatMode | null>(null);
+  const selectionPillOffset = useSharedValue(0);
+  const selectionPillAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: selectionPillOffset.get() }],
+  }));
+  useEffect(() => {
+    const peekHeight = Math.round(windowHeight * INVENTORY_CHAT_PEEK_RATIO);
+    const lift = Math.max(0, peekHeight + 12 - 130);
+    selectionPillOffset.set(withSpring(activeInventoryChatMode ? -lift : 0, {
+      damping: 24,
+      stiffness: 260,
+    }));
+  }, [activeInventoryChatMode, selectionPillOffset, windowHeight]);
   const [speechModalVisible, setSpeechModalVisible] = useState(false);
 
-  // Bulk action review flow state
-  type PlannedAction = {
-    itemId: string;
-    title: string;
-    thumbnail?: string;
-    actionType: string;
-    description: string;
-    changes: { field: string; from: string; to: string }[];
-    approved: boolean;
-  };
-  const [bulkPhase, setBulkPhase] = useState<'command' | 'planning' | 'review'>('command');
-  const [plannedActions, setPlannedActions] = useState<PlannedAction[]>([]);
-  const [planSummary, setPlanSummary] = useState('');
-  const [planLoading, setPlanLoading] = useState(false);
-  const [executeLoading, setExecuteLoading] = useState(false);
-  const [reviewModalVisible, setReviewModalVisible] = useState(false);
-
-  // Bulk Selection Handlers
   // Bulk Selection Handlers
   const handleLongPressItem = (id: string) => {
     // Standardize: Long press ALWAYS enters drag mode for that item
@@ -310,7 +322,9 @@ const InventoryOrdersScreen = observer(() => {
   const handleExitSelectionMode = () => {
     setIsSelectionMode(false);
     setSelectedItems(new Set());
-    setBulkActionModalVisible(false);
+    selectedItemsRef.current = new Set();
+    setActiveInventoryChatMode(null);
+    closeQuickChat();
   };
 
   // Preset: fetch slow movers variant IDs from nudges API (reuses insights data)
@@ -365,7 +379,6 @@ const InventoryOrdersScreen = observer(() => {
   const [liquidationTimeline, setLiquidationTimeline] = useState("");
   const [liquidationAmount, setLiquidationAmount] = useState("");
   const [liquidationStrategy, setLiquidationStrategy] = useState<'aggressive' | 'moderate' | 'conservative'>('moderate');
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [scrollEnabled, setScrollEnabled] = useState(true);
 
   // Drag-to-select refs
@@ -483,22 +496,6 @@ const InventoryOrdersScreen = observer(() => {
     scrollOffset.current = event.nativeEvent.contentOffset.y;
   };
 
-
-
-
-  useEffect(() => {
-    const keyboardShowListener = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => {
-      setKeyboardHeight(e.endCoordinates.height);
-    });
-    const keyboardHideListener = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => {
-      setKeyboardHeight(0);
-    });
-    return () => {
-      keyboardShowListener.remove();
-      keyboardHideListener.remove();
-    };
-  }, []);
-
   const handleSelectAll = () => {
     // Select all currently filtered items
     const allIds = filteredInventory.map(item => item.Id);
@@ -513,7 +510,6 @@ const InventoryOrdersScreen = observer(() => {
         .update({ IsArchived: true })
         .in('Id', ids);
       if (error) throw error;
-      setBulkActionModalVisible(false);
       handleExitSelectionMode();
     } catch (err) {
       log.error('Bulk delete failed', err);
@@ -541,7 +537,6 @@ const InventoryOrdersScreen = observer(() => {
         .update({ IsArchived: true })
         .in('Id', ids);
       if (error) throw error;
-      setBulkActionModalVisible(false);
       handleExitSelectionMode();
     } catch (err) {
       log.error('Bulk archive failed', err);
@@ -1410,10 +1405,29 @@ const InventoryOrdersScreen = observer(() => {
     return filtered;
   }, [enrichedProductVariants, selectedPartnerId, searchQuery, scannedBarcode, sortBy, lowStockOnly, presetVariantIds, priceMax]);
 
-  // Bulk action modal: apply filter query to current list and set match IDs (used inside modal)
-  const applyBulkActionModalFilter = useCallback((query: string): string[] => {
-    const parsed = parseFilterQuery(query);
-    let list = [...filteredInventory];
+  inventoryAgentStateRef.current = {
+    filteredInventory,
+    presetVariantIds,
+    context: {
+      currentTab: activeTab,
+      visibleItemCount: filteredInventory.length,
+      visibleItemIds: filteredInventory.slice(0, 500).map(item => item.Id),
+      filters: {
+        status: filterStatus,
+        platform: selectedPlatformType,
+        search: searchQuery || null,
+        locationIds: selectedLocationIds,
+        partnerId: selectedPartnerId,
+        lowStockOnly,
+        priceMax,
+      },
+    },
+  };
+
+  const resolveInventorySelection = useCallback((proposal: InventorySelectionProposal): string[] => {
+    const parsed = parseFilterQuery(proposal.query);
+    const current = inventoryAgentStateRef.current;
+    let list = [...current.filteredInventory];
     if (parsed.priceMax != null && parsed.priceMax > 0) {
       list = list.filter((item: EnrichedProductVariant) => (item.minPrice ?? item.Price ?? 0) <= parsed.priceMax!);
     }
@@ -1426,17 +1440,69 @@ const InventoryOrdersScreen = observer(() => {
         item.platformNames?.includes(plat) ?? false
       );
     }
-    if (parsed.triggerSlowMovers === true && presetVariantIds?.length) {
-      const allowSet = new Set(presetVariantIds);
+    if (parsed.triggerSlowMovers === true && current.presetVariantIds?.length) {
+      const allowSet = new Set(current.presetVariantIds);
       list = list.filter((item: EnrichedProductVariant) => allowSet.has(item.Id));
     }
     return list.map((item: EnrichedProductVariant) => item.Id);
-  }, [filteredInventory, presetVariantIds]);
+  }, []);
 
-  const handleBulkActionModalApply = useCallback(() => {
-    const ids = applyBulkActionModalFilter(bulkActionModalQuery);
-    setBulkActionModalMatchIds(ids.length > 0 ? ids : null);
-  }, [bulkActionModalQuery, applyBulkActionModalFilter]);
+  const applyInventorySelection = useCallback((proposal: InventorySelectionProposal): number => {
+    const matchedIds = resolveInventorySelection(proposal);
+    const next = proposal.operation === 'replace'
+      ? new Set(matchedIds)
+      : new Set(selectedItemsRef.current);
+    if (proposal.operation !== 'replace') {
+      for (const id of matchedIds) {
+        if (proposal.operation === 'remove') next.delete(id);
+        else next.add(id);
+      }
+    }
+    selectedItemsRef.current = next;
+    setSelectedItems(next);
+    setIsSelectionMode(true);
+    return next.size;
+  }, [resolveInventorySelection]);
+
+  const getInventorySelectionContext = useCallback(() => ({
+    ...inventoryAgentStateRef.current.context,
+    selectedItemIds: Array.from(selectedItemsRef.current),
+    selectedCount: selectedItemsRef.current.size,
+  }), []);
+
+  const handleInventoryActionApplied = useCallback((_action: InventoryBulkAction) => {
+    const cleared = new Set<string>();
+    selectedItemsRef.current = cleared;
+    setSelectedItems(cleared);
+    setIsSelectionMode(false);
+  }, []);
+
+  const openInventoryQuickChat = useCallback((mode: InventoryQuickChatMode) => {
+    setActiveInventoryChatMode(mode);
+    openQuickChat({
+      placeholder: mode === 'select'
+        ? 'Tell Sprout what to select'
+        : 'Tell Sprout what to edit',
+      emptyHint: mode === 'select'
+        ? 'Like "Nike shoes under $50".'
+        : 'Like "add tag sale to these".',
+      peekHeightRatio: INVENTORY_CHAT_PEEK_RATIO,
+      contextAttachment: {
+        kind: mode === 'select' ? 'inventory_bulk_select' : 'inventory_bulk_edit',
+        label: mode === 'select' ? 'Inventory selection' : 'Inventory edit',
+        getPayload: getInventorySelectionContext,
+      },
+      onResolveSelection: resolveInventorySelection,
+      onApplySelection: applyInventorySelection,
+      onInventoryActionApplied: handleInventoryActionApplied,
+      onDismiss: () => setActiveInventoryChatMode(null),
+    });
+  }, [
+    applyInventorySelection,
+    getInventorySelectionContext,
+    handleInventoryActionApplied,
+    resolveInventorySelection,
+  ]);
 
   const inventoryToDisplay = useMemo(() => {
     return filteredInventory.slice(0, displayCount);
@@ -1726,7 +1792,7 @@ const InventoryOrdersScreen = observer(() => {
                         </TouchableOpacity>
                       </Animated.View>
                     ) : (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 8, backgroundColor: "#fff", }}>
+                      <View style={styles.inventoryHeaderTools}>
                         {/* Search + compact location/sort buttons on one row (chat-search style). */}
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                           <View style={{ flex: 1, justifyContent: 'center' }}>
@@ -1756,6 +1822,26 @@ const InventoryOrdersScreen = observer(() => {
                             <ListFilter  size={24} fontWeight={500} color="#666"/>
                             
                           </TouchableOpacity>
+                        </View>
+                        <View style={styles.bulkEntryRow}>
+                          <Pressable
+                            onPress={() => openInventoryQuickChat('select')}
+                            style={({ pressed }) => [styles.bulkEntryChip, pressed && styles.bulkEntryChipPressed]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Bulk select inventory"
+                          >
+                            <Icon name="checkbox-multiple-marked-outline" size={17} color="#4B5563" />
+                            <Text style={styles.bulkEntryChipText}>Bulk select</Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => openInventoryQuickChat('edit')}
+                            style={({ pressed }) => [styles.bulkEntryChip, pressed && styles.bulkEntryChipPressed]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Bulk edit inventory"
+                          >
+                            <Icon name="pencil-outline" size={17} color="#4B5563" />
+                            <Text style={styles.bulkEntryChipText}>Bulk edit</Text>
+                          </Pressable>
                         </View>
                         {barcodeSearchError && (
                           <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
@@ -1859,13 +1945,13 @@ const InventoryOrdersScreen = observer(() => {
         )
       }
 
-      {/* Bulk Action Bar - Cleaner Light Mode */}
+      {/* Selection action pill */}
       {
-        isSelectionMode && !bulkActionModalVisible && (
+        isSelectionMode && (
           <Animated.View
             entering={SlideInDown.duration(300)}
             exiting={SlideOutDown}
-            style={styles.bulkActionBar}
+            style={[styles.bulkActionBar, selectionPillAnimatedStyle]}
           >
             <View style={styles.bulkActionContent}>
               {/* Left: Count Badge with Cancel */}
@@ -1901,15 +1987,35 @@ const InventoryOrdersScreen = observer(() => {
                   </TouchableOpacity>
                 ) : null}
 
-                <TouchableOpacity style={styles.actionChip} onPress={() => setBulkActionModalVisible(true)}>
-                  <Icon name="filter-variant-plus" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Bulk action</Text>
-                </TouchableOpacity>
+                <Pressable
+                  style={[styles.actionChip, styles.sproutActionChip]}
+                  onPress={() => openInventoryQuickChat('select')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Ask Sprout about selected inventory"
+                >
+                  <AnorhaFace size={20} />
+                  <Text style={[styles.actionChipText, styles.sproutActionText]}>Sprout</Text>
+                </Pressable>
 
-                <TouchableOpacity style={styles.actionChip} onPress={() => setLiquidationModalVisible(true)}>
-                  <Icon name="tag-outline" size={18} color="#374151" />
-                  <Text style={styles.actionChipText}>Liquidate</Text>
-                </TouchableOpacity>
+                <Pressable
+                  style={[styles.actionChip, styles.sproutActionChip]}
+                  onPress={() => openInventoryQuickChat('select')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Bulk select with Sprout"
+                >
+                  <Icon name="checkbox-multiple-marked-outline" size={17} color="#5D7E16" />
+                  <Text style={[styles.actionChipText, styles.sproutActionText]}>Bulk select</Text>
+                </Pressable>
+
+                <Pressable
+                  style={[styles.actionChip, styles.sproutActionChip]}
+                  onPress={() => openInventoryQuickChat('edit')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Bulk edit with Sprout"
+                >
+                  <AnorhaFace size={20} />
+                  <Text style={[styles.actionChipText, styles.sproutActionText]}>Bulk edit</Text>
+                </Pressable>
 
                 <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
                   <Icon name="trash-can-outline" size={18} color="#374151" />
@@ -1940,321 +2046,6 @@ const InventoryOrdersScreen = observer(() => {
           </Animated.View>
         )
       }
-
-      {/* Bulk Action Inline Card — replaces BaseModal, acts as command entry */}
-      {
-        bulkActionModalVisible && (
-          <View
-            style={{
-              position: 'absolute',
-              bottom: keyboardHeight > 0 ? keyboardHeight : (Platform.OS === 'ios' ? 140 : 120),
-              left: 0,
-              right: 0,
-              zIndex: 1001,
-            }}
-          >
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={() => setBulkActionModalVisible(false)}
-              style={{ position: 'absolute', top: -1000, left: 0, right: 0, bottom: -500, backgroundColor: 'transparent' }}
-            />
-
-            <View style={{
-              backgroundColor: 'rgba(255, 255, 255, 1)',
-              borderRadius: 32,
-              borderWidth: keyboardHeight > 0 ? 0 : 1,
-              borderColor: '#F3F4F6',
-              paddingHorizontal: 20,
-              marginHorizontal: 12,
-              paddingBottom: 16,
-              marginBottom: 16,
-              paddingTop: 16,
-              ...Platform.select({
-                ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12 },
-                android: { elevation: 8 },
-              }),
-            }}>
-              {/* Header */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 }}>
-                <Text style={{ fontSize: 16, fontWeight: '700', color: '#111' }}>Bulk Action</Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    setBulkActionModalVisible(false);
-                    setBulkActionModalQuery('');
-                    setBulkActionModalMatchIds(null);
-                    setBulkPhase('command');
-                  }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Icon name="close" size={20} color="#9CA3AF" />
-                </TouchableOpacity>
-              </View>
-
-              {bulkPhase === 'command' && (
-                <View style={{ paddingHorizontal: 4, paddingBottom: 4 }}>
-                  <SmartCommandInput
-                    mode="voice_filter"
-                    startExpanded={true}
-                    initialMode="text"
-                    variant="inline"
-                    disableKeyboardHandling={true}
-                    fullWidth={true}
-                    apiBaseUrl={API_BASE_URL}
-                    getAuthToken={ensureSupabaseJwt}
-                    onSubmit={async (text) => {
-                      setBulkActionModalQuery(text);
-                      setBulkPhase('planning');
-                      setPlanLoading(true);
-
-                      try {
-                        const baseUrl = API_BASE_URL;
-                        const token = await ensureSupabaseJwt();
-                        if (!baseUrl || !token) throw new Error('Missing config');
-
-                        // Gather selected items data for the planner
-                        const selectedIds = Array.from(selectedItems);
-                        const itemsForPlanner = filteredInventory
-                          .filter(item => selectedIds.includes(item.Id))
-                          .map(item => ({
-                            id: item.Id,
-                            title: item.Title || 'Untitled',
-                            price: item.Price ?? item.minPrice ?? 0,
-                            quantity: item.totalQuantity ?? 0,
-                            sku: item.Sku || '',
-                            platform: item.platformNames?.join(', ') || '',
-                            tags: item.Tags || '',
-                            imageUrl: item.imageUrl || '',
-                          }));
-
-                        const res = await fetch(`${baseUrl}/api/products/bulk-actions/plan`, {
-                          method: 'POST',
-                          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ command: text, items: itemsForPlanner }),
-                        });
-
-                        if (!res.ok) throw new Error(`Plan failed: ${res.status}`);
-                        const plan = await res.json();
-
-                        const actionsWithApproval = (plan.actions || []).map((a: any) => ({ ...a, approved: true }));
-                        setPlannedActions(actionsWithApproval);
-                        setPlanSummary(plan.summary || `${actionsWithApproval.length} actions planned`);
-                        setBulkPhase('review');
-                        setBulkActionModalVisible(false);
-                        setReviewModalVisible(true);
-                      } catch (err) {
-                        log.error('[BulkAction] Planning failed:', err);
-                        Alert.alert('Error', 'Failed to plan bulk actions. Please try again.');
-                        setBulkPhase('command');
-                      } finally {
-                        setPlanLoading(false);
-                      }
-                    }}
-                    onCollapse={() => {
-                      setBulkActionModalVisible(false);
-                      setBulkPhase('command');
-                    }}
-                  />
-                </View>
-              )}
-
-              {bulkPhase === 'planning' && (
-                <View style={{ paddingVertical: 32, alignItems: 'center', gap: 12 }}>
-                  <ActivityIndicator size="large" color={BRAND_PRIMARY} />
-                  <Text style={{ color: '#6B7280', fontSize: 14, fontWeight: '500' }}>Planning actions…</Text>
-                </View>
-              )}
-            </View>
-          </View>
-        )
-      }
-
-      {/* Full-Screen Review Modal */}
-      <Modal
-        visible={reviewModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => {
-          setReviewModalVisible(false);
-          setBulkPhase('command');
-          setPlannedActions([]);
-        }}
-      >
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
-          {/* Review Header */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: '#111' }}>Review Changes</Text>
-              <Text style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>{planSummary}</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => {
-                setReviewModalVisible(false);
-                setBulkPhase('command');
-                setPlannedActions([]);
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Icon name="close" size={24} color="#6B7280" />
-            </TouchableOpacity>
-          </View>
-
-          {/* Select All / Deselect All bar */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
-            <Text style={{ fontSize: 13, color: '#6B7280' }}>
-              {plannedActions.filter(a => a.approved).length} of {plannedActions.length} approved
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: true })))}>
-                <Text style={{ fontSize: 13, color: BRAND_PRIMARY, fontWeight: '600' }}>Select All</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setPlannedActions(prev => prev.map(a => ({ ...a, approved: false })))}>
-                <Text style={{ fontSize: 13, color: '#9CA3AF', fontWeight: '600' }}>Deselect All</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Action Cards List */}
-          <FlatList
-            data={plannedActions}
-            keyExtractor={(item) => item.itemId}
-            contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: bottomSafePadding }}
-            renderItem={({ item, index }) => (
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => setPlannedActions(prev => prev.map((a, i) => i === index ? { ...a, approved: !a.approved } : a))}
-                style={{
-                  backgroundColor: '#fff',
-                  borderRadius: 14,
-                  borderWidth: 1,
-                  borderColor: item.approved ? BRAND_PRIMARY : '#E5E7EB',
-                  padding: 14,
-                  opacity: item.approved ? 1 : 0.5,
-                  ...Platform.select({
-                    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
-                    android: { elevation: 1 },
-                  }),
-                }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  {/* Checkbox */}
-                  <View style={{
-                    width: 22, height: 22, borderRadius: 6,
-                    borderWidth: 2, borderColor: item.approved ? BRAND_PRIMARY : '#D1D5DB',
-                    backgroundColor: item.approved ? BRAND_PRIMARY : 'transparent',
-                    alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    {item.approved && <Icon name="check" size={14} color="#fff" />}
-                  </View>
-
-                  {/* Item info */}
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#111' }} numberOfLines={1}>{item.title}</Text>
-                    <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{item.description}</Text>
-                  </View>
-                </View>
-
-                {/* Changes */}
-                {item.changes.length > 0 && (
-                  <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6' }}>
-                    {item.changes.map((change, ci) => (
-                      <View key={ci} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <Text style={{ fontSize: 12, color: '#9CA3AF', fontWeight: '500', textTransform: 'capitalize' }}>{change.field}:</Text>
-                        <Text style={{ fontSize: 12, color: '#EF4444', textDecorationLine: 'line-through' }}>{change.from}</Text>
-                        <Icon name="arrow-right" size={12} color="#D1D5DB" />
-                        <Text style={{ fontSize: 12, color: '#10B981', fontWeight: '600' }}>{change.to}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </TouchableOpacity>
-            )}
-          />
-
-          {/* Bottom Action Bar */}
-          <View style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0,
-            backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#E5E7EB',
-            paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 34 : 16,
-            flexDirection: 'row', gap: 12,
-          }}>
-            <TouchableOpacity
-              style={{
-                flex: 1, paddingVertical: 14, borderRadius: 12,
-                backgroundColor: '#F3F4F6', alignItems: 'center',
-              }}
-              onPress={() => {
-                setReviewModalVisible(false);
-                setBulkPhase('command');
-                setPlannedActions([]);
-              }}
-            >
-              <Text style={{ color: '#6B7280', fontSize: 15, fontWeight: '600' }}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{
-                flex: 2, paddingVertical: 14, borderRadius: 12,
-                backgroundColor: plannedActions.some(a => a.approved) ? BRAND_PRIMARY : '#D1D5DB',
-                alignItems: 'center',
-                ...Platform.select({
-                  ios: { shadowColor: BRAND_PRIMARY, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
-                  android: { elevation: 3 },
-                }),
-              }}
-              disabled={!plannedActions.some(a => a.approved) || executeLoading}
-              onPress={async () => {
-                const approved = plannedActions.filter(a => a.approved);
-                if (approved.length === 0) return;
-
-                setExecuteLoading(true);
-                try {
-                  const baseUrl = API_BASE_URL;
-                  const token = await ensureSupabaseJwt();
-                  if (!baseUrl || !token) throw new Error('Missing config');
-
-                  const res = await fetch(`${baseUrl}/api/products/bulk-actions/execute`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      actions: approved.map(a => ({
-                        itemId: a.itemId,
-                        actionType: a.actionType,
-                        changes: a.changes,
-                      })),
-                    }),
-                  });
-
-                  if (!res.ok) throw new Error(`Execute failed: ${res.status}`);
-                  const result = await res.json();
-
-                  Alert.alert(
-                    'Done',
-                    `${result.successful} of ${result.total} changes applied successfully.`,
-                    [{ text: 'OK' }]
-                  );
-
-                  setReviewModalVisible(false);
-                  setBulkPhase('command');
-                  setPlannedActions([]);
-                  handleExitSelectionMode();
-                } catch (err) {
-                  log.error('[BulkAction] Execute failed:', err);
-                  Alert.alert('Error', 'Failed to execute bulk actions. Please try again.');
-                } finally {
-                  setExecuteLoading(false);
-                }
-              }}
-            >
-              {executeLoading ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
-                  Approve {plannedActions.filter(a => a.approved).length} changes
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </Modal>
 
       {/* Voice Search Modal - Dedicated voice recorder for instant recording */}
       <Modal
@@ -2334,6 +2125,16 @@ const InventoryOrdersScreen = observer(() => {
           </View>
 
           <View style={{ gap: 12 }}>
+            <TouchableOpacity style={styles.modalOption} onPress={() => {
+              setMoreMenuVisible(false);
+              setLiquidationModalVisible(true);
+            }}>
+              <View style={styles.modalOptionIconBg}>
+                <Icon name="tag-outline" size={20} color="#4B5563" />
+              </View>
+              <Text style={styles.modalOptionText}>Liquidate</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.modalOption} onPress={() => {
               log.debug('[Analytics] Print low stock');
               setMoreMenuVisible(false);
@@ -2852,6 +2653,38 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  inventoryHeaderTools: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+    gap: 10,
+  },
+  bulkEntryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bulkEntryChip: {
+    flex: 1,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F7F7F5',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  bulkEntryChipPressed: {
+    opacity: 0.72,
+  },
+  bulkEntryChipText: {
+    color: '#374151',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 
   // Selection Styles
   selectionHeader: {
@@ -2936,6 +2769,14 @@ const styles = StyleSheet.create({
   addToClearoutChip: {
     backgroundColor: '#93C822',
   },
+  sproutActionChip: {
+    backgroundColor: 'rgba(147,200,34,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(93,126,22,0.18)',
+  },
+  sproutActionText: {
+    color: '#5D7E16',
+  },
   actionChipText: {
     fontSize: 13,
     fontWeight: '600',
@@ -2945,32 +2786,6 @@ const styles = StyleSheet.create({
     padding: 8,
     backgroundColor: '#F3F4F6', // Light gray standard
     borderRadius: 20,
-  },
-  // Legacy styles (kept for backwards compatibility)
-  bulkActionText: {
-    fontSize: 15,
-    color: '#374151',
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  bulkActionButtons: {
-    flexDirection: 'row',
-    gap: 16,
-    alignItems: 'center',
-  },
-  bulkActionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F3F4F6',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    gap: 6,
-  },
-  bulkActionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
   },
   selectAllButton: {
     backgroundColor: '#84CC16', // Lime green

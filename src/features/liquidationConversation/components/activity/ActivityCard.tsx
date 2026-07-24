@@ -16,7 +16,12 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
-import type { ActivityPayload, CampaignItem, ValueChange } from '../../types';
+import type {
+  ActivityPayload,
+  CampaignItem,
+  InventorySelectionProposal,
+  ValueChange,
+} from '../../types';
 import ValueDiff from './ValueDiff';
 import RoutineCard from './RoutineCard';
 import { TypingIndicator } from './Typing';
@@ -32,9 +37,18 @@ export interface ActivityCardProps {
   onOpenTray?: (payload: ActivityPayload) => void;
   onOpenItem?: (productId: string) => void;
   planItems?: CampaignItem[];
+  onResolveSelection?: (proposal: InventorySelectionProposal) => string[];
+  onApplySelection?: (proposal: InventorySelectionProposal) => void;
 }
 
-export default function ActivityCard({ payload, streaming, onOpenTray, planItems = [] }: ActivityCardProps) {
+export default function ActivityCard({
+  payload,
+  streaming,
+  onOpenTray,
+  planItems = [],
+  onResolveSelection,
+  onApplySelection,
+}: ActivityCardProps) {
   switch (payload.kind) {
     case 'routine':
     case 'reminder':
@@ -48,9 +62,66 @@ export default function ActivityCard({ payload, streaming, onOpenTray, planItems
       return <DocumentCard payload={payload} onOpenTray={onOpenTray} />;
     case 'plan':
       return <PlanActivityCard payload={payload} planItems={planItems} onOpenTray={onOpenTray} />;
+    case 'selection':
+      return (
+        <SelectionCard
+          payload={payload}
+          onResolveSelection={onResolveSelection}
+          onApplySelection={onApplySelection}
+        />
+      );
     default:
       return null;
   }
+}
+
+function SelectionCard({
+  payload,
+  onResolveSelection,
+  onApplySelection,
+}: {
+  payload: Extract<ActivityPayload, { kind: 'selection' }>;
+  onResolveSelection?: (proposal: InventorySelectionProposal) => string[];
+  onApplySelection?: (proposal: InventorySelectionProposal) => void;
+}) {
+  const [applied, setApplied] = useState(false);
+  const matchedIds = onResolveSelection?.(payload.selection) || [];
+  const canApply = !applied && !!onApplySelection;
+  const detail =
+    payload.selection.operation === 'remove'
+      ? `${matchedIds.length} to remove`
+      : payload.selection.operation === 'replace'
+        ? `${matchedIds.length} matched`
+        : `${matchedIds.length} to add`;
+
+  return (
+    <View style={styles.selectionCard}>
+      <View style={styles.selectionIcon}>
+        <Icon name="checkbox-multiple-marked-outline" size={19} color={CHAT_COLORS.brandDeep} />
+      </View>
+      <View style={styles.selectionCopy}>
+        <Text style={styles.selectionTitle} numberOfLines={1}>{payload.selection.query}</Text>
+        <Text style={styles.selectionDetail}>{detail}</Text>
+      </View>
+      <Pressable
+        style={({ pressed }) => [
+          styles.selectionApply,
+          !canApply ? styles.selectionApplyDisabled : null,
+          pressed && canApply ? styles.selectionApplyPressed : null,
+        ]}
+        onPress={() => {
+          onApplySelection?.(payload.selection);
+          setApplied(true);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+        }}
+        disabled={!canApply}
+        accessibilityRole="button"
+        accessibilityLabel={`Apply selection for ${payload.selection.query}`}
+      >
+        <Text style={styles.selectionApplyText}>{applied ? 'Applied' : 'Apply'}</Text>
+      </Pressable>
+    </View>
+  );
 }
 
 // ── Plans and reports use the same compact artifact language as the home screen:
@@ -67,6 +138,15 @@ function PlanActivityCard({
 }) {
   const plan = payload.plan;
   const title = getPlanDisplayTitle(plan);
+  const inventoryAction = plan.inventoryAction;
+  const inventoryActionLabel =
+    inventoryAction?.action === 'archive'
+      ? 'Archive'
+      : inventoryAction?.action === 'delete'
+        ? 'Delete'
+        : inventoryAction?.action === 'add_tag'
+          ? 'Add tag'
+          : null;
   const priceRows = getPlanPricePreviews(plan).slice(0, 2).map((change) => {
     const item = matchPlanItem(change.name, planItems);
     return { ...change, before: change.before || campaignItemPrice(item) };
@@ -88,6 +168,11 @@ function PlanActivityCard({
         </View>
         <View style={styles.richTextCol}>
           <Text style={styles.artifactTitle} numberOfLines={2}>Plan: {title}</Text>
+          {inventoryAction && inventoryActionLabel ? (
+            <Text style={styles.artifactMeta}>
+              {inventoryActionLabel} · {inventoryAction.count} item{inventoryAction.count === 1 ? '' : 's'}
+            </Text>
+          ) : null}
         </View>
         <View style={styles.artifactAction}>
           <Text style={styles.artifactActionText}>View plan</Text>
@@ -316,6 +401,57 @@ function ToolRunCard({
 }
 
 const styles = StyleSheet.create({
+  selectionCard: {
+    width: '100%',
+    minHeight: 68,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#DDE8C5',
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  selectionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: 'rgba(147,200,34,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionCopy: { flex: 1, minWidth: 0 },
+  selectionTitle: {
+    fontSize: 14,
+    lineHeight: 18,
+    color: CHAT_COLORS.ink,
+    fontFamily: CHAT_FONT.semibold,
+  },
+  selectionDetail: {
+    marginTop: 2,
+    fontSize: 12,
+    color: CHAT_COLORS.dim,
+    fontFamily: CHAT_FONT.medium,
+  },
+  selectionApply: {
+    minWidth: 68,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    backgroundColor: '#93C822',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionApplyDisabled: { opacity: 0.4 },
+  selectionApplyPressed: { opacity: 0.82 },
+  selectionApplyText: {
+    fontSize: 13,
+    color: '#FFFFFF',
+    fontFamily: CHAT_FONT.bold,
+  },
+
   // ── Rich (value-change / publish) card ──
   richCard: {
     alignSelf: 'flex-start',
@@ -380,6 +516,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   artifactTitle: { fontSize: 14, lineHeight: 19, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.ink },
+  artifactMeta: { marginTop: 2, fontSize: 12, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.dim },
   artifactAction: {
     minHeight: 32,
     flexDirection: 'row',

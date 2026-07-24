@@ -23,6 +23,7 @@ export interface DashboardInsightChart {
 
 export interface DashboardInsight {
   id?: string;
+  fingerprint?: string;
   topDIN: {
     category: string;
     headline: string;
@@ -96,6 +97,10 @@ export interface DashboardInsight {
 
 export interface NudgesResponse {
   insight: DashboardInsight;
+  lastInsight?: DashboardInsight;
+  quiet?: boolean;
+  nothingNewSince?: string | null;
+  suggestedQuestions?: string[];
   timestamp: string;
   cacheExpiresAt: string | null;
   id?: string;
@@ -106,6 +111,9 @@ export interface NudgesResponse {
 
 interface UseOrgNudgesReturn {
   insight: DashboardInsight | null;
+  lastInsight: DashboardInsight | null;
+  quiet: boolean;
+  nothingNewSince: string | null;
   loading: boolean;
   error: string | null;
   lastUpdated: string | null;
@@ -114,6 +122,10 @@ interface UseOrgNudgesReturn {
   nextRefreshAt: string | null;
   refetch: () => Promise<void>;
   forceRefresh: () => Promise<void>;
+  dismissInsight: (
+    fingerprint?: string,
+    options?: { keepVisible?: boolean },
+  ) => Promise<void>;
 }
 
 interface PersistedInsightSnapshot {
@@ -246,6 +258,7 @@ const normalizeSingleInsight = (raw: any): DashboardInsight | null => {
 
   return {
     id: coerceText(raw?.id || raw?.insightId || raw?.recommendationId) || undefined,
+    fingerprint: coerceText(raw?.fingerprint) || undefined,
     topDIN: {
       category: coerceText(raw?.topDIN?.category, 'Priority'),
       headline,
@@ -373,6 +386,9 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const userId = session?.user?.id;
   const persistenceKey = userId && orgId ? storageKeyFor(userId, orgId) : null;
   const [insight, setInsight] = useState<DashboardInsight | null>(null);
+  const [lastInsight, setLastInsight] = useState<DashboardInsight | null>(null);
+  const [quiet, setQuiet] = useState(false);
+  const [nothingNewSince, setNothingNewSince] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -388,6 +404,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const applySnapshot = useCallback((snapshot: PersistedInsightSnapshot) => {
     snapshotRef.current = snapshot;
     setInsight(snapshot.insight);
+    setLastInsight(snapshot.insight);
     setGeneratedAt(snapshot.generatedAt);
     setNextRefreshAt(snapshot.nextRefreshAt);
     setLastUpdated(snapshot.generatedAt || snapshot.insight.timestamp || null);
@@ -398,6 +415,9 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     fetchSequenceRef.current += 1;
     snapshotRef.current = null;
     setInsight(null);
+    setLastInsight(null);
+    setQuiet(false);
+    setNothingNewSince(null);
     setGeneratedAt(null);
     setNextRefreshAt(null);
     setLastUpdated(null);
@@ -492,8 +512,27 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         throw new Error(`Failed to fetch insights: ${response.status} - ${errorText.substring(0, 100)}`);
       }
 
-      const data = await response.json() as NudgesResponse & { insight?: unknown };
-      const normalizedInsight = normalizeInsight(data?.insight);
+      const data = await response.json() as NudgesResponse & {
+        insight?: unknown;
+        lastInsight?: unknown;
+      };
+      const carriedQuestions = normalizeSuggestedQuestions(data?.suggestedQuestions);
+      const normalizedInsightBase = normalizeInsight(data?.insight);
+      const normalizedLastInsightBase = normalizeInsight(data?.lastInsight);
+      const normalizedInsight = normalizedInsightBase && carriedQuestions
+        ? {
+            ...normalizedInsightBase,
+            suggestedQuestions:
+              normalizedInsightBase.suggestedQuestions ?? carriedQuestions,
+          }
+        : normalizedInsightBase;
+      const normalizedLastInsight = normalizedLastInsightBase && carriedQuestions
+        ? {
+            ...normalizedLastInsightBase,
+            suggestedQuestions:
+              normalizedLastInsightBase.suggestedQuestions ?? carriedQuestions,
+          }
+        : normalizedLastInsightBase;
 
       if (!normalizedInsight) {
         log.warn('[useOrgNudges] ⚠️ Response missing or invalid insight data');
@@ -519,6 +558,9 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       );
       const resolved = resolveSnapshot(snapshotRef.current, incoming);
       applySnapshot(resolved);
+      setLastInsight(normalizedLastInsight ?? identifiedInsight);
+      setQuiet(Boolean(data?.quiet));
+      setNothingNewSince(normalizeIsoDate(data?.nothingNewSince));
       const resolvedTimestamp = coerceText(data?.timestamp, identifiedInsight.timestamp || new Date().toISOString());
       setLastUpdated(resolvedTimestamp);
       setCacheExpiresAt(coerceText(data?.cacheExpiresAt) || null);
@@ -603,8 +645,68 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     }
   }, [orgId, fetchNudges, session?.bridgeReady]);
 
+  const dismissInsight = useCallback(async (
+    fingerprint?: string,
+    options: { keepVisible?: boolean } = {},
+  ) => {
+    if (!orgId || !persistenceKey) return;
+
+    const requestStorageKey = persistenceKey;
+    try {
+      const token = await ensureSupabaseJwt();
+      if (!token) {
+        throw new Error('No JWT token available');
+      }
+
+      // eslint-disable-next-line no-restricted-syntax -- This mirrors the existing authenticated nudges action route.
+      const response = await fetch(
+        `${API_BASE_URL}/api/insights/orgs/${orgId}/nudges/dismiss`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ fingerprint }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to dismiss insight: ${response.status}`);
+      }
+
+      const data = await response.json() as {
+        success?: boolean;
+        fingerprint?: string;
+        nothingNewSince?: string;
+      };
+      if (data.success === false) {
+        throw new Error('Failed to dismiss insight');
+      }
+      if (activeStorageKeyRef.current !== requestStorageKey) return;
+
+      if (!options.keepVisible) {
+        setLastInsight((previous) => previous ?? insight);
+        setQuiet(true);
+        setNothingNewSince(
+          normalizeIsoDate(data.nothingNewSince) ??
+            normalizeIsoDate(insight?.timestamp),
+        );
+      }
+      setError(null);
+    } catch (dismissError) {
+      log.error('[useOrgNudges] Failed to dismiss insight:', dismissError);
+      if (activeStorageKeyRef.current === requestStorageKey) {
+        setError('Could not dismiss insight.');
+      }
+    }
+  }, [insight, orgId, persistenceKey]);
+
   return {
     insight,
+    lastInsight,
+    quiet,
+    nothingNewSince,
     loading,
     error,
     lastUpdated,
@@ -613,6 +715,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     nextRefreshAt,
     refetch: fetchNudges,
     forceRefresh,
+    dismissInsight,
   };
 }
 

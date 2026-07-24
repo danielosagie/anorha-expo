@@ -9,7 +9,15 @@ import { StreamingMessageBubble } from './StreamingMessageBubble';
 import { TimestampRevealContext } from './timestampReveal';
 import ActivityTraySheet from './activity/ActivityTraySheet';
 import { useActivityTray } from './activity/useActivityTray';
-import type { ActivityPayload, CampaignItem, ConversationMessage, DecisionPrompt, PlanPayload, ValueChange } from '../types';
+import type {
+  ActivityPayload,
+  CampaignItem,
+  ConversationMessage,
+  DecisionPrompt,
+  InventorySelectionProposal,
+  PlanPayload,
+  ValueChange,
+} from '../types';
 import { useMessageNarration } from '../useMessageNarration';
 import { useChatPreferences } from '../chatPreferences';
 
@@ -41,9 +49,15 @@ type Props = {
   /** Send the seller's revision request for a report back to Sprout. */
   onReviseDocument?: (documentId: string, title: string, note: string) => void;
   /** Approve / Revise / Follow-up a proposed plan from its tray. */
-  onApprovePlan?: (planId: string, action: 'approve' | 'revise' | 'follow_up') => void;
+  onApprovePlan?: (
+    planId: string,
+    action: 'approve' | 'revise' | 'follow_up',
+    plan?: PlanPayload,
+  ) => void;
   /** Move an open plan into the composer so the seller can describe a revision. */
   onEditPlan?: (plan: PlanPayload) => void;
+  onResolveSelection?: (proposal: InventorySelectionProposal) => string[];
+  onApplySelection?: (proposal: InventorySelectionProposal) => void;
   /** Pending plan mutation; disables repeat approval taps until it settles. */
   submittingDecisionId?: string | null;
   ListHeaderComponent?: React.ReactElement | null;
@@ -53,6 +67,8 @@ type Props = {
   /** Scroll to a message selected from chat search. */
   scrollToMessageId?: string;
   scrollRequestKey?: number;
+  ListEmptyComponent?: React.ReactElement | null;
+  scrollEnabled?: boolean;
 };
 
 export const ConversationList = ({
@@ -71,12 +87,16 @@ export const ConversationList = ({
   onReviseDocument,
   onApprovePlan,
   onEditPlan,
+  onResolveSelection,
+  onApplySelection,
   submittingDecisionId,
   ListHeaderComponent = null,
   contentTopInset,
   contentBottomInset,
   scrollToMessageId,
   scrollRequestKey,
+  ListEmptyComponent,
+  scrollEnabled = true,
 }: Props) => {
   // One review-tray instance for the whole feed (hoisted here so FlashList
   // recycling can never unmount an open tray as its row scrolls off).
@@ -229,6 +249,8 @@ export const ConversationList = ({
             onOpenItem={onOpenItem}
             onFeedback={onFeedback}
             planItems={planItems}
+            onResolveSelection={onResolveSelection}
+            onApplySelection={onApplySelection}
             showDisclaimer={item.id === latestAssistantId}
             showFollowUps={suggestedFollowUps && item.id === latestAssistantId && messages[messages.length - 1]?.id === item.id}
             onFollowUp={onFollowUp}
@@ -244,13 +266,14 @@ export const ConversationList = ({
             onToggleNarration={(messageId, text) => toggleNarration({ messageId, text })}
           />
         )}
-        ListEmptyComponent={(
+        ListEmptyComponent={ListEmptyComponent === undefined ? (
           <View style={styles.emptyState}>
             <Icon name="chat-outline" size={24} color="#71717A" />
             <Text style={styles.emptyTitle}>Start the conversation</Text>
             <Text style={styles.emptyText}>Ask the liquidation agent what to do next or trigger an action from Home.</Text>
           </View>
-        )}
+        ) : ListEmptyComponent}
+        scrollEnabled={scrollEnabled}
         onScroll={({ nativeEvent }) => {
           const layoutHeight = nativeEvent.layoutMeasurement.height;
           const offsetY = nativeEvent.contentOffset.y;

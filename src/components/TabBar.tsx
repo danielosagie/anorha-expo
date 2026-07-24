@@ -2,7 +2,6 @@ import React, { useRef } from 'react';
 import {
   View,
   TouchableOpacity,
-  Text,
   StyleSheet,
   ViewStyle,
   StyleProp,
@@ -12,10 +11,11 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useTheme } from '../context/ThemeContext';
 import { useIsNight } from '../hooks/useIsNight';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ShadowSurface from './ui/ShadowSurface';
+import { AnorhaFace } from './brand/AnorhaFace';
+import { openQuickChat } from './sprout/quickChatStore';
 
 // Order here only gates which routes render; display order follows the navigator.
 const TAB_ICON: Record<string, string> = {
@@ -34,6 +34,7 @@ const NIGHT_SURFACE = 'rgba(28, 30, 24, 0.94)';
 const NIGHT_INACTIVE = 'rgba(255, 255, 255, 0.85)';
 const SIDE_BUTTON_SIZE = 56;
 const ADD_BUTTON_SIZE = 60;
+const SPROUT_GLYPH_SIZE = 18;
 
 type TabBarProps = {
   state: any;
@@ -54,12 +55,7 @@ const TabBar: React.FC<TabBarProps> = ({
   bottomInset = 18,
   rowHeight = 64,
 }) => {
-  const theme = useTheme();
   const isNight = useIsNight();
-
-  const handleSearch = () => {
-    navigation.navigate('GlobalSearch');
-  };
 
   const addRotateAnim = useRef(new Animated.Value(0)).current;
   const addRotate = addRotateAnim.interpolate({
@@ -129,19 +125,16 @@ const TabBar: React.FC<TabBarProps> = ({
           { paddingBottom: bottomInset, height: rowHeight + bottomInset },
         ]}
       >
-        {/* Search Button
         <TouchableOpacity
-          onPress={handleSearch}
+          onPress={() => openQuickChat()}
           accessibilityRole="button"
-          accessibilityLabel="Search"
+          accessibilityLabel="Open Sprout chat"
           activeOpacity={0.9}
         >
-          
           <View style={[styles.sideButton, dark && styles.sideButtonNight]}>
-            <Icon name="magnify" size={22} color={dark ? NIGHT_INACTIVE : '#6B7280'} />
+            <AnorhaFace size={SPROUT_GLYPH_SIZE} />
           </View>
         </TouchableOpacity>
-        */}
 
         <ShadowSurface
           shadow="lg"
@@ -228,7 +221,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 64,
+    paddingHorizontal: 48,
   },
   sideButton: {
     height: SIDE_BUTTON_SIZE,

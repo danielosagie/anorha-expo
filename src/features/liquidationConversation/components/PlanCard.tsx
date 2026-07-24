@@ -9,6 +9,12 @@ type Props = {
   submitting?: boolean;
 };
 
+const inventoryActionLabel = (action: NonNullable<DecisionPrompt['inventoryAction']>['action']) => {
+  if (action === 'archive') return 'Archive';
+  if (action === 'delete') return 'Delete';
+  return 'Add tag';
+};
+
 // A plan Sprout proposed via propose_plan: title + summary + ordered steps, with
 // Accept (runs it) / Revise (drops it, Sprout re-plans) / Follow-up. Sits above the
 // composer like the question card.
@@ -19,6 +25,14 @@ const PlanCard = ({ prompt, onDecision, submitting }: Props) => (
       <Text style={s.kicker}>Plan{prompt.planType ? ` · ${prompt.planType.replace(/_/g, ' ')}` : ''}</Text>
     </View>
     <Text style={s.title}>{prompt.title}</Text>
+    {prompt.inventoryAction ? (
+      <View style={s.inventoryMeta}>
+        <Text style={s.inventoryAction}>{inventoryActionLabel(prompt.inventoryAction.action)}</Text>
+        <Text style={s.inventoryCount}>
+          {prompt.inventoryAction.count} item{prompt.inventoryAction.count === 1 ? '' : 's'}
+        </Text>
+      </View>
+    ) : null}
     {prompt.summary ? <Text style={s.summary}>{prompt.summary}</Text> : null}
     {prompt.steps?.length ? (
       <View style={s.steps}>
@@ -83,6 +97,19 @@ const s = StyleSheet.create({
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   title: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 4 },
+  inventoryMeta: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: '#EFF7E0',
+  },
+  inventoryAction: { fontSize: 12, color: '#4E7012', fontFamily: 'Inter_700Bold' },
+  inventoryCount: { fontSize: 12, color: '#5D6B48', fontFamily: 'Inter_600SemiBold' },
   summary: { fontSize: 14, color: '#52525B', fontFamily: 'Inter_400Regular', lineHeight: 20, marginBottom: 10 },
   steps: { gap: 8, marginBottom: 12 },
   stepRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },

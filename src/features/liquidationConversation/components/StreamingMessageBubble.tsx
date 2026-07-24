@@ -1,26 +1,30 @@
 import React, { useContext, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { BRAND_PRIMARY } from '../../../design/tokens';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Check, Copy, Pause, ThumbsDown, ThumbsUp, Volume2 } from 'lucide-react-native';
 import { AnorhaFace } from '../../../components/brand/AnorhaFace';
 import Markdown from 'react-native-markdown-display';
 import { HorizontalFadeScroll } from './HorizontalFadeScroll';
-import type { ActivityPayload, CampaignItem, ChatJobCardMeta, ConversationMessage, DecisionPrompt } from '../types';
+import type {
+  ActivityPayload,
+  CampaignItem,
+  ChatJobCardMeta,
+  ConversationMessage,
+  DecisionPrompt,
+  InventorySelectionProposal,
+} from '../types';
 import { TimestampRevealContext } from './timestampReveal';
 import ActivityCard from './activity/ActivityCard';
 import { deriveActivities } from './activity/deriveActivities';
 import { sanitizeDisplayText } from '../displayText';
-import { useSystemNotifications } from '../../../context/SystemNotificationContext';
 import { SproutDisclaimer } from './SproutDisclaimer';
 import { DiaTextReveal } from '../../../components/DiaTextReveal';
 import {
   FollowUpPrompts,
   type FollowUpSuggestion,
 } from '../../../components/chat/FollowUpPrompts';
+import { MessageActions, type NarrationState } from './MessageActions';
 
 // A tappable cart card the agent drops in after turning photos into draft listings.
 // Tapping it opens the AddProduct cart hydrated from the quick-scan session.
@@ -65,98 +69,6 @@ const AttachedImages = ({ urls }: { urls: string[] }) => {
           resizeMode="cover"
         />
       ))}
-    </View>
-  );
-};
-
-const ACTION_HITSLOP = { top: 10, bottom: 10, left: 10, right: 10 };
-
-// The control bar under a finished assistant reply — copy, retry, and a thumbs
-// up/down. Bigger tap targets than before (the row was fiddly to hit). Copy grabs
-// the whole message; retry re-asks the same prompt; the vote is recorded server-side
-// via onFeedback (optimistic — the icon fills the instant you tap).
-const MessageActions = ({
-  text,
-  messageId,
-  onFeedback,
-  narrationState,
-  onToggleNarration,
-}: {
-  text: string;
-  messageId: string;
-  onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
-  narrationState: 'idle' | 'loading' | 'playing' | 'paused';
-  onToggleNarration?: (messageId: string, text: string, title?: string) => void;
-}) => {
-  const { showToast } = useSystemNotifications();
-  const [copied, setCopied] = useState(false);
-  const [vote, setVote] = useState<null | 'up' | 'down'>(null);
-  const tap = () => Haptics.selectionAsync().catch(() => undefined);
-  const copy = async () => {
-    try {
-      await Clipboard.setStringAsync(text);
-      setCopied(true);
-      tap();
-      showToast({ title: 'Response copied', type: 'success', icon: 'check-circle-outline', duration: 1600 });
-      setTimeout(() => setCopied(false), 1400);
-    } catch {
-      showToast({ title: 'Could not copy response', type: 'error', icon: 'alert-circle-outline', duration: 2000 });
-    }
-  };
-  const castVote = (next: 'up' | 'down') => {
-    tap();
-    const resolved = vote === next ? null : next;
-    setVote(resolved);
-    onFeedback?.(messageId, resolved);
-    showToast({
-      title: resolved ? 'Feedback saved' : 'Feedback cleared',
-      message: resolved === 'down' ? 'Thanks, this helps Sprout improve.' : undefined,
-      type: 'success',
-      icon: resolved ? 'check-circle-outline' : 'close-circle-outline',
-      duration: 1700,
-    });
-  };
-  return (
-    <View style={styles.actionsRow}>
-      <Pressable style={styles.actionIcon} onPress={copy} hitSlop={ACTION_HITSLOP} accessibilityRole="button" accessibilityLabel="Copy response">
-        {copied
-          ? <Check size={19} color="#5D7E16" strokeWidth={2.2} />
-          : <Copy size={19} color="#9CA3AF" strokeWidth={2} />}
-      </Pressable>
-      <Pressable
-        style={[styles.actionIcon, narrationState === 'playing' && styles.actionIconActive]}
-        onPress={() => { tap(); onToggleNarration?.(messageId, text, 'Sprout response'); }}
-        disabled={narrationState === 'loading' || !onToggleNarration}
-        hitSlop={ACTION_HITSLOP}
-        accessibilityRole="button"
-        accessibilityLabel={narrationState === 'playing' ? 'Pause reading response' : 'Read response aloud'}
-      >
-        {narrationState === 'loading' ? (
-          <ActivityIndicator size="small" color="#5D7E16" />
-        ) : (
-          narrationState === 'playing'
-            ? <Pause size={20} color="#5D7E16" fill="#5D7E16" strokeWidth={2} />
-            : <Volume2 size={20} color={narrationState === 'paused' ? '#5D7E16' : '#9CA3AF'} strokeWidth={2} />
-        )}
-      </Pressable>
-      <Pressable
-        style={styles.actionIcon}
-        onPress={() => castVote('up')}
-        hitSlop={ACTION_HITSLOP}
-        accessibilityRole="button"
-        accessibilityLabel="Helpful response"
-      >
-        <ThumbsUp size={19} color={vote === 'up' ? '#5D7E16' : '#9CA3AF'} fill={vote === 'up' ? '#5D7E16' : 'transparent'} strokeWidth={2} />
-      </Pressable>
-      <Pressable
-        style={styles.actionIcon}
-        onPress={() => castVote('down')}
-        hitSlop={ACTION_HITSLOP}
-        accessibilityRole="button"
-        accessibilityLabel="Unhelpful response"
-      >
-        <ThumbsDown size={19} color={vote === 'down' ? '#52525B' : '#9CA3AF'} fill={vote === 'down' ? '#52525B' : 'transparent'} strokeWidth={2} />
-      </Pressable>
     </View>
   );
 };
@@ -289,6 +201,8 @@ const AssistantBody = ({
   onOpenTray,
   onOpenItem,
   planItems,
+  onResolveSelection,
+  onApplySelection,
 }: {
   raw: string;
   activities: ActivityPayload[];
@@ -296,6 +210,8 @@ const AssistantBody = ({
   onOpenTray?: (payload: ActivityPayload) => void;
   onOpenItem?: (productId: string) => void;
   planItems?: CampaignItem[];
+  onResolveSelection?: (proposal: InventorySelectionProposal) => string[];
+  onApplySelection?: (proposal: InventorySelectionProposal) => void;
 }) => {
   const blocks = useMemo(() => buildBlocks(raw, activities), [raw, activities]);
   return (
@@ -309,6 +225,8 @@ const AssistantBody = ({
             onOpenTray={onOpenTray}
             onOpenItem={onOpenItem}
             planItems={planItems}
+            onResolveSelection={onResolveSelection}
+            onApplySelection={onApplySelection}
           />
         ) : (
           <TextBlock key={b.key} text={b.text} streaming={isStreaming} animationKey={b.key} />
@@ -333,10 +251,12 @@ type Props = {
   /** Record a thumbs up/down on this reply (null clears it). */
   onFeedback?: (messageId: string, vote: 'up' | 'down' | null) => void;
   planItems?: CampaignItem[];
+  onResolveSelection?: (proposal: InventorySelectionProposal) => string[];
+  onApplySelection?: (proposal: InventorySelectionProposal) => void;
   showDisclaimer?: boolean;
   showFollowUps?: boolean;
   onFollowUp?: (prompt: string) => void;
-  narrationState?: 'idle' | 'loading' | 'playing' | 'paused';
+  narrationState?: NarrationState;
   onToggleNarration?: (messageId: string, text: string, title?: string) => void;
 };
 
@@ -398,7 +318,24 @@ const normalizeFollowUps = (message: ConversationMessage, activities: ActivityPa
   ];
 };
 
-const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, onCancelQueued, onOpenTray, onOpenItem, onFeedback, planItems, showDisclaimer = false, showFollowUps = false, onFollowUp, narrationState = 'idle', onToggleNarration }: Props) => {
+const StreamingMessageBubbleBase = ({
+  message,
+  onDecision,
+  onRetry,
+  onOpenCart,
+  onCancelQueued,
+  onOpenTray,
+  onOpenItem,
+  onFeedback,
+  planItems,
+  onResolveSelection,
+  onApplySelection,
+  showDisclaimer = false,
+  showFollowUps = false,
+  onFollowUp,
+  narrationState = 'idle',
+  onToggleNarration,
+}: Props) => {
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -408,6 +345,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
   const revealTimeStyle = useAnimatedStyle(() => ({ opacity: dragX ? Math.min(1, -dragX.value / 46) : 0 }));
   const [digestOpen, setDigestOpen] = useState(false);
   const isDigest = !isUser && (message.metadata as any)?.kind === 'digest';
+  const isClientAuthored = !isUser && (message.metadata as any)?.clientAuthored === true;
 
   const statusLabel = useMemo(() => {
     if (message.kind === 'action') {
@@ -499,6 +437,8 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
             onOpenTray={onOpenTray}
             onOpenItem={onOpenItem}
             planItems={planItems}
+            onResolveSelection={onResolveSelection}
+            onApplySelection={onApplySelection}
           />
         )}
 
@@ -575,7 +515,7 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
         ) : null}
 
         {/* The after-message control bar — only under a finished assistant reply. */}
-        {!isUser && !isStreaming && !isFailed && renderMarkdown ? (
+        {!isUser && !isClientAuthored && !isStreaming && !isFailed && renderMarkdown ? (
           <MessageActions
             text={content}
             messageId={message.serverMessageId || message.id}
@@ -584,10 +524,10 @@ const StreamingMessageBubbleBase = ({ message, onDecision, onRetry, onOpenCart, 
             onToggleNarration={onToggleNarration}
           />
         ) : null}
-        {!isUser && !isStreaming && !isFailed && renderMarkdown && showFollowUps && onFollowUp ? (
+        {!isUser && !isClientAuthored && !isStreaming && !isFailed && renderMarkdown && showFollowUps && onFollowUp ? (
           <FollowUpPrompts suggestions={followUps} onPress={onFollowUp} />
         ) : null}
-        {!isUser && !isStreaming && !isFailed && renderMarkdown && showDisclaimer ? <SproutDisclaimer /> : null}
+        {!isUser && !isClientAuthored && !isStreaming && !isFailed && renderMarkdown && showDisclaimer ? <SproutDisclaimer /> : null}
       </View>
     </Animated.View>
   );
@@ -620,6 +560,8 @@ export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (pr
     ((a.metadata as any)?.jobCard?.sessionId || '') === ((b.metadata as any)?.jobCard?.sessionId || '') &&
     (a.imageUrls?.join('|') || '') === (b.imageUrls?.join('|') || '')
     && prev.planItems === next.planItems
+    && prev.onResolveSelection === next.onResolveSelection
+    && prev.onApplySelection === next.onApplySelection
     && prev.showDisclaimer === next.showDisclaimer
     && prev.showFollowUps === next.showFollowUps
     && prev.onFollowUp === next.onFollowUp
@@ -997,22 +939,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
   },
-  // After-message control bar (copy / retry / thumbs). Bigger, easier-to-hit targets.
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    marginLeft: -8,
-  },
-  actionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionIconActive: { backgroundColor: 'rgba(147,200,34,0.12)' },
   // Wide markdown tables — scroller wrapper + the bordered table container.
   mdTableScroll: {
     width: '100%',

@@ -100,6 +100,12 @@ export interface CampaignThreadSummary {
   metadata?: Record<string, unknown>;
 }
 
+export interface GlobalConversationTarget {
+  sessionId: string;
+  threadId: string;
+  title: string;
+}
+
 export interface PlanStep {
   title: string;
   detail?: string;
@@ -114,7 +120,25 @@ export interface PlanPayload {
   planType?: string;
   steps?: PlanStep[];
   strategyId?: string;
+  inventoryAction?: InventoryBulkAction;
 }
+
+export type InventoryBulkAction = {
+  action: 'archive' | 'delete' | 'add_tag';
+  count: number;
+  tag?: string;
+};
+
+export type InventorySelectionProposal = {
+  query: string;
+  operation: 'add' | 'replace' | 'remove';
+};
+
+export type ConversationContextAttachment = {
+  kind: 'inventory_bulk_select' | 'inventory_bulk_edit';
+  label: string;
+  payload: Record<string, unknown>;
+};
 
 export interface DecisionPrompt {
   id: string;
@@ -132,6 +156,7 @@ export interface DecisionPrompt {
   planType?: string;
   summary?: string;
   steps?: PlanStep[];
+  inventoryAction?: InventoryBulkAction;
 }
 
 export interface QuestionOption {
@@ -187,6 +212,7 @@ export interface ConversationQueueItem {
   actionPayload?: Record<string, unknown>;
   /** Public urls of photos the seller attached — the agent decides what to do with them. */
   imageUrls?: string[];
+  contextAttachment?: ConversationContextAttachment;
   createdAt: string;
 }
 
@@ -210,6 +236,7 @@ export interface StreamTurnInput {
   actionPayload?: Record<string, unknown>;
   /** Public urls of photos attached to this turn (already uploaded). */
   imageUrls?: string[];
+  contextAttachment?: ConversationContextAttachment;
   /** Sprout opens the thread itself — no user message is sent. Guarded server-side. */
   kickoff?: boolean;
 }
@@ -333,6 +360,8 @@ export interface ConversationToolStep {
   document?: ReportDocument;
   /** A plan the agent proposed in this step — promoted to a {kind:'plan'} approvable card. */
   plan?: PlanPayload;
+  /** An inventory selection proposal that stays inert until the seller taps Apply. */
+  selection?: InventorySelectionProposal;
   /** Length of the assistant text streamed so far when this step completed. Lets the
    *  bubble drop the card inline at the point the reply "brought it up" (client-stamped
    *  during streaming; absent on history reload → the card falls beneath the text). */
@@ -385,7 +414,8 @@ export type ActivityPayload =
   | (ActivityBase & { kind: 'routine'; routine: Routine })
   | (ActivityBase & { kind: 'reminder'; whenAtLabel: string; what: string; nextRunAt?: string })
   | (ActivityBase & { kind: 'document'; document: ReportDocument })
-  | (ActivityBase & { kind: 'plan'; plan: PlanPayload });
+  | (ActivityBase & { kind: 'plan'; plan: PlanPayload })
+  | (ActivityBase & { kind: 'selection'; selection: InventorySelectionProposal });
 
 export interface StreamTurnObserver {
   onThreadCreated?: (threadId: string) => void;
@@ -424,6 +454,8 @@ export interface DecisionSubmission {
   strategyId?: string;
   planId?: string;
   content?: string;
+  /** Re-run a failed, idempotent inventory plan. Ignored for other decisions. */
+  retry?: boolean;
 }
 
 export interface CampaignConfigUpdate {

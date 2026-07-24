@@ -4,8 +4,6 @@ import {
   Alert,
   Dimensions,
   Image,
-  Keyboard,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -16,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useAuth, useUser } from '@clerk/expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,14 +24,9 @@ import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, {
-  FadeInDown,
-  useAnimatedKeyboard,
-  useAnimatedStyle,
-} from 'react-native-reanimated';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import { StreamingText } from '../components/StreamingText';
 import { FollowUpPrompts, type FollowUpSuggestion } from '../components/chat/FollowUpPrompts';
-import { MessageComposer } from '../components/chat/MessageComposer';
 import { UpNextRow, type IconName } from '../components/quest/LobbyKit';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
@@ -42,7 +35,7 @@ import { NewClearoutSheet, NewClearoutInput } from '../components/liquidation/Ne
 import { DateRangeSheet, DateRange, todayRange } from '../components/liquidation/DateRangeSheet';
 import { useOrg } from '../context/OrgContext';
 import { useIsNight } from '../hooks/useIsNight';
-import { useOrgNudges } from '../hooks/useOrgNudges';
+import { trackInsightAction, useOrgNudges } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
 import ActivityTraySheet from '../features/liquidationConversation/components/activity/ActivityTraySheet';
@@ -54,6 +47,9 @@ import {
   compactHeroBodyText,
   sanitizeDisplayText,
 } from '../features/liquidationConversation/displayText';
+import { MessageActions } from '../features/liquidationConversation/components/MessageActions';
+import { useMessageNarration } from '../features/liquidationConversation/useMessageNarration';
+import { NarrationPlayerHost } from '../context/NarrationContext';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -62,8 +58,6 @@ const CONVEX_TEMPLATE =
 
 const BRAND = '#93C822';
 const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
-const HOME_TAB_ROW_HEIGHT = 64;
-const HOME_COMPOSER_GAP = 8;
 
 // 375-390pt screens leave 339-354pt after the hero's 18pt side padding.
 // Inter Semibold 16.5 averages about 7.92pt per prose character, or 43-45 chars/line.
@@ -88,6 +82,23 @@ const greetingForHour = (hour: number): string => {
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
+};
+
+const quietSincePhrase = (iso: string | null, now = new Date()): string | null => {
+  const timestamp = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(timestamp)) return null;
+
+  const date = new Date(timestamp);
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const days = Math.round((todayStart.getTime() - dateStart.getTime()) / 86400000);
+
+  if (days <= 0) return 'since today';
+  if (days === 1) return 'since yesterday';
+  if (days < 7) {
+    return `since ${date.toLocaleDateString('en-US', { weekday: 'short' })}`;
+  }
+  return `since ${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
 };
 
 const currency = (value: number): string => {
@@ -263,6 +274,7 @@ const ReportPreviewCard = ({
   chip,
   onPress,
   borderColor,
+  subdued = false,
 }: {
   title: string;
   subtitle?: string;
@@ -271,14 +283,19 @@ const ReportPreviewCard = ({
   // Themed so the card + its chip keep a visible outline in night mode (the
   // hardcoded black border vanished on the dark hero).
   borderColor?: string;
+  subdued?: boolean;
 }) => (
   <Pressable
-    style={[styles.reportCard, borderColor ? { borderColor } : null]}
+    style={[
+      styles.reportCard,
+      subdued ? styles.reportCardSubdued : null,
+      borderColor ? { borderColor } : null,
+    ]}
     onPress={onPress}
     accessibilityRole="button"
     accessibilityLabel={`${chip}: ${title}`}
   >
-    <View style={styles.reportIconWrap}>
+    <View style={[styles.reportIconWrap, subdued ? styles.reportIconWrapSubdued : null]}>
       <LinearGradient
         colors={['rgba(255,255,255,0.31)', 'rgba(153,153,153,0.31)']}
         style={styles.reportIconChip}
@@ -287,11 +304,24 @@ const ReportPreviewCard = ({
       </LinearGradient>
     </View>
     <View style={styles.reportTextCol}>
-      <Text style={styles.reportTitle} numberOfLines={2}>{sanitizeDisplayText(title)}</Text>
+      <Text
+        style={[styles.reportTitle, subdued ? styles.reportTitleSubdued : null]}
+        numberOfLines={2}
+      >
+        {sanitizeDisplayText(title)}
+      </Text>
       {!!subtitle && <Text style={styles.reportSub} numberOfLines={3}>{sanitizeDisplayText(subtitle)}</Text>}
     </View>
-    <View style={[styles.reportChip, borderColor ? { borderColor } : null]}>
-      <Text style={styles.reportChipText}>{chip}</Text>
+    <View
+      style={[
+        styles.reportChip,
+        subdued ? styles.reportChipSubdued : null,
+        borderColor ? { borderColor } : null,
+      ]}
+    >
+      <Text style={[styles.reportChipText, subdued ? styles.reportChipTextSubdued : null]}>
+        {chip}
+      </Text>
     </View>
   </Pressable>
 );
@@ -352,9 +382,16 @@ const sproutMessageForHour = (hour: number, _name: string): SproutMessage => {
 
 const SproutHomeScreen: React.FC = () => {
   const navigation = useNavigation<any>();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const { user } = useUser();
+  const {
+    toggleNarration,
+    playingMessageId,
+    loadedMessageId,
+    loadingMessageId,
+  } = useMessageNarration();
 
   // Name shown in the greeting. Fall through Clerk first/full name → username →
   // the email handle before the generic 'there', so accounts that never set a
@@ -403,42 +440,9 @@ const SproutHomeScreen: React.FC = () => {
 
   const [activeRange, setActiveRange] = useState<Range>('1W');
   const [activeFilter, setActiveFilter] = useState<Filter>('All');
-  // Campaign search — the magnifier in the filter row toggles an inline field
-  // that narrows the list by title on top of the active status filter.
+  // Campaign search restores the original inline toggle beside the status chips.
   const [searchOpen, setSearchOpen] = useState(false);
   const [campaignQuery, setCampaignQuery] = useState('');
-  const [homeComposerText, setHomeComposerText] = useState('');
-  const [homeComposerHeight, setHomeComposerHeight] = useState(76);
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const homeComposerBottom =
-    HOME_TAB_ROW_HEIGHT + Math.max(18, insets.bottom) + HOME_COMPOSER_GAP;
-  const keyboard = useAnimatedKeyboard();
-  const homeComposerLiftStyle = useAnimatedStyle(
-    () => ({
-      transform: [
-        {
-          translateY: -Math.max(
-            keyboard.height.value - homeComposerBottom + HOME_COMPOSER_GAP,
-            0,
-          ),
-        },
-      ],
-    }),
-    [homeComposerBottom],
-  );
-
-  useEffect(() => {
-    const showEvent =
-      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent =
-      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const show = Keyboard.addListener(showEvent, () => setKeyboardOpen(true));
-    const hide = Keyboard.addListener(hideEvent, () => setKeyboardOpen(false));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
 
   // Create-campaign modal state
   const [createOpen, setCreateOpen] = useState(false);
@@ -476,9 +480,13 @@ const SproutHomeScreen: React.FC = () => {
   const { currentOrg, isLoading: isOrgLoading } = useOrg();
   const {
     insight,
+    lastInsight,
+    quiet,
+    nothingNewSince,
     generatedAt: insightGeneratedAt,
     nextRefreshAt: insightNextRefreshAt,
     refetch: refetchInsight,
+    dismissInsight,
   } = useOrgNudges(!isOrgLoading ? currentOrg?.id : undefined);
   const currentInsightRef = useRef(insight);
   currentInsightRef.current = insight;
@@ -557,12 +565,45 @@ const SproutHomeScreen: React.FC = () => {
     () => nextRecommendationLine(insightNextRefreshAt, insightGeneratedAt),
     [insightGeneratedAt, insightNextRefreshAt],
   );
+  const insightActionId = useMemo(
+    () => `home-insight:${insight?.fingerprint || insight?.id || insightHeadline || 'current'}`,
+    [insight?.fingerprint, insight?.id, insightHeadline],
+  );
+  const insightNarrationState =
+    loadingMessageId === insightActionId
+      ? 'loading'
+      : playingMessageId === insightActionId
+        ? 'playing'
+        : loadedMessageId === insightActionId
+          ? 'paused'
+          : 'idle';
+  const handleInsightFeedback = useCallback((
+    _messageId: string,
+    vote: 'up' | 'down' | null,
+  ) => {
+    if (vote === 'up' && currentOrg?.id) {
+      void trackInsightAction(
+        currentOrg.id,
+        'feedback/helpful',
+        insightHeadline || 'Home insight',
+      );
+      return;
+    }
+    if (vote === 'down') {
+      void dismissInsight(insight?.fingerprint, { keepVisible: true });
+    }
+  }, [currentOrg?.id, dismissInsight, insight?.fingerprint, insightHeadline]);
+  const quietSince = useMemo(
+    () => quietSincePhrase(nothingNewSince),
+    [nothingNewSince],
+  );
+  const conversationInsight = quiet ? (lastInsight ?? insight) : insight;
 
   // Insight handoff → chat. The backend scopes by StrategyId; mobile threads key on
   // session ids, so match against the loaded campaigns and fall back to the newest —
   // the prompt text itself carries the exact scope either way.
   const handoffTarget = useMemo(() => {
-    const h = insight?.handoff;
+    const h = conversationInsight?.handoff;
     if (!h?.prompt) return null;
     const match = controller.campaigns.find((c) => c.id === h.campaignId);
     const campaignId = match?.id || controller.campaigns[0]?.id;
@@ -572,11 +613,11 @@ const SproutHomeScreen: React.FC = () => {
       prompt: h.prompt.trim(),
       label: h.label?.trim() || undefined,
     };
-  }, [insight?.handoff, controller.campaigns]);
+  }, [conversationInsight?.handoff, controller.campaigns]);
   const promptCampaignId =
     handoffTarget?.campaignId || controller.campaigns[0]?.id;
   const insightFollowUps = useMemo<FollowUpSuggestion[]>(() => {
-    const suggested = (insight?.suggestedQuestions || [])
+    const suggested = (conversationInsight?.suggestedQuestions || [])
       .map((question) => compactQuestion(question))
       .filter(Boolean)
       .map((question) => ({ label: question, prompt: question }));
@@ -588,7 +629,11 @@ const SproutHomeScreen: React.FC = () => {
     return label
       ? [{ label, prompt: handoffTarget.prompt }]
       : [];
-  }, [handoffTarget?.label, handoffTarget?.prompt, insight?.suggestedQuestions]);
+  }, [
+    conversationInsight?.suggestedQuestions,
+    handoffTarget?.label,
+    handoffTarget?.prompt,
+  ]);
   const openCampaignPrompt = useCallback(
     (prompt: string): boolean => {
       const initialPrompt = prompt.trim();
@@ -602,12 +647,6 @@ const SproutHomeScreen: React.FC = () => {
     },
     [navigation, promptCampaignId],
   );
-  const sendHomeComposer = useCallback(() => {
-    const prompt = homeComposerText.trim();
-    if (!prompt || !openCampaignPrompt(prompt)) return;
-    setHomeComposerText('');
-  }, [homeComposerText, openCampaignPrompt]);
-
   // Live pulse: when the briefing is quiet, show Sprout's most recent real action
   // so "Sprout is watching" is backed by evidence instead of vibes.
   const lastAction = controller.campaignOverview?.recentActions?.[0];
@@ -639,6 +678,7 @@ const SproutHomeScreen: React.FC = () => {
     if (DEMO) return null; // demo has its own scripted body
     if (latestDigest) return { id: `digest:${latestDigest.createdAt}`, text: compactHeroBodyText(latestDigest.text) };
     if (controller.loading) return null; // don't stream the transient "Catching you up…"
+    if (quiet) return null;
     if (insightHeadline && insightBody) {
       return { id: `insight:${insight?.id || insightHeadline}:${insightBody}`, text: insightBody };
     }
@@ -646,7 +686,7 @@ const SproutHomeScreen: React.FC = () => {
       id: isNight ? 'quiet:night' : 'quiet:day',
       text: isNight ? 'All quiet while you slept. Sprout is watching.' : 'All quiet so far. Sprout is watching.',
     };
-  }, [DEMO, latestDigest, controller.loading, insight?.id, insightBody, insightHeadline, isNight]);
+  }, [DEMO, latestDigest, controller.loading, quiet, insight?.id, insightBody, insightHeadline, isNight]);
 
   const [seenLoaded, setSeenLoaded] = useState(false);
   const [lastSeenMsgId, setLastSeenMsgId] = useState<string | null>(null);
@@ -657,7 +697,20 @@ const SproutHomeScreen: React.FC = () => {
       .catch(() => { if (alive) setSeenLoaded(true); });
     return () => { alive = false; };
   }, []);
-  const isShowingInsight = Boolean(seenLoaded && !latestDigest && !controller.loading && insightHeadline && insightBody);
+  const isShowingInsight = Boolean(
+    seenLoaded &&
+    !latestDigest &&
+    !controller.loading &&
+    !quiet &&
+    insightHeadline &&
+    insightBody,
+  );
+  const isShowingQuiet = Boolean(
+    seenLoaded &&
+    !latestDigest &&
+    !controller.loading &&
+    quiet,
+  );
   const shouldStreamHero = seenLoaded && !!heroMessage && heroMessage.id !== lastSeenMsgId;
   const markHeroSeen = useCallback(() => {
     if (!heroMessage) return;
@@ -745,10 +798,14 @@ const SproutHomeScreen: React.FC = () => {
     } else if (activeFilter === 'Completed') {
       out = out.filter(c => c.status === 'completed');
     }
-    const q = campaignQuery.trim().toLowerCase();
-    if (q) out = out.filter(c => (c.title || '').toLowerCase().includes(q));
+    const query = campaignQuery.trim().toLowerCase();
+    if (query) {
+      out = out.filter(campaign =>
+        (campaign.title || '').toLowerCase().includes(query),
+      );
+    }
     return out;
-  }, [baseCampaigns, activeFilter, campaignQuery]);
+  }, [activeFilter, baseCampaigns, campaignQuery]);
 
   // Mockup groups the list: live clearouts first, then a dimmed COMPLETED section.
   const runningCampaigns = useMemo(
@@ -894,6 +951,8 @@ const SproutHomeScreen: React.FC = () => {
   // there's overnight activity to recap. Otherwise the quiet line stands in.
   const showSproutMessage = DEMO || !!latestDigest || briefingRows.length > 0;
   const ledgerRows = DEMO ? DEMO_LEDGER : briefingRows;
+  const showQuietInsight = !showSproutMessage && isShowingQuiet;
+  const showActiveInsight = !showSproutMessage && isShowingInsight;
 
   const reportTitle = useMemo(() => {
     const h = new Date().getHours();
@@ -909,9 +968,24 @@ const SproutHomeScreen: React.FC = () => {
   // home screen can open a report directly (no detour through a chat prompt).
   const { openTray, trayProps } = useActivityTray();
   const [reportHasHandoff, setReportHasHandoff] = useState(false);
+  const [reportDismissTarget, setReportDismissTarget] = useState<{
+    fingerprint?: string;
+  } | null>(null);
 
-  const openReportDocument = useCallback((doc: ReportDocument, withHandoff = false) => {
-    setReportHasHandoff(withHandoff);
+  const openReportDocument = useCallback((
+    doc: ReportDocument,
+    options: {
+      withHandoff?: boolean;
+      dismissible?: boolean;
+      dismissFingerprint?: string;
+    } = {},
+  ) => {
+    setReportHasHandoff(!!options.withHandoff);
+    setReportDismissTarget(
+      options.dismissible
+        ? { fingerprint: options.dismissFingerprint }
+        : null,
+    );
     openTray({
       kind: 'document',
       id: doc.documentId,
@@ -948,7 +1022,11 @@ const SproutHomeScreen: React.FC = () => {
   // else fetch it by its persisted reportId. Returns true when a report opened.
   const openInsightReport = useCallback(async (): Promise<boolean> => {
     if (insight?.report?.sections?.length) {
-      openReportDocument(prepareInsightReport(insight.report), true);
+      openReportDocument(prepareInsightReport(insight.report), {
+        withHandoff: true,
+        dismissible: true,
+        dismissFingerprint: insight.fingerprint,
+      });
       return true;
     }
     const reportId = insight?.reportId;
@@ -984,7 +1062,11 @@ const SproutHomeScreen: React.FC = () => {
               Array.isArray(doc.sections) &&
               doc.sections.length
             ) {
-              openReportDocument(prepareInsightReport(doc), true);
+              openReportDocument(prepareInsightReport(doc), {
+                withHandoff: true,
+                dismissible: true,
+                dismissFingerprint: currentInsight?.fingerprint,
+              });
               return true;
             }
           }
@@ -1107,10 +1189,14 @@ const SproutHomeScreen: React.FC = () => {
             </View>
           ) : (
             <>
-              {/* The quiet-state message (the periodic insight when there is one, else
-                  the honest "watching" line) types in on first open / when it's new,
-                  just like the digest and the chat. Instant on remount, never replays. */}
-              {controller.loading ? (
+              {showQuietInsight ? (
+                <Text
+                  style={[styles.quietInsightLine, { color: THEME.faint }]}
+                  numberOfLines={1}
+                >
+                  All quiet.{quietSince ? ` ${quietSince}` : ''}
+                </Text>
+              ) : controller.loading ? (
                 <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>Catching you up…</Text>
               ) : seenLoaded && heroMessage ? (
                 <StreamingText
@@ -1123,7 +1209,7 @@ const SproutHomeScreen: React.FC = () => {
                   style={[styles.briefingProse, { color: THEME.strong }]}
                 />
               ) : null}
-              {isShowingInsight && insightSupportLine ? (
+              {showActiveInsight && insightSupportLine ? (
                 <Text
                   style={[styles.briefingSupport, { color: THEME.faint }]}
                   numberOfLines={1}
@@ -1132,15 +1218,31 @@ const SproutHomeScreen: React.FC = () => {
                   {insightSupportLine}
                 </Text>
               ) : null}
-              {!isShowingInsight && !controller.loading && lastActivityLine && (
+              {!showActiveInsight &&
+              !showQuietInsight &&
+              !controller.loading &&
+              lastActivityLine ? (
                 <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
-              )}
+              ) : null}
             </>
           )}
 
           {/* Actionable insights always keep their report destination, including
               while campaign data reloads or a digest occupies the prose area. */}
-          {isActionableInsight ? (
+          {showQuietInsight ? (
+            lastInsight?.report ? (
+              <ReportPreviewCard
+                title="Last note"
+                chip="Report"
+                borderColor={THEME.cardBorder}
+                subdued
+                onPress={() => {
+                  tap();
+                  openReportDocument(lastInsight.report!, { withHandoff: true });
+                }}
+              />
+            ) : null
+          ) : isActionableInsight ? (
             <ReportPreviewCard
               title={insightReportTitle}
               chip="Report"
@@ -1152,7 +1254,7 @@ const SproutHomeScreen: React.FC = () => {
             />
           ) : null}
           {!showSproutMessage &&
-          isShowingInsight &&
+          (isShowingInsight || isShowingQuiet) &&
           promptCampaignId &&
           insightFollowUps.length ? (
             <FollowUpPrompts
@@ -1162,6 +1264,37 @@ const SproutHomeScreen: React.FC = () => {
               borderColor={THEME.cardBorder}
               iconColor={THEME.faint}
             />
+          ) : null}
+          {(showActiveInsight && insightBody) || insightNextCheckLine ? (
+            <View style={styles.insightCountdownRow}>
+              {showActiveInsight && insightBody ? (
+                <MessageActions
+                  text={insightBody}
+                  messageId={insightActionId}
+                  onFeedback={handleInsightFeedback}
+                  narrationState={insightNarrationState}
+                  onToggleNarration={(messageId, text) => {
+                    void toggleNarration({ messageId, text });
+                  }}
+                  tintColor={THEME.dim}
+                  upActiveColor={THEME.strong}
+                  downActiveColor={THEME.strong}
+                  narrationActiveColor={THEME.strong}
+                  activeBackgroundColor="rgba(255,255,255,0.14)"
+                  style={styles.insightActions}
+                />
+              ) : null}
+              {insightNextCheckLine ? (
+                <Text
+                  style={[styles.insightCountdownText, { color: THEME.dim }]}
+                  accessibilityLabel={insightNextCheckLine}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {insightNextCheckLine}
+                </Text>
+              ) : null}
+            </View>
           ) : null}
 
           {/* Divider + today's numbers only when there's something below the fold —
@@ -1251,7 +1384,7 @@ const SproutHomeScreen: React.FC = () => {
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
-          paddingBottom: insets.bottom + 120 + homeComposerHeight,
+          paddingBottom: insets.bottom + 120,
         }}
         refreshControl={
           <RefreshControl
@@ -1264,72 +1397,77 @@ const SproutHomeScreen: React.FC = () => {
       >
         {/* ── BODY ─────────────────────────────────────────────────── */}
         <View style={styles.body}>
-          {/* No point filtering when there's nothing made yet — during onboarding the
-              setup feed is the whole focus. Bar appears once the first clearout exists. */}
-          {controller.campaigns.length > 0 && (
-          <>
-          <View style={styles.filterRow}>
-            <View style={styles.filterChips}>
-              {FILTERS.map(f => {
-                const active = f === activeFilter;
-                return (
+          {controller.campaigns.length > 0 ? (
+            <>
+            <View style={styles.filterRow}>
+              <View style={styles.filterChips}>
+                {FILTERS.map(f => {
+                  const active = f === activeFilter;
+                  return (
+                    <TouchableOpacity
+                      key={f}
+                      style={[
+                        styles.filterChip,
+                        {
+                          backgroundColor: active ? THEME.chipActiveBg : THEME.chipIdleBg,
+                          borderColor: active ? THEME.chipBorder : 'transparent',
+                        },
+                      ]}
+                      onPress={() => {
+                        tap();
+                        setActiveFilter(f);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.filterChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{f}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <TouchableOpacity
+                style={[styles.searchBtn, { backgroundColor: searchOpen ? THEME.chipActiveBg : THEME.chipIdleBg }]}
+                onPress={() => {
+                  tap();
+                  setSearchOpen(open => {
+                    if (open) setCampaignQuery('');
+                    return !open;
+                  });
+                }}
+                activeOpacity={0.8}
+                accessibilityLabel="Search clearouts"
+              >
+                <Icon
+                  name={searchOpen ? 'close' : 'magnify'}
+                  size={17}
+                  color={searchOpen ? THEME.chipActiveText : THEME.chipIdleText}
+                />
+              </TouchableOpacity>
+            </View>
+            {searchOpen ? (
+              <View style={[styles.searchRow, { backgroundColor: THEME.chipIdleBg }]}>
+                <Icon name="magnify" size={16} color={THEME.chipIdleText} />
+                <TextInput
+                  value={campaignQuery}
+                  onChangeText={setCampaignQuery}
+                  placeholder="Search clearouts"
+                  placeholderTextColor={THEME.chipIdleText}
+                  style={[styles.searchInput, { color: isNight ? '#F4F4EE' : '#18181B' }]}
+                  autoFocus
+                  autoCorrect={false}
+                  returnKeyType="search"
+                />
+                {campaignQuery.length > 0 ? (
                   <TouchableOpacity
-                    key={f}
-                    style={[
-                      styles.filterChip,
-                      {
-                        backgroundColor: active ? THEME.chipActiveBg : THEME.chipIdleBg,
-                        borderColor: active ? THEME.chipBorder : 'transparent',
-                      },
-                    ]}
-                    onPress={() => {
-                      tap();
-                      setActiveFilter(f);
-                    }}
-                    activeOpacity={0.8}
+                    onPress={() => setCampaignQuery('')}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Text style={[styles.filterChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{f}</Text>
+                    <Icon name="close-circle" size={16} color={THEME.chipIdleText} />
                   </TouchableOpacity>
-                );
-              })}
-            </View>
-            <TouchableOpacity
-              style={[styles.searchBtn, { backgroundColor: searchOpen ? THEME.chipActiveBg : THEME.chipIdleBg }]}
-              onPress={() => {
-                tap();
-                setSearchOpen(o => {
-                  if (o) setCampaignQuery('');
-                  return !o;
-                });
-              }}
-              activeOpacity={0.8}
-              accessibilityLabel="Search clearouts"
-            >
-              <Icon name={searchOpen ? 'close' : 'magnify'} size={17} color={searchOpen ? THEME.chipActiveText : THEME.chipIdleText} />
-            </TouchableOpacity>
-          </View>
-          {searchOpen ? (
-            <View style={[styles.searchRow, { backgroundColor: THEME.chipIdleBg }]}>
-              <Icon name="magnify" size={16} color={THEME.chipIdleText} />
-              <TextInput
-                value={campaignQuery}
-                onChangeText={setCampaignQuery}
-                placeholder="Search clearouts"
-                placeholderTextColor={THEME.chipIdleText}
-                style={[styles.searchInput, { color: isNight ? '#F4F4EE' : '#18181B' }]}
-                autoFocus
-                autoCorrect={false}
-                returnKeyType="search"
-              />
-              {campaignQuery.length > 0 ? (
-                <TouchableOpacity onPress={() => setCampaignQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Icon name="close-circle" size={16} color={THEME.chipIdleText} />
-                </TouchableOpacity>
-              ) : null}
-            </View>
+                ) : null}
+              </View>
+            ) : null}
+            </>
           ) : null}
-          </>
-          )}
 
           {controller.error ? (
             <View style={styles.errorBanner}>
@@ -1493,47 +1631,14 @@ const SproutHomeScreen: React.FC = () => {
             initialPrompt: handoffTarget.prompt,
           }),
         } : undefined}
+        documentDismiss={reportDismissTarget ? {
+          label: 'Dismiss',
+          onPress: () => {
+            tap();
+            void dismissInsight(reportDismissTarget.fingerprint);
+          },
+        } : undefined}
       />
-
-      {!selectMode ? (
-        <Animated.View
-          pointerEvents="box-none"
-          style={[
-            styles.homeComposerAvoider,
-            { bottom: homeComposerBottom },
-            homeComposerLiftStyle,
-          ]}
-        >
-          <View
-            onLayout={(event) =>
-              setHomeComposerHeight(event.nativeEvent.layout.height)
-            }
-          >
-            {!keyboardOpen &&
-            !homeComposerText.trim() &&
-            insightNextCheckLine ? (
-              <Text
-                style={[
-                  styles.homeCountdown,
-                  isNight && styles.homeCountdownNight,
-                ]}
-              >
-                {insightNextCheckLine}
-              </Text>
-            ) : null}
-            <MessageComposer
-              value={homeComposerText}
-              placeholder="Ask Sprout"
-              onChangeText={setHomeComposerText}
-              onSend={sendHomeComposer}
-              queuedCount={0}
-              isStreaming={false}
-              getAuthToken={ensureSupabaseJwt}
-              hideAttach
-            />
-          </View>
-        </Animated.View>
-      ) : null}
 
       {/* Selection action pill — floats in the navigator's spot on long-press
           (the tab bar hides while selecting). Bulk pause / delete. */}
@@ -1571,6 +1676,7 @@ const SproutHomeScreen: React.FC = () => {
           </View>
         </View>
       ) : null}
+      {isFocused ? <NarrationPlayerHost /> : null}
     </View>
   );
 };
@@ -1736,24 +1842,6 @@ const CampaignCard: React.FC<{
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F6F7F4' },
-  homeComposerAvoider: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 24,
-  },
-  homeCountdown: {
-    alignSelf: 'flex-end',
-    marginRight: 18,
-    marginBottom: 2,
-    color: '#71717A',
-    fontFamily: FONT.semibold,
-    fontSize: 12,
-    fontVariant: ['tabular-nums'],
-  },
-  homeCountdownNight: {
-    color: 'rgba(244,244,238,0.72)',
-  },
 
   // ── Long-press selection ──────────────────────────────
   cardSelected: {
@@ -1941,6 +2029,25 @@ const styles = StyleSheet.create({
   briefingHeadline: { fontFamily: FONT.semibold, fontSize: 17, marginBottom: 10, lineHeight: 25 },
   briefingProse: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, marginTop: 1 },
   briefingSupport: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, marginTop: 7 },
+  insightActions: { marginTop: 0, flexShrink: 0 },
+  quietInsightLine: { fontFamily: FONT.medium, fontSize: 16.5, lineHeight: 23, marginTop: 1 },
+  insightCountdownRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  insightCountdownText: {
+    flexShrink: 1,
+    marginLeft: 'auto',
+    fontFamily: FONT.medium,
+    fontSize: 13.5,
+    lineHeight: 20,
+    paddingVertical: 4,
+    textAlign: 'right',
+    fontVariant: ['tabular-nums'],
+  },
   // Nutrition-summary style: values become inline pill-chips in a flowing row.
   briefingWrap: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', marginTop: 2 },
   briefingWord: { fontSize: 17, lineHeight: 28, fontFamily: FONT.regular },
@@ -1977,7 +2084,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     gap: 12,
   },
+  reportCardSubdued: { backgroundColor: 'rgba(0,0,0,0.1)', borderWidth: 1 },
   reportIconWrap: { transform: [{ rotate: '-7deg' }] },
+  reportIconWrapSubdued: { opacity: 0.68 },
   reportIconChip: {
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.32)',
@@ -1989,6 +2098,7 @@ const styles = StyleSheet.create({
   // The hero already explains the finding. This card is only the destination,
   // so it carries the report title without repeating its summary.
   reportTitle: { fontFamily: FONT.semibold, fontSize: 16.5, lineHeight: 23, color: '#FFFFFF' },
+  reportTitleSubdued: { color: 'rgba(255,255,255,0.72)' },
   reportSub: { marginTop: 3, fontFamily: FONT.medium, fontSize: 13.5, lineHeight: 18, color: 'rgba(255,255,255,0.72)' },
   reportChip: {
     backgroundColor: 'rgba(244,244,245,0.2)',
@@ -2000,7 +2110,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  reportChipSubdued: { backgroundColor: 'rgba(244,244,245,0.1)' },
   reportChipText: { fontFamily: FONT.semibold, fontSize: 14, color: '#FFFFFF' },
+  reportChipTextSubdued: { color: 'rgba(255,255,255,0.78)' },
   eventRows: { marginBottom: 14, gap: 10 },
   eventRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   eventLabel: { fontSize: 17, fontFamily: FONT.medium },

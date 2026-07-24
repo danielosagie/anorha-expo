@@ -129,6 +129,26 @@ test('mergeRemoteMessages keeps unsent local messages while hydrating remote his
   assert.ok(merged.some((message: any) => message.id === 'server-1'));
 });
 
+test('mergeRemoteMessages keeps client-authored assistant summaries', () => {
+  const summary: ConversationMessage = {
+    id: 'client-summary-1',
+    clientMessageId: 'client-summary-1',
+    campaignId,
+    threadId,
+    role: 'assistant',
+    content: 'Selected 3 items: under $50.',
+    createdAt: new Date().toISOString(),
+    deliveryState: 'sent',
+    kind: 'text',
+    metadata: { clientAuthored: true },
+  };
+
+  const merged = mergeRemoteMessages([summary], []);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, summary.id);
+});
+
 test('acknowledgeMessage reconciles optimistic user bubble with server id', () => {
   const state = createQueuedTextState('msg-1', 'Ack me');
   const acked = acknowledgeMessage(state, 'msg-1', 'server-123');

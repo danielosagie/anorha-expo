@@ -65,6 +65,8 @@ import SproutChatSettingsScreen from '../screens/SproutChatSettingsScreen';
 import CampaignInventorySelectScreen from '../screens/CampaignInventorySelectScreen';
 import SproutHomeScreen from '../screens/SproutHomeScreen';
 import CampaignThreadScreen from '../screens/CampaignThreadScreen';
+import GlobalSproutChatScreen from '../screens/GlobalSproutChatScreen';
+import { QuickChatHost } from '../components/sprout/QuickChatHost';
 import { SessionContext } from '../context/SessionContext';
 import { createLogger } from '../utils/logger';
 const log = createLogger('AppNavigator');
@@ -240,6 +242,14 @@ export type AppStackParamList = {
     openDrawer?: boolean;
   } | undefined;
   SproutHomeScreen: undefined;
+  GlobalSproutChat: {
+    campaignId?: string;
+    firstName?: string;
+    suggestedQuestions?: string[];
+    placeholder?: string;
+    emptyHint?: string;
+    peekHeightRatio?: number;
+  } | undefined;
   Partners: undefined;
 };
 
@@ -312,37 +322,38 @@ const TabNavigator = () => {
   };
 
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: tabBarContainerStyle,
-      }}
+    <>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarStyle: tabBarContainerStyle,
+        }}
 
-      tabBar={(props: any) => {
-        // Capture screen is full-bleed camera chrome (Shop-style): no navigator row.
-        // Its own bottom controls carry Back / shutter / mode + the cart CTA.
-        const focusedRouteName = props.state?.routes?.[props.state?.index]?.name;
-        if (focusedRouteName === 'AddProduct') return null;
-        // A screen can hand its bottom spot to a floating action pill (e.g. home's
-        // multi-select bar) by setting tabBarStyle: { display: 'none' }.
-        const focusedKey = props.state?.routes?.[props.state?.index]?.key;
-        const tbStyle = focusedKey ? props.descriptors?.[focusedKey]?.options?.tabBarStyle : undefined;
-        const tabBarHidden = Array.isArray(tbStyle)
-          ? tbStyle.some((s: any) => s && s.display === 'none')
-          : tbStyle?.display === 'none';
-        if (tabBarHidden) return null;
-        return (
-          <TabBar
-            {...props}
-            containerStyle={tabBarContainerStyle}
-            surfaceStyle={tabBarSurfaceStyle}
-            bottomInset={tabBarBottom}
-            rowHeight={TAB_ROW_HEIGHT}
-          />
-        );
-      }}
-      initialRouteName="Clearouts"
-    >
+        tabBar={(props: any) => {
+          // Capture screen is full-bleed camera chrome (Shop-style): no navigator row.
+          // Its own bottom controls carry Back / shutter / mode + the cart CTA.
+          const focusedRouteName = props.state?.routes?.[props.state?.index]?.name;
+          if (focusedRouteName === 'AddProduct') return null;
+          // A screen can hand its bottom spot to a floating action pill (e.g. home's
+          // multi-select bar) by setting tabBarStyle: { display: 'none' }.
+          const focusedKey = props.state?.routes?.[props.state?.index]?.key;
+          const tbStyle = focusedKey ? props.descriptors?.[focusedKey]?.options?.tabBarStyle : undefined;
+          const tabBarHidden = Array.isArray(tbStyle)
+            ? tbStyle.some((s: any) => s && s.display === 'none')
+            : tbStyle?.display === 'none';
+          if (tabBarHidden) return null;
+          return (
+            <TabBar
+              {...props}
+              containerStyle={tabBarContainerStyle}
+              surfaceStyle={tabBarSurfaceStyle}
+              bottomInset={tabBarBottom}
+              rowHeight={TAB_ROW_HEIGHT}
+            />
+          );
+        }}
+        initialRouteName="Clearouts"
+      >
       {/* Sprout home is the leftmost tab and the landing screen. */}
       <Tab.Screen
         name="Clearouts"
@@ -400,7 +411,9 @@ const TabNavigator = () => {
           tabBarItemStyle: { display: 'none' },
         }}
       />
-    </Tab.Navigator>
+      </Tab.Navigator>
+      <QuickChatHost />
+    </>
   );
 };
 
@@ -444,6 +457,16 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="SproutChatSettings" component={sb(SproutChatSettingsScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="CampaignInventorySelect" component={sb(CampaignInventorySelectScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SproutHomeScreen" component={sb(SproutHomeScreen)} options={{ headerTitle: 'Sprout' }} />
+    <AppStackNav.Screen
+      name="GlobalSproutChat"
+      component={GlobalSproutChatScreen}
+      options={{
+        presentation: 'transparentModal',
+        animationEnabled: false,
+        detachPreviousScreen: false,
+        cardStyle: { backgroundColor: 'transparent' },
+      }}
+    />
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" getComponent={() => sb(require('../screens/ProductDetail').default)} />
     <AppStackNav.Screen name="PastScans" getComponent={() => sb(require('../screens/PastScansScreen').default)} />
