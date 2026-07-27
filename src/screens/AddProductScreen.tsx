@@ -1718,11 +1718,39 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         },
       };
     });
+
+    // Auto-confirm snapshots the match rows into their own copy BEFORE research finishes, and
+    // the cart row prefers that copy over the live candidates. Without this second write the
+    // research lands somewhere nothing reads and the card stays at $0 forever.
+    setConfirmedQuickMatchByItemId((prev) => {
+      const current = prev[job.itemId];
+      const index = current?.preSelectedIndices?.[0];
+      if (!current?.matchRows?.length || typeof index !== 'number') return prev;
+      const row: any = current.matchRows[index];
+      if (!row) return prev;
+
+      const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low ?? 0);
+      const hasOwnPrice = typeof row.price === 'number' && row.price > 0;
+      const nextPricing = priceData?.error && row.pricingResearch
+        ? { ...row.pricingResearch, soldCompsError: priceData.error }
+        : priceData;
+
+      const matchRows = [...current.matchRows];
+      matchRows[index] = {
+        ...row,
+        price: hasOwnPrice
+          ? row.price
+          : (Number.isFinite(recommended) && recommended > 0 ? recommended : row.price),
+        pricingResearch: nextPricing,
+      };
+      return { ...prev, [job.itemId]: { ...current, matchRows } };
+    });
+
     setShelfPricingPendingByItemId((prev) => {
       if (!prev[job.itemId]) return prev;
       return { ...prev, [job.itemId]: false };
     });
-  }, [setQuickScanStore]);
+  }, [setConfirmedQuickMatchByItemId, setQuickScanStore]);
 
   const pumpShelfPricingQueue = useCallback(() => {
     while (
@@ -2658,6 +2686,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, []);
 
 
+  // One place that turns a shelf box into a cropped cover. Used both when items are first
+  // extracted and when a later search result supplies a box, so a card that never resolves
+  // still gets a thumbnail.
+  const enqueueCropForShelfItem = useCallback((itemId: string, box: ShelfItemBox | undefined) => {
+    const sourceUri = lastShelfScanPhotoRef.current?.uri;
+    if (!box || !sourceUri) return;
+    enqueueShelfItemCrop({
+      itemId,
+      sourceUri,
+      box,
+      upload: async (localUri, photoId) => {
+        const upload = uploadImageToSupabaseRef.current;
+        if (!upload) throw new Error('Shelf crop uploader is not ready');
+        return upload(localUri, photoId);
+      },
+    });
+  }, []);
+
   const consumeShelfStreamEvent = useCallback((
     parsed: QuickScanStreamEvent,
     token: string,
@@ -2695,12 +2741,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     if (parsed.type === 'EXTRACTED_ITEMS') {
-      const items = (parsed.items || []) as Array<string | { query: string; quantity?: number; itemKey?: string }>;
+      const items = (parsed.items || []) as Array<string | { query: string; quantity?: number; itemKey?: string; box?: unknown }>;
       const ts = Date.now();
       const folderItems = items.map((item, idx) => {
         const query = typeof item === 'string' ? item : item.query;
         const quantity = typeof item === 'object' && item.quantity != null ? item.quantity : 1;
-        return { id: `shelf-${ts}-${idx}`, title: query, quantity };
+        // The server now ships a box with each extracted item, so a card can be cropped from
+        // the shelf photo immediately rather than waiting on (or missing) its search result.
+        const shelfBox = typeof item === 'object'
+          ? normalizeShelfItemBox(item.box, shelfScanSourceSizeRef.current)
+          : undefined;
+        return { id: `shelf-${ts}-${idx}`, title: query, quantity, shelfBox };
       });
 
       shelfQueryToItemIdsRef.current = {};
@@ -2729,6 +2780,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (folderId && folderItems.length > 0) {
         addShelfItemsToFolder(folderId, folderItems);
         setActiveItemId((current) => current || folderItems[0].id);
+        // Crop every card up front. Waiting for SEARCH_RESULT meant a card whose search never
+        // bound back to it stayed thumbnail-less for the life of the cart.
+        for (const folderItem of folderItems) {
+          enqueueCropForShelfItem(folderItem.id, folderItem.shelfBox);
+        }
       }
 
       setIsBulkMode(true);
@@ -2776,12 +2832,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             for (const candidateId of shelfQueryToItemIdsRef.current[queryKey] || []) exactQueryMatches.add(candidateId);
           }
         }
-        if (exactQueryMatches.size === 1) itemId = Array.from(exactQueryMatches)[0];
+        // Several cards can share a query when a shelf holds lookalikes. Claiming the first
+        // still-unresolved one is always right: results arrive one per card, so each lands on a
+        // distinct card. Bailing out here instead is what used to mint a phantom card and strand
+        // its twins with no matches.
+        itemId = Array.from(exactQueryMatches).find(
+          (candidateId) => !pendingShelfItemsByIdRef.current[candidateId]?.resolved,
+        ) ?? (exactQueryMatches.size === 1 ? Array.from(exactQueryMatches)[0] : undefined);
       }
 
       const quantity = typeof res?.quantity === 'number' ? res.quantity : 1;
       const shelfBox = normalizeShelfItemBox(
-        parsed.box ?? res?.box ?? res?.extractedItem?.box,
+        // `extractedItem` is the raw VLM object, where the field is boundingBox. Reading `box`
+        // off it never matched anything.
+        parsed.box ?? res?.box ?? res?.extractedItem?.boundingBox ?? res?.extractedItem?.box,
         shelfScanSourceSizeRef.current,
       );
       const folderId = activeShelfFolderIdRef.current;
@@ -2907,18 +2971,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           }
         }
 
-        if (shelfBox && lastShelfScanPhotoRef.current?.uri) {
-          enqueueShelfItemCrop({
-            itemId,
-            sourceUri: lastShelfScanPhotoRef.current.uri,
-            box: shelfBox,
-            upload: async (localUri, photoId) => {
-              const upload = uploadImageToSupabaseRef.current;
-              if (!upload) throw new Error('Shelf crop uploader is not ready');
-              return upload(localUri, photoId);
-            },
-          });
-        }
+        enqueueCropForShelfItem(itemId, shelfBox);
 
         // Per-item inventory dedup signal (shelf/multi) — the "Already in Inventory" badge
         // already renders off the prepended isLocalMatch candidate; this stores the explicit
@@ -2989,7 +3042,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         message: parsedError.message || 'Error processing shelf scan.',
       });
     }
-  }, [addShelfItemsToFolder, enqueueShelfPricingResearch, resetShelfScanResults, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore, sheetTranslateY, stopShelfScan]);
+  }, [addShelfItemsToFolder, enqueueCropForShelfItem, enqueueShelfPricingResearch, resetShelfScanResults, setActiveItemId, setBulkItems, setConfirmedQuickMatchByItemId, setQuickScanStore, sheetTranslateY, stopShelfScan]);
 
   const beginAdaptiveShelfScan = useCallback((
     photo: CapturedPhoto,
