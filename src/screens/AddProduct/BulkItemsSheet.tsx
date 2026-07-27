@@ -32,12 +32,32 @@ type RenderEntry =
   | { kind: 'folderCard'; id: string; label?: string; childCount: number; sourcePhotoUri?: string; childIds: string[]; children: BulkCartItem[] }
   | { kind: 'item'; item: BulkCartItem; index: number };
 
-const extractPrice = (price: any): number | undefined =>
-  typeof price === 'number'
-    ? price
-    : typeof price?.extracted_value === 'number'
-      ? price.extracted_value
-      : undefined;
+/**
+ * Prices reach us as a number, a SerpAPI `{value, extracted_value}`, an eBay Browse
+ * `{value, currency}`, or a bare '$1,299.00'. Only the first two used to be understood, and a
+ * zero was rendered literally as "$0" — so an unpriced match looked like a free one.
+ */
+const extractPrice = (price: any): number | undefined => {
+  if (typeof price === 'number') return Number.isFinite(price) && price > 0 ? price : undefined;
+  if (price && typeof price === 'object') {
+    if (typeof price.extracted_value === 'number' && price.extracted_value > 0) return price.extracted_value;
+    return extractPrice(price.value ?? price.amount);
+  }
+  if (typeof price !== 'string') return undefined;
+  const match = price.replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+  const parsed = match ? Number.parseFloat(match[0]) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+/**
+ * What the row should show for money: the listing's own price, else whatever sold-comps
+ * research came back with. The row used to read only `price`, so a completed pricing lookup
+ * never actually reached the card.
+ */
+const resolveCandidatePrice = (candidate: any): number | undefined =>
+  extractPrice(candidate?.price)
+  ?? extractPrice(candidate?.pricingResearch?.recommended)
+  ?? extractPrice(candidate?.pricingResearch?.median);
 
 const soldCompCount = (pricingResearch: any): number => {
   if (pricingResearch?.error || pricingResearch?.soldCompsError) return 0;
@@ -202,7 +222,7 @@ const FolderCartRow = React.memo(function FolderCartRow({
             const matchCount = scan?.matchData?.totalMatches || scan?.matchData?.rankedCandidates?.length || 0;
             const imageUri = resolveImageUri(candidate);
             const itemPhotoUri = resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0]);
-            const price = extractPrice(candidate?.price);
+            const price = resolveCandidatePrice(candidate) ?? resolveCandidatePrice(scannedCandidate);
             const title = candidate?.title || item.title || 'Shelf item';
             const isInventoryMatch = Boolean(inventoryMatchByItemId?.[item.id] || candidate?.isLocalMatch || candidate?.inInventory);
             const subtitle = isInventoryMatch
@@ -297,7 +317,8 @@ const BulkCartRow = React.memo(function BulkCartRow({
   loadingState,
   matchInfo,
   quickScanData,
-  scannedEarlierThisSession,
+  sessionDupOwnerId,
+  sessionDupOwnerQuantity,
   isGenerated,
   navigation,
   onGenerate,
@@ -316,7 +337,9 @@ const BulkCartRow = React.memo(function BulkCartRow({
   loadingState?: ItemLoadingState;
   matchInfo?: QuickMatchSelection;
   quickScanData?: { matchData: MatchResponse; matchRows: any[] };
-  scannedEarlierThisSession: boolean;
+  /** Set when an earlier row already matched this same listing. Holds that row's id. */
+  sessionDupOwnerId?: string;
+  sessionDupOwnerQuantity?: number;
   isGenerated: boolean;
   navigation: any;
   onGenerate: (item: BulkCartItem) => void;
@@ -340,14 +363,17 @@ const BulkCartRow = React.memo(function BulkCartRow({
   const selectedMatch = confirmedMatch || topMatch;
   const isLocalInventoryMatch = Boolean(selectedMatch?.isLocalMatch);
   const hasPhotos = item.photos.length > 0;
-  const thumbUri = hasPhotos
-    ? resolveImageUri(selectedMatch) ||
-      resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0])
-    : null;
+  // The item's own photo wins when it has one, but a matched listing's image is worth showing
+  // even before a photo exists. Gating this on hasPhotos left every shelf-extracted card
+  // showing the empty camera placeholder despite having a perfectly good match image.
+  const thumbUri =
+    (hasPhotos ? resolveImageUri(item.photos.find((photo) => photo.isCover) || item.photos[0]) : null) ||
+    resolveImageUri(selectedMatch) ||
+    null;
   const rowTitle = selectedMatch
     ? (selectedMatch.title || 'Selected match')
     : (item.title && !/^Item \d+$/.test(item.title) ? item.title : `Item ${index + 1}`);
-  const matchPrice = extractPrice(selectedMatch?.price);
+  const matchPrice = resolveCandidatePrice(selectedMatch);
   const statusSubtitle = loadingState?.isLoading
     ? (loadingState.stage || 'Working…')
     : retryableError
@@ -356,8 +382,8 @@ const BulkCartRow = React.memo(function BulkCartRow({
         ? 'Details ready · tap to review'
         : isLocalInventoryMatch
           ? 'Already in inventory'
-          : scannedEarlierThisSession
-            ? 'Already scanned this session'
+          : sessionDupOwnerId
+            ? 'Already in this cart'
             : confirmedMatch
               ? 'Match confirmed'
               : selectedMatch
@@ -445,6 +471,28 @@ const BulkCartRow = React.memo(function BulkCartRow({
                 <Text style={styles.retryChipText}>Retry</Text>
               </TouchableOpacity>
             ) : null}
+          </View>
+        ) : null}
+
+        {sessionDupOwnerId && !loadingState?.isLoading && !isGenerated ? (
+          <View style={styles.detailActionsRow}>
+            <TouchableOpacity
+              style={styles.detailChip}
+              activeOpacity={0.7}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                // Roll this row's count into the card it duplicates, then drop it. The flag
+                // used to be a label with nothing behind it, so the duplicate still shipped
+                // as its own listing.
+                onUpdateItemQuantity?.(sessionDupOwnerId, (sessionDupOwnerQuantity ?? 1) + (item.quantity ?? 1));
+                onDeleteItem(item.id);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Merge into the earlier matching item"
+            >
+              <Icon name="call-merge" size={15} color="#64748B" />
+              <Text style={styles.detailChipText} numberOfLines={1}>Merge</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -664,7 +712,7 @@ export const BulkItemsSheet: React.FC<{
     const confCand: any =
       typeof confIdx === 'number' && Array.isArray(conf?.matchRows) ? conf.matchRows[confIdx] : undefined;
     const cand: any = confCand ?? qs?.matchData?.rankedCandidates?.[0];
-    return sum + (extractPrice(cand?.price) ?? 0) * ((it as any).quantity ?? 1);
+    return sum + (resolveCandidatePrice(cand) ?? 0) * ((it as any).quantity ?? 1);
   }, 0);
   const [editingItemId, setEditingItemId] = React.useState<string | null>(null);
   const [editQueryText, setEditQueryText] = React.useState("");
@@ -761,6 +809,16 @@ export const BulkItemsSheet: React.FC<{
     }
     return owners;
   }, [confirmedQuickMatchByItemId, displayItems, quickScanStore]);
+  // Owner quantities, so a flagged row can roll its own count into the card it duplicates.
+  const dupOwnerQuantityById = useMemo(() => {
+    const quantities: Record<string, number> = {};
+    for (const it of displayItems) {
+      const ownerId = sessionDupOwnerByItemId[it.id];
+      if (!ownerId) continue;
+      quantities[it.id] = displayItems.find((candidate) => candidate.id === ownerId)?.quantity ?? 1;
+    }
+    return quantities;
+  }, [displayItems, sessionDupOwnerByItemId]);
   const hasAnyPhotos = displayItems.some(item => item.photos.length > 0);
   const hasAnyItems = totalItems > 0;
   const isAnalyzeInFlightRef = React.useRef(false);
@@ -1166,7 +1224,8 @@ export const BulkItemsSheet: React.FC<{
         loadingState={itemLoadingStates[item.id]}
         matchInfo={confirmedQuickMatchByItemId[item.id]}
         quickScanData={quickScanStore?.[item.id]}
-        scannedEarlierThisSession={Boolean(sessionDupOwnerByItemId[item.id])}
+        sessionDupOwnerId={sessionDupOwnerByItemId[item.id]}
+        sessionDupOwnerQuantity={dupOwnerQuantityById[item.id]}
         isGenerated={itemStageById?.[item.id] === 'generated'}
         navigation={navigation}
         onGenerate={handleGenerateItem}
@@ -1203,6 +1262,7 @@ export const BulkItemsSheet: React.FC<{
     onToggleSavedForLater,
     onUpdateItemQuantity,
     quickScanStore,
+    dupOwnerQuantityById,
     sessionDupOwnerByItemId,
     shelfPresentation?.title,
     shelfPricingPendingByItemId,

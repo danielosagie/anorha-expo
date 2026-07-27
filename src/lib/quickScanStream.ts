@@ -32,7 +32,9 @@ export type QuickScanStreamEvent = {
   count?: number;
   detected?: 'single' | 'multi';
   itemKey?: string;
-  items?: Array<string | { query: string; quantity?: number; itemKey?: string }>;
+  // Shelf/multi sends objects carrying a stable itemKey (what cart cards bind to) and the
+  // item's box (what the crop pipeline needs). Single mode still sends plain query strings.
+  items?: Array<string | { query: string; quantity?: number; itemKey?: string; box?: unknown }>;
   box?: unknown;
   result?: any;
   data?: any;
