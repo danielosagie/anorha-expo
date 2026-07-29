@@ -84,6 +84,22 @@ const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 });
 const dismissKeyboard = () => Keyboard.dismiss();
 
+/** JS-side keyboard height, for layout values (insets, padding) that can't read a worklet. */
+function useKeyboardHeight(): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', event =>
+      setHeight(event.endCoordinates?.height ?? 0),
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () => setHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return height;
+}
+
 export type QuickChatSheetProps = {
   firstName: string;
   campaignId?: string;
@@ -342,15 +358,18 @@ export function QuickChatSheet({
   );
 
   const keyboard = useAnimatedKeyboard();
-  // At the composer-only rest height the composer still lifts by the whole keyboard height
-  // inside the sheet, so the sheet has to extend behind the keyboard or the composer would
-  // be clipped off the top. sheetHeight stays the part the seller sees and drags. Gated to
-  // that rest height so the peek presentation keeps its existing behaviour.
-  const growsWithKeyboard = restingHeight < peekHeight;
+  // The composer lifts by the whole keyboard height INSIDE the sheet, so the sheet has to
+  // extend behind the keyboard by the same amount or the composer is pushed up over the
+  // messages and out the top. sheetHeight stays the part the seller sees and drags.
+  //
+  // This used to be gated to the composer-only rest height, which left the peek
+  // presentation (any thread WITH history) as a fixed 55%-tall sheet under a ~45%-tall
+  // keyboard: the keyboard swallowed nearly the whole sheet and the composer floated over
+  // the transcript. Clamped to MAX_SHEET_H so the grown sheet can't run off the top.
   const sheetStyle = useAnimatedStyle(() => ({
-    height: sheetHeight.get() + (growsWithKeyboard ? keyboard.height.value : 0),
+    height: Math.min(MAX_SHEET_H, sheetHeight.get() + keyboard.height.value),
     transform: [{ translateY: sheetTranslateY.get() }],
-  }), [growsWithKeyboard]);
+  }));
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: backdropOpacity.get() * 0.32,
   }));
@@ -480,6 +499,7 @@ function QuickChatConversation({
   const empty = !controller.isLoadingMessages && controller.activeMessages.length === 0;
   const [headerHeight, setHeaderHeight] = useState(0);
   const [footerHeight, setFooterHeight] = useState(0);
+  const keyboardHeight = useKeyboardHeight();
   const localRetriesRef = useRef(new Map<string,
     | { kind: 'plan'; prompt: DecisionPrompt }
     | { kind: 'selection'; proposal: InventorySelectionProposal }
@@ -695,6 +715,29 @@ function QuickChatConversation({
     }),
     [insets.bottom],
   );
+  // The list's bottom inset is a plain layout number, so it can't read the animated
+  // keyboard value — it has to track the same lift in JS or the transcript scrolls under
+  // the lifted composer and the newest turn is unreachable.
+  const composerLift = Math.max(keyboardHeight - insets.bottom, 0);
+
+  // Opening the sheet raised the keyboard immediately, mid entry-spring: the seller landed
+  // on a sheet whose visible strip was the grabber, with the transcript they came to read
+  // behind the keys. Focus is now (a) deferred until the sheet has settled and (b) only
+  // automatic on an empty thread, where the sheet IS just a composer. With history, reading
+  // comes first — tapping the composer still opens the keyboard.
+  const [effectiveFocusKey, setEffectiveFocusKey] = useState(0);
+  const consumedFocusKeyRef = useRef(0);
+  useEffect(() => {
+    if (!focusRequestKey || consumedFocusKeyRef.current === focusRequestKey) return;
+    // Hold the request until the thread has loaded — "empty" is not knowable while
+    // messages are still in flight, and guessing wrong is what put the keyboard over the
+    // transcript.
+    if (controller.isLoadingMessages) return;
+    consumedFocusKeyRef.current = focusRequestKey;
+    if (!empty && !full) return;
+    const timer = setTimeout(() => setEffectiveFocusKey(focusRequestKey), 280);
+    return () => clearTimeout(timer);
+  }, [focusRequestKey, controller.isLoadingMessages, empty, full]);
 
   const pendingQuestion =
     controller.pendingQuestion &&
@@ -744,47 +787,49 @@ function QuickChatConversation({
           onMessages={controller.ingestLiveMessages}
         />
 
-        <ConversationList
-          messages={controller.activeMessages}
-          loading={controller.isLoadingMessages}
-          onDecision={handleDecision}
-          onRetry={handleMessageRetry}
-          onCancelQueued={controller.cancelQueuedMessage}
-          onFeedback={controller.submitMessageFeedback}
-          onFollowUp={sendSuggestion}
-          onOpenCart={(sessionId: string) => {
-            const origin = { screen: 'GlobalSproutChat' };
-            try {
-              navigation.navigate('TabNavigator', {
-                screen: 'AddProduct',
-                params: { sessionId, origin },
-              });
-            } catch {
-              navigation.navigate('AddProduct', { sessionId, origin });
+        <View style={[styles.flex, { paddingTop: headerHeight }]}>
+          <ConversationList
+            messages={controller.activeMessages}
+            loading={controller.isLoadingMessages}
+            onDecision={handleDecision}
+            onRetry={handleMessageRetry}
+            onCancelQueued={controller.cancelQueuedMessage}
+            onFeedback={controller.submitMessageFeedback}
+            onFollowUp={sendSuggestion}
+            onOpenCart={(sessionId: string) => {
+              const origin = { screen: 'GlobalSproutChat' };
+              try {
+                navigation.navigate('TabNavigator', {
+                  screen: 'AddProduct',
+                  params: { sessionId, origin },
+                });
+              } catch {
+                navigation.navigate('AddProduct', { sessionId, origin });
+              }
+            }}
+            onOpenItem={(productId: string) => navigation.navigate('ProductDetail', { productId })}
+            onReviseDocument={(_documentId, title, note) => {
+              controller.setComposerText(`Revise the "${title}" report: ${note}`);
+            }}
+            onApprovePlan={handleTrayPlan}
+            onResolveSelection={onResolveSelection}
+            onApplySelection={applySelection}
+            submittingDecisionId={controller.submittingDecisionId}
+            contentTopInset={8}
+            contentBottomInset={footerHeight + composerLift + 8}
+            scrollEnabled={!transition.transitioning}
+            ListEmptyComponent={
+              empty && full ? (
+                <NewChatHero
+                  firstName={firstName}
+                  suggestions={suggestions}
+                  hint={emptyHint}
+                  onSelect={sendSuggestion}
+                />
+              ) : null
             }
-          }}
-          onOpenItem={(productId: string) => navigation.navigate('ProductDetail', { productId })}
-          onReviseDocument={(_documentId, title, note) => {
-            controller.setComposerText(`Revise the "${title}" report: ${note}`);
-          }}
-          onApprovePlan={handleTrayPlan}
-          onResolveSelection={onResolveSelection}
-          onApplySelection={applySelection}
-          submittingDecisionId={controller.submittingDecisionId}
-          contentTopInset={headerHeight + 8}
-          contentBottomInset={footerHeight + 8}
-          scrollEnabled={!transition.transitioning}
-          ListEmptyComponent={
-            empty && full ? (
-              <NewChatHero
-                firstName={firstName}
-                suggestions={suggestions}
-                hint={emptyHint}
-                onSelect={sendSuggestion}
-              />
-            ) : null
-          }
-        />
+          />
+        </View>
 
         <Animated.View
           style={[styles.composerAvoider, composerLiftStyle]}
@@ -828,7 +873,7 @@ function QuickChatConversation({
               getAuthToken={ensureSupabaseJwt}
               contextAttachment={contextAttachment ? { label: contextAttachment.label } : null}
               hideAttach={!!contextAttachment}
-              focusRequestKey={focusRequestKey}
+              focusRequestKey={effectiveFocusKey}
             />
           </ChatComposerFooter>
           </View>
