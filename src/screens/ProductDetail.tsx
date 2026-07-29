@@ -128,9 +128,29 @@ interface ProductDetailNavigationProps {
   navigate: (screen: string, params?: any) => void;
 }
 
+type ProductDetailItem = ProductVariant & {
+  Description: string | null;
+  Tags: string[];
+  Metadata: Record<string, any>;
+};
+
+const toProductDetailItem = (variant: any, fallback?: ProductDetailItem | null): ProductDetailItem => {
+  const product = Array.isArray(variant?.Products) ? variant.Products[0] : variant?.Products;
+  return {
+    ...variant,
+    Description: product?.Description ?? variant?.Description ?? fallback?.Description ?? null,
+    Tags: Array.isArray(product?.Tags)
+      ? product.Tags
+      : Array.isArray(variant?.Tags)
+        ? variant.Tags
+        : fallback?.Tags ?? [],
+    Metadata: variant?.Metadata ?? fallback?.Metadata ?? {},
+  } as ProductDetailItem;
+};
+
 interface ProductDetailRouteProps {
   params: {
-    item?: ProductVariant;
+    item?: ProductDetailItem;
     productId?: string;
   };
 }
@@ -279,7 +299,7 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
 const ProductDetailScreen = observer(
   ({ route, navigation }: { route: ProductDetailRouteProps; navigation: ProductDetailNavigationProps }) => {
     const theme = useTheme();
-    const passedItem = route.params?.item;
+    const passedItem = route.params?.item ? toProductDetailItem(route.params.item) : undefined;
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
     const fbDispatch = useFacebookJobStatus();
@@ -313,7 +333,7 @@ const ProductDetailScreen = observer(
     }, []);
 
     // State management
-    const [detailedItem, setDetailedItem] = useState<ProductVariant | undefined | null>(passedItem);
+    const [detailedItem, setDetailedItem] = useState<ProductDetailItem | undefined | null>(passedItem);
 
     // Direct DB fetch of this variant's ProductImages. The global productImages$ sync has
     // realtime disabled (one-time get at startup), so it frequently doesn't have this item's
@@ -925,7 +945,8 @@ const ProductDetailScreen = observer(
         // Load inventory levels for ALL variants of this product (base + options)
         const { data: inventoryData, error: inventoryError } = await supabase
           .from('InventoryLevels')
-          .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+          // Production-verified schema: InventoryLevels stores quantity data; price comes from ProductVariants.
+          .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
           .in('ProductVariantId', allVariantIds);
 
         if (inventoryError) {
@@ -1387,11 +1408,11 @@ const ProductDetailScreen = observer(
         // First, load the current variant and its related product
         const { data: variantData, error: variantError } = await supabase
           .from('ProductVariants')
+          // Production-verified schema: Description/Tags live on Products; ProductVariants has no Metadata.
           .select(`
             Id,
             ProductId,
             Title,
-            Description,
             Price,
             CompareAtPrice,
             Sku,
@@ -1399,11 +1420,9 @@ const ProductDetailScreen = observer(
             Weight,
             WeightUnit,
             Options,
-            Metadata,
             IsTaxable,
             RequiresShipping,
             TaxCode,
-            Tags,
             OnShopify,
             OnSquare,
             OnClover,
@@ -1413,6 +1432,10 @@ const ProductDetailScreen = observer(
             PrimaryImageUrl,
             CreatedAt,
             UpdatedAt,
+            Products (
+              Description,
+              Tags
+            ),
             ProductImages!ProductImages_ProductVariantId_fkey (
               Id,
               ImageUrl,
@@ -1434,11 +1457,12 @@ const ProductDetailScreen = observer(
         }
 
         const variant = variantData;
+        const product = Array.isArray(variant.Products) ? variant.Products[0] : variant.Products;
         const sortedImages = variant.ProductImages
           ?.sort((a: any, b: any) => (a.Position || 0) - (b.Position || 0))
           ?.map((img: any) => img.ImageUrl) || [];
 
-        log.debug('[ProductDetail] Loaded variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', variant.Tags);
+        log.debug('[ProductDetail] Loaded variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', product?.Tags);
 
         // Now load ALL variants for this product
         const { data: allVariants, error: allVariantsError } = await supabase
@@ -1462,27 +1486,21 @@ const ProductDetailScreen = observer(
         } else {
           log.debug('[ProductDetail] Loaded all variants for product:', allVariants?.length || 0);
         }
-
-
-
-        // ⚡ NOTE: VariantPricing table no longer exists - pricing is stored in InventoryLevels.Price
-        // Variants and inventory are loaded in loadPlatformData() instead
+        // Variants and inventory quantities are loaded in loadPlatformData(); price stays on ProductVariants.
         log.debug('[ProductDetail] Variants loaded via loadPlatformData, not VariantPricing table');
 
         // Update detailedItem with full data
-        const enrichedItem = {
+        const enrichedItem = toProductDetailItem({
           ...detailedItem,
           ...variant,
           ImageUrls: sortedImages,
           // Include all the fields we need
           Options: variant.Options || {},
-          Metadata: variant.Metadata || {},
-          Tags: variant.Tags || [],
           IsTaxable: variant.IsTaxable,
           RequiresShipping: variant.RequiresShipping,
           TaxCode: variant.TaxCode,
           PrimaryImageUrl: variant.PrimaryImageUrl,
-        };
+        }, detailedItem);
 
         setDetailedItem(enrichedItem);
 
@@ -1776,7 +1794,7 @@ const ProductDetailScreen = observer(
             ...prev,
             ...updateData,
             Metadata: { ...(prev as any).Metadata, platformSpecificData: cleanedPlatformData },
-          } as ProductVariant) : prev);
+          } as ProductDetailItem) : prev);
           const textStillCurrent = editVersionRef.current === saveStartEditVersion;
           hasUnsavedChangesRef.current = !textStillCurrent;
           setHasUnsavedChanges(!textStillCurrent);
@@ -2757,7 +2775,7 @@ const ProductDetailScreen = observer(
     const handleFormChange = useCallback((field: keyof EditFormData, value: any) => {
       setDetailedItem(prev => {
         if (!prev) return prev;
-        const updated = { ...prev, [field]: value } as ProductVariant;
+        const updated = { ...prev, [field]: value } as ProductDetailItem;
         editVersionRef.current += 1;
         hasUnsavedChangesRef.current = true;
         setHasUnsavedChanges(true);
@@ -3023,19 +3041,20 @@ const ProductDetailScreen = observer(
       const itemData = productVariants$[productId].get();
 
       if (itemData) {
-        setDetailedItem(itemData);
+        const item = toProductDetailItem(itemData);
+        setDetailedItem(item);
         setFormData({
-          Title: itemData.Title || '',
-          Description: itemData.Description || '',
-          Price: itemData.Price || 0,
-          CompareAtPrice: itemData.CompareAtPrice || 0,
-          Sku: itemData.Sku || '',
-          Barcode: itemData.Barcode || '',
-          Weight: itemData.Weight || 0,
-          WeightUnit: itemData.WeightUnit || 'kg',
-          RequiresShipping: itemData.RequiresShipping !== false,
-          IsTaxable: itemData.IsTaxable !== false,
-          TaxCode: itemData.TaxCode || '',
+          Title: item.Title || '',
+          Description: item.Description || '',
+          Price: item.Price || 0,
+          CompareAtPrice: item.CompareAtPrice || 0,
+          Sku: item.Sku || '',
+          Barcode: item.Barcode || '',
+          Weight: item.Weight || 0,
+          WeightUnit: item.WeightUnit || 'kg',
+          RequiresShipping: item.RequiresShipping !== false,
+          IsTaxable: item.IsTaxable !== false,
+          TaxCode: item.TaxCode || '',
         });
         setIsLoading(false);
       } else if (!passedItem && productId) {
@@ -3059,21 +3078,23 @@ const ProductDetailScreen = observer(
         // Ignore responses that land after productId/passedItem changed, so a
         // stale lookup can't overwrite the newer product's state.
         let canceled = false;
-        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, IsArchived, Tags, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, Metadata, CreatedAt, UpdatedAt';
+        // Production-verified schema: Description/Tags live on Products; ProductVariants has no Metadata.
+        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, IsArchived, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, CreatedAt, UpdatedAt, Products(Description, Tags)';
         const applyVariant = (data: any) => {
-          setDetailedItem(data as ProductVariant);
+          const item = toProductDetailItem(data);
+          setDetailedItem(item);
           setFormData({
-            Title: data.Title || '',
-            Description: data.Description || '',
-            Price: data.Price || 0,
-            CompareAtPrice: data.CompareAtPrice || 0,
-            Sku: data.Sku || '',
-            Barcode: data.Barcode || '',
-            Weight: data.Weight || 0,
-            WeightUnit: data.WeightUnit || 'kg',
-            RequiresShipping: data.RequiresShipping !== false,
-            IsTaxable: data.IsTaxable !== false,
-            TaxCode: data.TaxCode || '',
+            Title: item.Title || '',
+            Description: item.Description || '',
+            Price: item.Price || 0,
+            CompareAtPrice: item.CompareAtPrice || 0,
+            Sku: item.Sku || '',
+            Barcode: item.Barcode || '',
+            Weight: item.Weight || 0,
+            WeightUnit: item.WeightUnit || 'kg',
+            RequiresShipping: item.RequiresShipping !== false,
+            IsTaxable: item.IsTaxable !== false,
+            TaxCode: item.TaxCode || '',
           });
         };
         // The PostgREST client can hang on a dropped connection without ever
@@ -3091,6 +3112,7 @@ const ProductDetailScreen = observer(
             const { data, error } = await withTimeout(
               supabase
                 .from('ProductVariants')
+                // Production-verified schema: Description/Tags are embedded from Products; Metadata is absent.
                 .select(VARIANT_COLS)
                 .eq('Id', productId)
                 .maybeSingle(),  // maybeSingle avoids an error when the product doesn't exist
@@ -3108,6 +3130,7 @@ const ProductDetailScreen = observer(
             const { data: byProduct, error: byProductError } = await withTimeout(
               supabase
                 .from('ProductVariants')
+                // Production-verified schema: Description/Tags are embedded from Products; Metadata is absent.
                 .select(VARIANT_COLS)
                 .eq('ProductId', productId)
                 .order('CreatedAt', { ascending: true })
@@ -3163,8 +3186,7 @@ const ProductDetailScreen = observer(
       }
     }, [detailedItem?.Id, detailedItem?.ProductId]); // Re-run when ProductId is populated
 
-    // Helper: Hydrate inventory data from InventoryLevels into variant structure
-    // ⚡ CRITICAL FIX: Use ProductVariants directly, not VariantPricing (which doesn't exist)
+    // Helper: hydrate quantities from InventoryLevels and prices from ProductVariants.
     const hydrateInventoryFromDB = useCallback((variants: any[], invLevels: InventoryLevel[]): any[] => {
       if (!variants || variants.length === 0) {
         log.debug('[ProductDetail] hydrateInventoryFromDB: No variants to hydrate');
@@ -3187,8 +3209,8 @@ const ProductDetailScreen = observer(
           const locId = level.PlatformLocationId || 'default';
           inventoryByLocation[locId] = {
             quantity: level.Quantity || 0,
-            price: level.Price || undefined,
-            compareAtPrice: level.CompareAtPrice || undefined,
+            price: v.Price ?? undefined,
+            compareAtPrice: v.CompareAtPrice ?? undefined,
             connectionId: level.PlatformConnectionId || undefined,
           };
         });
@@ -3638,13 +3660,8 @@ const ProductDetailScreen = observer(
             return variant;
           });
 
-          // ⚡ CRITICAL FIX: Extract ONLY non-inventory/price fields from platformData
-          // platformData comes from stale ProductVariants.Metadata.platformSpecificData
-          // We want to use it for SEO, descriptions, titles etc. but NOT for prices/quantities
-          // which should come from LIVE InventoryLevels data
-          // Keep the SAVED per-platform price/compareAtPrice from Metadata — that's
-          // exactly what the user's last save wrote. Only the inventory-derived
-          // collections (variants/locations/quantities) come from live InventoryLevels.
+          // Keep non-inventory fields from the client-hydrated platform data. Quantities
+          // come from InventoryLevels; canonical price comes from ProductVariants.
           const {
             variants: _staleVariants,
             locations: _staleLocations,
@@ -3652,21 +3669,11 @@ const ProductDetailScreen = observer(
             ...safePlatformData
           } = platformData;
 
-          // Get the LIVE price from InventoryLevels if available
-          // Use the first inventory level's price for this platform as the "base" price
-          const platformInventory = rawInventoryLevels?.filter(lvl =>
-            connectionToPlatform.get(lvl.PlatformConnectionId || '') === platformKeyLower
-          ) || [];
-          const livePrice = platformInventory[0]?.Price;
-          const liveCompareAtPrice = platformInventory[0]?.CompareAtPrice;
-
           allPlatforms[platformKey] = {
             ...canonicalBase,           // Base canonical data (includes ProductVariants.Price as fallback)
             ...safePlatformData,        // Platform-specific SEO, titles, descriptions, and SAVED price
-            // Saved metadata price wins (it's the user's last edit); fall back to live
-            // InventoryLevels, then canonical, only when metadata has no price.
-            price: safePlatformData.price ?? livePrice ?? canonicalBase.price,
-            compareAtPrice: safePlatformData.compareAtPrice ?? liveCompareAtPrice ?? canonicalBase.compareAtPrice,
+            price: safePlatformData.price ?? canonicalBase.price,
+            compareAtPrice: safePlatformData.compareAtPrice ?? canonicalBase.compareAtPrice,
             options: safePlatformData.options || (detailedItem.Options && typeof detailedItem.Options === 'object'
               ? Object.entries(detailedItem.Options).map(([name, values]) => ({ name, values: Array.isArray(values) ? values : [values] }))
               : []),
@@ -3913,7 +3920,6 @@ const ProductDetailScreen = observer(
                 // Check all user-facing scalar fields for meaningful changes.
                 const trackedFieldDefs: Array<{ model: keyof ProductVariant; marker: string }> = [
                   { model: 'Title', marker: 'title' },
-                  { model: 'Description', marker: 'description' },
                   { model: 'Price', marker: 'price' },
                   { model: 'CompareAtPrice', marker: 'compareAtPrice' },
                   { model: 'Sku', marker: 'sku' },
@@ -3952,9 +3958,6 @@ const ProductDetailScreen = observer(
                     // Apply external updates to canonical platform data
                     if (fieldChanges.title && updatedProduct.Title) {
                       updated[canonicalKey] = { ...canonical, title: updatedProduct.Title };
-                    }
-                    if (fieldChanges.description && updatedProduct.Description) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), description: updatedProduct.Description };
                     }
                     if (fieldChanges.price && updatedProduct.Price !== undefined) {
                       updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), price: updatedProduct.Price };
@@ -4004,7 +4007,6 @@ const ProductDetailScreen = observer(
                 return {
                   ...prev,
                   Title: updatedProduct.Title ?? prev.Title,
-                  Description: updatedProduct.Description ?? prev.Description,
                   Price: updatedProduct.Price ?? prev.Price,
                   CompareAtPrice: updatedProduct.CompareAtPrice ?? prev.CompareAtPrice,
                   Sku: updatedProduct.Sku ?? prev.Sku,
@@ -4020,7 +4022,7 @@ const ProductDetailScreen = observer(
                   Tags: prev.Tags,
                   // PlatformSpecificData is stored on the enriched item, preserve it
                   ...((prev as any).PlatformSpecificData ? { PlatformSpecificData: (prev as any).PlatformSpecificData } : {}),
-                } as ProductVariant;
+                } as ProductDetailItem;
               });
 
               // ⚡ FIX: Also update displayedPlatforms to reflect realtime changes in the UI
@@ -4034,7 +4036,6 @@ const ProductDetailScreen = observer(
                   updated[platformKey] = {
                     ...updated[platformKey],
                     title: updatedProduct.Title ?? updated[platformKey].title,
-                    description: updatedProduct.Description ?? updated[platformKey].description,
                     price: updatedProduct.Price ?? updated[platformKey].price,
                     sku: updatedProduct.Sku ?? updated[platformKey].sku,
                     compareAtPrice: updatedProduct.CompareAtPrice ?? updated[platformKey].compareAtPrice,
@@ -4096,7 +4097,7 @@ const ProductDetailScreen = observer(
               setRawInventoryLevels(prev => {
                 const updated = prev.map(level =>
                   level.Id === updatedLevel.Id
-                    ? { ...level, Quantity: updatedLevel.Quantity, Price: updatedLevel.Price }
+                    ? { ...level, Quantity: updatedLevel.Quantity }
                     : level
                 );
                 return updated;
@@ -4140,7 +4141,7 @@ const ProductDetailScreen = observer(
                     const inv = { ...(v.inventoryByLocation || {}) };
                     const existing = inv[locIdRaw] || inv[keysToUpdate[0]];
                     keysToUpdate.forEach(k => {
-                      inv[k] = { quantity: updatedLevel.Quantity, price: updatedLevel.Price ?? existing?.price };
+                      inv[k] = { quantity: updatedLevel.Quantity, price: existing?.price };
                     });
                     return { ...v, inventoryByLocation: inv };
                   });
@@ -4171,15 +4172,13 @@ const ProductDetailScreen = observer(
                 })();
               }
 
-              // Green border: per-field keys so only quantity or price input highlights.
+              // Green border: InventoryLevels realtime can only change quantity.
               const locIdRaw = updatedLevel.PlatformLocationId ?? 'default';
               const compositeId = `${platformKey ?? 'unknown'}::${resolvedConnId || 'unknown'}::${locIdRaw}`;
               setExternalUpdates(prev => ({
                 ...prev,
                 [`inventory_${affectedVariantId}_${locIdRaw}_quantity`]: { quantity: updatedLevel.Quantity, updatedAt: Date.now() },
-                [`inventory_${affectedVariantId}_${locIdRaw}_price`]: { price: updatedLevel.Price, updatedAt: Date.now() },
                 [`inventory_${affectedVariantId}_${compositeId}_quantity`]: { quantity: updatedLevel.Quantity, updatedAt: Date.now() },
-                [`inventory_${affectedVariantId}_${compositeId}_price`]: { price: updatedLevel.Price, updatedAt: Date.now() },
               }));
 
               log.debug('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
@@ -4270,19 +4269,20 @@ const ProductDetailScreen = observer(
         if (observables?.productVariants$) {
           const refreshed = observables.productVariants$[update.variantId].get();
           if (refreshed) {
-            setDetailedItem(refreshed);
+            const refreshedItem = toProductDetailItem(refreshed, detailedItem);
+            setDetailedItem(refreshedItem);
             setFormData({
-              Title: refreshed.Title || '',
-              Description: refreshed.Description || '',
-              Price: refreshed.Price || 0,
-              CompareAtPrice: refreshed.CompareAtPrice || 0,
-              Sku: refreshed.Sku || '',
-              Barcode: refreshed.Barcode || '',
-              Weight: refreshed.Weight || 0,
-              WeightUnit: refreshed.WeightUnit || 'kg',
-              RequiresShipping: refreshed.RequiresShipping !== false,
-              IsTaxable: refreshed.IsTaxable !== false,
-              TaxCode: refreshed.TaxCode || '',
+              Title: refreshedItem.Title || '',
+              Description: refreshedItem.Description || '',
+              Price: refreshedItem.Price || 0,
+              CompareAtPrice: refreshedItem.CompareAtPrice || 0,
+              Sku: refreshedItem.Sku || '',
+              Barcode: refreshedItem.Barcode || '',
+              Weight: refreshedItem.Weight || 0,
+              WeightUnit: refreshedItem.WeightUnit || 'kg',
+              RequiresShipping: refreshedItem.RequiresShipping !== false,
+              IsTaxable: refreshedItem.IsTaxable !== false,
+              TaxCode: refreshedItem.TaxCode || '',
             });
           }
         }

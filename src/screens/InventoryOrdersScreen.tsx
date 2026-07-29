@@ -88,6 +88,8 @@ type MatchLocation = 'title' | 'description' | 'sku' | 'barcode' | 'tags';
 
 type EnrichedProductVariant = ProductVariantData & {
   imageUrl?: string;
+  productDescription?: string;
+  productTags?: string[];
   totalQuantity?: number;
   platformNames?: string[];
   minPrice?: number;  // Lowest price across all option variants
@@ -606,7 +608,8 @@ const InventoryOrdersScreen = observer(() => {
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
-  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt';
+  // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
+  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Description, Tags)';
 
   const loadPartnerOrigins = useCallback(async () => {
     if (!currentOrg?.id) {
@@ -646,6 +649,7 @@ const InventoryOrdersScreen = observer(() => {
       const to = from + pageSize - 1;
       const { data, error } = await supabase
         .from('ProductVariants')
+        // Production-verified schema: product Description/Tags are embedded from Products.
         .select(PRODUCT_VARIANT_SELECT)
         .eq('UserId', userId)
         .not('Sku', 'like', 'DRAFT-%')
@@ -713,7 +717,8 @@ const InventoryOrdersScreen = observer(() => {
               if (variantIds.length > 0) {
                 const { data: levelsData, error: levelsError } = await supabase
                   .from('InventoryLevels')
-                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+                  // Production-verified schema: InventoryLevels stores quantity data, not variant price.
+                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
                   .in('ProductVariantId', variantIds);
 
                 if (levelsError) {
@@ -804,7 +809,8 @@ const InventoryOrdersScreen = observer(() => {
             if (variantIds.length > 0) {
               const { data: levelsData } = await supabase
                 .from('InventoryLevels')
-                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+                // Production-verified schema: InventoryLevels stores quantity data, not variant price.
+                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
                 .in('ProductVariantId', variantIds);
 
               if (levelsData && levelsData.length > 0) {
@@ -1183,6 +1189,7 @@ const InventoryOrdersScreen = observer(() => {
     const enrichedVariants: EnrichedProductVariant[] = productVariantIdsToDisplay.map(variantId => {
       const variant = variants[variantId];
       const variantWithType = variant as any;
+      const parentProduct = Array.isArray(variant.Products) ? variant.Products[0] : variant.Products;
 
       // Get images - check variant first, then product-level images
       const variantImages = imagesByVariantId.get(variantId) || [];
@@ -1256,6 +1263,8 @@ const InventoryOrdersScreen = observer(() => {
       return {
         ...variant,
         imageUrl,
+        productDescription: parentProduct?.Description || undefined,
+        productTags: parentProduct?.Tags || [],
         totalQuantity,
         platformNames,
         lastSyncedAt,
@@ -1304,9 +1313,9 @@ const InventoryOrdersScreen = observer(() => {
         }
 
         // Check description
-        if (item.Description?.toLowerCase().includes(queryLower)) {
+        if (item.productDescription?.toLowerCase().includes(queryLower)) {
           matches.push('description');
-          if (!snippet) snippet = item.Description.substring(0, 60) + '...';
+          if (!snippet) snippet = item.productDescription.substring(0, 60) + '...';
         }
 
         // Check SKU
@@ -1322,11 +1331,11 @@ const InventoryOrdersScreen = observer(() => {
         }
 
         // Check tags
-        const hasTagMatch = item.Tags?.some(tag => tag.toLowerCase().includes(queryLower));
+        const hasTagMatch = item.productTags?.some(tag => tag.toLowerCase().includes(queryLower));
         if (hasTagMatch) {
           matches.push('tags');
           if (!snippet) {
-            const matchedTag = item.Tags?.find(tag => tag.toLowerCase().includes(queryLower));
+            const matchedTag = item.productTags?.find(tag => tag.toLowerCase().includes(queryLower));
             snippet = `Tag: ${matchedTag}`;
           }
         }

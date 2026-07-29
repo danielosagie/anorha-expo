@@ -80,6 +80,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
         // Handle backend format: { variant, inventoryLevels, images }
         if (product.variant && product.inventoryLevels) {
           log.debug('[QUICK DETAIL] Backend format detected, transforming data');
+          const baseVariant = product.variant;
 
           // Transform inventoryLevels to inventoryByLocation format
           const inventoryByLocation: Record<string, { quantity: number; price?: number }> = {};
@@ -87,14 +88,12 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             if (level.PlatformLocationId) {
               inventoryByLocation[level.PlatformLocationId] = {
                 quantity: level.Quantity || 0,
-                price: level.Price,
+                price: baseVariant.Price,
               };
             }
           });
 
           // Check if we have the base variant or need to fetch all variants for the product
-          const baseVariant = product.variant;
-
           log.debug('[QUICK DETAIL] Base variant:', {
             id: baseVariant.Id,
             productId: baseVariant.ProductId,
@@ -107,7 +106,8 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
             try {
               const { data: allVariants, error: variantsError } = await supabase
                 .from('ProductVariants')
-                .select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, VariantType, PrimaryImageUrl, CreatedAt, UpdatedAt')
+                // Production-verified schema: ProductVariants has no Description; this sheet does not render it.
+                .select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, PrimaryImageUrl, CreatedAt, UpdatedAt')
                 .eq('ProductId', baseVariant.ProductId);
 
               log.debug('[QUICK DETAIL] DB Query result:', {
@@ -121,7 +121,8 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
               const variantIds = (allVariants || []).map((v: any) => v.Id);
               const { data: allInventory } = await supabase
                 .from('InventoryLevels')
-                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt')
+                // Production-verified schema: InventoryLevels stores quantity data; price comes from each variant.
+                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
                 .in('ProductVariantId', variantIds);
 
               // CRITICAL FIX: Filter out base variant when option variants exist
@@ -155,7 +156,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                     if (inv.PlatformLocationId) {
                       variantInventory[inv.PlatformLocationId] = {
                         quantity: inv.Quantity || 0,
-                        price: inv.Price,
+                        price: v.Price,
                       };
                     }
                   });
@@ -1049,4 +1050,3 @@ const styles = StyleSheet.create({
 });
 
 export default QuickProductDetailSheet;
-

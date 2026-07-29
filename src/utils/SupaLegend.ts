@@ -32,6 +32,14 @@ const log = createLogger('SupaLegend');
  * columns — see initializeLegendState — so non-selected fields are absent at runtime.)
  */
 export interface ProductVariant extends ProductVariantsRow {
+  // Product copy moved to the parent Products row in item-model Phase 4B.
+  Products?: {
+    Description: string | null;
+    Tags: string[] | null;
+  } | Array<{
+    Description: string | null;
+    Tags: string[] | null;
+  }> | null;
   // Client-only / derived (NOT database columns):
   image?: string; // primary image URL convenience
   quantity?: number; // aggregated quantity convenience
@@ -141,12 +149,13 @@ export async function initializeLegendState(
         customSynced({
             collection: 'ProductVariants',
             // OPTIMIZED: Only fetch columns we actually use in the UI
-            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Description, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, Tags, PrimaryImageUrl, CreatedAt, UpdatedAt'),
+            // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
+            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Description, Tags)'),
             filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v6`, // Bumped for column change
+                name: `productVariants_user_${currentUserId}_v7`, // Bumped for parent product copy
                 retrySync: true,
             },
         })
@@ -209,14 +218,15 @@ export async function initializeLegendState(
             collection: 'InventoryLevels',
             // Only fetch essential columns for inventory tracking
             // IMPORTANT: PoolId and OrgId are needed for partner-shared inventory
-            select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, Price, CompareAtPrice, Currency, UpdatedAt'),
+            // Production-verified schema: InventoryLevels stores quantity/version data, never product price.
+            select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt'),
             // READ-ONLY sync: the client never writes InventoryLevels (inventory is mutated
             // server-side and flows back via realtime). Allowing write actions let realtime
             // echoes upsert rows back to Supabase, failing RLS with HTTP 400 → retry storm.
             actions: ['read'],
             realtime: true, // Live updates essential for inventory (read-only mirror)
             persist: {
-                name: `inventoryLevels_user_${currentUserId}_v6`, // Bumped to include PoolId
+                name: `inventoryLevels_user_${currentUserId}_v7`, // Bumped after removing legacy price fields
                 retrySync: true,
             },
         })
