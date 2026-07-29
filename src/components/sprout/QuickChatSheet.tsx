@@ -72,6 +72,11 @@ const DEFAULT_PEEK_RATIO = 0.55;
 const MAX_SHEET_H = Math.round(SCREEN_H * 0.9);
 const EXPAND_AT = Math.round(SCREEN_H * 0.7);
 const GRABBER_H = 22;
+const SHEET_BORDER = 1;
+// The chat surface paints a cream wash under its floating header, so a pure white grabber
+// strip above it reads as a stripe across the top of the sheet. Matching the wash's top
+// colour keeps the sheet one continuous surface.
+const SHEET_TOP_WASH = '#F8FCF0';
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
   month: 'short',
@@ -187,6 +192,23 @@ export function QuickChatSheet({
     () => toHeroSuggestions(suggestedQuestions),
     [suggestedQuestions],
   );
+  // Before the first exchange the sheet is only the composer, so it rests at the chrome it
+  // actually renders instead of reserving the peek height. Gated on loaded state, never a
+  // timer: a thread with history is still loading here, so it never flashes the short sheet.
+  const [chromeHeight, setChromeHeight] = useState(0);
+  const reportChromeHeight = useCallback((height: number) => {
+    setChromeHeight(current => (Math.abs(current - height) < 1 ? current : height));
+  }, []);
+  const composerOnly =
+    !controller.loading &&
+    !controller.isLoadingMessages &&
+    !controller.isStreaming &&
+    controller.queuedCount === 0 &&
+    controller.activeMessages.length === 0;
+  const restingHeight = composerOnly && chromeHeight > 0
+    ? Math.min(peekHeight, chromeHeight + GRABBER_H + SHEET_BORDER * 2)
+    : peekHeight;
+  const restHeight = useSharedValue(peekHeight);
 
   useEffect(() => {
     quickChatTransition.resetSheet({
@@ -196,6 +218,19 @@ export function QuickChatSheet({
     sheetTranslateY.set(withSpring(0, { damping: 26, stiffness: 260, mass: 0.72 }));
     backdropOpacity.set(withTiming(1, { duration: 180 }));
   }, [backdropOpacity, peekHeight, sheetTranslateY]);
+
+  // Grow out of the composer-only rest height when the first turn lands (and back down if
+  // the thread empties). Critically damped so the sheet settles without overshooting.
+  useEffect(() => {
+    restHeight.set(restingHeight);
+    sheetHeight.set(withSpring(restingHeight, { damping: 30, stiffness: 240, mass: 0.9 }));
+    if (!quickChatTransition.getSnapshot().transitioning) {
+      quickChatTransition.setFrame({
+        y: SCREEN_H - restingHeight + GRABBER_H,
+        height: restingHeight - GRABBER_H,
+      });
+    }
+  }, [restHeight, restingHeight, sheetHeight]);
 
   useEffect(() => {
     if (transition.destination === 'sheet' && !transition.transitioning) {
@@ -271,8 +306,8 @@ export function QuickChatSheet({
       quickChatTransition.requestCollapse();
       return;
     }
-    sheetHeight.set(withSpring(peekHeight, { damping: 25, stiffness: 260 }));
-  }, [peekHeight, sheetHeight, transition.destination]);
+    sheetHeight.set(withSpring(restHeight.get(), { damping: 25, stiffness: 260 }));
+  }, [restHeight, sheetHeight, transition.destination]);
   const pan = useMemo(
     () =>
       Gesture.Pan()
@@ -288,7 +323,8 @@ export function QuickChatSheet({
         .onEnd(event => {
           'worklet';
           const height = sheetHeight.get();
-          if (height < peekHeight * 0.58 || event.velocityY > 900) {
+          const rest = restHeight.get();
+          if (height < rest * 0.58 || event.velocityY > 900) {
             runOnJS(dismissKeyboard)();
             sheetTranslateY.set(
               withTiming(height + 24, { duration: 190 }, finished => {
@@ -299,16 +335,22 @@ export function QuickChatSheet({
           } else if (height > EXPAND_AT || event.velocityY < -800) {
             runOnJS(expand)();
           } else {
-            sheetHeight.set(withSpring(peekHeight, { damping: 25, stiffness: 260 }));
+            sheetHeight.set(withSpring(rest, { damping: 25, stiffness: 260 }));
           }
         }),
-    [backdropOpacity, expand, onClose, peekHeight, sheetHeight, sheetTranslateY, startHeight],
+    [backdropOpacity, expand, onClose, restHeight, sheetHeight, sheetTranslateY, startHeight],
   );
 
+  const keyboard = useAnimatedKeyboard();
+  // At the composer-only rest height the composer still lifts by the whole keyboard height
+  // inside the sheet, so the sheet has to extend behind the keyboard or the composer would
+  // be clipped off the top. sheetHeight stays the part the seller sees and drags. Gated to
+  // that rest height so the peek presentation keeps its existing behaviour.
+  const growsWithKeyboard = restingHeight < peekHeight;
   const sheetStyle = useAnimatedStyle(() => ({
-    height: sheetHeight.get(),
+    height: sheetHeight.get() + (growsWithKeyboard ? keyboard.height.value : 0),
     transform: [{ translateY: sheetTranslateY.get() }],
-  }));
+  }), [growsWithKeyboard]);
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: backdropOpacity.get() * 0.32,
   }));
@@ -330,6 +372,7 @@ export function QuickChatSheet({
       onReturnToPeek={returnToPeek}
       onExpand={expand}
       onDismiss={dismiss}
+      onCompactHeight={reportChromeHeight}
     />
   );
 
@@ -406,6 +449,7 @@ function QuickChatConversation({
   onReturnToPeek,
   onExpand,
   onDismiss,
+  onCompactHeight,
   standaloneFull = false,
   onCollapse,
 }: {
@@ -422,6 +466,8 @@ function QuickChatConversation({
   onReturnToPeek: () => void;
   onExpand: () => void;
   onDismiss: () => void;
+  /** Compact only: the measured header + composer height the sheet collapses to. */
+  onCompactHeight?: (height: number) => void;
   standaloneFull?: boolean;
   onCollapse?: () => void;
 }) {
@@ -449,6 +495,14 @@ function QuickChatConversation({
       payload: contextAttachment.getPayload(),
     };
   }, [contextAttachment]);
+
+  // Report the chrome the sheet has to keep visible when there is nothing else to show.
+  // Compact only: the full surface pads for the status bar and the home indicator, which
+  // would overstate the collapsed height.
+  useEffect(() => {
+    if (full || !onCompactHeight || !headerHeight || !footerHeight) return;
+    onCompactHeight(headerHeight + footerHeight);
+  }, [footerHeight, full, headerHeight, onCompactHeight]);
 
   const transitionStyle = useAnimatedStyle(() => {
     const progress = quickChatProgress.get();
@@ -633,18 +687,13 @@ function QuickChatConversation({
   }, [onCollapse, standaloneFull]);
 
   const keyboard = useAnimatedKeyboard();
+  // The footer pads for the home indicator, so the lift gives that padding back when the
+  // keyboard covers it. Without this the composer would float a whole inset above the keys.
   const composerLiftStyle = useAnimatedStyle(
     () => ({
-      transform: [
-        {
-          translateY: -Math.max(
-            keyboard.height.value - (visualFull ? insets.bottom : 0),
-            0,
-          ),
-        },
-      ],
+      transform: [{ translateY: -Math.max(keyboard.height.value - insets.bottom, 0) }],
     }),
-    [insets.bottom, visualFull],
+    [insets.bottom],
   );
 
   const pendingQuestion =
@@ -726,9 +775,8 @@ function QuickChatConversation({
           contentBottomInset={footerHeight + 8}
           scrollEnabled={!transition.transitioning}
           ListEmptyComponent={
-            empty ? (
+            empty && full ? (
               <NewChatHero
-                compact={!visualFull}
                 firstName={firstName}
                 suggestions={suggestions}
                 hint={emptyHint}
@@ -762,7 +810,7 @@ function QuickChatConversation({
             </View>
           ) : null}
           <ChatComposerFooter
-            bottomPadding={visualFull ? (insets.bottom || 10) + 12 : 12}
+            bottomPadding={(insets.bottom || 10) + 12}
             error={controller.error}
             onRetry={controller.onRefresh}
             notice={controller.notice}
@@ -827,53 +875,46 @@ export function StandaloneGlobalSproutChat({
   );
 }
 
+/** Full-surface only. The compact sheet is just the composer until the first turn lands. */
 function NewChatHero({
-  compact,
   firstName,
   suggestions,
   hint,
   onSelect,
 }: {
-  compact: boolean;
   firstName: string;
   suggestions: HeroSuggestion[];
   hint?: string;
   onSelect: (prompt: string) => void;
 }) {
   return (
-    <View style={[styles.hero, compact ? styles.heroCompact : styles.heroFull]}>
-      <AnorhaFace size={compact ? 50 : 96} />
-      {!compact ? <Text style={styles.heroDate}>{DATE_FORMATTER.format(new Date())}</Text> : null}
-      <Text style={[styles.heroGreeting, compact && styles.heroGreetingCompact]}>
-        {compact ? 'Ready when you are.' : `Ready when you are, ${firstName}.`}
-      </Text>
+    <View style={styles.hero}>
+      <AnorhaFace size={96} />
+      <Text style={styles.heroDate}>{DATE_FORMATTER.format(new Date())}</Text>
+      <Text style={styles.heroGreeting}>{`Ready when you are, ${firstName}.`}</Text>
       {hint ? (
         <Text style={styles.heroHint}>{hint}</Text>
       ) : (
-        <View style={[styles.suggestions, compact && styles.suggestionsCompact]}>
+        <View style={styles.suggestions}>
           {suggestions.slice(0, 2).map(suggestion => (
             <Pressable
               key={suggestion.prompt}
-              style={[styles.suggestionCard, compact && styles.suggestionChip]}
+              style={styles.suggestionCard}
               onPress={() => onSelect(suggestion.prompt)}
               accessibilityRole="button"
             >
-              {!compact ? (
-                <View style={styles.suggestionIcon}>
-                  <Icon name={suggestion.icon} size={18} color="#5D7E16" />
-                </View>
-              ) : null}
+              <View style={styles.suggestionIcon}>
+                <Icon name={suggestion.icon} size={18} color="#5D7E16" />
+              </View>
               <View style={styles.suggestionCopy}>
-                <Text style={[styles.suggestionTitle, compact && styles.suggestionChipText]} numberOfLines={1}>
+                <Text style={styles.suggestionTitle} numberOfLines={1}>
                   {suggestion.title}
                 </Text>
-                {!compact ? (
-                  <Text style={styles.suggestionSubtitle} numberOfLines={2}>
-                    {suggestion.subtitle}
-                  </Text>
-                ) : null}
+                <Text style={styles.suggestionSubtitle} numberOfLines={2}>
+                  {suggestion.subtitle}
+                </Text>
               </View>
-              {!compact ? <Icon name="arrow-up-right" size={17} color="#9CA3AF" /> : null}
+              <Icon name="arrow-up-right" size={17} color="#9CA3AF" />
             </Pressable>
           ))}
         </View>
@@ -892,18 +933,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#17200D',
   },
   sheet: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: SHEET_TOP_WASH,
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
     overflow: 'hidden',
-    borderWidth: 1,
+    borderWidth: SHEET_BORDER,
     borderColor: '#E5E7EB',
   },
   grabberZone: {
     height: GRABBER_H,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: SHEET_TOP_WASH,
   },
   grabber: {
     width: 40,
@@ -948,12 +989,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
-  },
-  heroCompact: {
-    minHeight: 150,
-    gap: 9,
-  },
-  heroFull: {
     minHeight: Math.max(480, SCREEN_H - 250),
     gap: 12,
   },
@@ -970,10 +1005,6 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     textAlign: 'center',
   },
-  heroGreetingCompact: {
-    fontSize: 16,
-    lineHeight: 21,
-  },
   heroHint: {
     maxWidth: 340,
     color: '#71717A',
@@ -988,11 +1019,6 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 8,
   },
-  suggestionsCompact: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 2,
-  },
   suggestionCard: {
     minHeight: 70,
     borderRadius: 16,
@@ -1004,14 +1030,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-  },
-  suggestionChip: {
-    flex: 1,
-    minHeight: 38,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    justifyContent: 'center',
   },
   suggestionIcon: {
     width: 36,
@@ -1027,11 +1045,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     fontSize: 14,
     lineHeight: 18,
-  },
-  suggestionChipText: {
-    fontSize: 12,
-    lineHeight: 16,
-    textAlign: 'center',
   },
   suggestionSubtitle: {
     marginTop: 3,
