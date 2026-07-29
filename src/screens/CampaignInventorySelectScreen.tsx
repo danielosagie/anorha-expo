@@ -33,8 +33,14 @@ const CONVEX_TEMPLATE =
   'mobile';
 
 const BRAND = '#93C822';
+// Production-verified schema: ProductVariants has no Tags; product tags live on Products.
 const SELECT_COLS =
-  'Id, Title, Sku, Price, Tags, PrimaryImageUrl, VariantType, IsArchived, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook';
+  'Id, Title, Sku, Price, PrimaryImageUrl, VariantType, IsArchived, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, Products(Tags)';
+
+const productTags = (row: any): string[] => {
+  const product = Array.isArray(row?.Products) ? row.Products[0] : row?.Products;
+  return Array.isArray(product?.Tags) ? product.Tags : [];
+};
 
 // Derived from the canonical registry — connectable platforms with an On* column
 // (no amazon/planned). key = the ProductVariants boolean column name.
@@ -97,6 +103,7 @@ const CampaignInventorySelectScreen = () => {
           const to = from + size - 1;
           const { data, error } = await supabase
             .from('ProductVariants')
+            // Production-verified schema: product Tags are embedded from Products.
             .select(SELECT_COLS)
             .eq('UserId', userId)
             .not('Sku', 'like', 'DRAFT-%')
@@ -142,11 +149,11 @@ const CampaignInventorySelectScreen = () => {
       if (pk) list = list.filter(r => r[pk]);
     }
     const q = query.trim().toLowerCase();
-    if (q) list = list.filter(r => `${r.Title || ''} ${r.Sku || ''} ${r.Tags || ''}`.toLowerCase().includes(q));
+    if (q) list = list.filter(r => `${r.Title || ''} ${r.Sku || ''} ${productTags(r).join(' ')}`.toLowerCase().includes(q));
     return list;
   }, [rows, platform, query]);
 
-  const haystack = (r: any) => `${r.Title || ''} ${r.Tags || ''} ${r.Sku || ''}`.toLowerCase();
+  const haystack = (r: any) => `${r.Title || ''} ${productTags(r).join(' ')} ${r.Sku || ''}`.toLowerCase();
 
   // Offline fallback: the old substring matcher, used only when the agent call fails.
   const localKeywordSelect = useCallback((text: string): number => {
@@ -185,7 +192,7 @@ const CampaignInventorySelectScreen = () => {
         title: r.Title,
         price: Number(r.Price ?? 0),
         sku: r.Sku,
-        tags: typeof r.Tags === 'string' ? r.Tags : Array.isArray(r.Tags) ? r.Tags.join(', ') : '',
+        tags: productTags(r).join(', '),
       }));
       const resp = await fetch(`${API_BASE_URL}/api/inventory/select`, {
         method: 'POST',

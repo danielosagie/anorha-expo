@@ -40,9 +40,9 @@ interface VariantDetail {
   images: string[];
 }
 
-// Barcode/Price/Description + every ordered image, by canonical ProductVariants.Id.
+// Production-verified schema: variant identity/price stays on ProductVariants; Description lives on Products.
 const VARIANT_DETAIL_SELECT = `
-  Id, Title, Sku, Barcode, Description, Price,
+  Id, Title, Sku, Barcode, Price, Products(Description),
   ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)
 `;
 
@@ -150,6 +150,7 @@ export default function CompareSheet({
         await ensureSupabaseJwt();
         const { data, error } = await supabase
           .from('ProductVariants')
+          // Production-verified schema: candidate Description is embedded from Products.
           .select(VARIANT_DETAIL_SELECT)
           .eq('Id', candidate.id)
           .maybeSingle();
@@ -161,6 +162,7 @@ export default function CompareSheet({
           return;
         }
         const row = data as any;
+        const product = Array.isArray(row.Products) ? row.Products[0] : row.Products;
         const images: string[] = Array.isArray(row.ProductImages)
           ? [...row.ProductImages]
               .sort((a, b) => (a?.Position ?? 0) - (b?.Position ?? 0))
@@ -173,7 +175,7 @@ export default function CompareSheet({
           sku: row.Sku ?? null,
           barcode: row.Barcode ?? null,
           price: typeof row.Price === 'number' ? row.Price : null,
-          description: row.Description ?? null,
+          description: product?.Description ?? null,
           images,
         });
       } catch (e) {

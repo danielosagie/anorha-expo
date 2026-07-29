@@ -154,7 +154,8 @@ export async function fetchImportIncomingItemDetails(
     draftKey
       ? supabase
           .from('ProductVariants')
-          .select('Id, Title, Sku, Description, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+          // Production-verified schema: ProductVariants has no Description; product copy lives on Products.
+          .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
           .eq('Sku', draftKey)
           .limit(1)
           .maybeSingle()
@@ -162,7 +163,8 @@ export async function fetchImportIncomingItemDetails(
     platformIdIsUuid
       ? supabase
           .from('ProductVariants')
-          .select('Id, Title, Sku, Description, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+          // Production-verified schema: ProductVariants has no Description; product copy lives on Products.
+          .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
           .eq('Id', item.platformId)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -176,7 +178,8 @@ export async function fetchImportIncomingItemDetails(
   if (!variant && mapping?.ProductVariantId) {
     const result = await supabase
       .from('ProductVariants')
-      .select('Id, Title, Sku, Description, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+      // Production-verified schema: ProductVariants has no Description; product copy lives on Products.
+      .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
       .eq('Id', mapping.ProductVariantId)
       .maybeSingle();
     if (result.error) throw result.error;
@@ -206,7 +209,6 @@ export async function fetchImportIncomingItemDetails(
   const description =
     firstText(mappingObjects, ['description', 'body', 'listingDescription', 'shortDescription']) ||
     cleanText(mapping?.ConnectionDescription) ||
-    cleanText(variant?.Description) ||
     cleanText(product?.Description);
   const partnerName = sourceOrgResult.error ? '' : cleanText((sourceOrgResult.data as any)?.Name);
   const connection = connectionResult.error ? null : connectionResult.data as any;
