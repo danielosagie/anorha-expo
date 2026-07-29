@@ -5513,8 +5513,8 @@ const styles = StyleSheet.create({
     margin: 0,
     marginTop: 0,
   },
-  // Active Channels — UJK-0 gray card wrapping a white inner list (matches the Inventory card)
-  channelsCard: { marginTop: 12, backgroundColor: '#F3F4F6', borderColor: '#F1F2F4', borderWidth: 1, borderRadius: 14, padding: 12 },
+  // Active Channels: white card with vertical margin, matching the other detail cards.
+  channelsCard: { marginVertical: 12, backgroundColor: '#fff', borderColor: '#F1F2F4', borderWidth: 1, borderRadius: 14, padding: 12 },
   channelsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9, paddingHorizontal: 2 },
   channelsTitle: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#666666' },
   channelsManagePill: { backgroundColor: '#FFFFFF', borderColor: '#E5E7EB', borderWidth: 1, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 },
