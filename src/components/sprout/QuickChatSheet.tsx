@@ -716,7 +716,7 @@ function QuickChatConversation({
     [insets.bottom],
   );
   // The list's bottom inset is a plain layout number, so it can't read the animated
-  // keyboard value — it has to track the same lift in JS or the transcript scrolls under
+  // keyboard value, it has to track the same lift in JS or the transcript scrolls under
   // the lifted composer and the newest turn is unreachable.
   const composerLift = Math.max(keyboardHeight - insets.bottom, 0);
 
@@ -724,12 +724,12 @@ function QuickChatConversation({
   // on a sheet whose visible strip was the grabber, with the transcript they came to read
   // behind the keys. Focus is now (a) deferred until the sheet has settled and (b) only
   // automatic on an empty thread, where the sheet IS just a composer. With history, reading
-  // comes first — tapping the composer still opens the keyboard.
+  // comes first, tapping the composer still opens the keyboard.
   const [effectiveFocusKey, setEffectiveFocusKey] = useState(0);
   const consumedFocusKeyRef = useRef(0);
   useEffect(() => {
     if (!focusRequestKey || consumedFocusKeyRef.current === focusRequestKey) return;
-    // Hold the request until the thread has loaded — "empty" is not knowable while
+    // Hold the request until the thread has loaded. "empty" is not knowable while
     // messages are still in flight, and guessing wrong is what put the keyboard over the
     // transcript.
     if (controller.isLoadingMessages) return;
