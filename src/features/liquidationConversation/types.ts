@@ -144,6 +144,7 @@ export interface DecisionPrompt {
   id: string;
   threadId?: string;
   kind: 'approve' | 'revise' | 'follow_up';
+  decisionType?: 'plan' | 'approval' | 'unsupported';
   title: string;
   description?: string;
   approveLabel?: string;
@@ -158,6 +159,44 @@ export interface DecisionPrompt {
   steps?: PlanStep[];
   inventoryAction?: InventoryBulkAction;
 }
+
+export type AgentPendingActionStatus =
+  | 'proposed'
+  | 'approved'
+  | 'rejected'
+  | 'executing'
+  | 'completed'
+  | 'failed';
+
+interface AgentPendingActionClientDtoBase {
+  id: string;
+  pendingActionId: string;
+  toolName: string;
+  actionCategory: 'read' | 'draft' | 'write';
+  input: Record<string, unknown>;
+  draftOutput?: Record<string, unknown>;
+  status: AgentPendingActionStatus;
+  requiresApproval: boolean;
+  approvalReason?: string;
+}
+
+export type AgentPendingActionClientDto =
+  | (AgentPendingActionClientDtoBase & {
+      kind: 'question';
+      toolName: 'ask_seller_question';
+    })
+  | (AgentPendingActionClientDtoBase & {
+      kind: 'plan';
+      toolName: 'propose_plan';
+    })
+  | (AgentPendingActionClientDtoBase & {
+      kind: 'approval';
+    });
+
+export type PendingPrompts = {
+  question: QuestionPrompt | null;
+  plan: DecisionPrompt | null;
+};
 
 export interface QuestionOption {
   label: string;
@@ -423,7 +462,12 @@ export interface StreamTurnObserver {
   onAssistantStarted?: (payload: { messageId?: string; threadId?: string }) => void;
   onAssistantDelta?: (payload: { delta: string; messageId?: string; threadId?: string }) => void;
   onReasoning?: (payload: { reasoning: string; messageId?: string; threadId?: string }) => void;
-  onAssistantCompleted?: (payload: { messageId?: string; content?: string; threadId?: string }) => void;
+  onAssistantCompleted?: (payload: {
+    messageId?: string;
+    content?: string;
+    threadId?: string;
+    pendingPrompts?: PendingPrompts;
+  }) => void;
   onToolCompleted?: (payload: ConversationToolStep & { threadId?: string }) => void;
   onActionCompleted?: (payload: {
     clientMessageId?: string;
@@ -453,6 +497,7 @@ export interface DecisionSubmission {
   action: 'approve' | 'revise' | 'follow_up';
   strategyId?: string;
   planId?: string;
+  rejectOnly?: boolean;
   content?: string;
   /** Re-run a failed, idempotent inventory plan. Ignored for other decisions. */
   retry?: boolean;
