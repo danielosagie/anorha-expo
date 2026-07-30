@@ -30,6 +30,7 @@ import { sanitizeDisplayText } from '../../displayText';
 import { campaignItemPrice, getPlanDisplayTitle, getPlanPricePreviews, matchPlanItem } from '../../planPresentation';
 import { DiaTextReveal } from '../../../../components/DiaTextReveal';
 import { useChatPreferences } from '../../chatPreferences';
+import { ThinkingText } from '../../../../components/ThinkingText';
 
 export interface ActivityCardProps {
   payload: ActivityPayload;
@@ -364,7 +365,12 @@ function ToolRunCard({
         <TouchableOpacity style={styles.reasoningCard} activeOpacity={0.7} onPress={() => setExpanded((e) => !e)}>
           <View style={styles.reasoningHead}>
             <Icon name="lightbulb-on-outline" size={13} color={CHAT_COLORS.brandDeep} />
-            <Text style={styles.reasoningLabel}>{thinkingLive ? 'Thinking' : 'Thought it through'}</Text>
+            {thinkingLive ? (
+              // Only active reasoning shimmers so completion stays visually settled.
+              <ThinkingText style={styles.reasoningLabel}>Thinking</ThinkingText>
+            ) : (
+              <Text style={styles.reasoningLabel}>Thought it through</Text>
+            )}
             {thinkingLive ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
             <View style={styles.activitySpacer} />
             <Icon name={showReasoningBody ? 'chevron-up' : 'chevron-down'} size={16} color="#C4C4CC" />
