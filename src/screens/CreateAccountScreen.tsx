@@ -1456,6 +1456,7 @@ export default function CreateAccountScreen() {
 
       // 5. Create Org & Invites
       let createdOrgId: string | null = null;
+      const failedInvites: string[] = [];
       if (!createOrganization) {
         throw new Error('Organization setup is unavailable. Please try again.');
       }
@@ -1472,9 +1473,21 @@ export default function CreateAccountScreen() {
         if (existing) log.debug('[CreateAccount] Reusing existing organization from a prior attempt');
         createdOrgId = org?.id || null;
         if (!createdOrgId) throw new Error('Organization creation returned no ID');
-        if (!existing && formData.invites.length > 0) {
-          for (const email of formData.invites) {
-            try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { log.warn(`Failed to invite ${email}`, inviteErr); }
+        // Invites must run on a retry too. Gating them behind `!existing` meant one
+        // failed Finish (the org is created before the steps that throw) silently
+        // dropped every teammate the seller typed in, with nothing said either way.
+        // Re-inviting an already-invited email is a duplicate error from Clerk,
+        // which is exactly the no-op a retry wants.
+        for (const email of formData.invites) {
+          try {
+            await org.inviteMember({ emailAddress: email, role: 'org:member' });
+          } catch (inviteErr: any) {
+            const reason = String(
+              inviteErr?.errors?.[0]?.code || inviteErr?.errors?.[0]?.message || '',
+            ).toLowerCase();
+            if (reason.includes('duplicate') || reason.includes('already')) continue;
+            log.warn(`Failed to invite ${email}`, inviteErr);
+            failedInvites.push(email);
           }
         }
       } catch (error) {
@@ -1579,6 +1592,17 @@ export default function CreateAccountScreen() {
       setCreatedOrgId(createdOrgId);
       setCurrentStep('CONNECT');
 
+      // A dropped invite used to be a log line nobody reads. The seller typed those
+      // addresses in; if one did not go out they need to know now, not when the
+      // teammate asks where their email is.
+      if (failedInvites.length > 0) {
+        showModal(
+          'Invites not sent',
+          `Could not invite ${failedInvites.join(', ')}. Add them from Team.`,
+          'warning',
+        );
+      }
+
     } catch (error: any) {
       // Never swallow this. A generic "Setup failed" with no log made a hard Android
       // block (push-token rejection) look like a random flake for weeks.
@@ -1596,7 +1620,7 @@ export default function CreateAccountScreen() {
     } finally {
       setLoading(false);
     }
-  }, [clerkUser, formData, createOrganization, refreshOrgs, navigation, clearSavedProgress]);
+  }, [clerkUser, formData, createOrganization, refreshOrgs, navigation, clearSavedProgress, showModal]);
 
   // Leave onboarding for the main app (from the CONNECT step: "Continue" or skip).
   const finishToApp = useCallback(() => {
