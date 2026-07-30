@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, Image, StyleSheet, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, Image, PixelRatio, StyleSheet, Platform } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -216,8 +216,15 @@ export const CenterOverlay: React.FC<{
   const veilOpacity = useDerivedValue(() => (
     interpolate(transitionProgress.value, [0, 0.3, 0.65, 1], [0, 0.12, 0.32, 0])
   ));
-  const snapshotWidth = searchSnapshot?.itemKey === activeItemKey ? searchSnapshot.image.width() : 0;
-  const snapshotHeight = searchSnapshot?.itemKey === activeItemKey ? searchSnapshot.image.height() : 0;
+  // makeImageFromView returns device pixels; the canvas draws in points, so an unscaled
+  // width paints the snapshot at the screen's pixel ratio and swamps the card.
+  const snapshotScale = PixelRatio.get();
+  const snapshotWidth = searchSnapshot?.itemKey === activeItemKey
+    ? searchSnapshot.image.width() / snapshotScale
+    : 0;
+  const snapshotHeight = searchSnapshot?.itemKey === activeItemKey
+    ? searchSnapshot.image.height() / snapshotScale
+    : 0;
   const snapshotX = useDerivedValue(() => Math.max(0, (blurCanvasSize.value.width - snapshotWidth) / 2));
   const snapshotY = useDerivedValue(() => Math.max(0, (blurCanvasSize.value.height - snapshotHeight) / 2));
   const blurWidth = useDerivedValue(() => blurCanvasSize.value.width);

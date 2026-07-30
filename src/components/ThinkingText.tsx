@@ -111,9 +111,17 @@ function MaskedShimmerText({
   font: SkFont;
   fontSize: number;
 }) {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const ready = size.width > 0 && size.height > 0;
+  const [measured, setMeasured] = useState({ width: 0, height: 0 });
   const metrics = font.getMetrics();
+  // Skia lays glyphs out on its own advances, which run wider than the platform text
+  // layout. Sizing the canvas off the native measurement alone clips the tail.
+  const glyphBounds = font.measureText(children);
+  const glyphWidth = glyphBounds.x + glyphBounds.width;
+  const size = {
+    width: Math.max(measured.width, Math.ceil(glyphWidth)),
+    height: measured.height,
+  };
+  const ready = size.width > 0 && size.height > 0;
   const baseline = (size.height - (metrics.descent - metrics.ascent)) / 2 - metrics.ascent;
   const bandWidth = Math.max(size.width * 0.55, fontSize * 2.2);
   const progress = useSharedValue(0);
@@ -138,7 +146,7 @@ function MaskedShimmerText({
 
   return (
     <View
-      style={styles.root}
+      style={[styles.root, ready ? { width: size.width } : null]}
       accessible
       accessibilityRole="text"
       accessibilityLabel={children}
@@ -147,9 +155,10 @@ function MaskedShimmerText({
         style={[style, styles.staticText, ready ? styles.measure : null]}
         accessible={false}
         importantForAccessibility="no"
+        numberOfLines={1}
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
-          setSize((current) => (
+          setMeasured((current) => (
             current.width === width && current.height === height
               ? current
               : { width, height }
