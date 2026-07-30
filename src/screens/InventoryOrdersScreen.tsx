@@ -1922,6 +1922,8 @@ const InventoryOrdersScreen = observer(() => {
         anchor={{ top: insets.top + 44, left: Math.max(16, windowWidth - 300 - 16) }}
         sections={[
           [
+            // Selection mode was reachable only by long-pressing a row, which is undiscoverable.
+            { key: 'select', label: 'Select', icon: 'checkbox-outline', onPress: () => { setBulkMenuOpen(false); setIsSelectionMode(true); } },
             { key: 'bulk-select', label: 'Bulk select', icon: 'checkbox-multiple-marked-outline', onPress: () => { setBulkMenuOpen(false); openInventoryQuickChat('select'); } },
             { key: 'bulk-edit', label: 'Bulk edit', icon: 'pencil-outline', onPress: () => { setBulkMenuOpen(false); openInventoryQuickChat('edit'); } },
           ],
