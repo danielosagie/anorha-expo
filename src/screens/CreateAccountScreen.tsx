@@ -19,6 +19,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import PhoneInput from 'react-native-phone-number-input';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Camera } from 'expo-camera';
 import { AudioModule } from 'expo-audio';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -998,6 +1000,65 @@ export default function CreateAccountScreen() {
   // Update ref on render
   formDataRef.current = formData;
 
+  // ── Resumable onboarding ────────────────────────────────────────────────────
+  // Onboarding is ~11 steps of typing. Backgrounding the app used to drop all of it and
+  // restart at WELCOME, because step + answers lived only in component state. Persist both
+  // per Clerk user and restore on mount. Cleared once onboarding actually completes.
+  const progressKey = clerkUser?.id ? `onboardingProgress:${clerkUser.id}` : null;
+  const [progressRestored, setProgressRestored] = useState(false);
+
+  useEffect(() => {
+    if (!progressKey) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(progressKey);
+        if (cancelled || !raw) return;
+        const saved = JSON.parse(raw) as { step?: Step; formData?: Partial<FormData> };
+        // Permissions are OS state, never restored from disk — they can be revoked
+        // between sessions, and agreedToLegal must be an explicit act every time.
+        if (saved.formData) {
+          setFormData(prev => ({
+            ...prev,
+            ...saved.formData,
+            locationPermission: prev.locationPermission,
+            notificationPermission: prev.notificationPermission,
+            microphonePermission: prev.microphonePermission,
+            cameraPermission: prev.cameraPermission,
+            agreedToLegal: false,
+          }));
+        }
+        // An explicit route target (deep link / retry) wins over the saved step.
+        // CONNECT is post-completion, so a resume must not drop back into it.
+        if (saved.step && saved.step !== 'CONNECT' && !route.params?.initialStep) {
+          setCurrentStep(saved.step);
+        }
+      } catch (e) {
+        log.warn('[CreateAccount] Could not restore onboarding progress', e);
+      } finally {
+        if (!cancelled) setProgressRestored(true);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressKey]);
+
+  // Save after every answer. Writes only once the restore pass has run, so an empty
+  // initial state can never overwrite real saved progress.
+  useEffect(() => {
+    if (!progressKey || !progressRestored) return;
+    if (currentStep === 'CONNECT') return;
+    AsyncStorage.setItem(
+      progressKey,
+      JSON.stringify({ step: currentStep, formData, savedAt: Date.now() }),
+    ).catch(e => log.warn('[CreateAccount] Could not save onboarding progress', e));
+  }, [progressKey, progressRestored, currentStep, formData]);
+
+  const clearSavedProgress = useCallback(() => {
+    if (!progressKey) return;
+    AsyncStorage.removeItem(progressKey).catch(() => undefined);
+  }, [progressKey]);
+
   const [formattedPhone, setFormattedPhone] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [errorModal, setErrorModal] = useState<{ visible: boolean; type: 'error' | 'warning' | 'info' | 'success'; title: string; message: string }>({ visible: false, type: 'warning', title: '', message: '' });
@@ -1395,16 +1456,38 @@ export default function CreateAccountScreen() {
 
       // 5. Create Org & Invites
       let createdOrgId: string | null = null;
+      const failedInvites: string[] = [];
       if (!createOrganization) {
         throw new Error('Organization setup is unavailable. Please try again.');
       }
       try {
-        const org = await createOrganization({ name: formData.businessName });
+        // Idempotent: a failed Finish leaves the org behind (it is created before the
+        // steps that used to throw), so a retry must adopt it instead of minting a
+        // duplicate "Acme (2)" org for the same seller.
+        const existing = clerkUser.organizationMemberships?.find(
+          membership =>
+            membership.organization?.name?.trim().toLowerCase() ===
+            formData.businessName.trim().toLowerCase(),
+        )?.organization;
+        const org = existing || (await createOrganization({ name: formData.businessName }));
+        if (existing) log.debug('[CreateAccount] Reusing existing organization from a prior attempt');
         createdOrgId = org?.id || null;
         if (!createdOrgId) throw new Error('Organization creation returned no ID');
-        if (formData.invites.length > 0) {
-          for (const email of formData.invites) {
-            try { await org.inviteMember({ emailAddress: email, role: 'org:member' }); } catch (inviteErr) { log.warn(`Failed to invite ${email}`, inviteErr); }
+        // Invites must run on a retry too. Gating them behind `!existing` meant one
+        // failed Finish (the org is created before the steps that throw) silently
+        // dropped every teammate the seller typed in, with nothing said either way.
+        // Re-inviting an already-invited email is a duplicate error from Clerk,
+        // which is exactly the no-op a retry wants.
+        for (const email of formData.invites) {
+          try {
+            await org.inviteMember({ emailAddress: email, role: 'org:member' });
+          } catch (inviteErr: any) {
+            const reason = String(
+              inviteErr?.errors?.[0]?.code || inviteErr?.errors?.[0]?.message || '',
+            ).toLowerCase();
+            if (reason.includes('duplicate') || reason.includes('already')) continue;
+            log.warn(`Failed to invite ${email}`, inviteErr);
+            failedInvites.push(email);
           }
         }
       } catch (error) {
@@ -1452,19 +1535,38 @@ export default function CreateAccountScreen() {
         }
       }
 
-      // 6. Push Token
+      // 6. Push Token — BEST EFFORT ONLY. This used to run unguarded and threw on every
+      // Android build (no FCM credentials → getExpoPushTokenAsync rejects), which the outer
+      // catch turned into "Setup failed. Please try again." with the org already created —
+      // permanently wedging Android signups. Push registration is not part of onboarding;
+      // usePushNotifications re-registers on every launch anyway.
       if (formData.notificationPermission) {
-        const tokenData = await Notifications.getExpoPushTokenAsync();
-        if (tokenData?.data) {
-          await supabase.from('UserDevices').upsert({
-            UserId: dbUserId,
-            ExpoPushToken: tokenData.data,
-            Platform: Platform.OS,
-          }, { onConflict: 'UserId, ExpoPushToken' });
+        try {
+          const projectId =
+            (Constants.expoConfig?.extra as any)?.eas?.projectId ||
+            (Constants.expoConfig?.extra as any)?.projectId;
+          const tokenData = await Notifications.getExpoPushTokenAsync(
+            projectId ? { projectId } : undefined,
+          );
+          if (tokenData?.data) {
+            // onConflict is a raw PostgREST column list — a space in it resolves to a
+            // column named " ExpoPushToken" and the upsert 400s (42703).
+            const { error: deviceError } = await supabase.from('UserDevices').upsert({
+              UserId: dbUserId,
+              ExpoPushToken: tokenData.data,
+              Platform: Platform.OS,
+            }, { onConflict: 'UserId,ExpoPushToken' });
+            if (deviceError) log.warn('[CreateAccount] Device registration failed', deviceError);
+          }
+        } catch (pushErr) {
+          log.warn('[CreateAccount] Push token registration skipped', pushErr);
         }
       }
 
-      if (refreshOrgs) await refreshOrgs();
+      // Org list refresh is a convenience for the next screen, never a gate on completion.
+      if (refreshOrgs) {
+        try { await refreshOrgs(); } catch (e) { log.warn('[CreateAccount] refreshOrgs failed', e); }
+      }
 
       // Onboarding is complete only after the user record and organization both
       // exist. The following connect step is deliberately skippable.
@@ -1473,6 +1575,8 @@ export default function CreateAccountScreen() {
         .update({ isOnboardingComplete: true })
         .eq('Id', dbUserId);
       if (completionError) throw completionError;
+
+      clearSavedProgress();
 
       capture(AnalyticsEvents.ONBOARDING_COMPLETED, {
         create_organization: !!createOrganization,
@@ -1488,12 +1592,35 @@ export default function CreateAccountScreen() {
       setCreatedOrgId(createdOrgId);
       setCurrentStep('CONNECT');
 
+      // A dropped invite used to be a log line nobody reads. The seller typed those
+      // addresses in; if one did not go out they need to know now, not when the
+      // teammate asks where their email is.
+      if (failedInvites.length > 0) {
+        showModal(
+          'Invites not sent',
+          `Could not invite ${failedInvites.join(', ')}. Add them from Team.`,
+          'warning',
+        );
+      }
+
     } catch (error: any) {
-      showModal('Error', 'Setup failed. Please try again.', 'error');
+      // Never swallow this. A generic "Setup failed" with no log made a hard Android
+      // block (push-token rejection) look like a random flake for weeks.
+      log.error('[CreateAccount] Setup failed', error);
+      const detail =
+        error?.message ||
+        error?.errors?.[0]?.longMessage ||
+        error?.errors?.[0]?.message ||
+        '';
+      showModal(
+        'Error',
+        detail ? `Setup failed. ${detail}` : 'Setup failed. Please try again.',
+        'error',
+      );
     } finally {
       setLoading(false);
     }
-  }, [clerkUser, formData, createOrganization, refreshOrgs, navigation]);
+  }, [clerkUser, formData, createOrganization, refreshOrgs, navigation, clearSavedProgress, showModal]);
 
   // Leave onboarding for the main app (from the CONNECT step: "Continue" or skip).
   const finishToApp = useCallback(() => {

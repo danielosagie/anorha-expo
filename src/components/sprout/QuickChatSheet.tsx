@@ -5,6 +5,7 @@ import {
   Dimensions,
   Keyboard,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -22,7 +23,6 @@ import Animated, {
   Extrapolation,
   interpolate,
   runOnJS,
-  useAnimatedKeyboard,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -154,20 +154,50 @@ function RecordingWindowGlow({ active }: { active: boolean }) {
   );
 }
 
+// This sheet renders inside a native Modal (presentationStyle="overFullScreen"), which on iOS
+// is its OWN UIWindow. Reanimated's useAnimatedKeyboard observes the app's main window, so
+// inside this Modal its height stays 0 forever: the sheet never grew and the composer never
+// lifted, leaving the composer buried under the keyboard. JS Keyboard events DO fire in a
+// modal, so both are driven from those instead. Do not switch these back to
+// useAnimatedKeyboard without checking it on a real device inside the Modal.
+const KB_SHOW_EVENT = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+const KB_HIDE_EVENT = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
 /** JS-side keyboard height, for layout values (insets, padding) that can't read a worklet. */
 function useKeyboardHeight(): number {
   const [height, setHeight] = useState(0);
   useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', event =>
-      setHeight(event.endCoordinates?.height ?? 0),
+    const show = Keyboard.addListener(KB_SHOW_EVENT, (event: any) =>
+      setHeight(event?.endCoordinates?.height ?? 0),
     );
-    const hide = Keyboard.addListener('keyboardDidHide', () => setHeight(0));
+    const hide = Keyboard.addListener(KB_HIDE_EVENT, () => setHeight(0));
     return () => {
       show.remove();
       hide.remove();
     };
   }, []);
   return height;
+}
+
+/** Same signal as a shared value, so the sheet/composer worklets can read it. */
+function useKeyboardOffset() {
+  const offset = useSharedValue(0);
+  useEffect(() => {
+    // Mirror the OS animation curve so the sheet and the keys move together.
+    const show = Keyboard.addListener(KB_SHOW_EVENT, (event: any) => {
+      offset.set(withTiming(event?.endCoordinates?.height ?? 0, {
+        duration: event?.duration || 250,
+      }));
+    });
+    const hide = Keyboard.addListener(KB_HIDE_EVENT, (event: any) => {
+      offset.set(withTiming(0, { duration: event?.duration || 220 }));
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [offset]);
+  return offset;
 }
 
 export type QuickChatSheetProps = {
@@ -446,7 +476,7 @@ export function QuickChatSheet({
     [backdropOpacity, expand, onClose, restHeight, sheetHeight, sheetTranslateY, startHeight],
   );
 
-  const keyboard = useAnimatedKeyboard();
+  const keyboardOffset = useKeyboardOffset();
   // The composer lifts by the whole keyboard height INSIDE the sheet, so the sheet has to
   // extend behind the keyboard by the same amount or the composer is pushed up over the
   // messages and out the top. sheetHeight stays the part the seller sees and drags.
@@ -456,7 +486,7 @@ export function QuickChatSheet({
   // keyboard: the keyboard swallowed nearly the whole sheet and the composer floated over
   // the transcript. Clamped to MAX_SHEET_H so the grown sheet can't run off the top.
   const sheetStyle = useAnimatedStyle(() => ({
-    height: Math.min(MAX_SHEET_H, sheetHeight.get() + keyboard.height.value),
+    height: Math.min(MAX_SHEET_H, sheetHeight.get() + keyboardOffset.get()),
     transform: [{ translateY: sheetTranslateY.get() }],
   }));
   const backdropStyle = useAnimatedStyle(() => ({
@@ -806,12 +836,12 @@ function QuickChatConversation({
     quickChatTransition.requestCollapse();
   }, [onCollapse, standaloneFull]);
 
-  const keyboard = useAnimatedKeyboard();
+  const keyboardOffset = useKeyboardOffset();
   // The footer pads for the home indicator, so the lift gives that padding back when the
   // keyboard covers it. Without this the composer would float a whole inset above the keys.
   const composerLiftStyle = useAnimatedStyle(
     () => ({
-      transform: [{ translateY: -Math.max(keyboard.height.value - insets.bottom, 0) }],
+      transform: [{ translateY: -Math.max(keyboardOffset.get() - insets.bottom, 0) }],
     }),
     [insets.bottom],
   );

@@ -1728,7 +1728,8 @@ const InventoryOrdersScreen = observer(() => {
             accessibilityRole="button"
             accessibilityLabel="Bulk actions"
           >
-            <Icon name="checkbox-multiple-marked-outline" size={22} color="#2c2c2c" />
+            <Icon name="checkbox-multiple-marked-outline" size={18} color="#2c2c2c" />
+            <Text style={styles.titleBulkText}>Select</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -2354,7 +2355,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   titleTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  titleBulkTap: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  // Icon-only read as a bare glyph with no meaning. The label is what makes it a control.
+  titleBulkTap: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#EFEFEA' },
+  titleBulkText: { fontSize: 14, fontWeight: '600', color: '#2c2c2c' },
   titleText: { fontSize: 26, fontWeight: '700', color: '#2c2c2c' },
   container: {
     borderTopRightRadius: 32,

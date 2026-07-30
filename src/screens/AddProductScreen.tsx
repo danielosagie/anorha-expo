@@ -20,8 +20,7 @@ import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
 import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
-import ListingProcessingCard from './AddProduct/ListingProcessingCard';
-import ListingsReadyCard from './AddProduct/ListingsReadyCard';
+import ListingStatusCard from './AddProduct/ListingStatusCard';
 import { useBulkItems } from './AddProduct/hooks/useBulkItems';
 import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
 import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
@@ -1442,6 +1441,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             ...prev,
             [id]: { matchRows: candidates, preSelectedIndices: [0], source: 'quick_scan_confirmed' },
           }));
+          // Identity is settled now — this is when the paid sold-comps pass is earned.
+          researchSoldCompsOnConfirm([id]);
         }
         showNotificationMessage('Added to cart');
       }}
@@ -1522,6 +1523,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             return next;
           });
           if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
+          // Add-all is a bulk confirm — the deferred sold-comps passes fire here.
+          researchSoldCompsOnConfirm(folder.children.map((child) => child.id));
           showNotificationMessage(`${folder.children.length} item${folder.children.length === 1 ? '' : 's'} added to cart`);
         }}
       />
@@ -1569,6 +1572,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const shelfPricingQueueRef = useRef<ShelfPricingJob[]>([]);
   const shelfPricingActiveRef = useRef(0);
   const shelfPricingGenerationRef = useRef(0);
+  // Latest store snapshot for async helpers (confirm-time pricing) without stale closures.
+  const quickScanStoreRef = useRef(quickScanStore);
+  quickScanStoreRef.current = quickScanStore;
   const [shelfPricingPendingByItemId, setShelfPricingPendingByItemId] = useState<Record<string, boolean>>({});
   const shelfPricingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const shelfPricingPumpRef = useRef<() => void>(() => {});
@@ -1694,7 +1700,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         signal: abortController.signal,
       });
       priceData = response.ok
-        ? { ...(await response.json()), condition }
+        // soldComps marks a COMPLETED paid research pass — the instant live-listing seed has
+        // samples too, and without this flag the two are indistinguishable downstream.
+        ? { ...(await response.json()), condition, soldComps: true }
         : { low: null, median: null, high: null, recommended: null, samples: [], error: 'request_failed' };
       if (Array.isArray(priceData?.samples)) {
         priceData = { ...priceData, samples: priceData.samples.map(withResolvedImageUrl) };
@@ -1807,6 +1815,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     shelfPricingQueueRef.current.push(job);
     shelfPricingPumpRef.current();
   }, []);
+
+  // Sold-comps research is METERED (a paid call per item). It used to fire for every shelf
+  // item off the top candidate's title before anyone had confirmed the identity — which is
+  // how the backend billed a sold-comps lookup for a snowboard on a laundry shelf. Items
+  // whose identity is not settled at scan time get a deferred marker instead, and this
+  // fires when the seller actually confirms the match.
+  const researchSoldCompsOnConfirm = useCallback((itemIds: string[]) => {
+    void (async () => {
+      const token = await ensureSupabaseJwt();
+      if (!token) return;
+      for (const itemId of itemIds) {
+        const entry = quickScanStoreRef.current[itemId];
+        const top: any = entry?.matchData?.rankedCandidates?.[0];
+        const existing = top?.pricingResearch;
+        // Only a COMPLETED paid pass (soldComps flag) counts as researched. The instant
+        // live-listing seed also carries samples, and a timed-out attempt deserves a retry.
+        const alreadyResearched = existing?.soldComps === true;
+        const title = String(top?.title || '').trim();
+        if (!title || alreadyResearched) continue;
+        enqueueShelfPricingResearch({
+          itemId,
+          title,
+          condition: existing?.condition || 'mixed',
+          token,
+          generation: shelfPricingGenerationRef.current,
+        });
+      }
+    })();
+  }, [enqueueShelfPricingResearch]);
 
   const cancelShelfPricingResearch = useCallback(() => {
     shelfPricingGenerationRef.current += 1;
@@ -2986,13 +3023,44 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         if (rankedCandidates.length > 0) {
           const topTitle = String(rankedCandidates[0]?.title || res?.usedQuery || '').trim();
-          if (topTitle && token) {
+          // Sold-comps research is a paid call per item. Only settled identities earn one at
+          // scan time; unconfirmed items get theirs when the seller confirms the match
+          // (researchSoldCompsOnConfirm). Pricing an identity nobody has agreed to is how a
+          // laundry shelf billed a sold-comps lookup for a snowboard.
+          if (topTitle && token && shouldAutoConfirmTopMatch) {
             enqueueShelfPricingResearch({
               itemId,
               title: topTitle,
               condition: observedCondition,
               token,
               generation: shelfPricingGeneration,
+            });
+          } else if (topTitle) {
+            // Deferred, not failed: a terminal marker so the card never spins, replaced with
+            // real research the moment the seller confirms.
+            setQuickScanStore((prev) => {
+              const current = prev[itemId];
+              if (!current?.matchData?.rankedCandidates?.length) return prev;
+              const candidates = [...current.matchData.rankedCandidates];
+              candidates[0] = {
+                ...candidates[0],
+                pricingResearch: candidates[0]?.pricingResearch || {
+                  low: null,
+                  median: null,
+                  high: null,
+                  recommended: null,
+                  condition: observedCondition,
+                  samples: [],
+                  error: 'awaiting_identity_confirm',
+                },
+              };
+              return {
+                ...prev,
+                [itemId]: {
+                  ...current,
+                  matchData: { ...current.matchData, rankedCandidates: candidates },
+                },
+              };
             });
           } else {
             // No searchable identity means enrichment cannot start. Store a terminal
@@ -4602,18 +4670,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // photo becomes the cover. Mirrors the live-camera capture branch, target-id explicit.
   const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean; skipPreflight?: boolean }) => {
     const wasEmpty = (bulkItemsRef.current.find((i) => i.id === itemId)?.photos.length ?? 0) === 0;
+    // Shelf-scanned items arrive MATCHED and with zero photos, so "first photo" is not
+    // evidence the item still needs identifying. Re-matching them threw away the confirmed
+    // identity and re-searched off the new photo — adding a photo silently undid the match.
+    const alreadyMatched = !!confirmedQuickMatchByItemId[itemId] ||
+      !!bulkItemsRef.current.find((i) => i.id === itemId)?.preSelectedSource;
     setBulkItems((prev) => prev.map((item) => {
       if (item.id !== itemId) return item;
       const empty = item.photos.length === 0;
       return { ...item, photos: [...item.photos, { ...photo, isCover: empty ? true : photo.isCover }] };
     }));
     setCapturedPhotos((prev) => [...prev, photo]);
-    // Scan when this is the cover (first) photo OR an explicit correction/re-match (wrong-item,
-    // add-details tag). A plain "add another photo" to an already-matched item does NOT re-match.
-    if (wasEmpty || opts?.rescan) {
+    // Scan when this is the cover (first) photo of an UNMATCHED item, or on an explicit
+    // correction/re-match (wrong-item, add-details tag). Adding a photo to an
+    // already-matched item is just adding a photo.
+    if ((wasEmpty && !alreadyMatched) || opts?.rescan) {
       setTimeout(() => performQuickScan(photo, itemId, opts?.skipPreflight ? { skipPreflight: true } : undefined), 500);
     }
-  }, [performQuickScan]);
+  }, [performQuickScan, confirmedQuickMatchByItemId, setBulkItems]);
 
   // Open / close the inline capture overlay for a target item. `rescan` marks an explicit
   // correction (wrong-item / add-details tag) so the captured shot re-runs the full match;
@@ -4622,17 +4696,28 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const photoCapturePreflightGrantedRef = useRef(false);
   const openPhotoCaptureForItem = useCallback(async (itemId: string, opts?: { rescan?: boolean }) => {
     if (photoCaptureTargetId) return; // overlay already open — ignore re-entrant taps
+    // Matched items don't scan on the first photo (see attachPhotoToItem), so they must not
+    // be charged a scan or blocked by the scan gate just to attach one.
+    const alreadyMatched = !!confirmedQuickMatchByItemId[itemId] ||
+      !!bulkItemsRef.current.find((item) => item.id === itemId)?.preSelectedSource;
     const targetNeedsScan =
       !!opts?.rescan ||
-      (bulkItemsRef.current.find((item) => item.id === itemId)?.photos.length ?? 0) === 0;
-    if (targetNeedsScan && !(await requestQuickScanAccess())) return;
+      (!alreadyMatched &&
+        (bulkItemsRef.current.find((item) => item.id === itemId)?.photos.length ?? 0) === 0);
+    if (targetNeedsScan && !(await requestQuickScanAccess())) {
+      // Denied access used to return silently, so "add photo" was a dead tap with no
+      // explanation. requestQuickScanAccess surfaces its own upgrade prompt when it has
+      // one; this covers the cases where it just says no.
+      showNotificationMessage('Scans are paused. Check your plan to continue.');
+      return;
+    }
 
     photoCaptureRescanRef.current = !!opts?.rescan;
     photoCapturePreflightGrantedRef.current = targetNeedsScan;
     setOverlayFacing('back');
     setOverlayFlash('off');
     setPhotoCaptureTargetId(itemId);
-  }, [photoCaptureTargetId, requestQuickScanAccess]);
+  }, [photoCaptureTargetId, requestQuickScanAccess, confirmedQuickMatchByItemId, showNotificationMessage]);
   const closePhotoCaptureOverlay = useCallback(() => {
     photoCapturePreflightGrantedRef.current = false;
     setPhotoCaptureTargetId(null);
@@ -6389,24 +6474,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onClose={() => setInventoryDedupDialog(null)}
       />
 
-      {/* Post-checkout: "Creating your listings" → "Ready to review" cards. */}
-      <ListingProcessingCard
-        visible={!!creatingListings && !processingCardDismissed}
-        imageUri={creatingListings?.photoUri}
-        count={creatingListings?.count ?? 1}
-        onDone={() => setProcessingCardDismissed(true)}
-      />
-      <ListingsReadyCard
-        visible={!!listingsReady}
-        count={listingsReady?.count ?? 1}
+      {/* Post-checkout listing status. One slim centred card for both phases — creation
+          runs in the background, so it never takes the screen over. */}
+      <ListingStatusCard
+        state={
+          listingsReady
+            ? 'ready'
+            : (creatingListings && !processingCardDismissed) ? 'creating' : null
+        }
+        count={(listingsReady ? listingsReady.count : creatingListings?.count) ?? 1}
         onReview={() => {
           setListingsReady(null);
-          // ListingsReadyCard and the bulk items sheet are sibling Modals; presenting
-          // in the same tick batches them (see openBulkItemsSheet note). Defer so the
-          // ready card dismisses first, then open the review surface.
+          // The status card and the bulk items sheet are sibling Modals; presenting in the
+          // same tick batches them (see openBulkItemsSheet note). Defer so this dismisses
+          // first, then open the review surface.
           setTimeout(() => openBulkItemsSheet(), 280);
         }}
-        onDismiss={() => setListingsReady(null)}
+        onDismiss={() => {
+          if (listingsReady) setListingsReady(null);
+          else setProcessingCardDismissed(true);
+        }}
       />
     </GestureHandlerRootView>
   );

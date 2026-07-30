@@ -97,10 +97,28 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
     );
     const selected = selectedRow || scannedCandidate || inventoryCandidate;
     const pricingResearch = selected?.pricingResearch ?? scannedCandidate?.pricingResearch;
-    if (isInventoryMatch && selected) {
+    // The backend's veto outranks an inventory flag. A raw text-search hit on the seller's own
+    // catalog arrives flagged isLocalMatch even when the backend scored the item NEEDS_REVIEW,
+    // and this branch used to run BEFORE the veto check below — so an unresolved item was shown
+    // as a settled "Already in inventory" with someone else's product name on it. Only an
+    // explicit dedup decision (inventoryEntry) or a match the backend was willing to confirm
+    // may claim inventory; everything else falls through to review.
+    const backendVetoed = quickScanStore[id]?.matchData?.canAutoConfirm === false;
+    const inventoryClaimTrusted = Boolean(inventoryEntry) || !backendVetoed;
+    if (isInventoryMatch && selected && inventoryClaimTrusted) {
       return {
         kind: 'inventory',
         text: 'Already in inventory',
+        price: money(selected?.price),
+        title: selected?.title,
+        image: resolveImageUri(selected),
+        pricingResearch,
+      };
+    }
+    if (isInventoryMatch && selected && backendVetoed) {
+      return {
+        kind: 'candidates',
+        text: 'Needs review',
         price: money(selected?.price),
         title: selected?.title,
         image: resolveImageUri(selected),
