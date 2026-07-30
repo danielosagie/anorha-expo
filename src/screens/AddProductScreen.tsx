@@ -20,8 +20,7 @@ import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
 import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
-import ListingProcessingCard from './AddProduct/ListingProcessingCard';
-import ListingsReadyCard from './AddProduct/ListingsReadyCard';
+import ListingStatusCard from './AddProduct/ListingStatusCard';
 import { useBulkItems } from './AddProduct/hooks/useBulkItems';
 import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
 import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
@@ -4602,18 +4601,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // photo becomes the cover. Mirrors the live-camera capture branch, target-id explicit.
   const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean; skipPreflight?: boolean }) => {
     const wasEmpty = (bulkItemsRef.current.find((i) => i.id === itemId)?.photos.length ?? 0) === 0;
+    // Shelf-scanned items arrive MATCHED and with zero photos, so "first photo" is not
+    // evidence the item still needs identifying. Re-matching them threw away the confirmed
+    // identity and re-searched off the new photo — adding a photo silently undid the match.
+    const alreadyMatched = !!confirmedQuickMatchByItemId[itemId] ||
+      !!bulkItemsRef.current.find((i) => i.id === itemId)?.preSelectedSource;
     setBulkItems((prev) => prev.map((item) => {
       if (item.id !== itemId) return item;
       const empty = item.photos.length === 0;
       return { ...item, photos: [...item.photos, { ...photo, isCover: empty ? true : photo.isCover }] };
     }));
     setCapturedPhotos((prev) => [...prev, photo]);
-    // Scan when this is the cover (first) photo OR an explicit correction/re-match (wrong-item,
-    // add-details tag). A plain "add another photo" to an already-matched item does NOT re-match.
-    if (wasEmpty || opts?.rescan) {
+    // Scan when this is the cover (first) photo of an UNMATCHED item, or on an explicit
+    // correction/re-match (wrong-item, add-details tag). Adding a photo to an
+    // already-matched item is just adding a photo.
+    if ((wasEmpty && !alreadyMatched) || opts?.rescan) {
       setTimeout(() => performQuickScan(photo, itemId, opts?.skipPreflight ? { skipPreflight: true } : undefined), 500);
     }
-  }, [performQuickScan]);
+  }, [performQuickScan, confirmedQuickMatchByItemId, setBulkItems]);
 
   // Open / close the inline capture overlay for a target item. `rescan` marks an explicit
   // correction (wrong-item / add-details tag) so the captured shot re-runs the full match;
@@ -4622,17 +4627,28 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const photoCapturePreflightGrantedRef = useRef(false);
   const openPhotoCaptureForItem = useCallback(async (itemId: string, opts?: { rescan?: boolean }) => {
     if (photoCaptureTargetId) return; // overlay already open — ignore re-entrant taps
+    // Matched items don't scan on the first photo (see attachPhotoToItem), so they must not
+    // be charged a scan or blocked by the scan gate just to attach one.
+    const alreadyMatched = !!confirmedQuickMatchByItemId[itemId] ||
+      !!bulkItemsRef.current.find((item) => item.id === itemId)?.preSelectedSource;
     const targetNeedsScan =
       !!opts?.rescan ||
-      (bulkItemsRef.current.find((item) => item.id === itemId)?.photos.length ?? 0) === 0;
-    if (targetNeedsScan && !(await requestQuickScanAccess())) return;
+      (!alreadyMatched &&
+        (bulkItemsRef.current.find((item) => item.id === itemId)?.photos.length ?? 0) === 0);
+    if (targetNeedsScan && !(await requestQuickScanAccess())) {
+      // Denied access used to return silently, so "add photo" was a dead tap with no
+      // explanation. requestQuickScanAccess surfaces its own upgrade prompt when it has
+      // one; this covers the cases where it just says no.
+      showNotificationMessage('Scans are paused. Check your plan to continue.');
+      return;
+    }
 
     photoCaptureRescanRef.current = !!opts?.rescan;
     photoCapturePreflightGrantedRef.current = targetNeedsScan;
     setOverlayFacing('back');
     setOverlayFlash('off');
     setPhotoCaptureTargetId(itemId);
-  }, [photoCaptureTargetId, requestQuickScanAccess]);
+  }, [photoCaptureTargetId, requestQuickScanAccess, confirmedQuickMatchByItemId, showNotificationMessage]);
   const closePhotoCaptureOverlay = useCallback(() => {
     photoCapturePreflightGrantedRef.current = false;
     setPhotoCaptureTargetId(null);
@@ -6389,24 +6405,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onClose={() => setInventoryDedupDialog(null)}
       />
 
-      {/* Post-checkout: "Creating your listings" → "Ready to review" cards. */}
-      <ListingProcessingCard
-        visible={!!creatingListings && !processingCardDismissed}
-        imageUri={creatingListings?.photoUri}
-        count={creatingListings?.count ?? 1}
-        onDone={() => setProcessingCardDismissed(true)}
-      />
-      <ListingsReadyCard
-        visible={!!listingsReady}
-        count={listingsReady?.count ?? 1}
+      {/* Post-checkout listing status. One slim centred card for both phases — creation
+          runs in the background, so it never takes the screen over. */}
+      <ListingStatusCard
+        state={
+          listingsReady
+            ? 'ready'
+            : (creatingListings && !processingCardDismissed) ? 'creating' : null
+        }
+        count={(listingsReady ? listingsReady.count : creatingListings?.count) ?? 1}
         onReview={() => {
           setListingsReady(null);
-          // ListingsReadyCard and the bulk items sheet are sibling Modals; presenting
-          // in the same tick batches them (see openBulkItemsSheet note). Defer so the
-          // ready card dismisses first, then open the review surface.
+          // The status card and the bulk items sheet are sibling Modals; presenting in the
+          // same tick batches them (see openBulkItemsSheet note). Defer so this dismisses
+          // first, then open the review surface.
           setTimeout(() => openBulkItemsSheet(), 280);
         }}
-        onDismiss={() => setListingsReady(null)}
+        onDismiss={() => {
+          if (listingsReady) setListingsReady(null);
+          else setProcessingCardDismissed(true);
+        }}
       />
     </GestureHandlerRootView>
   );

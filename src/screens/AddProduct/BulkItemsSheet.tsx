@@ -968,16 +968,28 @@ export const BulkItemsSheet: React.FC<{
     }
     // Multi-select: when a subset is passed, only those items are listed; otherwise the whole cart.
     const targetItems = itemsOverride && itemsOverride.length > 0 ? itemsOverride : bulkItems;
-    const firstPhotos = targetItems.map(item => item.photos[0]).filter(Boolean);
-    if (firstPhotos.length === 0) {
-      Alert.alert('No Photos', 'Please take some photos first before searching.');
+    // A photo is one of two ways to identify an item; a confirmed match is the other, and it
+    // is the STRONGER one (it already carries the product identity, title, price and source
+    // links, so generation runs off scraped context and needs no image at all). Requiring a
+    // photo here blocked exactly the shelf-scanned items that were already matched.
+    const hasIdentity = (item: typeof targetItems[number]) =>
+      item.photos.length > 0 ||
+      !!item.preSelectedSource ||
+      confirmedQuickMatchByItemId[item.id]?.source === 'quick_scan_confirmed' ||
+      confirmedQuickMatchByItemId[item.id]?.source === 'quick_scan_auto';
+    const identifiableItems = targetItems.filter(hasIdentity);
+    if (identifiableItems.length === 0) {
+      Alert.alert(
+        'Nothing to list yet',
+        'Add a photo or confirm a match on at least one item first.',
+      );
       isAnalyzeInFlightRef.current = false;
       return;
     }
 
     let listingCreationHandedOff = false;
     if (opts?.listingCreation) {
-      const creationItemIds = targetItems.filter((item) => item.photos.length > 0).map((item) => item.id);
+      const creationItemIds = identifiableItems.map((item) => item.id);
       setIsListingCreationSubmitting(true);
       setListingCreationItemIds(creationItemIds);
       onListingCreationStarted?.({ ...opts.listingCreation, itemIds: creationItemIds });
@@ -986,10 +998,8 @@ export const BulkItemsSheet: React.FC<{
     onStartBroadSearch();
 
     const loadingStates: Record<string, ItemLoadingState> = {};
-    targetItems.forEach(item => {
-      if (item.photos.length > 0) {
-        loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
-      }
+    identifiableItems.forEach(item => {
+      loadingStates[item.id] = { isLoading: true, stage: 'Processing...' };
     });
     setItemLoadingStates(loadingStates);
 
@@ -1047,13 +1057,15 @@ export const BulkItemsSheet: React.FC<{
         };
       });
 
+      // A confirmed candidate is enough to generate directly — images are optional context,
+      // not a precondition. Photo-less matched items used to fall through to analyze, which
+      // needs a photo, so they silently produced nothing.
       const directGenerateEntries = queueEntries.filter((entry) => (
-        entry.selectedCandidate &&
-        entry.generateProduct &&
-        Array.isArray(entry.generateProduct.imageUrls) &&
-        entry.generateProduct.imageUrls.length > 0
+        entry.selectedCandidate && entry.generateProduct
       ));
-      const analyzeEntries = queueEntries.filter((entry) => !directGenerateEntries.includes(entry));
+      const analyzeEntries = queueEntries.filter((entry) => (
+        !directGenerateEntries.includes(entry) && entry.item.photos.length > 0
+      ));
       const userImagesByIndex = Object.fromEntries(
         bulkItems.map((item, index) => [index, item.photos.map((photo) => photo.uri).filter(Boolean)])
       );
@@ -1150,10 +1162,10 @@ export const BulkItemsSheet: React.FC<{
       log.error('[ANALYZE] Error:', error);
       setItemLoadingStates((prev) => {
         const next = { ...prev };
-        targetItems.forEach((item) => {
-          if (item.photos.length > 0) {
-            next[item.id] = { isLoading: false, stage: 'Failed', error: 'Try again' };
-          }
+        // Clear every item we actually started, photo-less matched ones included — else a
+        // failed run leaves them spinning forever.
+        identifiableItems.forEach((item) => {
+          next[item.id] = { isLoading: false, stage: 'Failed', error: 'Try again' };
         });
         return next;
       });

@@ -614,13 +614,15 @@ const App: React.FC = () => {
                   message="Securing your session and loading your data…"
                 />
               )
-            ) : !legendStateModules ? (
-              <AppStartupShell
-                title="Preparing local data"
-                message="Reconnecting shared app state and restoring your last workspace."
-              />
             ) : (
-              <SafeErrorBoundary onGoHome={goHomeReset}><AppNavigator /></SafeErrorBoundary>
+              // The inventory prefetch is NOT a gate on the whole navigator any more. It
+              // only gates the TabNavigator landing (AppNavigator decides), so a seller
+              // who still has to onboard goes straight to onboarding instead of waiting
+              // out a prefetch of data they do not have yet. useLegendState() already
+              // hands screens an inert fallback while `legendStateModules` is null.
+              <SafeErrorBoundary onGoHome={goHomeReset}>
+                <AppNavigator dataReady={!!legendStateModules} />
+              </SafeErrorBoundary>
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />

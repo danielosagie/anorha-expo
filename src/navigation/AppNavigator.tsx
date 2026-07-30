@@ -525,7 +525,13 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
 // Prevent auto-hiding of splash screen
 SplashScreen.preventAutoHideAsync();
 
-const AppNavigator = () => {
+/**
+ * `dataReady` is the shared-inventory (Legend State) prefetch flag. It gates ONLY the
+ * TabNavigator landing — a seller who has not onboarded has no inventory to prefetch, so
+ * making them wait on it stranded every fresh signup on a full-screen shell (see the
+ * landing gate below).
+ */
+const AppNavigator = ({ dataReady = true }: { dataReady?: boolean }) => {
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
   const clerk = useClerk();
   const session = React.useContext(SessionContext);
@@ -889,6 +895,20 @@ const AppNavigator = () => {
           session?.bootstrapError ||
           'Checking sign-in state and rebuilding your last known workspace.'
         }
+      />
+    );
+  }
+
+  // Inventory prefetch gate — TabNavigator ONLY. Home/Inventory render against the shared
+  // observables, so entering them on an empty tree shows a false "no data" everywhere.
+  // Onboarding (CreateAccountScreen) and AccountSyncIssue read none of it, and a brand-new
+  // seller has nothing TO prefetch: gating them here parked every first-time signup on
+  // "Preparing local data" for the whole prefetch window instead of opening onboarding.
+  if (!navBooted && isSignedIn && initialAppScreen === 'TabNavigator' && !dataReady) {
+    return (
+      <AppStartupShell
+        title="Preparing local data"
+        message="Reconnecting shared app state and restoring your last workspace."
       />
     );
   }
