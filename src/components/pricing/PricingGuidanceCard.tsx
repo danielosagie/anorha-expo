@@ -39,6 +39,7 @@ export interface PricingGuidanceData {
   median?: number;
   average?: number;
   recommended?: number;
+  condition?: string;
   sampleCount?: number;
   cachedAt?: string;
   samples?: PricingComp[];
@@ -116,9 +117,11 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   const recommended = typeof p.recommended === 'number' ? p.recommended : median;
   const sampleCount = p.sampleCount ?? (samples.length || undefined);
   const cached = cachedLabel(p.cachedAt);
-  const metaLine = sampleCount
-    ? `Based on ${sampleCount} sold listings${cached ? ` · ${cached}` : ''}`
+  const conditionLabel = p.condition === 'mixed' ? 'Mixed condition' : null;
+  const sampleLabel = sampleCount
+    ? `Based on ${sampleCount} sold listings${cached ? `, ${cached}` : ''}`
     : null;
+  const metaLine = [conditionLabel, sampleLabel].filter(Boolean).join('. ') || null;
 
   const applyOptions = onApplyPrice && hasRange
     ? ([

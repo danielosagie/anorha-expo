@@ -81,6 +81,7 @@ const SHELF_PRICING_TIMEOUT_MS = 15_000;
 type ShelfPricingJob = {
   itemId: string;
   title: string;
+  condition?: string;
   token: string;
   generation: number;
 };
@@ -1658,14 +1659,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     try {
       const cleanedTitle = job.title.replace(/\s*[|—–-]\s*(eBay|Amazon|Walmart|Etsy|Target)\s*$/i, '').trim();
+      const condition = job.condition || 'mixed';
       const response = await fetch(`${API_BASE_URL}/api/ebay/pricing-research`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${job.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: cleanedTitle, condition: 'new', limit: 20 }),
+        // Unknown photo condition must stay mixed. Treating it as new reuses incompatible comps.
+        body: JSON.stringify({ title: cleanedTitle, condition, limit: 20 }),
         signal: abortController.signal,
       });
       priceData = response.ok
-        ? await response.json()
+        ? { ...(await response.json()), condition }
         : { low: null, median: null, high: null, recommended: null, samples: [], error: 'request_failed' };
       if (Array.isArray(priceData?.samples)) {
         priceData = { ...priceData, samples: priceData.samples.map(withResolvedImageUrl) };
@@ -2248,28 +2251,36 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       ...prev,
       [itemId]: { isLoading: false, stage: 'Scan failed', error: errorMessage },
     }));
-    // The cart status survives the local snapshot. The matchContext marker also
-    // survives backend draft hydration, including historical gate-stopped carts.
-    setQuickScanStore(prev => {
-      const existing = prev[itemId];
-      const fallback: MatchResponse = {
-        systemAction: 'fallback_to_manual',
-        confidence: 'low',
-        rankedCandidates: [],
-        totalMatches: 0,
-      };
-      return {
-        ...prev,
-        [itemId]: {
-          matchData: {
-            ...(existing?.matchData || fallback),
-            scanError: errorMessage,
-          } as MatchResponse,
-          matchRows: existing?.matchRows || [],
-        },
-      };
+    // A failed replacement cannot retain candidates or verdicts from the previous scan.
+    setQuickScanStore(prev => ({
+      ...prev,
+      [itemId]: {
+        matchData: {
+          systemAction: 'fallback_to_manual',
+          confidence: 'low',
+          rankedCandidates: [],
+          totalMatches: 0,
+          canAutoConfirm: false,
+          confidenceState: 'NOT_RUN',
+          reasonCode: 'client_error',
+          scanError: errorMessage,
+        } as MatchResponse,
+        matchRows: [],
+      },
+    }));
+    setConfirmedQuickMatchByItemId(prev => {
+      if (!prev[itemId]) return prev;
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
     });
-  }, [setQuickScanStore]);
+    setInventoryDedupByItemId(prev => {
+      if (!prev[itemId]) return prev;
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+  }, [setConfirmedQuickMatchByItemId, setQuickScanStore]);
 
   const clearQuickScanRetryable = useCallback((itemId: string) => {
     transitionItem(itemId, 'searching');
@@ -2879,66 +2890,90 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return next;
         });
 
-        if (res?.matches && res.matches.length > 0) {
-          const livePricing = res?.livePricing;
-          const instantPricing = livePricing
-            ? {
-                low: livePricing.low,
-                high: livePricing.high,
-                median: livePricing.median,
-                recommended: livePricing.median,
-                sampleCount: livePricing.sampleCount,
-                samples: Array.isArray(livePricing.samples)
-                  ? livePricing.samples.map(withResolvedImageUrl)
-                  : livePricing.samples,
-                livePricing,
-              }
-            : undefined;
-          const rankedCandidates = res.matches.map((match: any, index: number) => {
-            const normalized = withResolvedImageUrl(match);
-            return index === 0 && instantPricing && !match?.pricingResearch
-              ? { ...normalized, pricingResearch: instantPricing }
-              : normalized;
-          });
-
-          setQuickScanStore((prev) => ({
-            ...prev,
-            [itemId]: {
-              matchData: {
-                systemAction: 'show_multiple_matches',
-                confidence: res.confidence || 'medium',
-                rankedCandidates,
-                totalMatches: rankedCandidates.length,
-              },
-              matchRows: rankedCandidates,
-            },
-          }));
-
-          const shouldAutoConfirmTopMatch = shouldAutoSelectQuickMatch({
+        const matches = Array.isArray(res?.matches) ? res.matches : [];
+        const rawCondition = res?.observedCondition ?? res?.extractedItem?.condition;
+        const observedCondition = typeof rawCondition === 'string' && rawCondition.trim()
+          ? rawCondition.trim().toLowerCase()
+          : undefined;
+        const livePricing = res?.livePricing;
+        const instantPricing = livePricing
+          ? {
+              low: livePricing.low,
+              high: livePricing.high,
+              median: livePricing.median,
+              recommended: livePricing.median,
+              condition: observedCondition || 'mixed',
+              sampleCount: livePricing.sampleCount,
+              samples: Array.isArray(livePricing.samples)
+                ? livePricing.samples.map(withResolvedImageUrl)
+                : livePricing.samples,
+              livePricing,
+            }
+          : undefined;
+        const rankedCandidates = matches.map((match: any, index: number) => {
+          const normalized = withResolvedImageUrl(match);
+          return index === 0 && instantPricing && !match?.pricingResearch
+            ? { ...normalized, pricingResearch: instantPricing }
+            : normalized;
+        });
+        const hasBackendVerdict = typeof res?.canAutoConfirm === 'boolean';
+        const shouldAutoConfirmTopMatch = res?.canAutoConfirm === true || (
+          !hasBackendVerdict && shouldAutoSelectQuickMatch({
             totalMatches: rankedCandidates.length,
             recommendedAction: 'show_multiple_matches',
-            rerankerConfidence: res.confidence === 'high' ? 0.9 : res.confidence === 'medium' ? 0.6 : 0.2,
+            rerankerConfidence: res?.confidence === 'high' ? 0.9 : res?.confidence === 'medium' ? 0.6 : 0.2,
             topCandidateIsLocalMatch: Boolean(rankedCandidates[0]?.isLocalMatch),
-          });
+          })
+        );
 
-          if (shouldAutoConfirmTopMatch) {
-            const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(rankedCandidates);
-            setConfirmedQuickMatchByItemId((prev) => ({
-              ...prev,
-              [itemId]: {
-                matchRows: quickMatchHintCandidates,
-                preSelectedIndices: [0],
-                source: 'quick_scan_auto',
-                confidence: res.confidence === 'high' ? 0.9 : 0.6,
-              },
-            }));
+        // Every shelf result is a replacement snapshot. A server veto or empty result
+        // must remove the previous positive instead of leaving it available to generation.
+        setQuickScanStore((prev) => ({
+          ...prev,
+          [itemId]: {
+            matchData: {
+              systemAction: shouldAutoConfirmTopMatch ? 'show_single_match' : (rankedCandidates.length > 0 ? 'show_multiple_matches' : 'fallback_to_manual'),
+              confidence: res?.confidence || 'low',
+              rankedCandidates,
+              totalMatches: rankedCandidates.length,
+              canAutoConfirm: res?.canAutoConfirm,
+              confidenceState: res?.confidenceState,
+              reasonCode: res?.reasonCode,
+            },
+            matchRows: rankedCandidates,
+          },
+        }));
+        setConfirmedQuickMatchByItemId((prev) => {
+          if (!shouldAutoConfirmTopMatch) {
+            if (!prev[itemId]) return prev;
+            const next = { ...prev };
+            delete next[itemId];
+            return next;
           }
+          const quickMatchHintCandidates = rankedCandidatesToQuickMatchHintCandidates(rankedCandidates);
+          return {
+            ...prev,
+            [itemId]: {
+              matchRows: quickMatchHintCandidates,
+              preSelectedIndices: [0],
+              source: 'quick_scan_auto',
+              confidence: res?.confidence === 'high' ? 0.9 : 0.6,
+            },
+          };
+        });
+        transitionItem(
+          itemId,
+          shouldAutoConfirmTopMatch ? 'matched' : 'needs_context',
+          shouldAutoConfirmTopMatch ? undefined : { needsContextReason: rankedCandidates.length > 0 ? 'Needs review' : 'No matches found' },
+        );
 
+        if (rankedCandidates.length > 0) {
           const topTitle = String(rankedCandidates[0]?.title || res?.usedQuery || '').trim();
           if (topTitle && token) {
             enqueueShelfPricingResearch({
               itemId,
               title: topTitle,
+              condition: observedCondition,
               token,
               generation: shelfPricingGeneration,
             });
@@ -2973,12 +3008,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         enqueueCropForShelfItem(itemId, shelfBox);
 
-        // Per-item inventory dedup signal (shelf/multi) — the "Already in Inventory" badge
-        // already renders off the prepended isLocalMatch candidate; this stores the explicit
-        // match so the badge tap can offer the Update-vs-Add-new choice with a clean id.
-        if (res?.alreadyInInventory && res?.inventoryMatch) {
-          setInventoryDedupByItemId((prev) => ({ ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } }));
-        }
+        // Dedup is also a replacement verdict. A negative result must remove the old badge target.
+        setInventoryDedupByItemId((prev) => {
+          if (res?.alreadyInInventory === true && res?.inventoryMatch) {
+            return { ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: shouldAutoConfirmTopMatch ? 'matched' : 'needs_review' } };
+          }
+          if (!prev[itemId]) return prev;
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
       }
 
       setCurrentInstruction('searching');
@@ -3222,6 +3261,36 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         [itemId]: { isLoading: true, stage: 'Searching catalog...', error: undefined },
       }));
 
+      // A correction starts a new verdict. Clear every old positive before the stream
+      // runs so an empty result, disconnect, or timeout cannot keep the wrong item active.
+      setQuickScanStore((prev) => ({
+        ...prev,
+        [itemId]: {
+          matchData: {
+            systemAction: 'fallback_to_manual',
+            confidence: 'low',
+            rankedCandidates: [],
+            totalMatches: 0,
+            canAutoConfirm: false,
+            confidenceState: 'NOT_RUN',
+          },
+          matchRows: [],
+        },
+      }));
+      setConfirmedQuickMatchByItemId((prev) => {
+        if (!prev[itemId]) return prev;
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      setInventoryDedupByItemId((prev) => {
+        if (!prev[itemId]) return prev;
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+      transitionItem(itemId, 'searching');
+
       const rawApiBase = API_BASE_URL;
       const API_BASE = rawApiBase;
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
@@ -3234,77 +3303,69 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           mode: 'ocr-vlm-search',
         },
         onConnectionError: (message) => {
-          setItemLoadingStates((prev) => ({
-            ...prev,
-            [itemId]: {
-              isLoading: false,
-              stage: 'Search failed',
-              error: message,
-            },
-          }));
+          markQuickScanRetryable(itemId, message || 'Unable to search catalog right now.');
         },
         onEvent: (parsed) => {
           if (parsed.type === 'SEARCH_RESULT') {
             const res = parsed.result;
-            if (res?.matches && res.matches.length > 0) {
-              setQuickScanStore((prev) => ({
-                ...prev,
-                [itemId]: {
-                  matchData: {
-                    systemAction: 'show_multiple_matches',
-                    confidence: res.confidence || 'medium',
-                    rankedCandidates: res.matches.map(withResolvedImageUrl),
-                    totalMatches: res.matches.length,
-                  },
-                  matchRows: res.matches.map((match: any) => ({ ...withResolvedImageUrl(match), queryKey: newQuery })),
+            const matches = Array.isArray(res?.matches) ? res.matches : [];
+            const rankedCandidates = matches.map(withResolvedImageUrl);
+            setQuickScanStore((prev) => ({
+              ...prev,
+              [itemId]: {
+                matchData: {
+                  systemAction: rankedCandidates.length > 0 ? 'show_multiple_matches' : 'fallback_to_manual',
+                  confidence: res?.confidence || 'low',
+                  rankedCandidates,
+                  totalMatches: rankedCandidates.length,
+                  canAutoConfirm: res?.canAutoConfirm,
+                  confidenceState: res?.confidenceState,
+                  reasonCode: res?.reasonCode,
                 },
-              }));
-              // Drop the previously confirmed/auto-selected match so the fresh results actually
-              // surface — previewData prioritizes confirmedQuickMatchByItemId, which would
-              // otherwise keep showing the OLD (wrong) match after a re-research.
-              setConfirmedQuickMatchByItemId((prev) => {
-                if (!prev[itemId]) return prev;
-                const next = { ...prev };
-                delete next[itemId];
-                return next;
-              });
+                matchRows: matches.map((match: any) => ({ ...withResolvedImageUrl(match), queryKey: newQuery })),
+              },
+            }));
+            transitionItem(itemId, 'needs_context', {
+              needsContextReason: rankedCandidates.length > 0 ? 'Needs review' : 'No matches found',
+            });
+            if (activeItemIdRef.current === itemId) {
+              setCurrentInstruction(rankedCandidates.length > 0 ? 'matches_found' : 'no_matches');
             }
-            // Per-item inventory dedup signal (re-research) — store the explicit match so the
-            // "Already in Inventory" badge tap can offer Update-vs-Add-new.
-            if (res?.alreadyInInventory && res?.inventoryMatch) {
-              setInventoryDedupByItemId((prev) => ({ ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } }));
-            }
+            // The dedup verdict is replaced on every result, including explicit false.
+            setInventoryDedupByItemId((prev) => {
+              if (res?.alreadyInInventory === true && res?.inventoryMatch) {
+                return { ...prev, [itemId]: { match: res.inventoryMatch, fallbackInstruction: 'matches_found' } };
+              }
+              if (!prev[itemId]) return prev;
+              const next = { ...prev };
+              delete next[itemId];
+              return next;
+            });
           } else if (parsed.type === 'COMPLETE') {
             setItemLoadingStates((prev) => {
               const next = { ...prev };
               delete next[itemId];
               return next;
             });
-          } else if (parsed.type === 'ERROR' || parsed.type === 'TIMEOUT' || parsed.type === 'NO_ITEMS') {
-            setItemLoadingStates((prev) => ({
-              ...prev,
-              [itemId]: {
-                isLoading: false,
-                stage: 'Search failed',
-                error: parsed.message || 'Unable to search catalog right now.',
-              },
-            }));
+          } else if (parsed.type === 'NO_ITEMS') {
+            transitionItem(itemId, 'needs_context', { needsContextReason: 'No matches found' });
+            if (activeItemIdRef.current === itemId) setCurrentInstruction('no_matches');
+            setItemLoadingStates((prev) => {
+              const next = { ...prev };
+              delete next[itemId];
+              return next;
+            });
+          } else if (parsed.type === 'ERROR' || parsed.type === 'TIMEOUT') {
+            markQuickScanRetryable(itemId, parsed.message || 'Unable to search catalog right now.');
           }
         },
       });
 
       return () => stream.close();
     } catch (error: any) {
-      setItemLoadingStates((prev) => ({
-        ...prev,
-        [itemId]: {
-          isLoading: false,
-          stage: 'Search failed',
-          error: error?.message || 'Unable to search catalog right now.',
-        },
-      }));
+      markQuickScanRetryable(itemId, error?.message || 'Unable to search catalog right now.');
     }
-  }, []);
+  }, [markQuickScanRetryable, setConfirmedQuickMatchByItemId, setQuickScanStore]);
 
   const handleManualBarcodeSubmit = useCallback(async () => {
     const trimmed = manualBarcode.trim();
@@ -3937,6 +3998,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         confidenceScore?: number;
         reasonCode?: string;
         rerankerAnalysis?: any;
+        observedCondition?: string;
         alreadyInInventory?: boolean;
         inventoryMatch?: any;
       };
@@ -4015,13 +4077,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             }
             const fromResult = Array.isArray(evt.result?.matches) ? evt.result.matches : null;
             const fromData = Array.isArray(evt.data?.results) ? evt.data.results.flatMap((r: any) => r?.matches || []) : null;
-            const seen = (fromResult && fromResult.length) ? fromResult : ((fromData && fromData.length) ? fromData : null);
-            if (seen) {
+            // Empty arrays are authoritative snapshots, not missing data.
+            const seen = fromResult ?? fromData;
+            if (seen !== null) {
               latestMatches = seen;
               latestConfidence = evt.result?.confidence ?? evt.data?.overallConfidence ?? latestConfidence;
             }
             if (evt.result?.livePricing) latestLivePricing = evt.result.livePricing;
             else if (evt.data?.results?.[0]?.livePricing) latestLivePricing = evt.data.results[0].livePricing;
+            const rawObservedCondition = evt.result?.observedCondition
+              ?? evt.result?.extractedItem?.condition
+              ?? evt.data?.results?.[0]?.observedCondition
+              ?? evt.data?.results?.[0]?.extractedItem?.condition;
+            if (typeof rawObservedCondition === 'string' && rawObservedCondition.trim()) {
+              latestVerdict.observedCondition = rawObservedCondition.trim().toLowerCase();
+            }
 
             const verdictSrc = (evt.result && typeof evt.result.canAutoConfirm === 'boolean') ? evt.result
               : (evt.data?.results?.[0] && typeof evt.data.results[0].canAutoConfirm === 'boolean') ? evt.data.results[0]
@@ -4149,6 +4219,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           systemAction: quickScanResult?.recommendedAction || 'show_multiple_matches',
           confidence: quickScanResult?.overallConfidence || 0,
           totalMatches: allMatches.length,
+          canAutoConfirm: backendAutoConfirm,
+          confidenceState: backendState,
+          reasonCode: streamResult.reasonCode,
           rankedCandidates: allMatches.map((match: any) => ({
             id: String(match.ProductVariantId || match.variantId || match.productId || `match-${Date.now()}`),
             productId: match.productId ? String(match.productId) : undefined,
@@ -4180,6 +4253,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (lp && nextMatchData.rankedCandidates?.[0] && !nextMatchData.rankedCandidates[0].pricingResearch) {
           (nextMatchData.rankedCandidates[0] as any).pricingResearch = {
             low: lp.low, high: lp.high, median: lp.median, sampleCount: lp.sampleCount,
+            condition: streamResult.observedCondition || 'mixed',
             samples: Array.isArray(lp.samples) ? lp.samples.map(withResolvedImageUrl) : lp.samples,
             livePricing: lp,
             // Exact product wasn't listed → these are SIMILAR-item comps; the card titles
@@ -4259,8 +4333,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // INVENTORY DEDUP — this scan strongly matched an item the user ALREADY owns. Surface it so
         // they can Update the existing item (restock) instead of silently re-adding a duplicate.
         const dupMatch = (streamResult.alreadyInInventory && streamResult.inventoryMatch) ? streamResult.inventoryMatch : null;
+        // The latest negative verdict must remove any inventory match from an earlier scan.
+        setInventoryDedupByItemId(prev => {
+          if (dupMatch) return { ...prev, [itemId]: { match: dupMatch, fallbackInstruction: realInstruction } };
+          if (!prev[itemId]) return prev;
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
         if (dupMatch) {
-          setInventoryDedupByItemId(prev => ({ ...prev, [itemId]: { match: dupMatch, fallbackInstruction: realInstruction } }));
           if (activeItemIdRef.current === itemId) {
             setCurrentInstruction('inventory_dedup');
             showNotificationMessage(`You already have "${String(dupMatch.title || 'this item').slice(0, 40)}" - tap to update it or add as new.`, 4500);
@@ -4296,18 +4377,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           (async () => {
             try {
               const cleanedTitle = topTitle.replace(/\s*[|—–-]\s*(eBay|Amazon|Walmart|Etsy|Target)\s*$/i, '').trim();
+              const pricingCondition = streamResult.observedCondition || 'mixed';
 
               const priceRes = await fetch(`${API_BASE}/api/ebay/pricing-research`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: cleanedTitle, condition: 'new', limit: 20 }),
+                // Preserve an observed condition, otherwise make the mixed range explicit.
+                body: JSON.stringify({ title: cleanedTitle, condition: pricingCondition, limit: 20 }),
               });
 
               // Store the response even when sold-comps "error": it can still carry
               // livePricing, and storing it ends the card's loading state with an
               // honest empty state instead of spinning forever. Only a failed request
               // is a hard miss (still stored as a marker so loading resolves).
-              const priceData = priceRes.ok ? await priceRes.json() : { error: 'request_failed' };
+              const priceData = priceRes.ok
+                ? { ...(await priceRes.json()), condition: pricingCondition }
+                : { error: 'request_failed', condition: pricingCondition };
               const recommended = Number(priceData?.recommended ?? priceData?.median ?? priceData?.low ?? 0);
 
               setQuickScanStore(prev => {
@@ -4351,6 +4436,26 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       } else {
         log.debug('[QUICK SCAN] No matches found');
         transitionItem(itemId, 'needs_context', { needsContextReason: 'No matches found' });
+        const noMatchesData: MatchResponse = {
+          systemAction: 'fallback_to_manual',
+          confidence: 'low',
+          rankedCandidates: [],
+          totalMatches: 0,
+          canAutoConfirm: false,
+          confidenceState: backendState || 'NO_CANDIDATES',
+          reasonCode: streamResult.reasonCode || 'no_confident_match',
+        };
+        // Zero candidates replace the prior result so previews cannot fall back to an old match.
+        setQuickScanStore(prev => ({
+          ...prev,
+          [itemId]: { matchData: noMatchesData, matchRows: [] },
+        }));
+        setInventoryDedupByItemId(prev => {
+          if (!prev[itemId]) return prev;
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
         // Distinguish an AI/image-service OUTAGE from a genuine "couldn't identify it" so we don't
         // blame the user's photo when the provider hiccuped. Backend tags the abstain reasonCode
         // 'provider_error' (LLM/search tool threw) — tell them to retry the same photo, not chase a
@@ -4370,7 +4475,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           delete next[itemId];
           return next;
         });
-        if (activeItemIdRef.current === itemId) setCurrentInstruction('no_matches');
+        if (activeItemIdRef.current === itemId) {
+          setMatchData(noMatchesData);
+          setCurrentInstruction('no_matches');
+        }
       }
 
     } catch (error) {
