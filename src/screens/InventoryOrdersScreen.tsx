@@ -1832,26 +1832,7 @@ const InventoryOrdersScreen = observer(() => {
                             
                           </TouchableOpacity>
                         </View>
-                        <View style={styles.bulkEntryRow}>
-                          <Pressable
-                            onPress={() => openInventoryQuickChat('select')}
-                            style={({ pressed }) => [styles.bulkEntryChip, pressed && styles.bulkEntryChipPressed]}
-                            accessibilityRole="button"
-                            accessibilityLabel="Bulk select inventory"
-                          >
-                            <Icon name="checkbox-multiple-marked-outline" size={17} color="#4B5563" />
-                            <Text style={styles.bulkEntryChipText}>Bulk select</Text>
-                          </Pressable>
-                          <Pressable
-                            onPress={() => openInventoryQuickChat('edit')}
-                            style={({ pressed }) => [styles.bulkEntryChip, pressed && styles.bulkEntryChipPressed]}
-                            accessibilityRole="button"
-                            accessibilityLabel="Bulk edit inventory"
-                          >
-                            <Icon name="pencil-outline" size={17} color="#4B5563" />
-                            <Text style={styles.bulkEntryChipText}>Bulk edit</Text>
-                          </Pressable>
-                        </View>
+                        {/* Bulk select and bulk edit live in the header menu now, beside Inventory and Scan. */}
                         {barcodeSearchError && (
                           <View style={[styles.errorMessage, { backgroundColor: theme.colors.error + '15' }]}>
                             <Icon name="alert-circle-outline" size={16} color={theme.colors.error} style={{ marginRight: 8 }} />
@@ -1915,6 +1896,10 @@ const InventoryOrdersScreen = observer(() => {
             { key: 'inventory', label: 'Inventory', icon: 'package-variant', active: activeTab === 'inventory', onPress: () => { setActiveTab('inventory'); setHeaderMenuOpen(false); } },
             { key: 'orders', label: 'Orders', icon: 'receipt-text-outline', active: activeTab === 'orders', onPress: () => { setActiveTab('orders'); setHeaderMenuOpen(false); } },
             { key: 'reports', label: 'Reports', icon: 'file-document-outline', active: activeTab === 'reports', onPress: () => { setActiveTab('reports'); setHeaderMenuOpen(false); } },
+          ],
+          [
+            { key: 'bulk-select', label: 'Bulk select', icon: 'checkbox-multiple-marked-outline', onPress: () => { setHeaderMenuOpen(false); openInventoryQuickChat('select'); } },
+            { key: 'bulk-edit', label: 'Bulk edit', icon: 'pencil-outline', onPress: () => { setHeaderMenuOpen(false); openInventoryQuickChat('edit'); } },
           ],
           [
             { key: 'scan', label: 'Scan inventory', icon: 'barcode-scan', onPress: () => { setHeaderMenuOpen(false); openScanner((code: string) => { handleBarcodeScan(code); closeScanner(); }, 'header_menu'); } },
@@ -1995,37 +1980,6 @@ const InventoryOrdersScreen = observer(() => {
                     </Text>
                   </TouchableOpacity>
                 ) : null}
-
-                <Pressable
-                  style={[styles.actionChip, styles.sproutActionChip]}
-                  onPress={() => openInventoryQuickChat('select')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Ask Sprout about selected inventory"
-                >
-                  <AnorhaFace size={20} />
-                  <Text style={[styles.actionChipText, styles.sproutActionText]}>Sprout</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[styles.actionChip, styles.sproutActionChip]}
-                  onPress={() => openInventoryQuickChat('select')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Bulk select with Sprout"
-                >
-                  <Icon name="checkbox-multiple-marked-outline" size={17} color="#5D7E16" />
-                  <Text style={[styles.actionChipText, styles.sproutActionText]}>Bulk select</Text>
-                </Pressable>
-
-                <Pressable
-                  style={[styles.actionChip, styles.sproutActionChip]}
-                  onPress={() => openInventoryQuickChat('edit')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Bulk edit with Sprout"
-                >
-                  <AnorhaFace size={20} />
-                  <Text style={[styles.actionChipText, styles.sproutActionText]}>Bulk edit</Text>
-                </Pressable>
-
                 <TouchableOpacity style={styles.actionChip} onPress={handleBulkDelete}>
                   <Icon name="trash-can-outline" size={18} color="#374151" />
                   <Text style={styles.actionChipText}>Delete</Text>
@@ -2668,32 +2622,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     gap: 10,
   },
-  bulkEntryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  bulkEntryChip: {
-    flex: 1,
-    minHeight: 42,
-    paddingHorizontal: 14,
-    borderRadius: 21,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#F7F7F5',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-  },
-  bulkEntryChipPressed: {
-    opacity: 0.72,
-  },
-  bulkEntryChipText: {
-    color: '#374151',
-    fontSize: 13,
-    fontWeight: '600',
-  },
 
   // Selection Styles
   selectionHeader: {
@@ -2777,14 +2705,6 @@ const styles = StyleSheet.create({
   },
   addToClearoutChip: {
     backgroundColor: '#93C822',
-  },
-  sproutActionChip: {
-    backgroundColor: 'rgba(147,200,34,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(93,126,22,0.18)',
-  },
-  sproutActionText: {
-    color: '#5D7E16',
   },
   actionChipText: {
     fontSize: 13,
