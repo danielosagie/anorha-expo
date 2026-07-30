@@ -2,12 +2,12 @@ export default {
   name: "Anorha",
   slug: "sssync", //DONT CHANGE AT ALL EVER - Need for production builds
   owner: process.env.EAS_BUILD ? "dosagie" : undefined,
-  version: "1.0.3",
+  version: "1.0.4",
   scheme: "anorhaapp",
   // EAS Update (OTA): JS-only fixes ship to installed builds via `eas update --channel production`
   // — no rebuild. fallbackToCacheTimeout:0 = never block launch on the update check (embedded
   // bundle now, fetch in background for next launch).
-  // runtimeVersion uses the "appVersion" policy (= the marketing `version`, "1.0.3") instead of
+  // runtimeVersion uses the "appVersion" policy (= the marketing `version`, "1.0.4") instead of
   // "fingerprint": fingerprint is computed twice with `eas build --local` (local CLI vs the build's
   // copied file set) and the two diverge → "Runtime version calculated on local machine not equal
   // to ... during build" build failure. appVersion is deterministic everywhere. CAVEAT: an OTA then
@@ -23,7 +23,7 @@ export default {
   orientation: "portrait",
   android: {
     package: "anorha.alpha",
-    versionCode: 14,
+    versionCode: 15,
     orientation: "portrait",
     permissions: [
       "android.permission.CAMERA",
@@ -41,7 +41,7 @@ export default {
     // expo-widgets ExpoWidgetsTarget read this same value, so their CFBundleVersions match
     // (remote autoIncrement only stamped the app target → widget stayed at "2" → ITMS-90473).
     // Bump this each App Store submission. (Was on remote autoIncrement at build 55.)
-    buildNumber: "70",
+    buildNumber: "71",
     icon: "./src/assets/1024_anorha.png",
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
