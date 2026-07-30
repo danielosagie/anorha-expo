@@ -23,6 +23,7 @@ class NativeSpringsShaderView: ExpoView, MTKViewDelegate {
     private var commandQueue: MTLCommandQueue?
 
     private var reactChildren: [UIView] = []
+    private var childrenUpdateWorkItem: DispatchWorkItem?
 
     private var currentShader: Shader?
     private var shaderParameters: [String: Any] = [:]
@@ -143,18 +144,15 @@ class NativeSpringsShaderView: ExpoView, MTKViewDelegate {
         metalView.isUserInteractionEnabled = false
     }
 
-    override func didAddSubview(_ subview: UIView) {
-        super.didAddSubview(subview)
+    // Fabric exposes per-child mount hooks instead of Paper's didUpdateReactSubviews batch hook.
+    override func mountChildComponentView(_ childComponentView: UIView, index: Int) {
+        super.mountChildComponentView(childComponentView, index: index)
+        scheduleChildrenUpdate()
+    }
 
-        if subview !== childrenContainer && subview !== outputView && subview !== metalView {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self = self else { return }
-                self.invalidateCache()
-                self.needsShaderUpdate = true
-                self.setNeedsLayout()
-                self.layoutIfNeeded()
-            }
-        }
+    override func unmountChildComponentView(_ childComponentView: UIView, index: Int) {
+        super.unmountChildComponentView(childComponentView, index: index)
+        scheduleChildrenUpdate()
     }
 
     override func insertSubview(_ subview: UIView, at index: Int) {
@@ -176,16 +174,18 @@ class NativeSpringsShaderView: ExpoView, MTKViewDelegate {
         super.willRemoveSubview(subview)
     }
 
-    override func didUpdateReactSubviews() {
-        super.didUpdateReactSubviews()
+    private func scheduleChildrenUpdate() {
+        childrenUpdateWorkItem?.cancel()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.invalidateCache()
             self.needsShaderUpdate = true
             self.setNeedsLayout()
             self.layoutIfNeeded()
         }
+        childrenUpdateWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
     private func setupMetal() {
