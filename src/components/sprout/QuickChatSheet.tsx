@@ -24,10 +24,18 @@ import Animated, {
   runOnJS,
   useAnimatedKeyboard,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import {
+  BlurMask,
+  Canvas,
+  LinearGradient,
+  Rect,
+  vec,
+} from '@shopify/react-native-skia';
 import { Portal, PortalHost } from 'react-native-teleport';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
@@ -61,13 +69,14 @@ import {
   ChatComposerFooter,
   ChatSurfaceWash,
 } from '../../features/liquidationConversation/components/ChatChrome';
+import { CHAT_COLORS } from '../../design/chatGlass';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
   process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ||
   'mobile';
 
-const SCREEN_H = Dimensions.get('window').height;
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const DEFAULT_PEEK_RATIO = 0.55;
 const MAX_SHEET_H = Math.round(SCREEN_H * 0.9);
 const EXPAND_AT = Math.round(SCREEN_H * 0.7);
@@ -83,6 +92,67 @@ const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   day: 'numeric',
 });
 const dismissKeyboard = () => Keyboard.dismiss();
+
+function RecordingWindowGlow({ active }: { active: boolean }) {
+  const reduceMotion = useReducedMotion();
+  const opacity = useSharedValue(0);
+
+  // Fade the state change without adding a distracting loop while capture is active.
+  useEffect(() => {
+    opacity.set(withTiming(active ? 1 : 0, {
+      duration: reduceMotion ? 1 : active ? 220 : 180,
+    }));
+  }, [active, opacity, reduceMotion]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.get(),
+  }));
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[styles.recordingWindowGlow, animatedStyle]}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <Rect
+          x={2}
+          y={2}
+          width={SCREEN_W - 4}
+          height={SCREEN_H - 4}
+          style="stroke"
+          strokeWidth={3}
+          opacity={0.5}
+        >
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(SCREEN_W, SCREEN_H)}
+            colors={[CHAT_COLORS.brandDeep, CHAT_COLORS.brand, CHAT_COLORS.brandDeep]}
+            positions={[0, 0.52, 1]}
+          />
+          <BlurMask blur={12} style="normal" />
+        </Rect>
+        <Rect
+          x={1}
+          y={1}
+          width={SCREEN_W - 2}
+          height={SCREEN_H - 2}
+          style="stroke"
+          strokeWidth={1}
+          opacity={0.28}
+        >
+          <LinearGradient
+            start={vec(0, 0)}
+            end={vec(SCREEN_W, SCREEN_H)}
+            colors={[CHAT_COLORS.brandDeep, CHAT_COLORS.brand, CHAT_COLORS.brandDeep]}
+            positions={[0, 0.52, 1]}
+          />
+        </Rect>
+      </Canvas>
+    </Animated.View>
+  );
+}
 
 /** JS-side keyboard height, for layout values (insets, padding) that can't read a worklet. */
 function useKeyboardHeight(): number {
@@ -199,10 +269,12 @@ export function QuickChatSheet({
   const transition = useQuickChatTransition();
   const sheetRef = useRef<View>(null);
   const expandRequestedRef = useRef(false);
+  const sheetPresentedRef = useRef(false);
   const peekHeight = Math.round(SCREEN_H * Math.max(0.3, Math.min(0.65, peekHeightRatio)));
   const sheetHeight = useSharedValue(peekHeight);
   const sheetTranslateY = useSharedValue(peekHeight + 24);
   const backdropOpacity = useSharedValue(0);
+  const [recordingActive, setRecordingActive] = useState(false);
   const controller = useSproutConversationController(campaignId);
   const heroSuggestions = useMemo(
     () => toHeroSuggestions(suggestedQuestions),
@@ -215,30 +287,40 @@ export function QuickChatSheet({
   const reportChromeHeight = useCallback((height: number) => {
     setChromeHeight(current => (Math.abs(current - height) < 1 ? current : height));
   }, []);
+  const hasSproutResponse = controller.activeMessages.some(message => message.role === 'assistant');
   const composerOnly =
     !controller.loading &&
     !controller.isLoadingMessages &&
-    !controller.isStreaming &&
-    controller.queuedCount === 0 &&
-    controller.activeMessages.length === 0;
+    !hasSproutResponse;
   const restingHeight = composerOnly && chromeHeight > 0
     ? Math.min(peekHeight, chromeHeight + GRABBER_H + SHEET_BORDER * 2)
     : peekHeight;
+  const restingHeightReady =
+    !controller.loading &&
+    !controller.isLoadingMessages &&
+    (!composerOnly || chromeHeight > 0);
   const restHeight = useSharedValue(peekHeight);
 
+  // Wait offscreen for history and chrome measurement so the first visible frame is compact.
   useEffect(() => {
-    quickChatTransition.resetSheet({
-      y: SCREEN_H - peekHeight + GRABBER_H,
-      height: peekHeight - GRABBER_H,
-    });
-    sheetTranslateY.set(withSpring(0, { damping: 26, stiffness: 260, mass: 0.72 }));
-    backdropOpacity.set(withTiming(1, { duration: 180 }));
-  }, [backdropOpacity, peekHeight, sheetTranslateY]);
-
-  // Grow out of the composer-only rest height when the first turn lands (and back down if
-  // the thread empties). Critically damped so the sheet settles without overshooting.
-  useEffect(() => {
+    if (!restingHeightReady) return;
     restHeight.set(restingHeight);
+    if (!sheetPresentedRef.current) {
+      sheetPresentedRef.current = true;
+      sheetHeight.set(restingHeight);
+      sheetTranslateY.set(restingHeight + 24);
+      quickChatTransition.resetSheet({
+        y: SCREEN_H - restingHeight + GRABBER_H,
+        height: restingHeight - GRABBER_H,
+      });
+      const frame = requestAnimationFrame(() => {
+        sheetTranslateY.set(withSpring(0, { damping: 26, stiffness: 260, mass: 0.72 }));
+        backdropOpacity.set(withTiming(1, { duration: 180 }));
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+
+    // The first Sprout response grows the same measured rest surface without overshoot.
     sheetHeight.set(withSpring(restingHeight, { damping: 30, stiffness: 240, mass: 0.9 }));
     if (!quickChatTransition.getSnapshot().transitioning) {
       quickChatTransition.setFrame({
@@ -246,7 +328,14 @@ export function QuickChatSheet({
         height: restingHeight - GRABBER_H,
       });
     }
-  }, [restHeight, restingHeight, sheetHeight]);
+  }, [
+    backdropOpacity,
+    restHeight,
+    restingHeight,
+    restingHeightReady,
+    sheetHeight,
+    sheetTranslateY,
+  ]);
 
   useEffect(() => {
     if (transition.destination === 'sheet' && !transition.transitioning) {
@@ -392,6 +481,7 @@ export function QuickChatSheet({
       onExpand={expand}
       onDismiss={dismiss}
       onCompactHeight={reportChromeHeight}
+      onRecordingChange={setRecordingActive}
     />
   );
 
@@ -423,6 +513,7 @@ export function QuickChatSheet({
               <View style={styles.sheetHost}>{conversation}</View>
             )}
           </Animated.View>
+          <RecordingWindowGlow active={recordingActive} />
         </GestureHandlerRootView>
       </Modal>
 
@@ -469,6 +560,7 @@ function QuickChatConversation({
   onExpand,
   onDismiss,
   onCompactHeight,
+  onRecordingChange,
   standaloneFull = false,
   onCollapse,
 }: {
@@ -487,6 +579,7 @@ function QuickChatConversation({
   onDismiss: () => void;
   /** Compact only: the measured header + composer height the sheet collapses to. */
   onCompactHeight?: (height: number) => void;
+  onRecordingChange?: (recording: boolean) => void;
   standaloneFull?: boolean;
   onCollapse?: () => void;
 }) {
@@ -499,6 +592,7 @@ function QuickChatConversation({
   const empty = !controller.isLoadingMessages && controller.activeMessages.length === 0;
   const [headerHeight, setHeaderHeight] = useState(0);
   const [footerHeight, setFooterHeight] = useState(0);
+  const [recordingActive, setRecordingActive] = useState(false);
   const keyboardHeight = useKeyboardHeight();
   const localRetriesRef = useRef(new Map<string,
     | { kind: 'plan'; prompt: DecisionPrompt }
@@ -515,6 +609,12 @@ function QuickChatConversation({
       payload: contextAttachment.getPayload(),
     };
   }, [contextAttachment]);
+
+  // Lift composer capture state because only the window-level surfaces span safe areas.
+  const handleRecordingChange = useCallback((recording: boolean) => {
+    setRecordingActive(recording);
+    onRecordingChange?.(recording);
+  }, [onRecordingChange]);
 
   // Report the chrome the sheet has to keep visible when there is nothing else to show.
   // Compact only: the full surface pads for the status bar and the home indicator, which
@@ -874,11 +974,13 @@ function QuickChatConversation({
               contextAttachment={contextAttachment ? { label: contextAttachment.label } : null}
               hideAttach={!!contextAttachment}
               focusRequestKey={effectiveFocusKey}
+              onRecordingChange={handleRecordingChange}
             />
           </ChatComposerFooter>
           </View>
         </Animated.View>
       </View>
+      {full ? <RecordingWindowGlow active={recordingActive} /> : null}
     </Animated.View>
   );
 }
@@ -973,6 +1075,10 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-end',
+  },
+  recordingWindowGlow: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1000,
   },
   backdrop: {
     backgroundColor: '#17200D',

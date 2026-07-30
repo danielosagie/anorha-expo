@@ -35,6 +35,8 @@ type Props = {
   focusRequestKey?: number;
   /** Hide attachment controls when the surface only accepts text or voice. */
   hideAttach?: boolean;
+  /** Publish capture state so feedback can live at the window edge. */
+  onRecordingChange?: (recording: boolean) => void;
 };
 
 const BRAND = '#93C822';
@@ -72,6 +74,7 @@ export const MessageComposer = ({
   onRemoveContextAttachment,
   focusRequestKey = 0,
   hideAttach = false,
+  onRecordingChange,
 }: Props) => {
   // Metering on, so the waveform reacts to the seller's actual voice level (Claude-style)
   // instead of a canned pulse.
@@ -125,6 +128,11 @@ export const MessageComposer = ({
     const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
     return () => subscription.remove();
   }, []);
+
+  // Recording feedback belongs to the window, so publish state instead of drawing it here.
+  useEffect(() => {
+    onRecordingChange?.(recording);
+  }, [onRecordingChange, recording]);
 
   useEffect(() => {
     attachProgress.value = withTiming(attachMenuOpen ? 1 : 0, {
