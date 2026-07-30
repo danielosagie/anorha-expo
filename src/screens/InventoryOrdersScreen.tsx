@@ -134,7 +134,7 @@ const InventoryOrdersScreen = observer(() => {
   const legendState: LegendStateObservables | null = useLegendState();
   const { currentOrg } = useOrg();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
   // Subscribe to real-time product variant and inventory changes
@@ -145,6 +145,7 @@ const InventoryOrdersScreen = observer(() => {
   // Filter & Search State
   const [activeTab, setActiveTab] = useState('inventory');
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
   // Default to live/active items so drafts (which often shadow an already-published item and
@@ -1719,6 +1720,17 @@ const InventoryOrdersScreen = observer(() => {
           <Text style={styles.titleText}>{activeTab === 'inventory' ? 'Inventory' : activeTab === 'orders' ? 'Orders' : 'Reports'}</Text>
           <ChevronsUpDownIcon color="#2c2c2c" fontWeight={500}/>
         </TouchableOpacity>
+        {activeTab === 'inventory' ? (
+          <TouchableOpacity
+            style={styles.titleBulkTap}
+            onPress={() => setBulkMenuOpen(true)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Bulk actions"
+          >
+            <Icon name="checkbox-multiple-marked-outline" size={22} color="#2c2c2c" />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <View style={[styles.container, { marginTop: 110, paddingTop: 20, backgroundColor: "#FFF", }]}>
@@ -1898,11 +1910,20 @@ const InventoryOrdersScreen = observer(() => {
             { key: 'reports', label: 'Reports', icon: 'file-document-outline', active: activeTab === 'reports', onPress: () => { setActiveTab('reports'); setHeaderMenuOpen(false); } },
           ],
           [
-            { key: 'bulk-select', label: 'Bulk select', icon: 'checkbox-multiple-marked-outline', onPress: () => { setHeaderMenuOpen(false); openInventoryQuickChat('select'); } },
-            { key: 'bulk-edit', label: 'Bulk edit', icon: 'pencil-outline', onPress: () => { setHeaderMenuOpen(false); openInventoryQuickChat('edit'); } },
-          ],
-          [
             { key: 'scan', label: 'Scan inventory', icon: 'barcode-scan', onPress: () => { setHeaderMenuOpen(false); openScanner((code: string) => { handleBarcodeScan(code); closeScanner(); }, 'header_menu'); } },
+          ],
+        ]}
+      />
+
+      {/* Bulk actions, anchored under their own button on the right of the title bar. */}
+      <AppMenu
+        visible={bulkMenuOpen}
+        onClose={() => setBulkMenuOpen(false)}
+        anchor={{ top: insets.top + 44, left: Math.max(16, windowWidth - 300 - 16) }}
+        sections={[
+          [
+            { key: 'bulk-select', label: 'Bulk select', icon: 'checkbox-multiple-marked-outline', onPress: () => { setBulkMenuOpen(false); openInventoryQuickChat('select'); } },
+            { key: 'bulk-edit', label: 'Bulk edit', icon: 'pencil-outline', onPress: () => { setBulkMenuOpen(false); openInventoryQuickChat('edit'); } },
           ],
         ]}
       />
@@ -2331,6 +2352,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   titleTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  titleBulkTap: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   titleText: { fontSize: 26, fontWeight: '700', color: '#2c2c2c' },
   container: {
     borderTopRightRadius: 32,
