@@ -447,6 +447,32 @@ type CameraInstruction =
   | 'matched'
   | 'needs_review'
   | 'inventory_dedup';
+const SCAN_INSTRUCTION_SET: CameraInstruction[] = [
+  'processing',
+  'analyzing',
+  'extracting',
+  'optimizing',
+  'searching',
+  'recognizing',
+];
+const ACTIVE_CAPTURE_INSTRUCTION_SET: CameraInstruction[] = [
+  'ready',
+  'move_closer',
+  'move_back',
+  'add_light',
+  'focus',
+  'capturing',
+];
+
+// Three words keep a real product identity readable inside the existing center pill.
+const compactOverlayItemIdentity = (value: unknown): string | null => {
+  const title = cleanMatchText(String(value || '')).trim();
+  if (!title || ['item', 'unidentified item', 'unknown product', 'selected match'].includes(title.toLowerCase())) {
+    return null;
+  }
+  return title.split(/\s+/).slice(0, 3).join(' ');
+};
+
 type ShelfProgressStatus = 'idle' | 'streaming' | 'completed' | 'no_items' | 'timeout' | 'error';
 
 type ShelfProgressState = {
@@ -2409,17 +2435,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   };
 
-  // The center overlay reflects the item the user is LOOKING AT, not the global scan
-  // machine: swapping to (or creating) an item that isn't scanning must not keep showing
-  // another item's "Searching for your item…" state. No active item (pre-first-photo,
-  // shelf/adaptive folder streaming) keeps the global instruction.
-  const SCAN_INSTRUCTION_SET = ['processing', 'analyzing', 'extracting', 'optimizing', 'searching', 'recognizing'];
+  // Progress follows the active item even while other queued items keep scanning.
   const activeItemScanning = !!activeItemId && !!itemLoadingStates[activeItemId]?.isLoading;
-  const overlayInstruction = activeItemScanning
-    ? 'processing'
-    : SCAN_INSTRUCTION_SET.includes(currentInstruction)
-      ? 'ready'
-      : currentInstruction;
 
   useEffect(() => {
     if (activeItemScanning) startProgressAnimation();
@@ -5577,6 +5594,38 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     subtitle: activeMatchIsConfirmed ? 'Tap to review or change' : 'Tap to review and confirm',
     isConfirmed: activeMatchIsConfirmed,
   } : null;
+  const activeOverlayItem = activeItemId
+    ? bulkItems.find((item) => item.id === activeItemId) ?? null
+    : null;
+  const activeOverlayItemIndex = activeItemId
+    ? bulkItems.findIndex((item) => item.id === activeItemId)
+    : -1;
+  const activeOverlayItemIdentity = compactOverlayItemIdentity(activeSelectedMatch?.title)
+    || compactOverlayItemIdentity(activeOverlayItem?.title)
+    || (
+      activeOverlayItemIndex >= 0
+        ? `Item ${activeOverlayItemIndex + 1} of ${bulkItems.length}`
+        : null
+    );
+  // Result labels come from the active item's store. currentInstruction is global and can describe the prior item.
+  const centerOverlayInstruction: CameraInstruction = (() => {
+    if (!activeItemId) {
+      return SCAN_INSTRUCTION_SET.includes(currentInstruction) ? 'ready' : currentInstruction;
+    }
+    if (activeItemScanning) return 'processing';
+    if (inventoryDedupByItemId[activeItemId]) return 'inventory_dedup';
+    if (activeSelectedMatch) {
+      return activeMatchIsConfirmed
+        ? 'matched'
+        : activeQuickMatchStore?.matchData?.canAutoConfirm === false
+          ? 'needs_review'
+          : 'matches_found';
+    }
+    if (activeQuickMatchStore) {
+      return activeMatchCount > 0 ? 'matches_found' : 'no_matches';
+    }
+    return ACTIVE_CAPTURE_INSTRUCTION_SET.includes(currentInstruction) ? currentInstruction : 'ready';
+  })();
 
   return (
     <GestureHandlerRootView style={styles.container}>
@@ -5758,10 +5807,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           stays pinned to the card's bottom edge while the cart opens. */}
       <Animated.View style={[StyleSheet.absoluteFill, cameraCardSlideStyle]} pointerEvents="box-none">
         <CenterOverlay
-          key={activeItemId ?? 'no-active-item'}
-          instruction={getInstructionText(overlayInstruction)}
-          isProcessing={SCAN_INSTRUCTION_SET.includes(overlayInstruction)}
+          instruction={getInstructionText(centerOverlayInstruction)}
+          isProcessing={SCAN_INSTRUCTION_SET.includes(centerOverlayInstruction)}
           cameraMode={cameraMode}
+          activeItemKey={activeItemId}
+          itemIdentity={activeOverlayItemIdentity}
           scannedBarcode={scannedBarcode}
           onCopyBarcode={copyBarcodeToClipboard}
           matchPreview={centerOverlayMatchPreview}
