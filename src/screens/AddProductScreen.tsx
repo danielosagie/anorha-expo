@@ -1441,6 +1441,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             ...prev,
             [id]: { matchRows: candidates, preSelectedIndices: [0], source: 'quick_scan_confirmed' },
           }));
+          // Identity is settled now — this is when the paid sold-comps pass is earned.
+          researchSoldCompsOnConfirm([id]);
         }
         showNotificationMessage('Added to cart');
       }}
@@ -1521,6 +1523,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             return next;
           });
           if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
+          // Add-all is a bulk confirm — the deferred sold-comps passes fire here.
+          researchSoldCompsOnConfirm(folder.children.map((child) => child.id));
           showNotificationMessage(`${folder.children.length} item${folder.children.length === 1 ? '' : 's'} added to cart`);
         }}
       />
@@ -1568,6 +1572,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const shelfPricingQueueRef = useRef<ShelfPricingJob[]>([]);
   const shelfPricingActiveRef = useRef(0);
   const shelfPricingGenerationRef = useRef(0);
+  // Latest store snapshot for async helpers (confirm-time pricing) without stale closures.
+  const quickScanStoreRef = useRef(quickScanStore);
+  quickScanStoreRef.current = quickScanStore;
   const [shelfPricingPendingByItemId, setShelfPricingPendingByItemId] = useState<Record<string, boolean>>({});
   const shelfPricingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const shelfPricingPumpRef = useRef<() => void>(() => {});
@@ -1693,7 +1700,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         signal: abortController.signal,
       });
       priceData = response.ok
-        ? { ...(await response.json()), condition }
+        // soldComps marks a COMPLETED paid research pass — the instant live-listing seed has
+        // samples too, and without this flag the two are indistinguishable downstream.
+        ? { ...(await response.json()), condition, soldComps: true }
         : { low: null, median: null, high: null, recommended: null, samples: [], error: 'request_failed' };
       if (Array.isArray(priceData?.samples)) {
         priceData = { ...priceData, samples: priceData.samples.map(withResolvedImageUrl) };
@@ -1806,6 +1815,35 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     shelfPricingQueueRef.current.push(job);
     shelfPricingPumpRef.current();
   }, []);
+
+  // Sold-comps research is METERED (a paid call per item). It used to fire for every shelf
+  // item off the top candidate's title before anyone had confirmed the identity — which is
+  // how the backend billed a sold-comps lookup for a snowboard on a laundry shelf. Items
+  // whose identity is not settled at scan time get a deferred marker instead, and this
+  // fires when the seller actually confirms the match.
+  const researchSoldCompsOnConfirm = useCallback((itemIds: string[]) => {
+    void (async () => {
+      const token = await ensureSupabaseJwt();
+      if (!token) return;
+      for (const itemId of itemIds) {
+        const entry = quickScanStoreRef.current[itemId];
+        const top: any = entry?.matchData?.rankedCandidates?.[0];
+        const existing = top?.pricingResearch;
+        // Only a COMPLETED paid pass (soldComps flag) counts as researched. The instant
+        // live-listing seed also carries samples, and a timed-out attempt deserves a retry.
+        const alreadyResearched = existing?.soldComps === true;
+        const title = String(top?.title || '').trim();
+        if (!title || alreadyResearched) continue;
+        enqueueShelfPricingResearch({
+          itemId,
+          title,
+          condition: existing?.condition || 'mixed',
+          token,
+          generation: shelfPricingGenerationRef.current,
+        });
+      }
+    })();
+  }, [enqueueShelfPricingResearch]);
 
   const cancelShelfPricingResearch = useCallback(() => {
     shelfPricingGenerationRef.current += 1;
@@ -2985,13 +3023,44 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         if (rankedCandidates.length > 0) {
           const topTitle = String(rankedCandidates[0]?.title || res?.usedQuery || '').trim();
-          if (topTitle && token) {
+          // Sold-comps research is a paid call per item. Only settled identities earn one at
+          // scan time; unconfirmed items get theirs when the seller confirms the match
+          // (researchSoldCompsOnConfirm). Pricing an identity nobody has agreed to is how a
+          // laundry shelf billed a sold-comps lookup for a snowboard.
+          if (topTitle && token && shouldAutoConfirmTopMatch) {
             enqueueShelfPricingResearch({
               itemId,
               title: topTitle,
               condition: observedCondition,
               token,
               generation: shelfPricingGeneration,
+            });
+          } else if (topTitle) {
+            // Deferred, not failed: a terminal marker so the card never spins, replaced with
+            // real research the moment the seller confirms.
+            setQuickScanStore((prev) => {
+              const current = prev[itemId];
+              if (!current?.matchData?.rankedCandidates?.length) return prev;
+              const candidates = [...current.matchData.rankedCandidates];
+              candidates[0] = {
+                ...candidates[0],
+                pricingResearch: candidates[0]?.pricingResearch || {
+                  low: null,
+                  median: null,
+                  high: null,
+                  recommended: null,
+                  condition: observedCondition,
+                  samples: [],
+                  error: 'awaiting_identity_confirm',
+                },
+              };
+              return {
+                ...prev,
+                [itemId]: {
+                  ...current,
+                  matchData: { ...current.matchData, rankedCandidates: candidates },
+                },
+              };
             });
           } else {
             // No searchable identity means enrichment cannot start. Store a terminal
