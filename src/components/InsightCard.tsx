@@ -6,6 +6,7 @@ import { AnorhaFace } from './brand/AnorhaFace';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import spinners from 'unicode-animations';
 import { StreamingText } from './StreamingText';
+import { ThinkingText } from './ThinkingText';
 
 // Define Prop Interfaces locally to avoid dependency loops, or import if shared properly
 export interface InsightMetric {
@@ -270,7 +271,8 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                         <AnorhaFace size={19} />
                         <Text style={styles.headerTitle}>Sprout's Insight</Text>
                     </View>
-                    <Text style={styles.headerTimestamp}>Thinking...</Text>
+                    {/* Loading is in flight here, so the shared thinking treatment applies. */}
+                    <ThinkingText style={styles.headerTimestamp}>Thinking...</ThinkingText>
                 </View>
 
                 <View style={[styles.contentCard, { minHeight: 180, justifyContent: 'center', alignItems: 'center' }]}>
