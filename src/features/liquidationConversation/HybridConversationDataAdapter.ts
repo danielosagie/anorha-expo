@@ -17,6 +17,7 @@ import {
   retryFailedTurn,
 } from './conversationState';
 import type {
+  AgentPendingActionClientDto,
   CampaignConfig,
   CampaignConfigUpdate,
   CampaignItem,
@@ -31,6 +32,7 @@ import type {
   GlobalConversationTarget,
   ItemStatus,
   NegotiationDecisionInput,
+  PendingPrompts,
   QuestionPrompt,
   RunFlashCampaignInput,
   StreamTurnInput,
@@ -117,6 +119,163 @@ class RequestError extends Error {
 const getApiBaseUrl = () => API_BASE_URL;
 
 const readString = (value: unknown) => (typeof value === 'string' ? value : undefined);
+
+type PendingActionWire = Omit<AgentPendingActionClientDto, 'kind'> & {
+  kind: unknown;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const toPendingActionWire = (value: unknown): PendingActionWire | null => {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.pendingActionId !== 'string' ||
+    typeof value.toolName !== 'string' ||
+    !isRecord(value.input)
+  ) return null;
+  return value as PendingActionWire;
+};
+
+const exactJson = (value: Record<string, unknown>) => JSON.stringify(value, null, 2);
+
+const toolTitle = (toolName: string) => {
+  const title = toolName.replace(/_/g, ' ').trim();
+  return title ? title.charAt(0).toUpperCase() + title.slice(1) : 'Approval';
+};
+
+const exactActionSteps = (action: PendingActionWire) => [
+  { title: 'Input', detail: exactJson(action.input) },
+  ...(isRecord(action.draftOutput)
+    ? [{ title: 'Draft', detail: exactJson(action.draftOutput) }]
+    : []),
+];
+
+const actionTitle = (action: PendingActionWire) =>
+  readString(action.draftOutput?.summary)?.trim() ||
+  readString(action.input.title)?.trim() ||
+  readString(action.input.message)?.trim() ||
+  readString(action.input.content)?.trim() ||
+  toolTitle(action.toolName);
+
+const unsupportedTitle = (kind: unknown) =>
+  typeof kind === 'string' && kind.trim() ? `Unsupported ${kind.trim()}` : 'Unknown request';
+
+const pendingPromptsFromActions = (
+  values: unknown[],
+  threadId?: string,
+): PendingPrompts => {
+  const actions = values
+    .map(toPendingActionWire)
+    .filter((action): action is PendingActionWire => !!action)
+    .filter(action => action.status !== 'completed' && action.status !== 'rejected');
+
+  const questionAction = actions.find(action => action.kind === 'question');
+  const questions = questionAction?.input.questions;
+  const question = questionAction && Array.isArray(questions) && questions.length > 0
+    ? {
+        pendingActionId: questionAction.pendingActionId,
+        threadId,
+        questions,
+      } as QuestionPrompt
+    : null;
+
+  const decisionAction = actions.find(action => action.kind !== 'question');
+  if (!decisionAction) return { question, plan: null };
+
+  if (decisionAction.kind === 'plan') {
+    const input = decisionAction.input;
+    if (typeof input.title !== 'string' || !input.title.trim()) {
+      log.warn('[HybridAdapter] Invalid plan pending action:', decisionAction.pendingActionId);
+      return {
+        question,
+        plan: {
+          id: decisionAction.pendingActionId,
+          threadId,
+          kind: 'approve',
+          decisionType: 'unsupported',
+          title: unsupportedTitle(decisionAction.kind),
+          steps: exactActionSteps(decisionAction),
+        },
+      };
+    }
+    const execute = isRecord(input.execute) ? input.execute : undefined;
+    const inventoryArgs =
+      execute?.tool === 'inventory_bulk_action' && isRecord(execute.args)
+        ? execute.args
+        : undefined;
+    const inventoryAction =
+      inventoryArgs &&
+      ['archive', 'delete', 'add_tag'].includes(String(inventoryArgs.action)) &&
+      Array.isArray(inventoryArgs.variantIds)
+        ? {
+            action: String(inventoryArgs.action) as 'archive' | 'delete' | 'add_tag',
+            count: inventoryArgs.variantIds.length,
+            ...(typeof inventoryArgs.tag === 'string' && inventoryArgs.tag.trim()
+              ? { tag: inventoryArgs.tag.trim() }
+              : {}),
+          }
+        : undefined;
+    return {
+      question,
+      plan: {
+        id: decisionAction.pendingActionId,
+        threadId,
+        kind: 'approve',
+        decisionType: 'plan',
+        planId: decisionAction.pendingActionId,
+        title: input.title,
+        summary: typeof input.summary === 'string' ? input.summary : undefined,
+        description: typeof input.summary === 'string' ? input.summary : undefined,
+        planType: typeof input.planType === 'string' ? input.planType : undefined,
+        steps: Array.isArray(input.steps)
+          ? input.steps
+              .filter((step): step is Record<string, unknown> => isRecord(step) && typeof step.title === 'string')
+              .map(step => ({
+                title: String(step.title),
+                detail: typeof step.detail === 'string' ? step.detail : undefined,
+              }))
+          : undefined,
+        ...(inventoryAction ? { inventoryAction } : {}),
+        strategyId: typeof input.strategyId === 'string' ? input.strategyId : undefined,
+        approveLabel: 'Approve',
+        reviseLabel: 'Revise',
+        followUpLabel: 'Follow-up',
+      },
+    };
+  }
+
+  if (decisionAction.kind === 'approval') {
+    return {
+      question,
+      plan: {
+        id: decisionAction.pendingActionId,
+        threadId,
+        kind: 'approve',
+        decisionType: 'approval',
+        planId: decisionAction.pendingActionId,
+        title: actionTitle(decisionAction),
+        steps: exactActionSteps(decisionAction),
+        approveLabel: 'Approve',
+        reviseLabel: 'Reject',
+      },
+    };
+  }
+
+  log.warn('[HybridAdapter] Unsupported pending action kind:', decisionAction.kind);
+  return {
+    question,
+    plan: {
+      id: decisionAction.pendingActionId,
+      threadId,
+      kind: 'approve',
+      decisionType: 'unsupported',
+      title: unsupportedTitle(decisionAction.kind),
+      steps: exactActionSteps(decisionAction),
+    },
+  };
+};
 
 // Pull attached photo urls off a persisted message's metadata so they render as
 // thumbnails in the chat history. The backend may store them under any of these
@@ -433,6 +592,9 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
                 messageId: readString(payload.messageId) || readString(payload.assistantMessageId),
                 content: readString(payload.content),
                 threadId,
+                pendingPrompts: Array.isArray(payload.pendingActions)
+                  ? pendingPromptsFromActions(payload.pendingActions, threadId)
+                  : undefined,
               });
               finish(threadId);
               break;
@@ -800,10 +962,15 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         return;
       }
       // Drop the proposed plan (best-effort) before sending the seller's revision note below.
-      await this.requestNest(`/api/agent/sessions/${campaignId}/pending-actions/${decision.planId}/reject`, {
+      const rejection = this.requestNest(`/api/agent/sessions/${campaignId}/pending-actions/${decision.planId}/reject`, {
         method: 'POST',
         body: JSON.stringify({ note: decision.content }),
-      }).catch(() => undefined);
+      });
+      if (decision.rejectOnly) {
+        await rejection;
+        return;
+      }
+      await rejection.catch(() => undefined);
     }
 
     const fallbackContent =
@@ -825,77 +992,14 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     });
   }
 
-  // Load questions and plans together. The previous implementation fetched the
-  // same endpoint up to four times per message: scoped + campaign-wide for each
-  // prompt type. A single campaign-wide read can preserve the same behavior by
-  // ranking actions from the visible thread first, then newest campaign-wide.
   async getPendingPrompts(
     campaignId: string,
     threadId: string,
-  ): Promise<{ question: QuestionPrompt | null; plan: DecisionPrompt | null }> {
-    const response = await this.requestNest<{ success: boolean; pendingActions?: any[] }>(
+  ): Promise<PendingPrompts> {
+    const response = await this.requestNest<{ success: boolean; pendingActions?: unknown[] }>(
       `/api/agent/sessions/${campaignId}/pending-actions?threadId=${encodeURIComponent(threadId)}`,
     ).catch(() => null);
-    const actions = (response?.pendingActions || [])
-      .filter((action) => action?.status !== 'completed' && action?.status !== 'rejected')
-      .sort((a, b) => {
-        const threadPriority = Number(b?.threadId === threadId) - Number(a?.threadId === threadId);
-        if (threadPriority !== 0) return threadPriority;
-        return String(b?.createdAt || '').localeCompare(String(a?.createdAt || ''));
-      });
-
-    const questionAction = actions.find((action) => action?.toolName === 'ask_seller_question');
-    const questions = questionAction?.input?.questions;
-    const question = questionAction && Array.isArray(questions) && questions.length > 0
-      ? { pendingActionId: questionAction.id, threadId: questionAction.threadId, questions }
-      : null;
-
-    const planAction = actions.find((action) => action?.toolName === 'propose_plan' && action?.input?.title);
-    const input = planAction?.input;
-    const execute = input?.execute && typeof input.execute === 'object' ? input.execute : undefined;
-    const inventoryArgs =
-      execute?.tool === 'inventory_bulk_action' && execute?.args && typeof execute.args === 'object'
-        ? execute.args
-        : undefined;
-    const inventoryAction =
-      inventoryArgs &&
-      ['archive', 'delete', 'add_tag'].includes(String(inventoryArgs.action)) &&
-      Array.isArray(inventoryArgs.variantIds)
-        ? {
-            action: String(inventoryArgs.action) as 'archive' | 'delete' | 'add_tag',
-            count: inventoryArgs.variantIds.length,
-            ...(typeof inventoryArgs.tag === 'string' && inventoryArgs.tag.trim()
-              ? { tag: inventoryArgs.tag.trim() }
-              : {}),
-          }
-        : undefined;
-    const plan: DecisionPrompt | null = planAction
-      ? {
-          id: planAction.id,
-          threadId: planAction.threadId,
-          kind: 'approve',
-          planId: planAction.id,
-          title: String(input.title),
-          summary: typeof input.summary === 'string' ? input.summary : undefined,
-          description: typeof input.summary === 'string' ? input.summary : undefined,
-          planType: typeof input.planType === 'string' ? input.planType : undefined,
-          steps: Array.isArray(input.steps)
-            ? input.steps
-                .filter((step: any) => step && typeof step.title === 'string')
-                .map((step: any) => ({
-                  title: String(step.title),
-                  detail: typeof step.detail === 'string' ? step.detail : undefined,
-                }))
-            : undefined,
-          ...(inventoryAction ? { inventoryAction } : {}),
-          strategyId: typeof input.strategyId === 'string' ? input.strategyId : undefined,
-          approveLabel: 'Approve',
-          reviseLabel: 'Revise',
-          followUpLabel: 'Follow-up',
-        }
-      : null;
-
-    return { question, plan };
+    return pendingPromptsFromActions(response?.pendingActions || [], threadId);
   }
 
   // Record a thumbs up/down on an assistant reply (null clears it). Fire-and-forget
@@ -1114,7 +1218,14 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
       const assistantId = createClientId('assistant-fallback');
       observer.onAssistantStarted?.({ messageId: assistantId, threadId });
       observer.onAssistantDelta?.({ delta: assistantContent, messageId: assistantId, threadId });
-      observer.onAssistantCompleted?.({ messageId: assistantId, content: assistantContent, threadId });
+      observer.onAssistantCompleted?.({
+        messageId: assistantId,
+        content: assistantContent,
+        threadId,
+        pendingPrompts: Array.isArray(response?.pendingActions)
+          ? pendingPromptsFromActions(response.pendingActions, threadId)
+          : undefined,
+      });
       return { threadId };
     }
 

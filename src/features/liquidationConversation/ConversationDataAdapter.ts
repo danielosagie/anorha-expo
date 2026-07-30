@@ -10,11 +10,10 @@ import type {
   StreamTurnObserver,
   CreateCampaignInput,
   CreateThreadInput,
-  DecisionPrompt,
   DecisionSubmission,
   GlobalConversationTarget,
   NegotiationDecisionInput,
-  QuestionPrompt,
+  PendingPrompts,
   RunFlashCampaignInput,
 } from './types';
 
@@ -38,7 +37,7 @@ export interface ConversationDataAdapter {
   getPendingPrompts(
     campaignId: string,
     threadId: string,
-  ): Promise<{ question: QuestionPrompt | null; plan: DecisionPrompt | null }>;
+  ): Promise<PendingPrompts>;
   answerQuestion(campaignId: string, pendingActionId: string, answer: { answers?: Record<string, string[]>; other?: string; text?: string }): Promise<void>;
   submitMessageFeedback(campaignId: string, messageId: string, vote: 'up' | 'down' | null, threadId?: string): Promise<void>;
   getCampaignConfig(campaignId: string): Promise<CampaignConfig>;

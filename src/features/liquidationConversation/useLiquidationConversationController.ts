@@ -507,8 +507,12 @@ export const useLiquidationConversationController = ({
               messageId || assistantId,
             ));
           },
-          onAssistantCompleted: ({ content, messageId }) => {
+          onAssistantCompleted: ({ content, messageId, pendingPrompts }) => {
             setThreadStateFor(threadId, current => completeAssistantMessage(current, content, messageId || assistantId), { immediate: true });
+            if (pendingPrompts) {
+              setPendingQuestion(pendingPrompts.question);
+              setPendingPlan(pendingPrompts.plan);
+            }
           },
           // Completed tool steps attach to THIS run's assistant bubble as compact
           // items (label + status only; arguments never reach the client).
@@ -1147,8 +1151,14 @@ export const useLiquidationConversationController = ({
           onToolCompleted: ({ threadId: _t, ...step }) =>
             setThreadStateFor(threadId, current => appendAssistantToolStep(current, campaignId, threadId,
               step, assistantId)),
-          onAssistantCompleted: ({ content, messageId }) => setThreadStateFor(threadId, current =>
-            completeAssistantMessage(current, content, messageId || assistantId), { immediate: true }),
+          onAssistantCompleted: ({ content, messageId, pendingPrompts }) => {
+            setThreadStateFor(threadId, current =>
+              completeAssistantMessage(current, content, messageId || assistantId), { immediate: true });
+            if (pendingPrompts) {
+              setPendingQuestion(pendingPrompts.question);
+              setPendingPlan(pendingPrompts.plan);
+            }
+          },
           onError: () => { kickedOffRef.current[threadId] = false; },
         },
       );
@@ -1197,7 +1207,7 @@ export const useLiquidationConversationController = ({
     const decisionId = prompt.planId || prompt.strategyId || prompt.id;
     if (decisionsInFlightRef.current.has(decisionId)) return false;
     if (resolvedDecisionIdsRef.current.has(decisionId)) {
-      setNotice('This plan has already been handled.');
+      setNotice(prompt.decisionType === 'approval' ? 'Already handled.' : 'This plan has already been handled.');
       return false;
     }
 
@@ -1223,6 +1233,7 @@ export const useLiquidationConversationController = ({
         action,
         strategyId: prompt.strategyId,
         planId: prompt.planId,
+        rejectOnly: prompt.decisionType === 'approval',
         retry: options?.retry,
       });
       // The mutation succeeded. Mark it resolved before any follow-up refresh so a
@@ -1231,7 +1242,9 @@ export const useLiquidationConversationController = ({
       // A plan decision resolves the card right away (approve runs it; revise/follow_up drop it).
       if (prompt.planId) setPendingPlan(null);
       setNotice(
-        action === 'approve'
+        prompt.decisionType === 'approval'
+          ? action === 'approve' ? 'Approved.' : 'Rejected.'
+          : action === 'approve'
           ? 'Plan approved. Sprout is applying it.'
           : action === 'revise'
             ? 'Revision requested.'
@@ -1251,7 +1264,9 @@ export const useLiquidationConversationController = ({
       return true;
     } catch (decisionError: any) {
       setError(
-        action === 'approve'
+        prompt.decisionType === 'approval'
+          ? decisionError?.message || 'Decision failed.'
+          : action === 'approve'
           ? decisionError?.message || 'The plan was not applied. Please try again.'
           : decisionError?.message || 'Failed to submit decision',
       );
