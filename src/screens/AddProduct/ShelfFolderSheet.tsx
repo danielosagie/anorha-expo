@@ -115,6 +115,10 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
     const n = qs?.matchData?.totalMatches || cands?.length || 0;
     if (n > 0 && cands?.length) {
       const c: any = cands[0];
+      // A backend veto is review state even when candidates exist.
+      if (qs?.matchData?.canAutoConfirm === false) {
+        return { kind: 'candidates', text: 'Needs review', price: money(c?.price), title: c?.title, image: resolveImageUri(c), pricingResearch };
+      }
       return { kind: 'candidates', text: `${n} match${n > 1 ? 'es' : ''}`, price: money(c?.price), title: c?.title, image: resolveImageUri(c), pricingResearch };
     }
     return { kind: 'needs', text: 'Needs more info' };

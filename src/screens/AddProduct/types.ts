@@ -35,6 +35,9 @@ export interface MatchResponse {
   confidence: 'high' | 'medium' | 'low';
   rankedCandidates: MatchCandidate[];
   totalMatches: number;
+  canAutoConfirm?: boolean;
+  confidenceState?: string;
+  reasonCode?: string;
   reranker?: {
     type: 'llama4-groq' | 'jina-modal' | 'fast-text' | 'none';
     rankingMethod?: 'exact_match' | 'semantic_similarity' | 'fuzzy_match' | 'vector_fallback';

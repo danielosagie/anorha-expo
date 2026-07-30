@@ -355,6 +355,8 @@ const BulkCartRow = React.memo(function BulkCartRow({
 }) {
   const matchCount = quickScanData?.matchData?.totalMatches || 0;
   const topMatch = quickScanData?.matchData?.rankedCandidates?.[0];
+  // Candidate count does not override the server's explicit review verdict.
+  const needsReview = quickScanData?.matchData?.canAutoConfirm === false;
   const persistedScanError = (quickScanData?.matchData as (MatchResponse & { scanError?: string }) | undefined)?.scanError;
   const retryableError = loadingState?.error || persistedScanError;
   const confirmedMatch = matchInfo?.matchRows && matchInfo.preSelectedIndices?.length
@@ -386,6 +388,8 @@ const BulkCartRow = React.memo(function BulkCartRow({
             ? 'Already in this cart'
             : confirmedMatch
               ? 'Match confirmed'
+              : needsReview
+                ? 'Needs review'
               : selectedMatch
                 ? `${matchCount} match${matchCount === 1 ? '' : 'es'} found`
                 : null;
