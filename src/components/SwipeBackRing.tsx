@@ -166,7 +166,12 @@ export const SwipeBackRing: React.FC<Props> = ({
 
   // Nothing to go back to (root/tab screens), or a left sheet/drawer is open: leave the
   // page untouched so the left-edge gesture belongs to that surface instead.
-  if (!enabled || suppressed) return <View style={{ flex: 1 }}>{children}</View>;
+  //
+  // A pull already in flight is the exception. Tearing this subtree down mid-gesture unmounts
+  // the view holding the PanResponder, so neither release nor terminate ever fires and the
+  // swipe dies without navigating. Let the gesture finish; the next render suppresses.
+  const gestureInFlight = committingRef.current || progressRef.current > 0;
+  if ((!enabled || suppressed) && !gestureInFlight) return <View style={{ flex: 1 }}>{children}</View>;
 
   // Indicator fades/scales in as soon as the pull starts.
   const appear = progress.interpolate({ inputRange: [0, 0.08, 1], outputRange: [0, 1, 1], extrapolate: 'clamp' });
