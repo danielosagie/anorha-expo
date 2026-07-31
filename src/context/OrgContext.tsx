@@ -38,7 +38,13 @@ export const OrgContext = createContext<OrgContextType>({
   refreshOrgs: async () => { },
 });
 
-const ORG_CACHE_KEY = 'sssync_org_context_cache_v1';
+// v2: the v1 payload recorded no owner, so a single global key meant the next
+// account to sign in on the device could hydrate the previous account's orgs,
+// roles, and pool data whenever the network refresh failed. The owner is now
+// part of the record and checked on read; the version bump discards v1 blobs
+// that cannot be attributed to anyone.
+const ORG_CACHE_KEY = 'sssync_org_context_cache_v2';
+const LEGACY_ORG_CACHE_KEY = 'sssync_org_context_cache_v1';
 
 function createHttpError(status: number, message: string) {
   return Object.assign(new Error(message), { status });
@@ -83,15 +89,29 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const hydrateFromCache = useCallback(async () => {
     try {
+      // Anything left by the ownerless v1 cache is unattributable, so drop it.
+      AsyncStorage.removeItem(LEGACY_ORG_CACHE_KEY).catch(() => {});
+
+      const ownerId = clerkUser?.id;
+      if (!ownerId) {
+        return false;
+      }
+
       const stored = await AsyncStorage.getItem(ORG_CACHE_KEY);
       if (!stored) {
         return false;
       }
 
       const parsed = JSON.parse(stored) as {
+        ownerId?: string;
         currentOrg: UserOrgAccess | null;
         availableOrgs: UserOrgAccess[];
       };
+
+      if (parsed.ownerId !== ownerId) {
+        await AsyncStorage.removeItem(ORG_CACHE_KEY);
+        return false;
+      }
 
       setAvailableOrgs(parsed.availableOrgs || []);
       setCurrentOrg(parsed.currentOrg || parsed.availableOrgs?.find((org) => org.isActive) || null);
@@ -100,18 +120,23 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       log.warn('[OrgContext] Failed to hydrate org cache:', error);
       return false;
     }
-  }, []);
+  }, [clerkUser?.id]);
 
   const persistOrgCache = useCallback(async (nextCurrentOrg: UserOrgAccess | null, nextAvailableOrgs: UserOrgAccess[]) => {
+    const ownerId = clerkUser?.id;
+    if (!ownerId) {
+      return;
+    }
     try {
       await AsyncStorage.setItem(ORG_CACHE_KEY, JSON.stringify({
+        ownerId,
         currentOrg: nextCurrentOrg,
         availableOrgs: nextAvailableOrgs,
       }));
     } catch (error) {
       log.warn('[OrgContext] Failed to persist org cache:', error);
     }
-  }, []);
+  }, [clerkUser?.id]);
 
   /**
    * Fetch all available orgs for this user
@@ -317,6 +342,10 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAvailableOrgs([]);
       setError(null);
       setIsLoading(false);
+      // Clearing state alone left the org names, roles, and pool data on disk
+      // for the next account to hydrate.
+      AsyncStorage.removeItem(ORG_CACHE_KEY).catch(() => {});
+      AsyncStorage.removeItem(LEGACY_ORG_CACHE_KEY).catch(() => {});
       return;
     }
 

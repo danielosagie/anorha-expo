@@ -9,6 +9,33 @@ const ensureIdentity = async (ctx: any) => {
   return identity;
 };
 
+/**
+ * Look up a campaign and prove the caller owns it.
+ *
+ * Being signed in is not the same as being the owner. Every mutation here takes
+ * a campaignId straight from the client, so checking only that *some* identity
+ * existed let any authenticated user rename, delete, or overwrite any campaign
+ * whose id they could guess or observe.
+ *
+ * Rows with an empty userId predate the field and stay claimable by the first
+ * authenticated writer, which is what the existing backfill relies on. A row
+ * that already has an owner belongs to that owner alone.
+ */
+const requireCampaignOwner = async (ctx: any, campaignId: string, identity: any) => {
+  const existing = await ctx.db
+    .query('campaigns')
+    .withIndex('by_campaign_id', (q: any) => q.eq('campaignId', campaignId))
+    .unique();
+
+  if (!existing) {
+    return null;
+  }
+  if (existing.userId && existing.userId !== identity.subject) {
+    throw new Error('Unauthorized');
+  }
+  return existing;
+};
+
 export const upsertFromSession = mutation({
   args: {
     campaignId: v.string(),
@@ -22,10 +49,7 @@ export const upsertFromSession = mutation({
     const identity = await ensureIdentity(ctx);
     const now = Date.now();
 
-    const existing = await ctx.db
-      .query('campaigns')
-      .withIndex('by_campaign_id', q => q.eq('campaignId', args.campaignId))
-      .unique();
+    const existing = await requireCampaignOwner(ctx, args.campaignId, identity);
 
     if (existing) {
       await ctx.db.patch(existing._id, {
@@ -89,11 +113,8 @@ export const rename = mutation({
     title: v.string(),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
-    const existing = await ctx.db
-      .query('campaigns')
-      .withIndex('by_campaign_id', q => q.eq('campaignId', args.campaignId))
-      .unique();
+    const identity = await ensureIdentity(ctx);
+    const existing = await requireCampaignOwner(ctx, args.campaignId, identity);
 
     if (!existing) {
       return null;
@@ -113,11 +134,8 @@ export const remove = mutation({
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
-    const existing = await ctx.db
-      .query('campaigns')
-      .withIndex('by_campaign_id', q => q.eq('campaignId', args.campaignId))
-      .unique();
+    const identity = await ensureIdentity(ctx);
+    const existing = await requireCampaignOwner(ctx, args.campaignId, identity);
 
     if (!existing) {
       return { removed: false };

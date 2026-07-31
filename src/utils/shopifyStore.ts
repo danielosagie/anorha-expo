@@ -18,13 +18,16 @@ export const extractShopifyStoreHandle = (
   const input = value.trim();
   if (!input) return null;
 
+  // Anchored: unanchored, these matched a Shopify host appearing ANYWHERE in the
+  // string, so https://evil.example/?x=admin.shopify.com/store/victim yielded
+  // "victim" and pointed OAuth at a store the attacker named.
   const adminMatch = input.match(
-    /(?:https?:\/\/)?admin\.shopify\.com\/store\/([^/?#\s]+)/i,
+    /^(?:https?:\/\/)?admin\.shopify\.com\/store\/([^/?#\s]+)/i,
   );
   if (adminMatch?.[1]) return validHandle(adminMatch[1]);
 
   const myshopifyMatch = input.match(
-    /(?:https?:\/\/)?([a-z0-9][a-z0-9-]*)\.myshopify\.com(?:[/?#\s]|$)/i,
+    /^(?:https?:\/\/)?([a-z0-9][a-z0-9-]*)\.myshopify\.com(?:[/?#\s]|$)/i,
   );
   if (myshopifyMatch?.[1]) return validHandle(myshopifyMatch[1]);
 
