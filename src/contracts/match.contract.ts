@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:745845a17fbd)
+// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:f608af251557)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * MATCH PIPELINE CONTRACT — single source of truth for the mobile↔backend match seam.
@@ -17,6 +17,7 @@
  * GET /products/match/jobs/:jobId/results · POST /products/match/jobs/:jobId/product/:productIndex/assist-response
  */
 import { z } from 'zod';
+import { zExactMatch, zItemIdentity, zPricingSnapshot, zSimilarComp } from './item-identity.contract';
 
 // ---------------------------------------------------------------------------
 // Shared job primitives
@@ -156,11 +157,38 @@ export const zVlmAnalysis = z.object({
 });
 export type VlmAnalysis = z.infer<typeof zVlmAnalysis>;
 
+export const zProviderOutcome = z.object({
+  stage: z.string(),
+  lane: z.string(),
+  provider: z.string(),
+  status: z.enum(['success', 'empty', 'failed', 'partial_failure', 'skipped', 'queued', 'in_flight']),
+  itemKey: z.string().optional(),
+  candidateCount: z.number().optional(),
+  acceptedCandidateCount: z.number().optional(),
+  durationMs: z.number().optional(),
+  reason: z.string().optional(),
+  error: z
+    .object({
+      class: z.string(),
+      message: z.string(),
+    })
+    .optional(),
+});
+export type ProviderOutcome = z.infer<typeof zProviderOutcome>;
+
 export const zSearchAttempt = z.object({
   source: z.enum(['ebay_text', 'ebay_image', 'web_text', 'visual_search', 'retry_text', 'classification_research']),
+  provider: z.string().optional(),
+  status: z.enum(['success', 'empty', 'failed', 'partial_failure', 'skipped', 'queued', 'in_flight']).optional(),
   query: z.string().optional(),
   resultCount: z.number(),
   durationMs: z.number(),
+  error: z
+    .object({
+      class: z.string(),
+      message: z.string(),
+    })
+    .optional(),
 });
 export type SearchAttempt = z.infer<typeof zSearchAttempt>;
 
@@ -181,6 +209,14 @@ export const zMatchJobResult = z.object({
   /** Full provider response (intentionally untyped — provider-shaped). */
   matchRows: z.array(z.any()),
   rerankedResults: z.array(zRerankedResult),
+  /** Canonical identity emitted once by Match and consumed unchanged by Generate. */
+  itemIdentity: zItemIdentity.optional(),
+  /** True same-product marketplace evidence. */
+  exactMatches: z.array(zExactMatch).optional(),
+  /** Related pricing evidence; never identity evidence. */
+  similarComps: z.array(zSimilarComp).optional(),
+  /** Frozen pricing result; Generate must not search or refresh it. */
+  pricingSnapshot: zPricingSnapshot.optional(),
   confidence: z.enum(['high', 'medium', 'low']),
   vectorSearchFoundResults: z.boolean(),
   originalTargetImage: z.string(),
@@ -196,6 +232,7 @@ export const zMatchJobResult = z.object({
   matchEvidence: zMatchEvidence.optional(),
   autoMatchMeta: zAutoMatchMeta.optional(),
   searchAttempts: z.array(zSearchAttempt).optional(),
+  providerOutcomes: z.array(zProviderOutcome).optional(),
   userAssist: zUserAssist.optional(),
   vlmAnalysis: zVlmAnalysis.optional(),
   autoGenerateEnqueued: z.boolean().optional(),

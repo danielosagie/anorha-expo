@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/generate.contract.ts (sha256:77b35ad00c18)
+// @generated from sssync-bknd/src/contracts/generate.contract.ts (sha256:7312f8ac41d3)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * GENERATE PIPELINE CONTRACT — listing-generation job seam.
@@ -8,7 +8,8 @@
  * GET /products/generate/versions · generate job submission envelopes.
  */
 import { z } from 'zod';
-import { zJobLifecycleStatus, zJobProgress } from './match.contract';
+import { zJobLifecycleStatus, zJobProgress, zProviderOutcome } from './match.contract';
+import { zGenerationPhoto, zItemIdentity, zPricingSnapshot } from './item-identity.contract';
 
 /**
  * One platform's generated listing fields. Core fields are typed; platforms add
@@ -28,6 +29,43 @@ export const zGeneratedPlatformDetails = z
   .catchall(z.any());
 export type GeneratedPlatformDetails = z.infer<typeof zGeneratedPlatformDetails>;
 
+export const zTaxonomyEnrichment = z.object({
+  categoryId: z.string().optional(),
+  path: z.string().optional(),
+  confidence: z.number().optional(),
+  source: z.string().optional(),
+});
+
+export const zPlatformShippingDefault = z.object({
+  deliveryMethod: z.string().optional(),
+  shippingCost: z.number().optional(),
+  fulfillmentPolicyId: z.string().optional(),
+  fulfillmentPolicyName: z.string().optional(),
+  source: z.enum(['connected_platform', 'seller_preference', 'estimated']),
+  confidence: z.number().optional(),
+});
+
+export const zPlatformShippingOption = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  deliveryMethod: z.string().optional(),
+  shippingCost: z.number().optional(),
+  source: z.enum(['connected_platform', 'seller_preference']),
+});
+
+export const zDraftEnrichment = z.object({
+  status: z.enum(['pending', 'completed', 'partial', 'failed']),
+  taxonomy: z.record(z.string(), zTaxonomyEnrichment),
+  shipping: z.object({
+    estimate: z.record(z.string(), z.any()).optional(),
+    platformDefaults: z.record(z.string(), zPlatformShippingDefault),
+    platformOptions: z.record(z.string(), z.array(zPlatformShippingOption)).optional(),
+  }),
+  errors: z.array(z.string()).optional(),
+  completedAt: z.string().optional(),
+});
+export type DraftEnrichment = z.infer<typeof zDraftEnrichment>;
+
 export const zGenerateJobResult = z.object({
   productIndex: z.number(),
   productId: z.string().optional(),
@@ -38,6 +76,10 @@ export const zGenerateJobResult = z.object({
   processingTimeMs: z.number(),
   source: z.enum(['ai_generated', 'scraped_content', 'hybrid']).optional(),
   sources: z.array(z.object({ url: z.string(), usedForFields: z.array(z.string()).optional() })).optional(),
+  providerOutcomes: z.array(zProviderOutcome).optional(),
+  draftReady: z.boolean().optional(),
+  draftReadyAt: z.string().optional(),
+  enrichment: zDraftEnrichment.optional(),
   error: z.string().optional(),
 });
 export type GenerateJobResult = z.infer<typeof zGenerateJobResult>;
@@ -66,6 +108,27 @@ export const zGenerateJobStatus = z.object({
   updatedAt: z.string(),
 });
 export type GenerateJobStatus = z.infer<typeof zGenerateJobStatus>;
+
+/**
+ * POST /products/generate/jobs request. This is intentionally a closed data
+ * boundary: Generate receives finalized identity/pricing plus photos/platforms.
+ * Search candidates, scrape options, and comp-refresh flags do not belong here.
+ */
+export const zSubmitGenerateJobRequest = z.object({
+  products: z.array(z.object({
+    productIndex: z.number(),
+    productId: z.string(),
+    variantId: z.string().optional(),
+    itemIdentity: zItemIdentity,
+    pricingSnapshot: zPricingSnapshot.nullable().optional(),
+    photos: z.array(zGenerationPhoto),
+    quantity: z.number().int().positive().optional(),
+    sourceMatchJobId: z.string().optional(),
+    sourceMatchProductIndex: z.number().optional(),
+  })).min(1),
+  platforms: z.array(z.string()),
+});
+export type SubmitGenerateJobRequest = z.infer<typeof zSubmitGenerateJobRequest>;
 
 /** GET /products/generate/jobs/:jobId/results — response (only when status=completed). */
 export const zGenerateJobResultsResponse = z.object({
