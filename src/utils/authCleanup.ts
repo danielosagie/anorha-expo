@@ -39,6 +39,18 @@ export async function purgeClerkAndAuthCaches(): Promise<void> {
     /* best-effort */
   }
   try {
+    // Biometric login stores the account password. Leaving it behind meant
+    // signing out did not actually end access: whoever holds the device next and
+    // enrolls a face or fingerprint could sign straight back into the previous
+    // account. Sign-out has to take the credential with it.
+    await Promise.all([
+      SecureStore.deleteItemAsync('biometric_password').catch(() => {}),
+      SecureStore.deleteItemAsync('biometric_email').catch(() => {}),
+    ]);
+  } catch {
+    /* best-effort */
+  }
+  try {
     await AuthPersistence.getInstance().clearAuthData();
   } catch {
     /* best-effort */

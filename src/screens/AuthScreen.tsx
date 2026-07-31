@@ -190,8 +190,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
       });
       if (!result.success) return;
 
-      const e = await SecureStore.getItemAsync('biometric_email');
-      const p = await SecureStore.getItemAsync('biometric_password');
+      const e = await SecureStore.getItemAsync('biometric_email', {
+        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
+      // Must mirror the write options, or the OS-gated item is not found.
+      const p = await SecureStore.getItemAsync('biometric_password', {
+        requireAuthentication: true,
+        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
       if (!e || !p) {
         showErrorModal('Set up Face ID', "Log in with your password once and we'll turn on Face ID for next time.", 'info');
         return;
@@ -310,8 +316,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
                   text: 'Yes',
                   onPress: async () => {
                     try {
-                      await SecureStore.setItemAsync('biometric_password', password);
-                      await SecureStore.setItemAsync('biometric_email', email);
+                      // Stored with the OS gate on: the item cannot be read
+                      // without a fresh biometric/passcode check, never leaves
+                      // this device, and is not carried into backups. Without
+                      // these options it was a plaintext-at-rest password that
+                      // any keychain dump could recover.
+                      await SecureStore.setItemAsync('biometric_password', password, {
+                        requireAuthentication: true,
+                        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+                      });
+                      await SecureStore.setItemAsync('biometric_email', email, {
+                        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+                      });
                       setIsBiometricSupported(true);
                       setHasBiometricCreds(true);
                     } catch {

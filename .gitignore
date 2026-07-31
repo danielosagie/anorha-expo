@@ -90,3 +90,7 @@ FIX_BARCODE_INVENTORY.md
 
 .env.local
 .gradle/
+
+# Diagnostic export: contains production org/user UUIDs and query structure.
+anorha_supabase_logs.txt
+*_supabase_logs.txt

@@ -26,6 +26,40 @@ import { BRAND_PRIMARY } from "../design/tokens";
 import { extractShopifyStoreHandle } from "../utils/shopifyStore";
 
 const SHOPIFY_ADMIN_URL = "https://admin.shopify.com";
+
+// This WebView carries the seller's live Shopify admin cookies, and it used to
+// follow every navigation it was handed. Any off-origin page reached from it
+// could render a convincing Shopify login and harvest the real credentials.
+// Shopify's own hosts stay open, as do the identity providers its login screen
+// hands off to, since blocking those would break signing in. Everything else is
+// refused rather than rendered inside a trusted, cookie-bearing frame.
+const ALLOWED_WEBVIEW_HOSTS = [
+  "shopify.com",
+  "myshopify.com",
+  "shopifycdn.com",
+  "accounts.google.com",
+  "appleid.apple.com",
+  "login.microsoftonline.com",
+  "facebook.com",
+];
+
+function isAllowedWebViewUrl(rawUrl: string): boolean {
+  let host: string;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:") {
+      // about:blank and the like are how the WebView bootstraps itself.
+      return parsed.protocol === "about:";
+    }
+    host = parsed.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  return ALLOWED_WEBVIEW_HOSTS.some(
+    (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+  );
+}
 const LOCATION_WATCHER = `
   (function () {
     function sendLocation() {
@@ -168,7 +202,7 @@ export default function ShopifyStorePicker({
             onNavigationStateChange={handleNavigation}
             onShouldStartLoadWithRequest={(request) => {
               detectStore(request.url);
-              return true;
+              return isAllowedWebViewUrl(request.url);
             }}
             onMessage={handleMessage}
             startInLoadingState={false}

@@ -280,7 +280,9 @@ const App: React.FC = () => {
             const urlObject = new URL(url);
             const token = urlObject.searchParams.get('token');
             if (token) {
-              console.log('[App] Partner invite deep link received, token:', token);
+              // The token IS the invite credential: anyone who reads it from a
+              // device log can accept the invite. Presence is all the log needs.
+              console.log('[App] Partner invite deep link received');
               navigationRef.current?.navigate('AppStack', {
                 screen: 'PartnerAccept',
                 params: { inviteCode: token }

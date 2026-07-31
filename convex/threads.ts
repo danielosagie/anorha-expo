@@ -9,6 +9,33 @@ const ensureIdentity = async (ctx: any) => {
   return identity;
 };
 
+/**
+ * Threads carry no userId of their own, so ownership lives on the parent
+ * campaign. `listByCampaign` already resolved it that way; the mutations did
+ * not, which meant any signed-in user holding someone else's campaign or thread
+ * id could rename, archive, delete, or reparent their threads.
+ *
+ * A campaign row that is missing or unowned is not yet anyone's, so it stays
+ * writable: threads are sometimes cached before the campaign upsert lands, and
+ * refusing those would break the normal flow without protecting anything.
+ */
+const assertCampaignWritable = async (ctx: any, campaignId: string, identity: any) => {
+  const campaign = await ctx.db
+    .query('campaigns')
+    .withIndex('by_campaign_id', (q: any) => q.eq('campaignId', campaignId))
+    .unique();
+
+  if (campaign?.userId && campaign.userId !== identity.subject) {
+    throw new Error('Unauthorized');
+  }
+  return campaign;
+};
+
+const assertThreadWritable = async (ctx: any, thread: any, identity: any) => {
+  await assertCampaignWritable(ctx, thread.campaignId, identity);
+  return thread;
+};
+
 export const create = mutation({
   args: {
     campaignId: v.string(),
@@ -19,13 +46,20 @@ export const create = mutation({
     metadata: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
+    await assertCampaignWritable(ctx, args.campaignId, identity);
     const now = Date.now();
 
     const existing = await ctx.db
       .query('threads')
       .withIndex('by_thread_id', q => q.eq('threadId', args.threadId))
       .unique();
+
+    // An existing thread under a different campaign must clear that campaign too,
+    // otherwise this reparents someone else's thread into the caller's campaign.
+    if (existing && existing.campaignId !== args.campaignId) {
+      await assertCampaignWritable(ctx, existing.campaignId, identity);
+    }
 
     if (args.isPrimary) {
       const campaignThreads = await ctx.db
@@ -99,7 +133,7 @@ export const updateMeta = mutation({
     lastMessageAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
     const existing = await ctx.db
       .query('threads')
       .withIndex('by_thread_id', q => q.eq('threadId', args.threadId))
@@ -108,6 +142,8 @@ export const updateMeta = mutation({
     if (!existing) {
       throw new Error('Thread not found');
     }
+
+    await assertThreadWritable(ctx, existing, identity);
 
     const now = Date.now();
 
@@ -141,7 +177,7 @@ export const remove = mutation({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
     const existing = await ctx.db
       .query('threads')
       .withIndex('by_thread_id', q => q.eq('threadId', args.threadId))
@@ -150,6 +186,8 @@ export const remove = mutation({
     if (!existing) {
       return { removed: false };
     }
+
+    await assertThreadWritable(ctx, existing, identity);
 
     await ctx.db.delete(existing._id);
     return { removed: true };
@@ -161,7 +199,9 @@ export const removeByCampaign = mutation({
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    await ensureIdentity(ctx);
+    const identity = await ensureIdentity(ctx);
+    await assertCampaignWritable(ctx, args.campaignId, identity);
+
     const rows = await ctx.db
       .query('threads')
       .withIndex('by_campaign', q => q.eq('campaignId', args.campaignId))
