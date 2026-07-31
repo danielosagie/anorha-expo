@@ -324,8 +324,11 @@ export function removeEntry(id: string) {
     cart$.savedForLaterIds.set(saved.filter(s => !removedIds.includes(s)));
   }
 
-  if (cart$.activeItemId.get() === id) {
-    const nextActive = selectAllItems().find(it => it.id !== id)?.id ?? null;
+  // Deleting a folder takes its children with it, so the active item can disappear
+  // without being the id that was passed in — check everything that just went away.
+  const activeId = cart$.activeItemId.get();
+  if (activeId && removedIds.includes(activeId)) {
+    const nextActive = selectAllItems().find(it => !removedIds.includes(it.id))?.id ?? null;
     cart$.activeItemId.set(nextActive);
   }
 }
@@ -441,6 +444,16 @@ export function ungroupFolder(folderId: string) {
       : [...order.slice(0, idx), ...folder.childIds, ...order.slice(idx + 1)];
   cart$.order.set(next);
   cart$.entries[folderId].delete();
+
+  // A folder set aside with "Save for later" hands the flag down to its children, so
+  // ungrouping never dumps a shelf the user deliberately parked back into the cart.
+  // The folder id is gone either way — leaving it in the list would strand it.
+  const saved = cart$.savedForLaterIds.get();
+  if (saved.includes(folderId)) {
+    const rest = saved.filter((id) => id !== folderId);
+    const inherited = folder.childIds.filter((cid) => !rest.includes(cid) && isItem(getEntry(cid)));
+    cart$.savedForLaterIds.set([...rest, ...inherited]);
+  }
 }
 
 // --- selectors -------------------------------------------------------------

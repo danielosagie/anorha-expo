@@ -1574,6 +1574,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     openFolder ? (
       <ShelfFolderSheet
         label={openFolder.label}
+        folderId={openFolder.id}
         sourcePhotoUri={openFolder.sourcePhotoUri}
         items={openFolder.children}
         quickScanStore={quickScanStore}
@@ -1581,6 +1582,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         itemLoadingStates={itemLoadingStates}
         inventoryMatchByItemId={inventoryDedupByItemId}
         shelfPricingPendingByItemId={shelfPricingPendingByItemId}
+        savedForLaterIds={savedForLaterIds}
+        onToggleSavedForLater={setItemSavedForLater}
+        onDeleteItem={(itemId) => {
+          const remaining = openFolder.children.filter((child) => child.id !== itemId);
+          deleteBulkItem(itemId);
+          // The last delete leaves an empty folder shell behind — drop it and back out.
+          if (remaining.length === 0) {
+            removeEntry(openFolder.id);
+            setOpenFolderId(null);
+          }
+        }}
+        onDeleteShelf={() => {
+          const folder = openFolder;
+          setOpenFolderId(null);
+          cancelQuickScansForItems(folder.children.map((child) => child.id));
+          removeEntry(folder.id); // removeEntry deletes a folder's children with it
+          showNotificationMessage('Shelf deleted');
+        }}
         onBack={() => setOpenFolderId(null)}
         onUngroup={() => {
           if (openFolderId) ungroupFolder(openFolderId);
@@ -1590,10 +1609,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onOpenLocalMatch={openExistingInventoryMatch}
         onAddAllToCart={() => {
           const folder = openFolder;
+          // Items set aside with "Save for later" stay set aside — add-all means the rest.
+          const saved = new Set(savedForLaterIds);
+          const adding = folder.children.filter((child) => !saved.has(child.id));
           setOpenFolderId(null);
           setConfirmedQuickMatchByItemId((prev) => {
             const next = { ...prev };
-            for (const child of folder.children) {
+            for (const child of adding) {
               if (next[child.id]) continue;
               const qs = quickScanStore[child.id];
               if (qs?.matchData?.rankedCandidates?.length) {
@@ -1608,8 +1630,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           });
           if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
           // Add-all is a bulk confirm — the deferred sold-comps passes fire here.
-          researchSoldCompsOnConfirm(folder.children.map((child) => child.id));
-          showNotificationMessage(`${folder.children.length} item${folder.children.length === 1 ? '' : 's'} added to cart`);
+          researchSoldCompsOnConfirm(adding.map((child) => child.id));
+          showNotificationMessage(`${adding.length} item${adding.length === 1 ? '' : 's'} added to cart`);
         }}
       />
     ) : null;
