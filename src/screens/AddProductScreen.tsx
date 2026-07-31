@@ -5288,15 +5288,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   // Close bulk items sheet
   const closeBulkItemsSheet = useCallback(() => {
-    // Don't allow closing while processing shelf scan
-    if (isProcessingShelfScan) {
-      return;
-    }
+    // Presentation is independent from the scan lifecycle. Shelf/adaptive scans keep
+    // streaming into cart$ while the seller returns to the capture strip; trapping the
+    // full-screen Modal until the stream ended made the app look frozen (and prevented
+    // normal Sprout/cart navigation during a slow search).
     // Idempotent: a close is already in flight — let its timer finish. Re-arming the
     // spring + timer mid-close is what produced a Fabric unmount crash
     // (RCTViewComponentView unmountChildComponentView assert).
     if (cartCloseTimerRef.current) return;
-    setCurrentInstruction('ready');
     // Spring the cart down; the capture-screen lift unwinds in lockstep
     // (cameraLiftStyle is derived from sheetTranslateY). The Modal unmount is deferred
     // until the spring has visually settled, and the value is pinned (no animation
@@ -5308,7 +5307,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       sheetTranslateY.value = SCREEN_HEIGHT;
       setShowDeepSearchSheet(false);
     }, 420);
-  }, [sheetTranslateY, isProcessingShelfScan]);
+  }, [sheetTranslateY]);
   closeBulkItemsSheetRef.current = closeBulkItemsSheet;
 
   // Open bulk items sheet deterministically
@@ -5500,24 +5499,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     showNotificationMessage,
   ]);
 
-  // When screen loses focus (user navigates away), save draft and close sheets
+  // Keep the blur save callback stable. useFocusEffect runs a callback's cleanup both
+  // on a real blur AND whenever that callback identity changes. Capturing the live cart
+  // objects in its dependency list therefore launched a backend save for every streamed
+  // search/generation update while the screen was still focused. Besides duplicating the
+  // debounced autosave above, that request churn could overlap Modal presentation changes
+  // and make Sprout -> cart -> Sprout appear hung.
+  const latestBlurDraftRef = useRef<ReturnType<typeof serializeCartToDraft> | null>(null);
+  latestBlurDraftRef.current = (
+    bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0
+  )
+    ? serializeCartToDraft({
+      shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
+    })
+    : null;
+  const saveDraftOnBlurRef = useRef(saveDraftToBackend);
+  saveDraftOnBlurRef.current = saveDraftToBackend;
+
+  // When the screen genuinely loses focus, persist the latest cart once.
   useFocusEffect(
     useCallback(() => {
       return () => {
-        // NOTE: this cleanup also fires every time the deps below change while the
-        // screen stays focused — Modal/timer teardown lives in the stable-callback
-        // focus effect right after this one, which only fires on real blur.
-        // Persist scan draft when navigating away so it appears in Scan Drafts
-        if (
-          (bulkItems.length > 0 || Object.keys(itemStageById).length > 0 || processedItemIds.length > 0) &&
-          !isHydratingRef.current
-        ) {
-          saveDraftToBackend(serializeCartToDraft({
-            shelfPhotoUri: shelfPhotoUriForDraftRef.current || shelfPhotoUri,
-          }));
-        }
+        const payload = latestBlurDraftRef.current;
+        if (payload && !isHydratingRef.current) void saveDraftOnBlurRef.current(payload);
       };
-    }, [activeItemId, bulkItems, itemStageById, processedItemIds, quickScanStore, savedForLaterIds, shelfPhotoUri, saveDraftToBackend])
+    }, [])
   );
 
   // Real-blur-only cleanup (stable callback → fires only on blur/unmount, never on
