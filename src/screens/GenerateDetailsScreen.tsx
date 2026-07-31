@@ -38,6 +38,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
+import { fetchGenerateJobStatus } from '../lib/generateJobs';
+import {
+  applyProgressiveEnrichment,
+  enrichmentLabel,
+  type ProgressiveEnrichment,
+} from '../features/generation/progressiveEnrichment';
 
 
 const ACTION_BAR_HEIGHT = 80;
@@ -96,6 +102,9 @@ type GeneratedResult = {
   sourceImageUrl?: string;
   processingTimeMs?: number;
   source?: string;
+  draftReady?: boolean;
+  draftReadyAt?: string;
+  enrichment?: ProgressiveEnrichment;
 };
 
 // Platform field schema for hierarchical structure
@@ -151,7 +160,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const completedAtParam = params.completedAt ?? params.response?.completedAt;
 
   const [fetched, setFetched] = useState(false);
-  const [jobData, setJobData] = useState<{ status?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
+  const [jobData, setJobData] = useState<{ status?: string; currentStage?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   // Chat-style "wanna change something" composer text (replaces SmartCommandInput).
@@ -230,9 +239,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           // If socket provides results, use them. Otherwise keep existing (unless empty)
           results: Array.isArray(socketJobState.results) && socketJobState.results.length > 0
             ? socketJobState.results
-            : (prev?.results || []),
+            : (prev?.results || (Array.isArray(resultsParam) ? resultsParam : [])),
           summary: prev?.summary, // Socket might not send summary, keep existing
-          completedAt: socketJobState.status === 'completed' ? new Date().toISOString() : prev?.completedAt
+          currentStage: socketJobState.currentStage ?? prev?.currentStage,
+          completedAt: socketJobState.status === 'completed' ? new Date().toISOString() : prev?.completedAt,
         };
       });
     }
@@ -244,6 +254,41 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const summary = jobData?.summary ?? summaryParam;
 
   const completedAt = jobData?.completedAt ?? completedAtParam;
+
+  // A generate job now exposes a usable draft while it remains `processing`; taxonomy
+  // and shipping settle afterward. Poll while this editor is focused so draft readiness
+  // and late defaults do not depend on a socket connection. Navigation pauses this local
+  // poll; AddProduct's durable queue remains the background owner.
+  useEffect(() => {
+    if (!jobId || !isFocused) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      const snapshot = await fetchGenerateJobStatus(jobId).catch(() => null);
+      if (cancelled) return;
+      if (snapshot) {
+        const incoming = Array.isArray(snapshot.results) ? snapshot.results as GeneratedResult[] : [];
+        setJobData((prev) => ({
+          status: snapshot.status,
+          currentStage: snapshot.currentStage ?? prev?.currentStage,
+          results: incoming.length > 0
+            ? incoming
+            : (prev?.results || (Array.isArray(resultsParam) ? resultsParam : [])),
+          summary: snapshot.summary ?? prev?.summary ?? summaryParam,
+          completedAt: snapshot.completedAt ?? prev?.completedAt,
+        }));
+        if (['completed', 'failed', 'cancelled'].includes(String(snapshot.status))) return;
+      }
+      timer = setTimeout(() => { void poll(); }, 1500);
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [jobId, isFocused, resultsParam, summaryParam]);
 
   // Fetch user-uploaded images from ProductImages table (like PastScansScreen does)
   useEffect(() => {
@@ -308,6 +353,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const debounceTimerRef = useRef<any>(null);
   const buildPlatformPayloadRef = useRef<() => any>(() => ({ media: { imageUris: [], coverImageIndex: 0 } }));
   const lastHydratedJobRef = useRef<string | null>(null);
+  const draftBaselineByProductRef = useRef<Record<number, Record<string, any>>>({});
   const lastSavedRef = useRef<string>('');
   const lastScheduledRef = useRef<string | null>(null);
   const draftEditVersionRef = useRef(0);
@@ -342,6 +388,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     activeRegenJobsRef.current = {};
     setGeneratingPlatformKeys(new Set());
     lastHydratedJobRef.current = null;
+    draftBaselineByProductRef.current = {};
     lastSavedRef.current = '';
     lastScheduledRef.current = null;
     draftEditVersionRef.current += 1;
@@ -500,7 +547,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     if (!res || !res.platforms) return;
 
     // Only hydrate if this is new data (different jobId or product index)
-    const currentJobId = `${jobId || 'job'}-${currentProductIndex}` + (res.platforms ? JSON.stringify(res.platforms).slice(0, 50) : '');
+    const currentJobId = `${jobId || 'job'}-${currentProductIndex}-${JSON.stringify({
+      platforms: res.platforms,
+      draftReadyAt: res.draftReadyAt,
+      enrichment: res.enrichment,
+    })}`;
     if (lastHydratedJobRef.current === currentJobId) {
       log.debug('[GEN-DETAILS] Skipping re-hydration - same job/item');
       return;
@@ -593,6 +644,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
     }
 
+    const baselineKey = typeof res.productIndex === 'number' ? res.productIndex : currentProductIndex;
+    if (!draftBaselineByProductRef.current[baselineKey]) {
+      draftBaselineByProductRef.current[baselineKey] = JSON.parse(JSON.stringify(normalized));
+    }
+
     // Re-hydration must MERGE UNDER the seller's saved draft. On a fresh mount platformsRef
     // is EMPTY, so passing it as the "preserve edits" base let the generated data clobber
     // every edit (price, category, …) each time they navigated back — the autosave was
@@ -624,8 +680,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const hydrated = wasEmptyAtRequest && Object.keys(platformsRef.current || {}).length > 0
         ? hydratePlatformsFromBackend(draftMerged, platformsRef.current)
         : draftMerged;
-      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(hydrated));
-      updatePlatforms(() => hydrated);
+      const enriched = applyProgressiveEnrichment(
+        draftBaselineByProductRef.current[baselineKey] || normalized,
+        hydrated,
+        res.enrichment,
+      );
+      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(enriched));
+      updatePlatforms(() => enriched);
       lastHydratedJobRef.current = currentJobId;
     })();
   }, [results, jobId, currentProductIndex, editorSessionKey]);
@@ -1048,6 +1109,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     [results, currentProductIndex]
   );
   const effectiveResult = hasMultipleResults ? currentResult : first;
+  const enrichmentStatus = effectiveResult?.enrichment?.status
+    ?? (effectiveResult?.draftReady && status !== 'completed' ? 'pending' : undefined);
+  const enrichmentStateLabel = enrichmentLabel(enrichmentStatus);
 
   // Advisory pre-publish quality check — scores the canonical (shopify-else-first)
   // platform + the same filtered photo set the form sees. Pure heuristic; never blocks.
@@ -2489,6 +2553,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           {effectiveResult ? (
 
             <>
+              {enrichmentStateLabel ? (
+                <View style={styles.enrichmentNotice}>
+                  {enrichmentStatus === 'pending' ? (
+                    <ActivityIndicator size="small" color={CHAT_COLORS.dim} />
+                  ) : (
+                    <Icon name="information-outline" size={16} color={CHAT_COLORS.dim} />
+                  )}
+                  <Text style={styles.enrichmentNoticeText}>{enrichmentStateLabel}</Text>
+                </View>
+              ) : null}
               {/* Image Change Handler */}
               {(() => {
     
@@ -3169,6 +3243,19 @@ const styles = StyleSheet.create({
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },
+  enrichmentNotice: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#F4F4F2',
+  },
+  enrichmentNoticeText: { color: CHAT_COLORS.dim, fontSize: 12, fontFamily: CHAT_FONT.medium },
   card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
   section: { marginTop: 8 },
   platform: { color: '#000', fontWeight: '700', marginBottom: 4 },

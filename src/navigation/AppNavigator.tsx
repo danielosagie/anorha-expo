@@ -28,6 +28,7 @@ import {
 // import { CirclePlus } from 'lucide-react-native';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { ProgressiveGenerateResult } from '../features/generation/progressiveEnrichment';
 
 // Import the context from its new location
 import { AuthContext, AuthContextType } from '../context/AuthContext';
@@ -181,12 +182,7 @@ export type AppStackParamList = {
     itemIds?: string[],
     focusItemId?: string,
     /** Optional pre-fetched results (the screen also polls by jobId). */
-    results?: Array<{
-      productIndex: number,
-      platforms: any[],
-      scrapedData: any[],
-      originalSelection: any[],
-    }>,
+    results?: ProgressiveGenerateResult[],
     summary?: any[],
     completedAt?: string,
     initialData?: Array<{}>,

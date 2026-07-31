@@ -8,11 +8,14 @@
 
 import { selectAllItems, selectItem } from './cartStore';
 import type { CartItem } from './types';
+import type { ProgressiveGenerateResult } from '../generation/progressiveEnrichment';
 
 export interface GenerateDetailsLaunchParams {
   jobId: string;
   matchJobId: string;
   status: 'processing';
+  /** Latest usable draft(s), even while taxonomy/shipping enrichment is pending. */
+  results?: ProgressiveGenerateResult[];
   /** ID-BASED handoff (canonical): resolve items from cart$ by id. */
   itemIds: string[];
   focusItemId: string;
@@ -44,6 +47,7 @@ export function buildGenerateDetailsLaunch(focusItemId: string): GenerateDetails
     jobId: clicked.generateJobId || '',
     matchJobId: clicked.generateMatchJobId || '',
     status: 'processing',
+    results: list.flatMap((it) => (it.generateResult ? [it.generateResult] : [])),
     itemIds: list.map((it) => it.id),
     focusItemId,
     items: list.map((it, index) => ({

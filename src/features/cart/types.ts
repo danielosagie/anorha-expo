@@ -9,8 +9,9 @@
 
 import type { CapturedPhoto } from '../../components/camera/PhotoStack';
 import type { MatchResponse, QuickMatchSelection } from '../../screens/AddProduct/types';
-import type { MatchJobResult, GenerateJobResult } from '../../contracts';
+import type { MatchJobResult } from '../../contracts';
 import type { StatusTransition } from './transitions';
+import type { ProgressiveGenerateResult } from '../generation/progressiveEnrichment';
 
 /**
  * Lifecycle status for a cart item — the cart's canonical state. Supersedes the
@@ -85,7 +86,7 @@ export interface CartItem {
   /** The originating match job (when the item generated via match→auto-generate), for GenerateDetailsScreen's matchJobId. */
   generateMatchJobId?: string;
   /** Contract-typed per-product result of the generate job (src/contracts). */
-  generateResult?: GenerateJobResult;
+  generateResult?: ProgressiveGenerateResult;
   /** Recent legal status moves (newest last, capped) — written by transitionItem. */
   statusHistory?: StatusTransition[];
   error?: string;

@@ -270,7 +270,10 @@ export function setItemPricing(itemId: string, pricing: any) {
 }
 
 /** Attach generation job ids to an item (durable across unmount) for the click → GenerateDetailsScreen handoff. */
-export function setItemGenerate(itemId: string, patch: { generateJobId?: string; generateMatchJobId?: string }) {
+export function setItemGenerate(
+  itemId: string,
+  patch: Pick<Partial<CartItem>, 'generateJobId' | 'generateMatchJobId' | 'generateResult'>,
+) {
   if (!isItem(getEntry(itemId))) return;
   cart$.entries[itemId].assign({ ...patch, updatedAt: now() });
 }

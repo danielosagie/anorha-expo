@@ -395,7 +395,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
     : retryableError
       ? (confirmedMatch ? 'Generation failed · tap retry' : 'Match failed · tap retry')
       : isGenerated
-        ? 'Details ready · tap to review'
+        ? (loadingState?.stage || 'Details ready · tap to review')
         : isLocalInventoryMatch
           ? 'Already in inventory'
           : sessionDupOwnerId

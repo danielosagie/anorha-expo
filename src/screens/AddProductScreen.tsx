@@ -32,6 +32,7 @@ import { use$ } from '@legendapp/state/react';
 import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
+import { enrichmentLabel } from '../features/generation/progressiveEnrichment';
 import { enqueueShelfItemCrop } from '../features/cart/shelfItemCropPipeline';
 import { resolveImageUri, withResolvedImageUrl } from '../utils/resolveImageUri';
 import {
@@ -228,6 +229,23 @@ function splitItemsByGeneratedContent(itemIds: string[], results: any[]): { ok: 
   }
   const any = results.some(generateResultHasContent);
   return any ? { ok: [...itemIds], empty: [] } : { ok: [], empty: [...itemIds] };
+}
+
+function pairGenerateResults(itemIds: string[], results: any[]): Array<{ itemId: string; result: any }> {
+  if (!Array.isArray(results) || results.length === 0) return [];
+  if (results.length === itemIds.length) {
+    return itemIds.map((itemId, index) => ({ itemId, result: results[index] }));
+  }
+  if (itemIds.length === 1) return [{ itemId: itemIds[0], result: results[0] }];
+  const byItemId = new Map(
+    results
+      .filter((result: any) => typeof result?.itemId === 'string')
+      .map((result: any) => [result.itemId, result]),
+  );
+  return itemIds.flatMap((itemId) => {
+    const result = byItemId.get(itemId);
+    return result ? [{ itemId, result }] : [];
+  });
 }
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
@@ -1285,8 +1303,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const expired = !!job.startedAt && Date.now() - job.startedAt > GEN_GIVE_UP_MS;
         const giveUp = () => {
           const msg = 'Generation is taking too long — retry';
-          job.itemIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
-          setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Timed out', error: msg }; }); return n; });
+          const readyIds = job.itemIds.filter((id) => selectItem(id)?.generateResult?.draftReady);
+          const failedIds = job.itemIds.filter((id) => !readyIds.includes(id));
+          failedIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
+          setItemLoadingStates((prev) => {
+            const n = { ...prev };
+            readyIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Draft ready · Some defaults unavailable' }; });
+            failedIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Timed out', error: msg }; });
+            return n;
+          });
           genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
         };
         try {
@@ -1300,8 +1325,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (!res.ok) { if (expired) giveUp(); continue; }
           const snap: any = await res.json();
           const status = snap?.status;
+          const results = Array.isArray(snap?.results) ? snap.results : [];
+          const resultPairs = job.processType === 'generate' ? pairGenerateResults(job.itemIds, results) : [];
           if (status === 'completed') {
-            const results = Array.isArray(snap?.results) ? snap.results : [];
             const autoGenId =
               job.processType === 'match'
                 ? (results.find((r: any) => r?.autoGenerateJobId)?.autoGenerateJobId as string | undefined)
@@ -1323,6 +1349,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               // Per-item verdicts: a partially-empty payload sends only the missing
               // items to the retry lane instead of blank "generated" cards (or, worse,
               // failing the items that DID generate).
+              resultPairs.forEach(({ itemId, result }) => setItemGenerate(itemId, { generateResult: result }));
               const { ok, empty } = splitItemsByGeneratedContent(job.itemIds, results);
               if (empty.length > 0) {
                 const msg = 'Couldn’t generate details';
@@ -1330,29 +1357,81 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 setItemLoadingStates((prev) => { const n = { ...prev }; empty.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: msg }; }); return n; });
               }
               if (ok.length > 0) {
-                setItemLoadingStates((prev) => { const n = { ...prev }; ok.forEach((id) => delete n[id]); return n; });
+                const newlyReady = ok.filter((id) => selectItem(id)?.status !== 'ready_to_list');
+                const resultByItemId = new Map(resultPairs.map(({ itemId, result }) => [itemId, result]));
+                setItemLoadingStates((prev) => {
+                  const n = { ...prev };
+                  ok.forEach((id) => {
+                    const label = enrichmentLabel(resultByItemId.get(id)?.enrichment?.status);
+                    if (label) n[id] = { isLoading: false, stage: label };
+                    else delete n[id];
+                  });
+                  return n;
+                });
                 setItemStageById((prev) => { const n = { ...prev }; ok.forEach((id) => { n[id] = 'generated'; }); return n; });
                 // State machine: draft generated → awaiting per-item finalize.
                 ok.forEach((id) => transitionItem(id, 'ready_to_list'));
                 // Listing(s) ready — if the seller has left this screen (other tab) or the app
                 // isn't active, fire a local "ready" notification. (Fully backgrounded/killed
                 // delivery needs a backend push; the poll is paused while suspended.)
-                if (!isFocusedRef.current || AppState.currentState !== 'active') {
-                  void notifyListingReady(ok.length);
+                if (newlyReady.length > 0 && (!isFocusedRef.current || AppState.currentState !== 'active')) {
+                  void notifyListingReady(newlyReady.length);
                 }
               }
               genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
             }
           } else if (status === 'failed') {
-            setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; }); return n; });
-            job.itemIds.forEach((id) => transitionItem(id, 'error', { error: snap?.error || 'Generation failed' }));
+            resultPairs
+              .filter(({ result }) => result?.draftReady === true && generateResultHasContent(result))
+              .forEach(({ itemId, result }) => setItemGenerate(itemId, { generateResult: result }));
+            const readyIds = job.itemIds.filter((id) => selectItem(id)?.generateResult?.draftReady);
+            const failedIds = job.itemIds.filter((id) => !readyIds.includes(id));
+            setItemLoadingStates((prev) => {
+              const n = { ...prev };
+              readyIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Draft ready · Some defaults unavailable' }; });
+              failedIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; });
+              return n;
+            });
+            failedIds.forEach((id) => transitionItem(id, 'error', { error: snap?.error || 'Generation failed' }));
             genQueue$.set(genQueue$.get().filter((j) => !(j.jobId === job.jobId && j.processType === job.processType)));
-          } else if (expired) {
-            // Still non-terminal past the deadline — NOW the give-up is justified.
-            giveUp();
           } else {
-            const stage = snap?.currentStage || 'Generating…';
-            setItemLoadingStates((prev) => { const n = { ...prev }; job.itemIds.forEach((id) => { n[id] = { isLoading: true, stage }; }); return n; });
+            // The backend emits a usable result as soon as the listing copy is ready, then
+            // keeps the job processing while taxonomy and shipping hydrate. Unlock review
+            // immediately and retain the job only as a background enrichment subscription.
+            const draftPairs = resultPairs.filter(({ result }) => result?.draftReady === true && generateResultHasContent(result));
+            const newlyReady = draftPairs
+              .map(({ itemId }) => itemId)
+              .filter((id) => selectItem(id)?.status !== 'ready_to_list');
+            draftPairs.forEach(({ itemId, result }) => {
+              setItemGenerate(itemId, { generateResult: result });
+              transitionItem(itemId, 'ready_to_list');
+            });
+            if (draftPairs.length > 0) {
+              setItemStageById((prev) => {
+                const n = { ...prev };
+                draftPairs.forEach(({ itemId }) => { n[itemId] = 'generated'; });
+                return n;
+              });
+            }
+            if (newlyReady.length > 0 && (!isFocusedRef.current || AppState.currentState !== 'active')) {
+              void notifyListingReady(newlyReady.length);
+            }
+            if (expired) {
+              // A ready draft remains usable even if optional enrichment never settles.
+              giveUp();
+            } else {
+              const draftIds = new Set(draftPairs.map(({ itemId }) => itemId));
+              const stage = snap?.currentStage || 'Generating…';
+              setItemLoadingStates((prev) => {
+                const n = { ...prev };
+                job.itemIds.forEach((id) => {
+                  n[id] = draftIds.has(id)
+                    ? { isLoading: false, stage: enrichmentLabel(selectItem(id)?.generateResult?.enrichment?.status) || 'Draft ready · Finishing category & shipping…' }
+                    : { isLoading: true, stage };
+                });
+                return n;
+              });
+            }
           }
         } catch {
           // Transient fetch error — keep polling, unless the job is already past the
