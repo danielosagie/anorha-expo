@@ -15,7 +15,7 @@ import type { MatchJobStatus } from '../contracts';
 import { readQuickScanClientState, writeQuickScanClientState } from '../contracts';
 import { cleanMatchText } from './AddProduct/utils';
 import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
-import { CenterOverlay } from './AddProduct/CenterOverlay';
+import { CenterOverlay, IDLE_CAPTURE_INSTRUCTION } from './AddProduct/CenterOverlay';
 import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
@@ -1574,6 +1574,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     openFolder ? (
       <ShelfFolderSheet
         label={openFolder.label}
+        folderId={openFolder.id}
         sourcePhotoUri={openFolder.sourcePhotoUri}
         items={openFolder.children}
         quickScanStore={quickScanStore}
@@ -1581,6 +1582,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         itemLoadingStates={itemLoadingStates}
         inventoryMatchByItemId={inventoryDedupByItemId}
         shelfPricingPendingByItemId={shelfPricingPendingByItemId}
+        savedForLaterIds={savedForLaterIds}
+        onToggleSavedForLater={setItemSavedForLater}
+        onDeleteItem={(itemId) => {
+          const remaining = openFolder.children.filter((child) => child.id !== itemId);
+          deleteBulkItem(itemId);
+          // The last delete leaves an empty folder shell behind — drop it and back out.
+          if (remaining.length === 0) {
+            removeEntry(openFolder.id);
+            setOpenFolderId(null);
+          }
+        }}
+        onDeleteShelf={() => {
+          const folder = openFolder;
+          setOpenFolderId(null);
+          cancelQuickScansForItems(folder.children.map((child) => child.id));
+          removeEntry(folder.id); // removeEntry deletes a folder's children with it
+          showNotificationMessage('Shelf deleted');
+        }}
         onBack={() => setOpenFolderId(null)}
         onUngroup={() => {
           if (openFolderId) ungroupFolder(openFolderId);
@@ -1590,10 +1609,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onOpenLocalMatch={openExistingInventoryMatch}
         onAddAllToCart={() => {
           const folder = openFolder;
+          // Items set aside with "Save for later" stay set aside — add-all means the rest.
+          const saved = new Set(savedForLaterIds);
+          const adding = folder.children.filter((child) => !saved.has(child.id));
           setOpenFolderId(null);
+          // Add-all is the opposite of setting the shelf aside, so a saved shelf gives up its
+          // own flag here. Leaving it set would let ungroupFolder hand it down to every child
+          // and drop the items we just reported as "added to cart" straight into the saved
+          // pile — an empty cart behind a success toast. Individually saved children keep
+          // their own flags either way; only the folder's is cleared.
+          if (saved.has(folder.id)) setItemSavedForLater(folder.id, false);
           setConfirmedQuickMatchByItemId((prev) => {
             const next = { ...prev };
-            for (const child of folder.children) {
+            for (const child of adding) {
               if (next[child.id]) continue;
               const qs = quickScanStore[child.id];
               if (qs?.matchData?.rankedCandidates?.length) {
@@ -1608,8 +1636,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           });
           if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
           // Add-all is a bulk confirm — the deferred sold-comps passes fire here.
-          researchSoldCompsOnConfirm(folder.children.map((child) => child.id));
-          showNotificationMessage(`${folder.children.length} item${folder.children.length === 1 ? '' : 's'} added to cart`);
+          researchSoldCompsOnConfirm(adding.map((child) => child.id));
+          showNotificationMessage(`${adding.length} item${adding.length === 1 ? '' : 's'} added to cart`);
         }}
       />
     ) : null;
@@ -2535,7 +2563,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       ) {
         return cameraMode === 'shelf' || isAdaptiveShelfScan ? 'Finding items…' : 'Recognizing';
       }
-      return 'Capturing';
+      return IDLE_CAPTURE_INSTRUCTION;
     }
 
     switch (instruction) {
@@ -2543,7 +2571,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (cameraMode === 'barcode') return 'Scan barcode on product';
         if (cameraMode === 'manifest') return 'Take photos of manifest';
         if (cameraMode === 'receipt') return 'Take photos of receipt';
-        return 'Capturing';
+        return IDLE_CAPTURE_INSTRUCTION;
       case 'move_closer': return 'Move closer to product';
       case 'move_back': return 'Move back from product';
       case 'add_light': return 'Add more light to scene';

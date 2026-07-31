@@ -30,6 +30,15 @@ import { UnicodeSpinner } from './UnicodeSpinner';
 import { CameraMode } from './types';
 import { resolveImageUri } from '../../utils/resolveImageUri';
 
+/**
+ * Sentinel the host returns when the camera has nothing to report — NOT display copy.
+ * It is always either substituted for the mode's idle line or suppressed entirely, so it
+ * never reaches the screen. Exported so the host references the same symbol: comparing
+ * against a bare 'Capturing' literal would let a copy or localization change silently
+ * bring the idle pill back.
+ */
+export const IDLE_CAPTURE_INSTRUCTION = 'Capturing';
+
 const MATCH_TRANSITION_MS = 260;
 const ITEM_IDENTITY_MS = 2600;
 const MATCH_CARD_LAYOUT = LinearTransition
@@ -73,7 +82,10 @@ export const CenterOverlay: React.FC<{
   cardBottomOffset,
   onSwipeItem,
 }) => {
-  const [postCaptureHoldItemKey, setPostCaptureHoldItemKey] = useState<string | null>(null);
+  // Wrapped in an object because the key it belongs to is legitimately null (no active
+  // item yet). A bare `string | null` made "no hold" and "hold on the null item" the same
+  // value, so the idle overlay spun its spinner the moment the camera opened.
+  const [postCaptureHold, setPostCaptureHold] = useState<{ itemKey: string | null } | null>(null);
   const [identityItemKey, setIdentityItemKey] = useState<string | null>(itemIdentity ? activeItemKey : null);
   const [searchSnapshot, setSearchSnapshot] = useState<{ itemKey: string | null; image: SkImage } | null>(null);
   const postCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,7 +98,7 @@ export const CenterOverlay: React.FC<{
   const reduceMotion = useReducedMotion();
   const transitionProgress = useSharedValue(matchPreview && !isProcessing ? 1 : 0);
   const blurCanvasSize = useSharedValue({ width: 0, height: 0 });
-  const showPostCaptureHold = postCaptureHoldItemKey === activeItemKey;
+  const showPostCaptureHold = postCaptureHold !== null && postCaptureHold.itemKey === activeItemKey;
   const showLoadingCard = cameraMode === 'camera'
     && totalPhotos > 0
     && (isProcessing || showPostCaptureHold);
@@ -108,12 +120,12 @@ export const CenterOverlay: React.FC<{
     if (previous.itemKey !== activeItemKey) {
       if (postCaptureTimeoutRef.current) clearTimeout(postCaptureTimeoutRef.current);
       postCaptureTimeoutRef.current = null;
-      setPostCaptureHoldItemKey(null);
+      setPostCaptureHold(null);
     } else if (totalPhotos > previous.totalPhotos) {
       if (postCaptureTimeoutRef.current) clearTimeout(postCaptureTimeoutRef.current);
-      setPostCaptureHoldItemKey(activeItemKey);
+      setPostCaptureHold({ itemKey: activeItemKey });
       postCaptureTimeoutRef.current = setTimeout(() => {
-        setPostCaptureHoldItemKey(null);
+        setPostCaptureHold(null);
         postCaptureTimeoutRef.current = null;
       }, 1200);
     }
@@ -343,10 +355,16 @@ export const CenterOverlay: React.FC<{
   }
 
   const idleInstruction = cameraMode === 'shelf' ? 'Capture shelf to find items' : 'Take a photo to find a match';
-  const displayInstruction = (!isProcessing && instruction === 'Capturing') ? idleInstruction : instruction;
+  const isIdleInstruction = !isProcessing && instruction === IDLE_CAPTURE_INSTRUCTION;
+  const displayInstruction = isIdleInstruction ? idleInstruction : instruction;
   const showSpinner = isProcessing || showPostCaptureHold;
   const showIdentity = Boolean(itemIdentity && identityItemKey === activeItemKey);
   const pillText = showIdentity ? itemIdentity : displayInstruction;
+
+  // A freshly opened camera has nothing to say — the viewfinder already tells the user to
+  // point it at something. The pill earns its place only when it carries live state
+  // (scan progress, the active item's name, a result), so the idle tagline stays off.
+  if (isIdleInstruction && !showIdentity && !showSpinner) return null;
 
   // Regular instruction overlay is top-middle like barcode.
   // box-none: the container is a full-width strip that overlaps the viewfinder's
