@@ -156,7 +156,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     },
     capabilities: {
       canPublish: true,
-      shipping: false,
+      shipping: true,
       supportsTaxonomy: false,
       requiredFields: ['title', 'sku', 'price'],
     },
@@ -177,7 +177,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     },
     capabilities: {
       canPublish: true,
-      shipping: false,
+      shipping: true,
       supportsTaxonomy: false,
       requiredFields: ['title', 'sku', 'price'],
     },

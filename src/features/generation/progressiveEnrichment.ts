@@ -15,6 +15,10 @@ export interface ProgressiveEnrichment {
       name: string;
       deliveryMethod?: 'in_person' | 'shipping' | 'both';
       shippingCost?: number | string;
+      currency?: string;
+      scope?: 'listing_profile' | 'delivery_profile' | 'payment_link' | 'order_type' | 'seller_default';
+      isDefault?: boolean;
+      manageable?: boolean;
       source: 'connected_platform' | 'seller_preference' | 'estimated';
     }>>;
     platformDefaults?: Record<string, {
@@ -22,6 +26,8 @@ export interface ProgressiveEnrichment {
       shippingCost?: number | string;
       fulfillmentPolicyId?: string;
       fulfillmentPolicyName?: string;
+      currency?: string;
+      scope?: 'listing_profile' | 'delivery_profile' | 'payment_link' | 'order_type' | 'seller_default';
       source: 'connected_platform' | 'seller_preference' | 'estimated';
       confidence?: number;
     }>;
@@ -61,6 +67,8 @@ const SHIPPING_FIELDS = [
   'shippingCost',
   'fulfillmentPolicyId',
   'fulfillmentPolicyName',
+  'shippingCurrency',
+  'shippingScope',
 ] as const;
 
 const ESTIMATE_FIELDS = [
@@ -133,6 +141,8 @@ export function applyProgressiveEnrichment(
       ...(defaults.shippingCost !== undefined ? { shippingCost: defaults.shippingCost } : {}),
       ...(defaults.fulfillmentPolicyId ? { fulfillmentPolicyId: defaults.fulfillmentPolicyId } : {}),
       ...(defaults.fulfillmentPolicyName ? { fulfillmentPolicyName: defaults.fulfillmentPolicyName } : {}),
+      ...(defaults.currency ? { shippingCurrency: defaults.currency } : {}),
+      ...(defaults.scope ? { shippingScope: defaults.scope } : {}),
     };
   }
 

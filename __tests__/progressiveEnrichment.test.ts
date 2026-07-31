@@ -15,10 +15,10 @@ test('late taxonomy and shipping defaults fill an untouched draft', () => {
     shipping: {
       estimate: { estimatedWeight: { value: 0.3, unit: 'lb' }, shippingTier: 'small' },
       platformOptions: {
-        ebay: [{ id: 'policy-1', name: 'Standard', deliveryMethod: 'shipping', source: 'connected_platform' }],
+        ebay: [{ id: 'policy-1', name: 'Standard', deliveryMethod: 'shipping', scope: 'listing_profile', source: 'connected_platform' }],
       },
       platformDefaults: {
-        ebay: { deliveryMethod: 'shipping', fulfillmentPolicyId: 'policy-1', source: 'connected_platform' },
+        ebay: { deliveryMethod: 'shipping', fulfillmentPolicyId: 'policy-1', currency: 'USD', scope: 'listing_profile', source: 'connected_platform' },
       },
     },
   });
@@ -27,6 +27,8 @@ test('late taxonomy and shipping defaults fill an untouched draft', () => {
   assert.equal(next.shopify.categoryPath, 'Electronics > Cables');
   assert.equal(next.ebay.fulfillmentPolicyId, 'policy-1');
   assert.equal(next.ebay.shippingOptions[0].name, 'Standard');
+  assert.equal(next.ebay.shippingCurrency, 'USD');
+  assert.equal(next.ebay.shippingScope, 'listing_profile');
   assert.deepEqual(next.shopify.estimatedWeight, { value: 0.3, unit: 'lb' });
 });
 

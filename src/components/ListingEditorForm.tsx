@@ -3186,7 +3186,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
 
       {/* ── Delivery & Shipping – Trigger card + unified bottom sheet ── */}
-      {platformKeys.some(k => ['facebook', 'ebay', 'shopify'].includes(k.toLowerCase())) && (
+      {platformKeys.some(k => getPlatform(k)?.capabilities.shipping === true) && (
         <View style={{ marginTop: 16 }}>
           <Text style={styles.fieldLabel}>Shipping</Text>
           <TouchableOpacity

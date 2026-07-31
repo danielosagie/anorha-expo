@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/generate.contract.ts (sha256:7312f8ac41d3)
+// @generated from sssync-bknd/src/contracts/generate.contract.ts (sha256:44d7c65481c3)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * GENERATE PIPELINE CONTRACT — listing-generation job seam.
@@ -41,6 +41,8 @@ export const zPlatformShippingDefault = z.object({
   shippingCost: z.number().optional(),
   fulfillmentPolicyId: z.string().optional(),
   fulfillmentPolicyName: z.string().optional(),
+  currency: z.string().optional(),
+  scope: z.enum(['listing_profile', 'delivery_profile', 'payment_link', 'order_type', 'seller_default']).optional(),
   source: z.enum(['connected_platform', 'seller_preference', 'estimated']),
   confidence: z.number().optional(),
 });
@@ -50,6 +52,10 @@ export const zPlatformShippingOption = z.object({
   name: z.string(),
   deliveryMethod: z.string().optional(),
   shippingCost: z.number().optional(),
+  currency: z.string().optional(),
+  scope: z.enum(['listing_profile', 'delivery_profile', 'payment_link', 'order_type', 'seller_default']).optional(),
+  isDefault: z.boolean().optional(),
+  manageable: z.boolean().optional(),
   source: z.enum(['connected_platform', 'seller_preference']),
 });
 

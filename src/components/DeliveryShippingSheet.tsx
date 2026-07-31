@@ -57,6 +57,13 @@ const SHIPPING_PLATFORMS = new Set<string>(
 
 const STORAGE_KEY = '@anorha/shipping_prefs';
 
+type StoredShippingPreference = {
+    deliveryMethod?: string;
+    shippingCost?: string;
+    fulfillmentPolicyId?: string;
+    fulfillmentPolicyName?: string;
+};
+
 /* ── Accordion helper ──────────────────────────────────────── */
 function AccordionSection({
     title,
@@ -249,7 +256,7 @@ export default function DeliveryShippingSheet({
             try {
                 const raw = await AsyncStorage.getItem(STORAGE_KEY);
                 if (!raw) return;
-                const prefs = JSON.parse(raw) as Record<string, { deliveryMethod?: string; shippingCost?: string }>;
+                const prefs = JSON.parse(raw) as Record<string, StoredShippingPreference>;
                 // Apply persisted preferences to platforms that don't already have values set
                 const nextPlatforms = { ...platforms };
                 let changed = false;
@@ -271,6 +278,8 @@ export default function DeliveryShippingSheet({
                         const patch: Record<string, any> = {};
                         if (!data.deliveryMethod && pref.deliveryMethod) patch.deliveryMethod = pref.deliveryMethod;
                         if ((data.shippingCost == null || data.shippingCost === '') && pref.shippingCost) patch.shippingCost = pref.shippingCost;
+                        if (!data.fulfillmentPolicyId && pref.fulfillmentPolicyId) patch.fulfillmentPolicyId = pref.fulfillmentPolicyId;
+                        if (!data.fulfillmentPolicyName && pref.fulfillmentPolicyName) patch.fulfillmentPolicyName = pref.fulfillmentPolicyName;
                         if (Object.keys(patch).length > 0) {
                             nextPlatforms[pk] = { ...data, ...patch };
                             changed = true;
@@ -287,17 +296,22 @@ export default function DeliveryShippingSheet({
     }, []); // Run once on mount
 
     // Save shipping prefs whenever delivery method changes
-    const persistPrefs = useCallback(async () => {
+    const persistPrefs = useCallback(async (sourcePlatforms: Record<string, any> = platforms) => {
         try {
-            const prefs: Record<string, { deliveryMethod?: string; shippingCost?: string }> = {};
+            const prefs: Record<string, StoredShippingPreference> = {};
             for (const pk of platformKeys) {
-                const data = platforms[pk];
+                const data = sourcePlatforms[pk];
                 if (!data) continue;
                 const key = pk.toLowerCase();
                 if (key === 'facebook') {
                     prefs[pk] = { deliveryMethod: data.pickupLocation?.deliveryMethod };
                 } else {
-                    prefs[pk] = { deliveryMethod: data.deliveryMethod, shippingCost: data.shippingCost?.toString() };
+                    prefs[pk] = {
+                        deliveryMethod: data.deliveryMethod,
+                        shippingCost: data.shippingCost?.toString(),
+                        fulfillmentPolicyId: data.fulfillmentPolicyId,
+                        fulfillmentPolicyName: data.fulfillmentPolicyName,
+                    };
                 }
             }
             await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
@@ -316,6 +330,17 @@ export default function DeliveryShippingSheet({
 
     const showsShipping = currentDeliveryMethod === 'shipping' || currentDeliveryMethod === 'both';
     const showsPickup = currentDeliveryMethod === 'in_person' || currentDeliveryMethod === 'both';
+    const platformShippingOptions = useMemo(
+        () => Array.isArray(tabData?.shippingOptions)
+            ? tabData.shippingOptions.filter((option: any) => option && typeof option.name === 'string')
+            : [],
+        [tabData?.shippingOptions],
+    );
+    const selectedShippingOption = useMemo(
+        () => platformShippingOptions.find((option: any) => option.id && option.id === tabData?.fulfillmentPolicyId)
+            || platformShippingOptions.find((option: any) => option.name === tabData?.fulfillmentPolicyName),
+        [platformShippingOptions, tabData?.fulfillmentPolicyId, tabData?.fulfillmentPolicyName],
+    );
 
     /* ── Summary text helpers for accordions ──────────────────── */
     const dimsSummary = useMemo(() => {
@@ -353,7 +378,20 @@ export default function DeliveryShippingSheet({
         next[selectedTab] = data;
         onChangePlatforms(next);
         // Persist after a tick
-        setTimeout(() => persistPrefs(), 100);
+        void persistPrefs(next);
+    };
+
+    const handleShippingOptionChange = (option: any) => {
+        const next = { ...platforms };
+        const data = { ...(next[selectedTab] || {}) };
+        if (option.id) data.fulfillmentPolicyId = option.id;
+        else delete data.fulfillmentPolicyId;
+        data.fulfillmentPolicyName = option.name;
+        if (option.deliveryMethod) data.deliveryMethod = option.deliveryMethod;
+        if (option.shippingCost != null) data.shippingCost = String(option.shippingCost);
+        next[selectedTab] = data;
+        onChangePlatforms(next);
+        void persistPrefs(next);
     };
 
     /* ── Who-pays-shipping change (eBay flat rate, per-platform) ─ */
@@ -366,7 +404,7 @@ export default function DeliveryShippingSheet({
         data.shippingCost = value;
         next[selectedTab] = data;
         onChangePlatforms(next);
-        setTimeout(() => persistPrefs(), 100);
+        void persistPrefs(next);
     };
 
     const handlePayerChange = (payer: 'free' | 'buyer') => {
@@ -535,7 +573,9 @@ export default function DeliveryShippingSheet({
                             <TouchableOpacity style={s.optionRow} activeOpacity={0.7} onPress={() => setExpandedRow((rr) => rr === 'fulfillment' ? null : 'fulfillment')}>
                                 <Text style={s.optionLabel}>{tabKeyLower === 'facebook' ? 'Handoff' : 'Fulfillment'}</Text>
                                 <View style={{ flex: 1 }} />
-                                <Text style={s.optionValue}>{currentDeliveryMethod === 'in_person' ? 'Pickup' : currentDeliveryMethod === 'both' ? 'Both (Ship + Pickup)' : 'Ship'}</Text>
+                                <Text style={s.optionValue} numberOfLines={1}>
+                                    {selectedShippingOption?.name || (currentDeliveryMethod === 'in_person' ? 'Pickup' : currentDeliveryMethod === 'both' ? 'Both (Ship + Pickup)' : 'Ship')}
+                                </Text>
                                 <Icon name={expandedRow === 'fulfillment' ? 'chevron-down' : 'chevron-right'} size={18} color="#9CA3AF" />
                             </TouchableOpacity>
                             {expandedRow === 'fulfillment' && (
@@ -553,6 +593,38 @@ export default function DeliveryShippingSheet({
                                             );
                                         })}
                                     </View>
+                                    {platformShippingOptions.length > 0 && tabKeyLower !== 'facebook' && (
+                                        <View style={{ marginTop: 14 }}>
+                                            <Text style={s.dimLabel}>Platform shipping option</Text>
+                                            <View style={{ marginTop: 6, gap: 8 }}>
+                                                {platformShippingOptions.map((option: any, index: number) => {
+                                                    const isActive = selectedShippingOption === option;
+                                                    return (
+                                                        <TouchableOpacity
+                                                            key={option.id || `${option.name}-${index}`}
+                                                            activeOpacity={0.8}
+                                                            style={[s.locationCard, isActive && s.shippingOptionActive]}
+                                                            onPress={() => handleShippingOptionChange(option)}
+                                                        >
+                                                            <View style={{ flex: 1 }}>
+                                                                <Text style={[s.shippingOptionName, isActive && s.shippingOptionNameActive]}>{option.name}</Text>
+                                                                {(option.deliveryMethod || option.shippingCost != null) && (
+                                                                    <Text style={s.shippingOptionDetail}>
+                                                                        {[
+                                                                            option.scope === 'payment_link' ? 'Checkout link' : option.scope === 'order_type' ? 'Merchant order type' : option.scope === 'delivery_profile' ? 'Delivery profile' : option.scope === 'listing_profile' ? 'Listing policy' : null,
+                                                                            option.deliveryMethod === 'in_person' ? 'Pickup' : option.deliveryMethod === 'both' ? 'Ship + pickup' : option.deliveryMethod === 'shipping' ? 'Shipping' : null,
+                                                                            option.shippingCost != null ? `$${Number(option.shippingCost).toFixed(2)}` : null,
+                                                                        ].filter(Boolean).join(' · ')}
+                                                                    </Text>
+                                                                )}
+                                                            </View>
+                                                            {isActive && <Icon name="check-circle" size={20} color={BRAND_PRIMARY} />}
+                                                        </TouchableOpacity>
+                                                    );
+                                                })}
+                                            </View>
+                                        </View>
+                                    )}
                                     {tabKeyLower === 'facebook' && showsPickup && (
                                         <TouchableOpacity activeOpacity={0.8} style={[s.locationCard, { marginTop: 12 }]} onPress={onOpenLocationPicker}>
                                             <View style={s.locationIconBg}><MapPin size={18} color={BRAND_PRIMARY} /></View>
@@ -772,6 +844,21 @@ const s = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#E5E7EB',
         borderRadius: 12,
+    },
+    shippingOptionActive: {
+        borderColor: BRAND_PRIMARY,
+        backgroundColor: 'rgba(147,200,34,0.08)',
+    },
+    shippingOptionName: {
+        color: '#111827',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    shippingOptionNameActive: { color: '#3f6212' },
+    shippingOptionDetail: {
+        color: '#6B7280',
+        fontSize: 12,
+        marginTop: 3,
     },
     locationIconBg: {
         width: 36,
