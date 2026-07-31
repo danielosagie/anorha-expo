@@ -399,7 +399,12 @@ export const ShelfFolderSheet: React.FC<ShelfFolderSheetProps> = ({
         <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
           <TouchableOpacity style={styles.cta} activeOpacity={0.85} onPress={onAddAllToCart}>
             <Text style={styles.ctaText}>
-              {savedCount > 0 ? `Add ${addableItems.length} to cart` : 'Add all'}
+              {/* A saved shelf leaves the saved pile when this is tapped — say "Move", not "Add". */}
+              {shelfSaved
+                ? `Move ${addableItems.length} to cart`
+                : savedCount > 0
+                  ? `Add ${addableItems.length} to cart`
+                  : 'Add all'}
             </Text>
           </TouchableOpacity>
         </View>

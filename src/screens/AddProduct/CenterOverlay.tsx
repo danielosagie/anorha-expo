@@ -30,6 +30,15 @@ import { UnicodeSpinner } from './UnicodeSpinner';
 import { CameraMode } from './types';
 import { resolveImageUri } from '../../utils/resolveImageUri';
 
+/**
+ * Sentinel the host returns when the camera has nothing to report — NOT display copy.
+ * It is always either substituted for the mode's idle line or suppressed entirely, so it
+ * never reaches the screen. Exported so the host references the same symbol: comparing
+ * against a bare 'Capturing' literal would let a copy or localization change silently
+ * bring the idle pill back.
+ */
+export const IDLE_CAPTURE_INSTRUCTION = 'Capturing';
+
 const MATCH_TRANSITION_MS = 260;
 const ITEM_IDENTITY_MS = 2600;
 const MATCH_CARD_LAYOUT = LinearTransition
@@ -346,7 +355,7 @@ export const CenterOverlay: React.FC<{
   }
 
   const idleInstruction = cameraMode === 'shelf' ? 'Capture shelf to find items' : 'Take a photo to find a match';
-  const isIdleInstruction = !isProcessing && instruction === 'Capturing';
+  const isIdleInstruction = !isProcessing && instruction === IDLE_CAPTURE_INSTRUCTION;
   const displayInstruction = isIdleInstruction ? idleInstruction : instruction;
   const showSpinner = isProcessing || showPostCaptureHold;
   const showIdentity = Boolean(itemIdentity && identityItemKey === activeItemKey);

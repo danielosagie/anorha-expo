@@ -15,7 +15,7 @@ import type { MatchJobStatus } from '../contracts';
 import { readQuickScanClientState, writeQuickScanClientState } from '../contracts';
 import { cleanMatchText } from './AddProduct/utils';
 import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
-import { CenterOverlay } from './AddProduct/CenterOverlay';
+import { CenterOverlay, IDLE_CAPTURE_INSTRUCTION } from './AddProduct/CenterOverlay';
 import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
 import { NotificationBar } from './AddProduct/NotificationBar';
@@ -1613,6 +1613,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           const saved = new Set(savedForLaterIds);
           const adding = folder.children.filter((child) => !saved.has(child.id));
           setOpenFolderId(null);
+          // Add-all is the opposite of setting the shelf aside, so a saved shelf gives up its
+          // own flag here. Leaving it set would let ungroupFolder hand it down to every child
+          // and drop the items we just reported as "added to cart" straight into the saved
+          // pile — an empty cart behind a success toast. Individually saved children keep
+          // their own flags either way; only the folder's is cleared.
+          if (saved.has(folder.id)) setItemSavedForLater(folder.id, false);
           setConfirmedQuickMatchByItemId((prev) => {
             const next = { ...prev };
             for (const child of adding) {
@@ -2557,7 +2563,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       ) {
         return cameraMode === 'shelf' || isAdaptiveShelfScan ? 'Finding items…' : 'Recognizing';
       }
-      return 'Capturing';
+      return IDLE_CAPTURE_INSTRUCTION;
     }
 
     switch (instruction) {
@@ -2565,7 +2571,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (cameraMode === 'barcode') return 'Scan barcode on product';
         if (cameraMode === 'manifest') return 'Take photos of manifest';
         if (cameraMode === 'receipt') return 'Take photos of receipt';
-        return 'Capturing';
+        return IDLE_CAPTURE_INSTRUCTION;
       case 'move_closer': return 'Move closer to product';
       case 'move_back': return 'Move back from product';
       case 'add_light': return 'Add more light to scene';
