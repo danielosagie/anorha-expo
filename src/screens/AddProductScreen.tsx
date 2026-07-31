@@ -688,6 +688,7 @@ const rankedCandidatesToQuickMatchHintCandidates = (candidates: MatchCandidate[]
       productUrl: candidate.productUrl || candidate.sourceUrl || '',
       source: 'quickscan',
       isLocalMatch: Boolean(candidate.isLocalMatch),
+      pricingResearch: candidate.pricingResearch,
       thumbnail: imageUrl,
       image: imageUrl,
       imageUrl,
@@ -1413,7 +1414,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       onResearch={({ text }) => {
         const id = previewItemId;
         setPreviewItemId(null);
-        if (id && text) researchItemWithText(id, text);
+        if (id && text) {
+          // Keep the correction as product identity, not as an ephemeral search string.
+          setBulkItems((prev) => prev.map((item) => item.id === id ? { ...item, title: text.trim() } : item));
+          researchItemWithText(id, text);
+        }
       }}
       onAddPhoto={() => {
         // Inline in-app camera (not the OS gallery) targeting this item — a plain gallery

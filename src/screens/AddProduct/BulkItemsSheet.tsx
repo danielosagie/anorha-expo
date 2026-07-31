@@ -4,15 +4,13 @@ import Animated, { Easing, FadeInDown, FadeOutUp, Keyframe, LinearTransition, Re
 import { PanGestureHandler, TapGestureHandler, State, Swipeable } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Camera as CameraIcon, RotateCcw } from 'lucide-react-native';
-import spinners from 'unicode-animations';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL } from '../../config/env';
 import BottomActionBar from '../../components/BottomActionBar';
 import { CapturedPhoto } from '../../components/camera/PhotoStack';
-import { UnicodeSpinner } from './UnicodeSpinner';
 import { getShelfProgressPresentation } from './utils';
-import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState, UnicodeSpinnerDefinition } from './types';
+import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
 import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
 import { uploadProductImage } from '../../utils/uploadProductImage';
@@ -64,6 +62,12 @@ const soldCompCount = (pricingResearch: any): number => {
   const explicitCount = Number(pricingResearch?.sampleCount);
   if (Number.isFinite(explicitCount) && explicitCount > 0) return explicitCount;
   return Array.isArray(pricingResearch?.samples) ? pricingResearch.samples.length : 0;
+};
+
+const resolvedItemIdentity = (item: BulkCartItem, candidate?: any): string => {
+  const enteredTitle = String(item.title || '').trim();
+  if (enteredTitle && !/^Item \d+$/i.test(enteredTitle)) return enteredTitle;
+  return String(candidate?.identityTitle || candidate?.title || '').trim();
 };
 
 const SHELF_ITEM_ENTERING = new Keyframe({
@@ -453,7 +457,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
             {statusSubtitle ? (
               <View style={styles.cartSubRow}>
                 {loadingState?.isLoading ? (
-                  <UnicodeSpinner spinner={(spinners.helix || spinners.dots) as UnicodeSpinnerDefinition} color="#93C822" size={11} />
+                  <ActivityIndicator size="small" color="#93C822" />
                 ) : (
                   <View style={[styles.cartStatusDot, { backgroundColor: retryableError ? '#F87171' : isGenerated ? '#93C822' : isLocalInventoryMatch ? '#60A5FA' : confirmedMatch ? '#93C822' : '#94A3B8' }]} />
                 )}
@@ -872,6 +876,7 @@ export const BulkItemsSheet: React.FC<{
       productIndex: number;
       productId: string;
       clientItemId: string;
+      identityTitle?: string;
       variantId?: string;
       imageUrls: string[];
       coverImageIndex: number;
@@ -939,7 +944,9 @@ export const BulkItemsSheet: React.FC<{
       body: JSON.stringify({
         products: successfulUploads.map((result) => result.product),
         selectedPlatforms: connectedPlatformKeys,
-        options: { useScraping: true },
+        // Matching already gathered the identity, source, and pricing context. A second web
+        // research pass is both redundant and able to replace the seller-confirmed item.
+        options: { useScraping: false },
       }),
     });
 
@@ -1039,7 +1046,7 @@ export const BulkItemsSheet: React.FC<{
         const isUsableSource =
           confirmedMatch?.source === 'quick_scan_confirmed' ||
           confirmedMatch?.source === 'quick_scan_auto';
-        const selectedCandidate = (
+        const confirmedCandidate = (
           isUsableSource &&
           selectedIndex != null &&
           Array.isArray(confirmedMatch.matchRows) &&
@@ -1047,6 +1054,27 @@ export const BulkItemsSheet: React.FC<{
         )
           ? confirmedMatch.matchRows[selectedIndex]
           : null;
+        const researchedCandidate: any = quickScanStore?.[item.id]?.matchData?.rankedCandidates?.[0] ?? null;
+        const identityTitle = resolvedItemIdentity(item, confirmedCandidate || researchedCandidate);
+        const hasSellerIdentity = Boolean(
+          String(item.title || '').trim() && !/^Item \d+$/i.test(String(item.title || '').trim()),
+        );
+        // "Sell this item" is an implicit confirmation of the identity on the card. A typed
+        // correction remains authoritative; the search result is supporting pricing evidence.
+        const selectedCandidate = confirmedCandidate || (
+          hasSellerIdentity
+            ? {
+                ...(researchedCandidate || {}),
+                title: identityTitle,
+                identityTitle,
+                userProvidedTitle: identityTitle,
+                comparisonTitle: researchedCandidate?.title,
+                description: undefined,
+                snippet: undefined,
+                source: researchedCandidate?.source || 'user_context',
+              }
+            : null
+        );
         const imageUrls = item.photos.map((photo) => photo.uri).filter(Boolean);
         const fallbackId = item.id || `quick-generate-${index}`;
 
@@ -1058,6 +1086,7 @@ export const BulkItemsSheet: React.FC<{
             productIndex: index,
             productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
             clientItemId: item.id,
+            identityTitle,
             variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
             imageUrls,
             coverImageIndex: 0,
@@ -1191,6 +1220,7 @@ export const BulkItemsSheet: React.FC<{
   }, [
     bulkItems,
     confirmedQuickMatchByItemId,
+    quickScanStore,
     connectedPlatformKeys,
     performAnalyze,
     onStartBroadSearch,
@@ -1631,12 +1661,7 @@ export const BulkItemsSheet: React.FC<{
               }}
             >
               {hasLoadingItems && (
-                <UnicodeSpinner
-                  spinner={(spinners.helix || spinners.dots) as UnicodeSpinnerDefinition}
-                  color="#FFFFFF"
-                  size={13}
-                  style={{ marginRight: 8 }}
-                />
+                <ActivityIndicator color="#FFFFFF" size="small" style={{ marginRight: 8 }} />
               )}
               <Text style={styles.searchForProductButtonText}>
                 {cameraMode === 'shelf' && totalItems > 0
