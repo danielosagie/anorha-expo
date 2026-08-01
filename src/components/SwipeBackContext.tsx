@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * Lets any screen temporarily suppress the global left-swipe-back ring — e.g. while a left
@@ -13,17 +13,35 @@ type Ctx = { suppressed: boolean; addSuppressor: () => () => void };
 const SwipeBackCtx = createContext<Ctx | null>(null);
 
 export const SwipeBackProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [count, setCount] = useState(0);
-  const value = useMemo<Ctx>(
-    () => ({
-      suppressed: count > 0,
-      addSuppressor: () => {
-        setCount((c) => c + 1);
-        return () => setCount((c) => Math.max(0, c - 1));
-      },
-    }),
-    [count],
-  );
+  // The ref-count lives in a ref and only the derived boolean is state, so registering or
+  // releasing a suppressor never changes this context's identity unless `suppressed` itself
+  // flips.
+  //
+  // It used to be `useMemo(..., [count])`, which rebuilt the value on every count tick. That
+  // changed the context identity, which re-ran every consumer's effect — cleanup, then re-add —
+  // so suppression thrashed between true and false while a sheet was open. A flip to true makes
+  // SwipeBackRing return bare children, which unmounts the view holding the PanResponder: a
+  // swipe already in flight lost its release handler and simply never navigated. That is the
+  // intermittent "the ring fills but it doesn't go back" on Add Product.
+  const [suppressed, setSuppressed] = useState(false);
+  const countRef = useRef(0);
+
+  const addSuppressor = useCallback(() => {
+    countRef.current += 1;
+    setSuppressed(countRef.current > 0);
+    // Each release is idempotent. Without this, a cleanup invoked twice (StrictMode, or the
+    // identity churn above) decremented the count a second time and silently took someone
+    // else's suppressor with it — the mirror bug, where the ring stays live under an open sheet.
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      countRef.current = Math.max(0, countRef.current - 1);
+      setSuppressed(countRef.current > 0);
+    };
+  }, []);
+
+  const value = useMemo<Ctx>(() => ({ suppressed, addSuppressor }), [suppressed, addSuppressor]);
   return <SwipeBackCtx.Provider value={value}>{children}</SwipeBackCtx.Provider>;
 };
 
@@ -32,11 +50,13 @@ export const useSwipeBackSuppressed = (): boolean => useContext(SwipeBackCtx)?.s
 
 /** While `active` is true, suppress the swipe-back ring. Auto-cleans up. */
 export const useSuppressSwipeBackWhen = (active: boolean): void => {
-  const ctx = useContext(SwipeBackCtx);
+  // Depend on the (now stable) addSuppressor, never the whole context — otherwise every
+  // suppression change anywhere in the app re-runs this effect for every consumer.
+  const addSuppressor = useContext(SwipeBackCtx)?.addSuppressor;
   useEffect(() => {
-    if (!active || !ctx) return;
-    return ctx.addSuppressor();
-  }, [active, ctx]);
+    if (!active || !addSuppressor) return;
+    return addSuppressor();
+  }, [active, addSuppressor]);
 };
 
 // ── Back-button anchor ──────────────────────────────────────────────────────
