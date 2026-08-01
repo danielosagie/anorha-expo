@@ -945,19 +945,64 @@ const SproutHomeScreen: React.FC = () => {
   const ledgerRows = DEMO ? DEMO_LEDGER : briefingRows;
   const showQuietInsight = !showSproutMessage && isShowingQuiet;
   const showActiveInsight = !showSproutMessage && isShowingInsight;
+  // The recap headline is rendered below AND read by heroAction — derive it once so the two
+  // can't drift. A selector that guesses at what the card is showing is the whole bug here.
+  const recapLead = ledgerRows.length > 0
+    ? `${ledgerRows.length} ${ledgerRows.length === 1 ? 'thing' : 'things'} happened ${isNight ? 'while you slept' : 'while you were away'}`
+    : sproutMsg.lead;
 
-  // Copy / speak / rate belong to whatever prose the card is actually showing. The row used to
-  // be gated on `showActiveInsight && insightBody`, which is a much narrower thing than "there
-  // is a message here" — so a digest, or the "Sprout is watching" line, left the bottom row
-  // holding nothing but the countdown. heroMessage IS the prose the card renders, so key the
-  // actions off that and fall back to the quiet line when the card is in its quiet form.
-  const heroAction = useMemo<{ id: string; text: string } | null>(() => {
-    if (showActiveInsight && insightBody) return { id: insightActionId, text: insightBody };
+  // Copy / speak / rate belong to whatever prose the card is actually showing. This used to be
+  // gated on `showActiveInsight && insightBody` — far narrower than "there is a message here" —
+  // so a digest or the quiet line left the bottom row holding only the countdown.
+  //
+  // The branches below mirror the hero's render branches ONE FOR ONE, in the same order. Reading
+  // from a different source than the card draws is how the actions end up copying or narrating
+  // text nobody can see: with an overnight recap on screen, heroMessage still resolves to insight
+  // or quiet prose that was never rendered.
+  const heroAction = useMemo<{ id: string; text: string; kind: 'insight' | 'other' } | null>(() => {
+    if (showSproutMessage) {
+      if (ledgerRows.length > 0) {
+        return {
+          id: `home-recap:${ledgerRows.map((row) => row.id).join(',')}`,
+          text: [recapLead, ...ledgerRows.map((row) => `${row.label} — ${row.status}`)].join('\n'),
+          kind: 'other',
+        };
+      }
+      // Matches the digest branch's own `!DEMO && seenLoaded` guard: before the seen-state
+      // loads the card renders nothing here, so there is nothing to act on yet.
+      if (latestDigest && !DEMO && seenLoaded) {
+        const digestText = compactHeroBodyText(latestDigest.text)?.trim();
+        if (digestText) return { id: `home-digest:${latestDigest.createdAt}`, text: digestText, kind: 'other' };
+      }
+      return null;
+    }
+    if (showActiveInsight && insightBody) return { id: insightActionId, text: insightBody, kind: 'insight' };
+    if (showQuietInsight) {
+      // quietSince is part of the text, so it must be part of the id — MessageActions resets its
+      // copied/vote state on messageId, and narration matches playback by it.
+      const quietText = `All quiet.${quietSince ? ` ${quietSince}` : ''}`;
+      return { id: `home-quiet:${quietSince || 'now'}`, text: quietText, kind: 'other' };
+    }
     const heroText = heroMessage?.text?.trim();
-    if (heroText) return { id: `home-hero:${heroMessage!.id}`, text: heroText };
-    if (showQuietInsight) return { id: 'home-quiet', text: `All quiet.${quietSince ? ` ${quietSince}` : ''}` };
+    if (heroText) return { id: `home-hero:${heroMessage!.id}`, text: heroText, kind: 'other' };
     return null;
-  }, [showActiveInsight, insightBody, insightActionId, heroMessage, showQuietInsight, quietSince]);
+  }, [
+    showSproutMessage, ledgerRows, recapLead, latestDigest, DEMO, seenLoaded,
+    showActiveInsight, insightBody, insightActionId, showQuietInsight, quietSince, heroMessage,
+  ]);
+
+  // handleInsightFeedback ignores its messageId, credits the vote to insightHeadline, and
+  // DISMISSES insight?.fingerprint on a down vote. That was safe while the row only ran for an
+  // active insight; now that it runs for recaps and quiet cards too, routing a digest's thumbs-
+  // down through it would silently dismiss an unrelated insight behind a "Feedback saved" toast.
+  const handleHeroFeedback = useCallback((messageId: string, vote: 'up' | 'down' | null) => {
+    if (!vote || !currentOrg?.id) return;
+    void trackInsightAction(
+      currentOrg.id,
+      vote === 'up' ? 'feedback/helpful' : 'feedback/unhelpful',
+      messageId,
+    );
+  }, [currentOrg?.id]);
   const heroNarrationState: NarrationState =
     loadingMessageId === heroAction?.id
       ? 'loading'
@@ -1155,11 +1200,7 @@ const SproutHomeScreen: React.FC = () => {
             // event → status rows, then ONE strong action: the full report.
             <View style={styles.sproutMsg}>
               <View style={styles.leadRow}>
-                <Text style={[styles.sproutLead, { color: THEME.strong }]}>
-                  {ledgerRows.length > 0
-                    ? `${ledgerRows.length} ${ledgerRows.length === 1 ? 'thing' : 'things'} happened ${isNight ? 'while you slept' : 'while you were away'}`
-                    : sproutMsg.lead}
-                </Text>
+                <Text style={[styles.sproutLead, { color: THEME.strong }]}>{recapLead}</Text>
                 <Icon name="bell-badge-outline" size={22} color={THEME.strong} />
               </View>
               {ledgerRows.length > 0 ? (
@@ -1284,7 +1325,7 @@ const SproutHomeScreen: React.FC = () => {
                 <MessageActions
                   text={heroAction.text}
                   messageId={heroAction.id}
-                  onFeedback={handleInsightFeedback}
+                  onFeedback={heroAction.kind === 'insight' ? handleInsightFeedback : handleHeroFeedback}
                   narrationState={heroNarrationState}
                   onToggleNarration={(messageId, text) => {
                     void toggleNarration({ messageId, text });
