@@ -149,7 +149,7 @@ export type AppStackParamList = {
   ProductDetail: { productId: string };
   PastScans: undefined;
   SyncInbox: { connectionId: string; platformName: string };
-  ImportHub: { completedLane?: 'matches' | 'photos' | 'details'; connectionId?: string } | undefined;
+  ImportHub: { completedLane?: 'matches' | 'required' | 'polish'; connectionId?: string } | undefined;
   SyncRules: { connectionId: string; platformName?: string };
   Profile: { refresh?: number };
   AccountSettings: { refresh?: number } | undefined;

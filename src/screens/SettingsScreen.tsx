@@ -2,7 +2,7 @@
 // preview, then the settings grid. Every card goes somewhere REAL.
 
 import React, { useContext, useEffect, useState } from 'react';
-import { Alert, Image, Linking, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ErrorModal from '../components/ErrorModal';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +17,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
+import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { normalizeDisplayName } from '../config/platforms';
 import { useImportHub } from '../hooks/useImportHub';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
@@ -115,7 +116,7 @@ const SettingsScreen = () => {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="dark-content" />
+      <FocusAwareStatusBar barStyle="dark-content" />
       <ErrorModal
         visible={showSignOut}
         type="warning"
@@ -150,11 +151,17 @@ const SettingsScreen = () => {
         </TouchableOpacity>
 
         {/* Integrations preview — tap a row for its import overview; full
-            management (refresh/remove/connect) lives on the Connections page. */}
+            management (refresh/remove/connect) lives on the Connections page.
+            With owed work the header opens the Import inbox (the badge IS the
+            inbox count — tapping it goes to the work, not to management). */}
         <TouchableOpacity
           style={styles.sectionRow}
           activeOpacity={0.7}
-          onPress={() => navigation.navigate('Connections')}
+          onPress={() =>
+            hub.totalNeedsYou > 0
+              ? navigation.navigate('ImportHub' as any)
+              : navigation.navigate('Connections')
+          }
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
           {hub.totalNeedsYou > 0 && (
@@ -185,16 +192,24 @@ const SettingsScreen = () => {
           ) : (
             platformPreview.map((c: any, i: number) => {
               const st = statusOf(c.Status);
+              // Mid-import / failed rows open the Import inbox (hub owns
+              // progress + retry); settled rows keep their SyncRules tap.
+              const s = String(c.Status || '').toLowerCase();
+              const inFlight =
+                s === 'pending' || s === 'scanning' || s === 'syncing' || s === 'reconciling' ||
+                s === 'ready_to_sync' || s === 'error' || s.includes('fail');
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.platformRow, i > 0 && styles.platformRowBorder]}
                   activeOpacity={0.7}
                   onPress={() =>
-                    navigation.navigate('SyncRules', {
-                      connectionId: c.Id,
-                      platformName: c.PlatformType,
-                    })
+                    inFlight
+                      ? navigation.navigate('ImportHub' as any, { connectionId: c.Id })
+                      : navigation.navigate('SyncRules', {
+                          connectionId: c.Id,
+                          platformName: c.PlatformType,
+                        })
                   }
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />

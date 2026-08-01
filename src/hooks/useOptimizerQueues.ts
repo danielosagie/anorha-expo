@@ -1,16 +1,23 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ensureSupabaseJwt, supabase } from '../lib/supabase';
 import { createLogger } from '../utils/logger';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { getPlatform } from '../config/platforms';
 const log = createLogger('useOptimizerQueues');
 
 
-// Canonical thresholds (shared across ImportOverview, BackfillOptimizer, sub-views)
+// THIN heuristics only — these numbers decide "could be better", never "blocked".
+// Whether an item is REQUIRED-blocked comes from the platform registry's
+// requiredFields (config/platforms.ts), the same source the publish gate checks
+// (utils/platformRequirements.ts). Keep the two ideas separate: a threshold here
+// is a nudge; a registry field is a wall.
 export const OPTIMIZER_THRESHOLDS = {
-  /** Minimum images to consider "photo complete" */
+  /** Below this, photos are THIN (a connected platform may still REQUIRE >= 1). */
   minImages: 2,
-  /** Minimum description length to consider "data complete" */
+  /** Below this, the description is THIN (required-ness is simply non-empty). */
   minDescriptionLength: 50,
-  /** Minimum title length */
+  /** Below this, the title is THIN (required-ness is simply non-empty). */
   minTitleLength: 5,
 } as const;
 
@@ -22,6 +29,7 @@ export interface ClassifiedProduct {
   Title: string;
   Description?: string | null;
   Sku?: string | null;
+  Price?: string | number | null;
   ProductImages?: any[] | null;
   /** Independent gap flags — an item can need photos AND details at once. */
   needsPhotos: boolean;
@@ -34,45 +42,117 @@ export interface ClassifiedProduct {
   queue: OptimizerQueue;
   /** Primary reason for this queue assignment */
   reason: string;
+
+  // ── Consequence classification (platform-aware) ────────────────────────────
+  /** Registry fields missing that a connected TARGET platform requires. */
+  requiredMissing: string[];
+  /** The platform keys whose requirements this item fails (e.g. ['ebay']). */
+  requiredFor: string[];
+  /** A connected store will refuse this item until fixed. */
+  isRequired: boolean;
+  /** Publishable everywhere it can go, just thin (below the nudge thresholds). */
+  isThin: boolean;
 }
 
 export interface OptimizerQueueCounts {
   photoNeeded: number;
   dataNeeded: number;
   manualQueue: number;
-  /** Distinct items needing ANY work (photos OR details) — never double-counts. */
+  /** Distinct items needing ANY work (required or thin) — never double-counts. */
   attention: number;
+  /** Items a connected platform will REFUSE until fixed — the owed number. */
+  required: number;
+  /** Items that publish fine but are thin — invited, never owed. */
+  polish: number;
   total: number;
 }
 
-// Classify each item against TWO independent dimensions — photos and details —
-// so an item that needs photos is STILL assessed for details. (The old chain
-// short-circuited on photos, which made "Details: Done" lie while every item
-// was stuck at the photo stage.)
-function classifyProduct(p: any): ClassifiedProduct {
+// Required-ness checks mirror utils/platformRequirements.hasRequiredField exactly
+// (same brain as the publish gate): presence, not quality. Quality lives in the
+// THIN thresholds above. `category` is deliberately not checked here yet — the
+// committed-variant rows carry no category field to read; the publish screen
+// still gates it. (Receipt: requiredFields lists category only for shopify/ebay.)
+const REQUIRED_CHECKABLE = ['title', 'sku', 'price', 'description', 'images'] as const;
+
+function missingRequiredFields(p: any): string[] {
+  const images = Array.isArray(p.ProductImages) ? p.ProductImages : [];
+  const missing: string[] = [];
+  if (!(p.Title || '').trim()) missing.push('title');
+  if (!(p.Sku && String(p.Sku).trim())) missing.push('sku');
+  const price = Number(p.Price);
+  if (!(p.Price != null && p.Price !== '' && !isNaN(price) && price > 0)) missing.push('price');
+  if (!(p.Description || '').trim()) missing.push('description');
+  if (images.length === 0) missing.push('images');
+  return missing;
+}
+
+// Classify one item against BOTH dimensions:
+//   required — a connected platform this item is NOT yet on refuses it as-is.
+//   thin     — below the nudge thresholds (publishes fine, sells slower).
+// `targets` = connected platform keys minus the ones this variant is already
+// mapped to (an item live on Shopify owes Shopify nothing).
+function classifyProduct(
+  p: any,
+  targets: string[],
+  requiredFieldsByKey: Record<string, string[]>,
+): ClassifiedProduct {
   const images = p.ProductImages || [];
   const imageCount = Array.isArray(images) ? images.length : 0;
-  const needsPhotos = imageCount < OPTIMIZER_THRESHOLDS.minImages;
-  const descOk = (p.Description || '').length >= OPTIMIZER_THRESHOLDS.minDescriptionLength;
-  const titleOk = (p.Title || '').trim().length >= OPTIMIZER_THRESHOLDS.minTitleLength;
-  const needsSku = !(p.Sku && String(p.Sku).trim());
-  const needsContent = !descOk || !titleOk;
+
+  const absent = new Set(missingRequiredFields(p));
+  const requiredMissing = new Set<string>();
+  const requiredFor: string[] = [];
+  for (const key of targets) {
+    const reqs = (requiredFieldsByKey[key] || []).filter((f) =>
+      (REQUIRED_CHECKABLE as readonly string[]).includes(f),
+    );
+    const misses = reqs.filter((f) => absent.has(f));
+    if (misses.length > 0) {
+      requiredFor.push(key);
+      misses.forEach((f) => requiredMissing.add(f));
+    }
+  }
+  const isRequired = requiredMissing.size > 0;
+
+  const thinPhotos = imageCount < OPTIMIZER_THRESHOLDS.minImages;
+  const thinDesc = (p.Description || '').length < OPTIMIZER_THRESHOLDS.minDescriptionLength;
+  const thinTitle = (p.Title || '').trim().length < OPTIMIZER_THRESHOLDS.minTitleLength;
+  const isThin = !isRequired && (thinPhotos || thinDesc || thinTitle);
+
+  // Mode routing (camera vs editor) — required items route by their required
+  // gaps; thin items by the nudge thresholds. Kept as the same independent
+  // flags the optimizer views already consume.
+  const needsPhotos = isRequired ? requiredMissing.has('images') : thinPhotos;
+  const needsContent = isRequired
+    ? requiredMissing.has('title') || requiredMissing.has('description') || requiredMissing.has('price')
+    : thinDesc || thinTitle;
+  const needsSku = isRequired ? requiredMissing.has('sku') : false;
   const needsDetails = needsContent || needsSku;
 
-  // `queue` is the item's primary bucket for the camera/generate sub-views'
-  // priority sort only — counts/queues below use the independent flags.
   const queue: OptimizerQueue = needsPhotos ? 'photo-needed' : needsContent ? 'data-needed' : 'manual-queue';
-  const reason = needsPhotos
-    ? `${imageCount} photos (need ${OPTIMIZER_THRESHOLDS.minImages})`
-    : !descOk
-      ? 'Weak or missing description'
-      : !titleOk
-        ? 'Weak title'
-        : needsSku
-          ? 'Missing SKU'
+  const reason = isRequired
+    ? `Needed for ${requiredFor.join(', ')}`
+    : thinPhotos
+      ? `${imageCount} photo${imageCount === 1 ? '' : 's'} (nice to have ${OPTIMIZER_THRESHOLDS.minImages})`
+      : thinDesc
+        ? 'Thin description'
+        : thinTitle
+          ? 'Thin title'
           : 'Ready';
 
-  return { ...p, needsPhotos, needsContent, needsSku, needsDetails, queue, reason };
+  return {
+    ...p,
+    needsPhotos,
+    needsContent,
+    needsSku,
+    needsDetails,
+    queue,
+    reason,
+    requiredMissing: Array.from(requiredMissing),
+    requiredFor,
+    isRequired,
+    isThin,
+  };
 }
 
 export interface UseOptimizerQueuesOptions {
@@ -120,8 +200,32 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
     dataNeeded: 0,
     manualQueue: 0,
     attention: 0,
+    required: 0,
+    polish: 0,
     total: 0,
   });
+
+  // The platform context that decides required-ness. Connected keys come from
+  // the visible (enabled, non-hidden) connections; pseudo-connections (csv,
+  // camera) resolve to no registry platform and drop out on their own.
+  const { liveConnections } = usePlatformConnections();
+  const { connectedKeys, keyByConnectionId, requiredFieldsByKey } = useMemo(() => {
+    const keys = new Set<string>();
+    const byConn = new Map<string, string>();
+    const reqs: Record<string, string[]> = {};
+    for (const c of liveConnections || []) {
+      const def = getPlatform(c?.PlatformType);
+      if (!def) continue;
+      byConn.set(c.Id, def.key);
+      if (isVisiblePlatformConnection(c)) {
+        keys.add(def.key);
+        reqs[def.key] = def.capabilities.requiredFields;
+      }
+    }
+    return { connectedKeys: Array.from(keys), keyByConnectionId: byConn, requiredFieldsByKey: reqs };
+  }, [liveConnections]);
+  // Refetch only when the connected-platform SET changes, not on status flips.
+  const platformSig = connectedKeys.slice().sort().join('|');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -166,32 +270,63 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
         }
       }
 
-      const classified = raw.map(normalizeOptimizerVariantRow).map(classifyProduct);
+      // Which platforms each variant is ALREADY on — an item live on Shopify
+      // owes Shopify nothing; its targets are the connected platforms it is
+      // missing from. One paged read of the mappings narrow columns, keyed back
+      // through the connection→platform map above.
+      const mappedKeysByVariant = new Map<string, Set<string>>();
+      const variantIds = raw.map((r: any) => r?.Id).filter(Boolean);
+      for (let i = 0; i < variantIds.length; i += 300) {
+        const chunk = variantIds.slice(i, i + 300);
+        const { data: maps, error: mapErr } = await supabase
+          .from('PlatformProductMappings')
+          .select('ProductVariantId, PlatformConnectionId')
+          .in('ProductVariantId', chunk);
+        if (mapErr) throw mapErr;
+        for (const m of maps || []) {
+          const key = keyByConnectionId.get(m.PlatformConnectionId);
+          if (!key) continue;
+          const set = mappedKeysByVariant.get(m.ProductVariantId) || new Set<string>();
+          set.add(key);
+          mappedKeysByVariant.set(m.ProductVariantId, set);
+        }
+      }
+
+      const classified = raw.map(normalizeOptimizerVariantRow).map((p: any) => {
+        const mapped = mappedKeysByVariant.get(p.Id);
+        const targets = connectedKeys.filter((k) => !mapped?.has(k));
+        return classifyProduct(p, targets, requiredFieldsByKey);
+      });
       setProducts(classified);
 
       // Independent dimensions — an item can need both photos and details.
       // photoNeeded + content/sku counts can overlap; `attention` is the distinct
-      // union (the honest "items needing any work").
+      // union (the honest "items needing any work"). `required` is the only
+      // number ever OWED; `polish` is invited.
       const photoNeeded = classified.filter((x) => x.needsPhotos).length;
       const dataNeeded = classified.filter((x) => x.needsContent).length;
       const manualQueue = classified.filter((x) => !x.needsContent && x.needsSku).length;
-      const attention = classified.filter((x) => x.needsPhotos || x.needsDetails).length;
+      const required = classified.filter((x) => x.isRequired).length;
+      const polish = classified.filter((x) => x.isThin).length;
       setCounts({
         photoNeeded,
         dataNeeded,
         manualQueue,
-        attention,
+        attention: required + polish,
+        required,
+        polish,
         total: classified.length,
       });
     } catch (e) {
       log.error('[useOptimizerQueues] Error:', e);
       setProducts([]);
-      setCounts({ photoNeeded: 0, dataNeeded: 0, manualQueue: 0, attention: 0, total: 0 });
+      setCounts({ photoNeeded: 0, dataNeeded: 0, manualQueue: 0, attention: 0, required: 0, polish: 0, total: 0 });
       setError(e instanceof Error ? e.message : 'Failed to load items');
     } finally {
       setLoading(false);
     }
-  }, [connectionId, limit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, limit, platformSig]);
 
   useEffect(() => {
     fetchData();
@@ -205,6 +340,17 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
   const dataNeededItems = products.filter((x) => x.needsContent);
   const manualQueueItems = products.filter((x) => !x.needsContent && x.needsSku);
 
+  // Consequence lists: required items (owed) and thin items (invited), each
+  // split by fix mode so callers can run camera-then-editor.
+  const requiredItems = products.filter((x) => x.isRequired);
+  const polishItems = products.filter((x) => x.isThin);
+  // Platforms driving ANY required item — for copy ("Needed for eBay").
+  const requiredPlatforms = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of products) if (p.isRequired) p.requiredFor.forEach((k) => set.add(k));
+    return Array.from(set);
+  }, [products]);
+
   return {
     loading,
     error,
@@ -213,6 +359,9 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
     photoNeededItems,
     dataNeededItems,
     manualQueueItems,
+    requiredItems,
+    polishItems,
+    requiredPlatforms,
     refresh: fetchData,
   };
 }

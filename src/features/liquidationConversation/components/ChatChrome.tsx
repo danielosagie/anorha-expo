@@ -24,8 +24,11 @@ type HeaderLabelAction = HeaderAction & {
 };
 
 type ChatChromeHeaderProps = {
-  title: string;
-  subtitle: string;
+  /** Omit both to drop the title pill entirely (Sprout's own surfaces carry no label). */
+  title?: string;
+  subtitle?: string;
+  /** Icon-only circle in the middle slot. Takes the title pill's place when set. */
+  centerAction?: HeaderAction;
   topInset?: number;
   leftAction?: HeaderLabelAction;
   rightAction?: HeaderAction;
@@ -34,6 +37,21 @@ type ChatChromeHeaderProps = {
   children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
 };
+
+/** The shared icon-only affordance: white circle, no label, no glyph text. */
+export function ChatCircleButton({ icon, onPress, accessibilityLabel }: HeaderAction) {
+  return (
+    <TouchableOpacity
+      style={styles.circleButton}
+      onPress={onPress}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+    >
+      {icon}
+    </TouchableOpacity>
+  );
+}
 
 export function ChatSurfaceWash() {
   return (
@@ -49,6 +67,7 @@ export function ChatSurfaceWash() {
 export function ChatChromeHeader({
   title,
   subtitle,
+  centerAction,
   topInset = 0,
   leftAction,
   rightAction,
@@ -100,23 +119,21 @@ export function ChatChromeHeader({
           ) : null}
         </View>
 
-        <View style={styles.titlePill}>
-          <Text style={styles.pillTitle} numberOfLines={1}>{title}</Text>
-          <Text style={styles.pillSub} numberOfLines={1}>{subtitle}</Text>
-        </View>
+        {centerAction ? (
+          <ChatCircleButton {...centerAction} />
+        ) : title ? (
+          <View style={styles.titlePill}>
+            <Text style={styles.pillTitle} numberOfLines={1}>{title}</Text>
+            {subtitle ? (
+              <Text style={styles.pillSub} numberOfLines={1}>{subtitle}</Text>
+            ) : null}
+          </View>
+        ) : (
+          <View style={styles.centerSpacer} />
+        )}
 
         <View style={[styles.sideSlot, styles.rightSlot]}>
-          {rightAction ? (
-            <TouchableOpacity
-              style={styles.circleButton}
-              onPress={rightAction.onPress}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel={rightAction.accessibilityLabel}
-            >
-              {rightAction.icon}
-            </TouchableOpacity>
-          ) : null}
+          {rightAction ? <ChatCircleButton {...rightAction} /> : null}
         </View>
       </View>
 
@@ -132,8 +149,13 @@ type ChatComposerFooterProps = {
   onRetry?: () => void;
   notice?: string | null;
   onDismissNotice?: () => void;
+  /** The surface behind is dark (night home), so the wash fades to black, not white. */
+  dark?: boolean;
   style?: StyleProp<ViewStyle>;
 };
+
+const FOOTER_FADE_LIGHT = ['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)', '#FFFFFF'] as const;
+const FOOTER_FADE_DARK = ['rgba(16,20,12,0)', 'rgba(16,20,12,0.85)', '#10140C'] as const;
 
 export function ChatComposerFooter({
   children,
@@ -142,6 +164,7 @@ export function ChatComposerFooter({
   onRetry,
   notice,
   onDismissNotice,
+  dark = false,
   style,
 }: ChatComposerFooterProps) {
   return (
@@ -149,11 +172,11 @@ export function ChatComposerFooter({
       <View pointerEvents="none" style={styles.footerBlur}>
         <ProgressiveBlurView
           intensity={Platform.OS === 'ios' ? 50 : 28}
-          tint="light"
+          tint={dark ? 'dark' : 'light'}
           direction="up"
         />
         <LinearGradient
-          colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)', '#FFFFFF']}
+          colors={dark ? FOOTER_FADE_DARK : FOOTER_FADE_LIGHT}
           locations={[0, 0.55, 1]}
           style={StyleSheet.absoluteFill}
         />
@@ -249,6 +272,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#18181B',
     fontFamily: 'Inter_600SemiBold',
+  },
+  centerSpacer: {
+    flex: 1,
   },
   titlePill: {
     flexShrink: 1,

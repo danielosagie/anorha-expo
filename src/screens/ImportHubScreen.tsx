@@ -17,13 +17,18 @@ import {
   NumberedCard,
   SectionCaption,
   AccountRow,
+  GroupRow,
 } from '../components/importinbox/InboxKit';
+import { getPlatform } from '../config/platforms';
 import SyncPreferencesSheet from '../components/importinbox/SyncPreferencesSheet';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportHub'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportHub'>;
 
-type LaneKey = 'matches' | 'photos' | 'details';
+// Consequence lanes: questions (the deck) and required (a store refuses these)
+// are OWED and drive the hero + Continue. Polish is invited-only — it renders
+// as a quiet row and never enters a count or the Continue chain.
+type LaneKey = 'matches' | 'required';
 
 const connectionStatusLabel = (connection: HubConnection): string => {
   if (connection.needsAttention > 0 || connection.state === 'needs-attention') return 'Needs review';
@@ -92,13 +97,13 @@ export default function ImportHubScreen() {
   // Straight to the working lanes whenever we're not loading or hard-errored.
   const showLanes = !loading && !hardError;
 
-  // Guided-pass order: the first non-empty lane is the "active" (highlighted)
-  // step; the rest stay tappable but calm. On return from a completed lane, that
-  // lane is now empty so the next one naturally becomes the highlight.
+  // Guided-pass order: the first non-empty OWED lane is the "active" step; the
+  // rest stay tappable but calm. On return from a completed lane, that lane is
+  // now empty so the next one naturally becomes the highlight. Polish never
+  // participates — it is not a step.
   const firstNonEmpty: LaneKey | null = useMemo(() => {
     if (lanes.matches.count > 0) return 'matches';
-    if (lanes.photos.count > 0) return 'photos';
-    if (lanes.details.count > 0) return 'details';
+    if (lanes.required.count > 0) return 'required';
     return null;
   }, [lanes]);
 
@@ -126,12 +131,12 @@ export default function ImportHubScreen() {
     openMatches(target.connectionId, target.platformName);
   }, [lanes.matches.byConnection, openMatches]);
 
-  const openPhotos = useCallback(() => {
-    navigation.navigate('BackfillOptimizer', { source: 'hub-photos' });
+  const openRequired = useCallback(() => {
+    navigation.navigate('BackfillOptimizer', { source: 'hub-required' });
   }, [navigation]);
 
-  const openDetails = useCallback(() => {
-    navigation.navigate('BackfillOptimizer', { source: 'hub-details' });
+  const openPolish = useCallback(() => {
+    navigation.navigate('BackfillOptimizer', { source: 'hub-polish' });
   }, [navigation]);
 
   // Open the essentials preferences sheet for a store (its logo/name/attention
@@ -183,16 +188,16 @@ export default function ImportHubScreen() {
     navigation.navigate('SyncRules', params);
   }, [prefsConn, navigation]);
 
-  // Continue → dive into the first non-empty lane (matches → photos → details).
+  // Continue → dive into the first non-empty OWED lane (matches → required).
+  // Polish is never in the chain; it's reachable only by choosing it.
   const onContinue = useCallback(() => {
     if (lanes.matches.count > 0) {
       const first = lanes.matches.byConnection[0];
       if (first) openMatches(first.connectionId, first.platformName);
       return;
     }
-    if (lanes.photos.count > 0) return openPhotos();
-    if (lanes.details.count > 0) return openDetails();
-  }, [lanes, openMatches, openPhotos, openDetails]);
+    if (lanes.required.count > 0) return openRequired();
+  }, [lanes, openMatches, openRequired]);
 
   const matchesSub = useMemo(() => {
     if (lanes.matches.count === 0) return 'Nothing to review';
@@ -205,7 +210,7 @@ export default function ImportHubScreen() {
   // (on focus) and the next-lane highlight (firstNonEmpty → 'active') are handled
   // generically below; this only acknowledges what was cleared.
   const completedLabel =
-    completedLane === 'matches' ? 'Matches' : completedLane === 'photos' ? 'Photos' : completedLane === 'details' ? 'Details' : null;
+    completedLane === 'matches' ? 'Questions' : completedLane === 'required' ? 'Required' : completedLane === 'polish' ? 'Polish' : null;
 
   const scanNames = useMemo(() => {
     const names = Array.from(new Set(scanning.map((s) => s.platformName).filter(Boolean)));
@@ -217,8 +222,18 @@ export default function ImportHubScreen() {
 
   // Lane states are derived from the authoritative aggregate only.
   const matchesLaneState = laneState('matches', lanes.matches.count);
-  const photosLaneState = laneState('photos', lanes.photos.count);
-  const detailsLaneState = laneState('details', lanes.details.count);
+  const requiredLaneState = laneState('required', lanes.required.count);
+
+  // "Needed for eBay" / "Needed for eBay + Shopify" — the receipt for why the
+  // required lane exists at all. Platforms come from the registry labels.
+  const requiredSub = useMemo(() => {
+    if (lanes.required.count === 0) return 'Done';
+    const names = lanes.required.platforms
+      .map((k) => getPlatform(k)?.label || k)
+      .filter(Boolean);
+    if (names.length === 0) return 'Missing required details';
+    return `Needed for ${names.join(' + ')}`;
+  }, [lanes.required]);
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
@@ -280,12 +295,12 @@ export default function ImportHubScreen() {
           </View>
         )}
 
-        {/* ── Lanes → Avec numbered step-cards ──────────────────────────────── */}
+        {/* ── Owed lanes → Avec numbered step-cards. * marks required. ──────── */}
         {showLanes && (
           <View style={styles.lanes}>
             <NumberedCard
               index={1}
-              title="Review matches"
+              title="Answer questions *"
               done={matchesLaneState === 'done'}
               active={matchesLaneState === 'active'}
               sub={
@@ -303,22 +318,24 @@ export default function ImportHubScreen() {
 
             <NumberedCard
               index={2}
-              title="Add photos"
-              done={photosLaneState === 'done'}
-              active={photosLaneState === 'active'}
-              sub={photosLaneState === 'done' ? 'Done' : 'Items missing photos'}
-              count={lanes.photos.count}
-              onPress={lanes.photos.count > 0 ? openPhotos : undefined}
+              title="Add what stores need *"
+              done={requiredLaneState === 'done'}
+              active={requiredLaneState === 'active'}
+              sub={requiredSub}
+              count={lanes.required.count}
+              onPress={lanes.required.count > 0 ? openRequired : undefined}
             />
+          </View>
+        )}
 
-            <NumberedCard
-              index={3}
-              title="Fix details"
-              done={detailsLaneState === 'done'}
-              active={detailsLaneState === 'active'}
-              sub={detailsLaneState === 'done' ? 'Done' : 'Titles, descriptions, SKUs'}
-              count={lanes.details.count}
-              onPress={lanes.details.count > 0 ? openDetails : undefined}
+        {/* ── Polish — invited, never owed. Quiet row, outside the steps. ──── */}
+        {showLanes && lanes.polish.count > 0 && (
+          <View style={styles.polish}>
+            <SectionCaption>Whenever you want</SectionCaption>
+            <GroupRow
+              label="Make listings stronger"
+              count={lanes.polish.count}
+              onPress={openPolish}
             />
           </View>
         )}
@@ -400,6 +417,9 @@ const styles = StyleSheet.create({
 
   // Lanes
   lanes: { marginTop: 4 },
+
+  // Polish — the invited section
+  polish: { marginTop: 22 },
 
   // Your stores
   stores: { marginTop: 22 },

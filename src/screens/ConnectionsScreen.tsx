@@ -323,6 +323,18 @@ const ConnectionsScreen = () => {
                       void retryImport(c);
                       return;
                     }
+                    // Anything mid-import (scanning/pending/syncing/…) or failed
+                    // opens the Import inbox with this store's row highlighted —
+                    // the hub owns in-flight progress and failure retry. This is
+                    // the hub's front door from Connections.
+                    const s = String(c.Status || '').toLowerCase();
+                    const inFlight =
+                      s === 'pending' || s === 'scanning' || s === 'syncing' || s === 'reconciling' ||
+                      s === 'ready_to_sync' || s === 'error' || s.includes('fail');
+                    if (inFlight) {
+                      navigation.navigate('ImportHub', { connectionId: c.Id });
+                      return;
+                    }
                     if (attn > 0) {
                       navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType });
                       return;

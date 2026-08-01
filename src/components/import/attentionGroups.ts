@@ -14,8 +14,10 @@ export type GroupKey = AttentionReason | 'other';
 // Human labels the owner approved (Avec "Review the rest" copy). Bold group
 // label on the left of each soft-card row.
 export const REASON_LABELS: Record<GroupKey, string> = {
+  // commit_failed leads: a failed import outranks every open question.
+  commit_failed: 'Didn’t import · retry',
   multiple_candidates: 'Could match something you have',
-  weak_match: 'Loose matches — double-check',
+  weak_match: 'Loose matches, double-check',
   look_alike_group: 'Look-alikes',
   duplicate_target: 'Possible duplicates',
   field_conflict: 'Details disagree',
@@ -57,6 +59,11 @@ export function groupItems(items: SyncItem[]): AttentionGroup[] {
     groups.push({ key, label: REASON_LABELS[key], items: arr });
   }
   groups.sort((a, b) => {
+    // Status loud: a failed import outranks every open question, whatever the
+    // counts say. Then largest bucket first, stable tiebreak by TIE_ORDER.
+    if (a.key === 'commit_failed' !== (b.key === 'commit_failed')) {
+      return a.key === 'commit_failed' ? -1 : 1;
+    }
     if (b.items.length !== a.items.length) return b.items.length - a.items.length;
     return TIE_ORDER.indexOf(a.key) - TIE_ORDER.indexOf(b.key);
   });

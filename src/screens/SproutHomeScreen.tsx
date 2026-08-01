@@ -7,7 +7,6 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -23,6 +22,7 @@ import { LineChart } from 'react-native-chart-kit';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
+import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { StreamingText } from '../components/StreamingText';
@@ -1111,7 +1111,7 @@ const SproutHomeScreen: React.FC = () => {
 
   return (
     <View style={[styles.screen, { backgroundColor: THEME.bodyBg }]}>
-      <StatusBar barStyle="light-content" />
+      <FocusAwareStatusBar barStyle="light-content" />
 
       {/* ── Static header: edge-to-edge, pinned at top, rounded bottom ── */}
       <View style={[styles.header, { backgroundColor: THEME.heroTop, paddingTop: insets.top + 2 }]}>
@@ -1764,7 +1764,7 @@ const CampaignCard: React.FC<{
         styles.card,
         isCompleted ? styles.cardCompleted : isNight ? styles.cardNight : styles.cardDay,
         isCompleted && { opacity: 0.55 },
-        selected && styles.cardSelected,
+        selected && (isNight ? styles.cardSelectedNight : styles.cardSelected),
       ]}
       onPress={onPress}
       onLongPress={onLongPress}
@@ -1772,8 +1772,8 @@ const CampaignCard: React.FC<{
       activeOpacity={0.92}
     >
       {selectMode ? (
-        <View style={[styles.selectDot, selected && styles.selectDotOn]}>
-          {selected ? <Icon name="check" size={14} color="#FFFFFF" /> : null}
+        <View style={[styles.selectDot, selected && (isNight ? styles.selectDotOnNight : styles.selectDotOn)]}>
+          {selected ? <Icon name="check" size={14} color={isNight ? '#17200D' : '#FFFFFF'} /> : null}
         </View>
       ) : null}
       <View style={styles.cardHeader}>
@@ -1848,6 +1848,12 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: BRAND,
   },
+  // Brand green all but vanishes against the night home. White is the only ring that
+  // reads as "picked" on that surface.
+  cardSelectedNight: {
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
   selectDot: {
     position: 'absolute',
     top: 10,
@@ -1865,6 +1871,10 @@ const styles = StyleSheet.create({
   selectDotOn: {
     borderColor: BRAND,
     backgroundColor: BRAND,
+  },
+  selectDotOnNight: {
+    borderColor: '#FFFFFF',
+    backgroundColor: '#FFFFFF',
   },
   // Floats in the navigator's spot (rounded on all sides, detached from the
   // edges) — not a full-width bottom sheet. `bottom` is set inline to match the

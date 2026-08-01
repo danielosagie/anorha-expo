@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -20,10 +20,14 @@ import {
   NumberedCard,
 } from '../components/importinbox/InboxKit';
 
-// Optimize v2 — one lobby of grouped gaps (photos · details · manual), each
-// routing to the fix it needs. Photo + details keep the real camera / AI views;
-// the manual queue runs the new "Fill the gaps" resolver deck.
+// Optimize v3 — consequence-scoped. The screen runs in one of three modes:
+//   required — items a connected store REFUSES until fixed (owed; hub lane 2)
+//   polish   — thin items that publish fine (invited; hub's quiet row)
+//   all      — both (standalone entry, no scope given)
+// Every mode opens on the intro lobby (the "here's what we're about to do"
+// step), then runs the same camera → explainer → generate/review machinery.
 
+type Mode = 'required' | 'polish' | 'all';
 type Bucket = 'photo' | 'data' | 'manual';
 type ScreenView =
   | { kind: 'lobby' }
@@ -57,8 +61,27 @@ export function BackfillOptimizerScreen() {
   const [completedPhotoIds, setCompletedPhotoIds] = useState<Set<string>>(new Set());
   const [completedDetailIds, setCompletedDetailIds] = useState<Set<string>>(new Set());
 
-  const { loading, error, products, counts, photoNeededItems, dataNeededItems, manualQueueItems, refresh } =
+  const { loading, error, products, counts, requiredPlatforms, refresh } =
     useOptimizerQueues({ connectionId });
+
+  // Mode comes from how you arrived: the hub's required lane, the hub's polish
+  // row, or a standalone entry (everything).
+  const initialSource: string | undefined = route.params?.source;
+  const mode: Mode =
+    initialSource === 'hub-required' ? 'required' : initialSource === 'hub-polish' ? 'polish' : 'all';
+
+  // The mode decides WHICH items exist here at all; the gap flags decide the
+  // fix (camera vs editor) exactly as before.
+  const scoped = useMemo(
+    () =>
+      products.filter((p) =>
+        mode === 'required' ? p.isRequired : mode === 'polish' ? p.isThin : p.isRequired || p.isThin,
+      ),
+    [products, mode],
+  );
+  const photoNeededItems = useMemo(() => scoped.filter((x) => x.needsPhotos), [scoped]);
+  const dataNeededItems = useMemo(() => scoped.filter((x) => x.needsContent), [scoped]);
+  const manualQueueItems = useMemo(() => scoped.filter((x) => !x.needsContent && x.needsSku), [scoped]);
 
   const prioritize = useCallback(
     (list: ClassifiedProduct[], done: Set<string>) => {
@@ -108,16 +131,15 @@ export function BackfillOptimizerScreen() {
 
   // End of the optimize stage → the shared completion screen (PublishConfirmation,
   // import variant). Same screen the match stage lands on, so the two stages end
-  // the same way.
+  // the same way. The cleared note names the lane you actually ran.
   const finishOptimize = useCallback(() => {
     navigation.navigate('PublishConfirmation' as any, {
       origin: 'import',
       importCount: polishedCount,
       savedToInventory: false,
-      // Hub uses this for its "{lane} cleared" note; details is the later bucket.
-      completedLane: completedDetailIds.size > 0 ? 'details' : 'photos',
+      completedLane: mode === 'polish' ? 'polish' : 'required',
     });
-  }, [navigation, polishedCount, completedDetailIds]);
+  }, [navigation, polishedCount, mode]);
 
   const enterBucket = (b: Bucket) => {
     if (remainingFor(b) === 0) return;
@@ -130,30 +152,8 @@ export function BackfillOptimizerScreen() {
     setView({ kind: 'review' });
   };
 
-  // Entered from a hub lane (source: 'hub-photos' | 'hub-details') → drop the user
-  // straight into that queue once the counts have loaded, skipping the lobby.
-  // Fires once; if the target queue is empty we simply stay in the lobby.
-  const initialSource: string | undefined = route.params?.source;
-  const autoEnteredRef = useRef(false);
-  useEffect(() => {
-    if (autoEnteredRef.current || loading) return;
-    if (initialSource !== 'hub-photos' && initialSource !== 'hub-details') {
-      autoEnteredRef.current = true;
-      return;
-    }
-    autoEnteredRef.current = true;
-    if (initialSource === 'hub-photos') {
-      if (photoQueue.length > 0) setView({ kind: 'lesson', q: 'photo' });
-    } else {
-      // hub-details → the details (data + manual) review path, same gating as
-      // enterBucket.
-      const detailIds = [...dataQueue, ...manualQueue].map((p) => p.Id);
-      if (detailIds.length > 0) {
-        setReviewIds(new Set(detailIds));
-        setView({ kind: 'review' });
-      }
-    }
-  }, [loading, initialSource, photoQueue, dataQueue, manualQueue]);
+  // Deep links land ON the lobby (the explainer step), never past it — the one
+  // screen that says what we're about to do before any work starts.
 
   // ── Photo / Details lessons keep the real camera + AI views ───────────────
   if (view.kind === 'lesson' && view.q === 'photo') {
@@ -256,18 +256,38 @@ export function BackfillOptimizerScreen() {
     );
   }
 
-  // ── Lobby · the optimize intro — a calm sibling of the hub ────────────────
-  // Direct entry only (the hub deep-links PAST this via source: hub-photos /
-  // hub-details). Two numbered cards name the tasks; the pill starts the first
-  // open one, or finishes when nothing's left.
+  // ── Lobby · the intro/explainer step, mode-scoped ─────────────────────────
+  // EVERY entry (hub-required, hub-polish, standalone) lands here first: the
+  // hero names the scope, one line says why, two numbered cards name the tasks;
+  // the pill starts the first open one, or finishes when nothing's left.
   const photosLeft = photoQueue.length;
   const detailsLeft = dataQueue.length + manualQueue.length;
   const startBucket: Bucket | null =
     photosLeft > 0 ? 'photo' : dataQueue.length > 0 ? 'data' : manualQueue.length > 0 ? 'manual' : null;
 
+  // Mode copy — the lobby IS the explainer step: what this is, why, what happens.
+  const platformNames = requiredPlatforms.map((k) => getPlatform(k)?.label || k);
+  const heroLabel =
+    mode === 'required'
+      ? `item${plural(scoped.length)} ${platformNames.length ? `${platformNames.join(' + ')} won’t take yet` : 'stores won’t take yet'}`
+      : mode === 'polish'
+        ? `item${plural(scoped.length)} could be stronger`
+        : counts.attention === 1
+          ? 'item to polish'
+          : 'items to polish';
+  const introLine =
+    mode === 'required'
+      ? 'Add what’s missing and they can go live. Photos first, then details.'
+      : mode === 'polish'
+        ? 'These publish fine today. Stronger listings just sell faster.'
+        : null;
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 6 }]}>
-      <InboxHeader title="Optimize" onBack={() => navigation.goBack()} />
+      <InboxHeader
+        title={mode === 'required' ? 'Required *' : mode === 'polish' ? 'Make them stronger' : 'Optimize'}
+        onBack={() => navigation.goBack()}
+      />
 
       {loading ? (
         <View style={styles.center}>
@@ -284,10 +304,8 @@ export function BackfillOptimizerScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.lobbyContent} showsVerticalScrollIndicator={false}>
-          <HeroNumeral
-            value={counts.attention}
-            label={counts.attention === 1 ? 'item to polish' : 'items to polish'}
-          />
+          <HeroNumeral value={mode === 'all' ? counts.attention : scoped.length} label={heroLabel} />
+          {!!introLine && <Text style={styles.introLine}>{introLine}</Text>}
           <View style={styles.cardList}>
             <NumberedCard
               index={1}
@@ -347,6 +365,9 @@ const styles = StyleSheet.create({
   // Lobby body (hero numeral + numbered cards). Bottom padding clears the pinned footer.
   lobbyContent: { paddingHorizontal: 20, paddingBottom: 170 },
   cardList: { marginTop: 4 },
+
+  // The one explainer line under the hero (required / polish modes).
+  introLine: { fontSize: 15, color: IC.muted, textAlign: 'center', lineHeight: 21, marginTop: -6, marginBottom: 16, paddingHorizontal: 14 },
 
   // Centered editorial beats (explainer handoff + done). Calm copy, no quest cards.
   centerBody: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, gap: 12 },

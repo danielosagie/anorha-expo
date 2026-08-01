@@ -4,11 +4,11 @@ import {
   Alert,
   Dimensions,
   Keyboard,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -17,11 +17,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Gesture,
   GestureDetector,
-  GestureHandlerRootView,
 } from 'react-native-gesture-handler';
 import Animated, {
-  Extrapolation,
-  interpolate,
   runOnJS,
   useAnimatedStyle,
   useReducedMotion,
@@ -36,10 +33,9 @@ import {
   Rect,
   vec,
 } from '@shopify/react-native-skia';
-import { Portal, PortalHost } from 'react-native-teleport';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
-import { ChevronDown, Maximize2, X } from 'lucide-react-native';
+import { ChevronDown, History, Maximize2, X } from 'lucide-react-native';
 import { ConversationList } from '../../features/liquidationConversation/components/ConversationList';
 import { ConvexLiveMessages } from '../../features/liquidationConversation/ConvexLiveMessages';
 import PlanCard from '../../features/liquidationConversation/components/PlanCard';
@@ -57,15 +53,8 @@ import { MessageComposer } from '../chat/MessageComposer';
 import { AnorhaFace } from '../brand/AnorhaFace';
 import { ensureSupabaseJwt } from '../../../lib/supabase';
 import {
-  QUICK_CHAT_FULL_HOST,
-  QUICK_CHAT_SHEET_HOST,
-  quickChatProgress,
-  quickChatTransition,
-  useQuickChatTransition,
-} from './quickChatTransition';
-import { TELEPORT_AVAILABLE } from './teleportAvailability';
-import {
   ChatChromeHeader,
+  ChatCircleButton,
   ChatComposerFooter,
   ChatSurfaceWash,
 } from '../../features/liquidationConversation/components/ChatChrome';
@@ -78,8 +67,6 @@ const CONVEX_TEMPLATE =
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const DEFAULT_PEEK_RATIO = 0.55;
-const MAX_SHEET_H = Math.round(SCREEN_H * 0.9);
-const EXPAND_AT = Math.round(SCREEN_H * 0.7);
 const GRABBER_H = 22;
 const SHEET_BORDER = 1;
 // The chat surface paints a cream wash under its floating header, so a pure white grabber
@@ -154,12 +141,10 @@ function RecordingWindowGlow({ active }: { active: boolean }) {
   );
 }
 
-// This sheet renders inside a native Modal (presentationStyle="overFullScreen"), which on iOS
-// is its OWN UIWindow. Reanimated's useAnimatedKeyboard observes the app's main window, so
-// inside this Modal its height stays 0 forever: the sheet never grew and the composer never
-// lifted, leaving the composer buried under the keyboard. JS Keyboard events DO fire in a
-// modal, so both are driven from those instead. Do not switch these back to
-// useAnimatedKeyboard without checking it on a real device inside the Modal.
+// Keyboard height is read from JS Keyboard events, not Reanimated's useAnimatedKeyboard.
+// The surface used to live inside a native Modal — its own UIWindow on iOS — where
+// useAnimatedKeyboard reported 0 forever and the composer stayed buried under the keys.
+// The Modal is gone, but these listeners are correct, cheap, and work on both platforms.
 const KB_SHOW_EVENT = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
 const KB_HIDE_EVENT = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
@@ -296,130 +281,91 @@ export function QuickChatSheet({
   onClose,
 }: QuickChatSheetProps) {
   const navigation = useNavigation<any>();
-  const transition = useQuickChatTransition();
-  const sheetRef = useRef<View>(null);
-  const expandRequestedRef = useRef(false);
-  const sheetPresentedRef = useRef(false);
   const peekHeight = Math.round(SCREEN_H * Math.max(0.3, Math.min(0.65, peekHeightRatio)));
-  const sheetHeight = useSharedValue(peekHeight);
-  const sheetTranslateY = useSharedValue(peekHeight + 24);
-  const backdropOpacity = useSharedValue(0);
   const [recordingActive, setRecordingActive] = useState(false);
   const controller = useSproutConversationController(campaignId);
   const heroSuggestions = useMemo(
     () => toHeroSuggestions(suggestedQuestions),
     [suggestedQuestions],
   );
-  // Before the first exchange the sheet is only the composer, so it rests at the chrome it
-  // actually renders instead of reserving the peek height. Gated on loaded state, never a
-  // timer: a thread with history is still loading here, so it never flashes the short sheet.
-  const [chromeHeight, setChromeHeight] = useState(0);
-  const reportChromeHeight = useCallback((height: number) => {
-    setChromeHeight(current => (Math.abs(current - height) < 1 ? current : height));
-  }, []);
-  const hasSproutResponse = controller.activeMessages.some(message => message.role === 'assistant');
-  const composerOnly =
-    !controller.loading &&
-    !controller.isLoadingMessages &&
-    !hasSproutResponse;
-  const restingHeight = composerOnly && chromeHeight > 0
-    ? Math.min(peekHeight, chromeHeight + GRABBER_H + SHEET_BORDER * 2)
-    : peekHeight;
-  const restingHeightReady =
-    !controller.loading &&
-    !controller.isLoadingMessages &&
-    (!composerOnly || chromeHeight > 0);
-  const restHeight = useSharedValue(peekHeight);
 
-  // Wait offscreen for history and chrome measurement so the first visible frame is compact.
+  // Composer first. Tapping Sprout puts an input on screen and nothing else: no backdrop,
+  // no sheet, no waiting on the network. The surface only grows into a transcript once a
+  // turn actually lands in THIS session. Existing history is not "a result coming back" —
+  // it stays folded behind the expand button, so the seller lands on an input rather than
+  // on a conversation they didn't ask to reopen.
+  //
+  // This used to present a full-screen Modal that stayed invisible until the thread had
+  // loaded and the chrome had measured. When either never resolved, the app was left under
+  // a transparent Modal that ate every tap: "the chat doesn't open and I can't press
+  // anything". Nothing here is allowed to gate on load state again.
+  const [grown, setGrown] = useState(false);
+  const grow = useCallback(() => setGrown(true), []);
+  const messageCount = controller.activeMessages.length;
+  const baselineCountRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!restingHeightReady) return;
-    restHeight.set(restingHeight);
-    if (!sheetPresentedRef.current) {
-      sheetPresentedRef.current = true;
-      sheetHeight.set(restingHeight);
-      sheetTranslateY.set(restingHeight + 24);
-      quickChatTransition.resetSheet({
-        y: SCREEN_H - restingHeight + GRABBER_H,
-        height: restingHeight - GRABBER_H,
-      });
-      const frame = requestAnimationFrame(() => {
-        sheetTranslateY.set(withSpring(0, { damping: 26, stiffness: 260, mass: 0.72 }));
-        backdropOpacity.set(withTiming(1, { duration: 180 }));
-      });
-      return () => cancelAnimationFrame(frame);
+    // Only trust the count once a thread has actually resolved. There is a frame on entry
+    // where the thread id is still null and the list is still empty, and taking THAT as
+    // the baseline made every existing conversation look like a fresh result had just
+    // landed — the surface opened as a transcript again, which is the whole complaint.
+    if (!controller.activeThreadId || controller.isLoadingMessages) return;
+    if (baselineCountRef.current === null) {
+      baselineCountRef.current = messageCount;
+      return;
     }
+    if (messageCount > baselineCountRef.current) setGrown(true);
+  }, [controller.activeThreadId, controller.isLoadingMessages, messageCount]);
+  // A stream or a prompt is a result arriving whatever the count says.
+  useEffect(() => {
+    if (controller.isStreaming || controller.pendingPlan || controller.pendingQuestion) {
+      setGrown(true);
+    }
+  }, [controller.isStreaming, controller.pendingPlan, controller.pendingQuestion]);
 
-    // The first Sprout response grows the same measured rest surface without overshoot.
-    sheetHeight.set(withSpring(restingHeight, { damping: 30, stiffness: 240, mass: 0.9 }));
-    if (!quickChatTransition.getSnapshot().transitioning) {
-      quickChatTransition.setFrame({
-        y: SCREEN_H - restingHeight + GRABBER_H,
-        height: restingHeight - GRABBER_H,
-      });
-    }
-  }, [
-    backdropOpacity,
-    restHeight,
-    restingHeight,
-    restingHeightReady,
-    sheetHeight,
-    sheetTranslateY,
-  ]);
+  // The surface's height is a plain style, never an animated one. Reanimated drives
+  // layout props straight onto the view on the old architecture: the box resizes but its
+  // children keep the layout Yoga gave them, so the peek sheet held a full-height
+  // conversation and pushed the composer clean off the bottom of the screen. Everything
+  // that moves here is a transform or an opacity.
+  const dragY = useSharedValue(0);
+  const enter = useSharedValue(0);
+  const backdropOpacity = useSharedValue(0);
+
+  // Start the entry animation in the effect body. It used to be deferred a frame with
+  // requestAnimationFrame; that frame never landed, so the whole surface sat at opacity 0
+  // while its buttons were happily in the accessibility tree — "the chat doesn't open".
+  useEffect(() => {
+    enter.set(withTiming(1, { duration: 190 }));
+  }, [enter]);
 
   useEffect(() => {
-    if (transition.destination === 'sheet' && !transition.transitioning) {
-      expandRequestedRef.current = false;
-    }
-  }, [transition.destination, transition.transitioning]);
+    backdropOpacity.set(withTiming(grown ? 1 : 0, { duration: 200 }));
+  }, [backdropOpacity, grown]);
 
   const dismiss = useCallback(() => {
-    if (transition.transitioning || transition.destination === 'full') return;
     dismissKeyboard();
-    backdropOpacity.set(withTiming(0, { duration: 170 }));
-    sheetTranslateY.set(
-      withTiming(sheetHeight.get() + 24, { duration: 210 }, finished => {
+    backdropOpacity.set(withTiming(0, { duration: 150 }));
+    enter.set(
+      withTiming(0, { duration: 180 }, finished => {
         if (finished) runOnJS(onClose)();
       }),
     );
-  }, [backdropOpacity, onClose, sheetHeight, sheetTranslateY, transition.destination, transition.transitioning]);
+  }, [backdropOpacity, enter, onClose]);
 
+  // One path to the full surface: hand the thread to its own screen and close the dock.
+  // The draft is persisted per thread, so whatever was typed is still there on arrival.
+  // This used to teleport the live conversation across a portal to keep it mounted, which
+  // only existed to escape the Modal the dock no longer uses.
   const expand = useCallback(() => {
-    if (!TELEPORT_AVAILABLE) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      navigation.navigate('GlobalSproutChat', {
-        campaignId,
-        firstName,
-        suggestedQuestions,
-        placeholder,
-        emptyHint,
-        peekHeightRatio,
-      });
-      onClose();
-      return;
-    }
-    if (
-      expandRequestedRef.current ||
-      transition.transitioning ||
-      transition.destination === 'full'
-    ) return;
-    expandRequestedRef.current = true;
-    const navigateFull = (y: number, height: number) => {
-      quickChatTransition.setFrame({
-        y: y + GRABBER_H,
-        height: Math.max(1, height - GRABBER_H),
-      });
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      navigation.navigate('GlobalSproutChat');
-    };
-    const fallbackHeight = sheetHeight.get();
-    if (sheetRef.current) {
-      sheetRef.current.measureInWindow((_x, y, _width, height) => {
-        navigateFull(y, height);
-      });
-      return;
-    }
-    navigateFull(SCREEN_H - fallbackHeight, fallbackHeight);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    navigation.navigate('GlobalSproutChat', {
+      campaignId,
+      firstName,
+      suggestedQuestions,
+      placeholder,
+      emptyHint,
+    });
+    onClose();
   }, [
     campaignId,
     emptyHint,
@@ -427,74 +373,56 @@ export function QuickChatSheet({
     navigation,
     onClose,
     placeholder,
-    peekHeightRatio,
-    sheetHeight,
     suggestedQuestions,
-    transition.destination,
-    transition.transitioning,
   ]);
 
-  const startHeight = useSharedValue(peekHeight);
-  const returnToPeek = useCallback(() => {
-    dismissKeyboard();
-    if (transition.destination === 'full') {
-      quickChatTransition.requestCollapse();
-      return;
-    }
-    sheetHeight.set(withSpring(restHeight.get(), { damping: 25, stiffness: 260 }));
-  }, [restHeight, sheetHeight, transition.destination]);
+  const returnToPeek = useCallback(() => dismissKeyboard(), []);
+  // The grabber drags the sheet away, nothing more. Dragging it taller used to be the only
+  // way up; the expand button says so out loud instead, and a transform can't desync the
+  // layout underneath it the way an animated height did.
   const pan = useMemo(
     () =>
       Gesture.Pan()
-        .onBegin(() => {
-          'worklet';
-          startHeight.set(sheetHeight.get());
-        })
         .onUpdate(event => {
           'worklet';
-          const next = startHeight.get() - event.translationY;
-          sheetHeight.set(Math.max(0, Math.min(MAX_SHEET_H, next)));
+          dragY.set(Math.max(0, event.translationY));
         })
         .onEnd(event => {
           'worklet';
-          const height = sheetHeight.get();
-          const rest = restHeight.get();
-          if (height < rest * 0.58 || event.velocityY > 900) {
+          if (dragY.get() > peekHeight * 0.32 || event.velocityY > 900) {
             runOnJS(dismissKeyboard)();
-            sheetTranslateY.set(
-              withTiming(height + 24, { duration: 190 }, finished => {
+            backdropOpacity.set(withTiming(0, { duration: 160 }));
+            enter.set(
+              withTiming(0, { duration: 180 }, finished => {
                 if (finished) runOnJS(onClose)();
               }),
             );
-            backdropOpacity.set(withTiming(0, { duration: 160 }));
-          } else if (height > EXPAND_AT || event.velocityY < -800) {
-            runOnJS(expand)();
           } else {
-            sheetHeight.set(withSpring(rest, { damping: 25, stiffness: 260 }));
+            dragY.set(withSpring(0, { damping: 26, stiffness: 280 }));
           }
         }),
-    [backdropOpacity, expand, onClose, restHeight, sheetHeight, sheetTranslateY, startHeight],
+    [backdropOpacity, dragY, enter, onClose, peekHeight],
   );
 
   const keyboardOffset = useKeyboardOffset();
-  // The composer lifts by the whole keyboard height INSIDE the sheet, so the sheet has to
-  // extend behind the keyboard by the same amount or the composer is pushed up over the
-  // messages and out the top. sheetHeight stays the part the seller sees and drags.
-  //
-  // This used to be gated to the composer-only rest height, which left the peek
-  // presentation (any thread WITH history) as a fixed 55%-tall sheet under a ~45%-tall
-  // keyboard: the keyboard swallowed nearly the whole sheet and the composer floated over
-  // the transcript. Clamped to MAX_SHEET_H so the grown sheet can't run off the top.
-  const sheetStyle = useAnimatedStyle(() => ({
-    height: Math.min(MAX_SHEET_H, sheetHeight.get() + keyboardOffset.get()),
-    transform: [{ translateY: sheetTranslateY.get() }],
-  }));
+  const insets = useSafeAreaInsets();
+  // Calm entry: a short fade and a 24pt rise. No spring — the old one overshot hard enough
+  // that opening the inventory helper read as the whole page bouncing. The same transform
+  // carries the drag and rides the whole surface above the keyboard, so the composer keeps
+  // its place inside it instead of being lifted a second time.
+  const enterStyle = useAnimatedStyle(() => ({
+    opacity: enter.get(),
+    transform: [{
+      translateY:
+        (1 - enter.get()) * 24
+        + dragY.get()
+        - Math.max(keyboardOffset.get() - insets.bottom, 0),
+    }],
+  }), [insets.bottom]);
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: backdropOpacity.get() * 0.32,
   }));
 
-  const hostName =
-    transition.destination === 'full' ? QUICK_CHAT_FULL_HOST : QUICK_CHAT_SHEET_HOST;
   const conversation = (
     <QuickChatConversation
       controller={controller}
@@ -507,56 +435,55 @@ export function QuickChatSheet({
       onApplySelection={onApplySelection}
       onInventoryActionApplied={onInventoryActionApplied}
       focusRequestKey={focusRequestKey}
+      compact={!grown}
+      onShowHistory={grow}
       onReturnToPeek={returnToPeek}
       onExpand={expand}
       onDismiss={dismiss}
-      onCompactHeight={reportChromeHeight}
       onRecordingChange={setRecordingActive}
     />
   );
 
   return (
-    <>
-      <Modal
-        visible={!TELEPORT_AVAILABLE || transition.destination === 'sheet'}
-        transparent
-        animationType="none"
-        presentationStyle="overFullScreen"
-        statusBarTranslucent
-        onRequestClose={dismiss}
-      >
-        <GestureHandlerRootView
-          style={styles.overlay}
-          pointerEvents={transition.destination === 'sheet' ? 'auto' : 'none'}
-        >
-          <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]} />
-          <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} accessibilityLabel="Close Sprout" />
-          <Animated.View ref={sheetRef} style={[styles.sheet, sheetStyle]}>
-            <GestureDetector gesture={pan}>
-              <View style={styles.grabberZone}>
-                <View style={styles.grabber} />
-              </View>
-            </GestureDetector>
-            {TELEPORT_AVAILABLE ? (
-              <PortalHost name={QUICK_CHAT_SHEET_HOST} style={styles.sheetHost} />
-            ) : (
-              <View style={styles.sheetHost}>{conversation}</View>
-            )}
-          </Animated.View>
-          <RecordingWindowGlow active={recordingActive} />
-        </GestureHandlerRootView>
-      </Modal>
-
-      {TELEPORT_AVAILABLE ? (
-        <Portal
-          hostName={hostName}
-          name="sprout-live-conversation"
-          style={transition.destination === 'full' ? styles.fullPortal : styles.sheetPortal}
-        >
-          {conversation}
-        </Portal>
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      {/* Compact is a bare composer over a live screen: no backdrop, and box-none
+          everywhere so every tap outside the composer still reaches the app. Only the
+          grown sheet earns a scrim and a tap-to-close catcher. */}
+      {grown ? (
+        <>
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]}
+          />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={dismiss}
+            accessibilityLabel="Close Sprout"
+          />
+        </>
       ) : null}
-    </>
+
+      <Animated.View
+        style={[
+          styles.dock,
+          grown ? styles.sheet : styles.dockCompact,
+          grown ? { height: peekHeight } : null,
+          enterStyle,
+        ]}
+        pointerEvents="box-none"
+      >
+        {grown ? (
+          <GestureDetector gesture={pan}>
+            <View style={styles.grabberZone}>
+              <View style={styles.grabber} />
+            </View>
+          </GestureDetector>
+        ) : null}
+        <View style={grown ? styles.sheetHost : styles.dockHost}>{conversation}</View>
+      </Animated.View>
+
+      <RecordingWindowGlow active={recordingActive} />
+    </View>
   );
 }
 
@@ -586,10 +513,11 @@ function QuickChatConversation({
   onApplySelection,
   onInventoryActionApplied,
   focusRequestKey,
+  compact = false,
+  onShowHistory,
   onReturnToPeek,
   onExpand,
   onDismiss,
-  onCompactHeight,
   onRecordingChange,
   standaloneFull = false,
   onCollapse,
@@ -604,21 +532,21 @@ function QuickChatConversation({
   onApplySelection?: QuickChatSheetProps['onApplySelection'];
   onInventoryActionApplied?: QuickChatSheetProps['onInventoryActionApplied'];
   focusRequestKey?: number;
+  /** Composer only — no transcript, no sheet chrome, nothing behind it. */
+  compact?: boolean;
+  /** Compact only: unfold the past turns in place, without leaving the screen. */
+  onShowHistory?: () => void;
   onReturnToPeek: () => void;
   onExpand: () => void;
   onDismiss: () => void;
-  /** Compact only: the measured header + composer height the sheet collapses to. */
-  onCompactHeight?: (height: number) => void;
   onRecordingChange?: (recording: boolean) => void;
   standaloneFull?: boolean;
   onCollapse?: () => void;
 }) {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const transition = useQuickChatTransition();
-  const full = standaloneFull || transition.destination === 'full';
-  const visualFull =
-    standaloneFull || (transition.destination === 'full' && transition.phase !== 'expanding');
+  const full = standaloneFull;
+  const visualFull = standaloneFull;
   const empty = !controller.isLoadingMessages && controller.activeMessages.length === 0;
   const [headerHeight, setHeaderHeight] = useState(0);
   const [footerHeight, setFooterHeight] = useState(0);
@@ -628,9 +556,6 @@ function QuickChatConversation({
     | { kind: 'plan'; prompt: DecisionPrompt }
     | { kind: 'selection'; proposal: InventorySelectionProposal }
   >());
-  const activeThread = controller.threads.find(thread => thread.id === controller.activeThreadId);
-  const rawTitle = activeThread?.title || controller.activeCampaign?.title || 'Sprout';
-  const threadTitle = rawTitle === 'Primary' || rawTitle === 'New chat' ? 'Sprout' : rawTitle;
   const getTurnContext = useCallback((): ConversationContextAttachment | undefined => {
     if (!contextAttachment) return undefined;
     return {
@@ -645,37 +570,6 @@ function QuickChatConversation({
     setRecordingActive(recording);
     onRecordingChange?.(recording);
   }, [onRecordingChange]);
-
-  // Report the chrome the sheet has to keep visible when there is nothing else to show.
-  // Compact only: the full surface pads for the status bar and the home indicator, which
-  // would overstate the collapsed height.
-  useEffect(() => {
-    if (full || !onCompactHeight || !headerHeight || !footerHeight) return;
-    onCompactHeight(headerHeight + footerHeight);
-  }, [footerHeight, full, headerHeight, onCompactHeight]);
-
-  const transitionStyle = useAnimatedStyle(() => {
-    const progress = quickChatProgress.get();
-    return {
-      height: interpolate(
-        progress,
-        [0, 1],
-        [transition.frame.height, SCREEN_H],
-        Extrapolation.CLAMP,
-      ),
-      borderRadius: interpolate(progress, [0, 1], [26, 0], Extrapolation.CLAMP),
-      transform: [
-        {
-          translateY: interpolate(
-            progress,
-            [0, 1],
-            [transition.frame.y, 0],
-            Extrapolation.CLAMP,
-          ),
-        },
-      ],
-    };
-  }, [transition.frame.height, transition.frame.y]);
 
   const sendSuggestion = useCallback((prompt: string) => {
     void controller.queueTextMessage(
@@ -828,27 +722,26 @@ function QuickChatConversation({
     );
   }, [handleDecision]);
 
-  const collapse = useCallback(() => {
-    if (standaloneFull) {
-      onCollapse?.();
-      return;
-    }
-    quickChatTransition.requestCollapse();
-  }, [onCollapse, standaloneFull]);
+  const collapse = useCallback(() => onCollapse?.(), [onCollapse]);
 
   const keyboardOffset = useKeyboardOffset();
   // The footer pads for the home indicator, so the lift gives that padding back when the
   // keyboard covers it. Without this the composer would float a whole inset above the keys.
+  // Only the full surface lifts its own composer: it fills the window, so nothing above it
+  // can move out of the keyboard's way. The dock is already ridden up by its container —
+  // lifting again here would double the offset and float the composer mid-screen.
   const composerLiftStyle = useAnimatedStyle(
     () => ({
-      transform: [{ translateY: -Math.max(keyboardOffset.get() - insets.bottom, 0) }],
+      transform: [{
+        translateY: full ? -Math.max(keyboardOffset.get() - insets.bottom, 0) : 0,
+      }],
     }),
-    [insets.bottom],
+    [full, insets.bottom],
   );
   // The list's bottom inset is a plain layout number, so it can't read the animated
   // keyboard value, it has to track the same lift in JS or the transcript scrolls under
   // the lifted composer and the newest turn is unreachable.
-  const composerLift = Math.max(keyboardHeight - insets.bottom, 0);
+  const composerLift = full ? Math.max(keyboardHeight - insets.bottom, 0) : 0;
 
   // Opening the sheet raised the keyboard immediately, mid entry-spring: the seller landed
   // on a sheet whose visible strip was the grabber, with the transcript they came to read
@@ -880,44 +773,137 @@ function QuickChatConversation({
       ? controller.pendingPlan
       : null;
 
+  const closeAction = {
+    icon: <X size={21} color="#18181B" />,
+    onPress: onDismiss,
+    accessibilityLabel: 'Close chat',
+  };
+
+  // One row above the composer: history on the left, the icon-only open-up button dead
+  // centre. No title, no "Global chat" label — the surface is Sprout, saying so is noise.
+  const actionsRow = (
+    <View style={styles.dockActions} pointerEvents="box-none">
+      <View style={styles.dockActionsSide} pointerEvents="box-none">
+        {compact && !full && onShowHistory ? (
+          <TouchableOpacity
+            style={styles.historyPill}
+            onPress={onShowHistory}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Show chat history"
+          >
+            <History size={15} color="#18181B" />
+            <Text style={styles.historyPillText}>Chat history</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <ChatCircleButton
+        icon={<Maximize2 size={17} color="#18181B" />}
+        onPress={onExpand}
+        accessibilityLabel="Expand chat"
+      />
+      <View style={styles.dockActionsSide} pointerEvents="box-none" />
+    </View>
+  );
+
+  // The composer pill, with close as its own circle beside it rather than a header button.
+  const bottomStack = (
+    <View onLayout={event => setFooterHeight(event.nativeEvent.layout.height)}>
+      {pendingPlan ? (
+        <View style={styles.pendingCard}>
+          <PlanCard
+            prompt={pendingPlan}
+            onDecision={handleDecision}
+            submitting={!!controller.submittingDecisionId}
+          />
+        </View>
+      ) : null}
+      {pendingQuestion ? (
+        <View style={styles.pendingCard}>
+          <QuestionCard
+            prompt={pendingQuestion}
+            submitting={controller.answeringQuestion}
+            onSubmit={(answers, other) => controller.submitAnswer(pendingQuestion, answers, other)}
+          />
+        </View>
+      ) : null}
+      {visualFull ? null : actionsRow}
+      <ChatComposerFooter
+        bottomPadding={(insets.bottom || 10) + 12}
+        error={controller.error}
+        onRetry={controller.onRefresh}
+        notice={controller.notice}
+        onDismissNotice={() => controller.setNotice(null)}
+      >
+        <View style={styles.composerRow}>
+          <View style={styles.flex}>
+            <MessageComposer
+              value={controller.composerText}
+              placeholder={placeholder}
+              onChangeText={controller.setComposerText}
+              onSend={(photos) => {
+                void controller.sendComposer(photos, undefined, getTurnContext());
+              }}
+              queuedCount={controller.queuedCount}
+              isStreaming={controller.isStreaming}
+              getAuthToken={ensureSupabaseJwt}
+              contextAttachment={contextAttachment ? { label: contextAttachment.label } : null}
+              hideAttach={!!contextAttachment}
+              focusRequestKey={effectiveFocusKey}
+              onRecordingChange={handleRecordingChange}
+            />
+          </View>
+          {visualFull ? null : <ChatCircleButton {...closeAction} />}
+        </View>
+      </ChatComposerFooter>
+    </View>
+  );
+
+  // Compact: the composer and nothing else. No wash, no header bar, no transcript, no
+  // absolute fill — the screen underneath stays visible and tappable.
+  if (compact && !full) {
+    return (
+      <Animated.View style={composerLiftStyle} pointerEvents="box-none">
+        <ConvexLiveMessages
+          threadId={controller.activeThreadId}
+          onMessages={controller.ingestLiveMessages}
+        />
+        {bottomStack}
+      </Animated.View>
+    );
+  }
+
   return (
     <Animated.View
       style={[
         styles.conversationSurface,
         full ? styles.fullConversationSurface : styles.sheetConversationSurface,
         standaloneFull ? styles.standaloneConversationSurface : null,
-        full && !standaloneFull ? transitionStyle : null,
       ]}
-      pointerEvents={!standaloneFull && transition.transitioning ? 'none' : 'auto'}
     >
       <View style={styles.flex}>
         <ChatSurfaceWash />
-        <ChatChromeHeader
-          title={threadTitle}
-          subtitle="Global chat"
-          topInset={visualFull ? insets.top : 0}
-          onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}
-          leftAction={{
-            icon: visualFull
-              ? <ChevronDown size={18} color="#18181B" />
-              : <Maximize2 size={17} color="#18181B" />,
-            label: 'Chat',
-            onPress: visualFull ? collapse : onExpand,
-            accessibilityLabel: visualFull ? 'Return to quick chat' : 'Expand chat',
-          }}
-          rightAction={!visualFull ? {
-            icon: <X size={21} color="#18181B" />,
-            onPress: onDismiss,
-            accessibilityLabel: 'Close chat',
-          } : undefined}
-        />
+        {/* Full screen keeps a header, for the status bar inset and the way back down.
+            The peek sheet carries no header at all: its buttons live above the composer,
+            where the seller's thumb already is. */}
+        {visualFull ? (
+          <ChatChromeHeader
+            topInset={insets.top}
+            onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}
+            centerAction={{
+              icon: <ChevronDown size={18} color="#18181B" />,
+              onPress: collapse,
+              accessibilityLabel: 'Collapse chat',
+            }}
+          />
+        ) : null}
 
         <ConvexLiveMessages
           threadId={controller.activeThreadId}
           onMessages={controller.ingestLiveMessages}
         />
 
-        <View style={[styles.flex, { paddingTop: headerHeight }]}>
+        <View style={[styles.flex, { paddingTop: visualFull ? headerHeight : 6 }]}>
           <ConversationList
             messages={controller.activeMessages}
             loading={controller.isLoadingMessages}
@@ -947,7 +933,6 @@ function QuickChatConversation({
             submittingDecisionId={controller.submittingDecisionId}
             contentTopInset={8}
             contentBottomInset={footerHeight + composerLift + 8}
-            scrollEnabled={!transition.transitioning}
             ListEmptyComponent={
               empty && full ? (
                 <NewChatHero
@@ -965,49 +950,7 @@ function QuickChatConversation({
           style={[styles.composerAvoider, composerLiftStyle]}
           pointerEvents="box-none"
         >
-          <View onLayout={event => setFooterHeight(event.nativeEvent.layout.height)}>
-          {pendingPlan ? (
-            <View style={styles.pendingCard}>
-              <PlanCard
-                prompt={pendingPlan}
-                onDecision={handleDecision}
-                submitting={!!controller.submittingDecisionId}
-              />
-            </View>
-          ) : null}
-          {pendingQuestion ? (
-            <View style={styles.pendingCard}>
-              <QuestionCard
-                prompt={pendingQuestion}
-                submitting={controller.answeringQuestion}
-                onSubmit={(answers, other) => controller.submitAnswer(pendingQuestion, answers, other)}
-              />
-            </View>
-          ) : null}
-          <ChatComposerFooter
-            bottomPadding={(insets.bottom || 10) + 12}
-            error={controller.error}
-            onRetry={controller.onRefresh}
-            notice={controller.notice}
-            onDismissNotice={() => controller.setNotice(null)}
-          >
-            <MessageComposer
-              value={controller.composerText}
-              placeholder={placeholder}
-              onChangeText={controller.setComposerText}
-              onSend={(photos) => {
-                void controller.sendComposer(photos, undefined, getTurnContext());
-              }}
-              queuedCount={controller.queuedCount}
-              isStreaming={controller.isStreaming}
-              getAuthToken={ensureSupabaseJwt}
-              contextAttachment={contextAttachment ? { label: contextAttachment.label } : null}
-              hideAttach={!!contextAttachment}
-              focusRequestKey={effectiveFocusKey}
-              onRecordingChange={handleRecordingChange}
-            />
-          </ChatComposerFooter>
-          </View>
+          {bottomStack}
         </Animated.View>
       </View>
       {full ? <RecordingWindowGlow active={recordingActive} /> : null}
@@ -1102,16 +1045,62 @@ function NewChatHero({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-  },
   recordingWindowGlow: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1000,
   },
   backdrop: {
     backgroundColor: '#17200D',
+  },
+  dock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  // Composer-only: no card, no border, no shadow. The composer already has its own pill.
+  dockCompact: {
+    backgroundColor: 'transparent',
+  },
+  dockHost: {
+    width: '100%',
+  },
+  dockActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  // Equal side slots keep the expand button dead-centred whatever the left slot holds.
+  dockActionsSide: {
+    flex: 1,
+  },
+  historyPill: {
+    alignSelf: 'flex-start',
+    height: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  historyPillText: {
+    fontSize: 15,
+    color: '#18181B',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  composerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
   },
   sheet: {
     backgroundColor: SHEET_TOP_WASH,
@@ -1134,10 +1123,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#D9DDE3',
   },
   sheetHost: { flex: 1 },
-  sheetPortal: { flex: 1 },
-  fullPortal: {
-    ...StyleSheet.absoluteFillObject,
-  },
   conversationSurface: {
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',

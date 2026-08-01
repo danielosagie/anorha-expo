@@ -27,7 +27,11 @@ export type AttentionReason =
   | 'duplicate_target'
   | 'field_conflict'
   | 'bundle'
-  | 'stale_link';
+  | 'stale_link'
+  // The commit ran and failed — resolving again retries it. Rows arrive with
+  // this on the AttentionReason column (backend sync-item.ts has 8 values;
+  // omitting one here rendered a LABEL-LESS group row).
+  | 'commit_failed';
 
 export interface SyncItem {
   platformId: string;

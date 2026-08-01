@@ -34,6 +34,7 @@ import { ListFilter } from 'lucide-react-native';
 import { ChevronsUpDownIcon } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
+import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { observer } from '@legendapp/state/react';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
@@ -275,19 +276,9 @@ const InventoryOrdersScreen = observer(() => {
     }
   }, [addToCampaign, selectedItems, addingToCampaign, campaignAdapter, navigation]);
 
-  const [activeInventoryChatMode, setActiveInventoryChatMode] = useState<InventoryQuickChatMode | null>(null);
-  const selectionPillOffset = useSharedValue(0);
-  const selectionPillAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: selectionPillOffset.get() }],
-  }));
-  useEffect(() => {
-    const peekHeight = Math.round(windowHeight * INVENTORY_CHAT_PEEK_RATIO);
-    const lift = Math.max(0, peekHeight + 12 - 130);
-    selectionPillOffset.set(withSpring(activeInventoryChatMode ? -lift : 0, {
-      damping: 24,
-      stiffness: 260,
-    }));
-  }, [activeInventoryChatMode, selectionPillOffset, windowHeight]);
+  // Sprout docks as a composer now, not a 38%-tall sheet, so the action pill has nothing
+  // to get out of the way of. It used to spring up ~210pt on open, which read as the whole
+  // page bouncing the moment you picked Bulk select.
   const [speechModalVisible, setSpeechModalVisible] = useState(false);
 
   // Bulk Selection Handlers
@@ -326,7 +317,6 @@ const InventoryOrdersScreen = observer(() => {
     setIsSelectionMode(false);
     setSelectedItems(new Set());
     selectedItemsRef.current = new Set();
-    setActiveInventoryChatMode(null);
     closeQuickChat();
   };
 
@@ -1488,7 +1478,6 @@ const InventoryOrdersScreen = observer(() => {
   }, []);
 
   const openInventoryQuickChat = useCallback((mode: InventoryQuickChatMode) => {
-    setActiveInventoryChatMode(mode);
     openQuickChat({
       placeholder: mode === 'select'
         ? 'Tell Sprout what to select'
@@ -1505,7 +1494,6 @@ const InventoryOrdersScreen = observer(() => {
       onResolveSelection: resolveInventorySelection,
       onApplySelection: applyInventorySelection,
       onInventoryActionApplied: handleInventoryActionApplied,
-      onDismiss: () => setActiveInventoryChatMode(null),
     });
   }, [
     applyInventorySelection,
@@ -1714,6 +1702,10 @@ const InventoryOrdersScreen = observer(() => {
 
   return (
     <View style={[styles.background]}>
+      {/* Light page: assert dark status-bar content, or whichever tab pushed
+          `light-content` last (camera, home) leaves the clock invisible here. */}
+      <FocusAwareStatusBar barStyle="dark-content" backgroundColor="#F2F2F7" />
+
       {/* Tappable header title → AppMenu (Inventory / Orders / Scan inventory). */}
       <View style={[styles.titleBar, { top: insets.top + 6 }]} pointerEvents="box-none">
         <TouchableOpacity style={styles.titleTap} onPress={() => setHeaderMenuOpen(true)} activeOpacity={0.7}>
@@ -1728,7 +1720,6 @@ const InventoryOrdersScreen = observer(() => {
             accessibilityRole="button"
             accessibilityLabel="Bulk actions"
           >
-            <Icon name="checkbox-multiple-marked-outline" size={18} color="#2c2c2c" />
             <Text style={styles.titleBulkText}>Select</Text>
           </TouchableOpacity>
         ) : null}
@@ -1969,7 +1960,7 @@ const InventoryOrdersScreen = observer(() => {
           <Animated.View
             entering={SlideInDown.duration(300)}
             exiting={SlideOutDown}
-            style={[styles.bulkActionBar, selectionPillAnimatedStyle]}
+            style={styles.bulkActionBar}
           >
             <View style={styles.bulkActionContent}>
               {/* Left: Count Badge with Cancel */}
@@ -2355,8 +2346,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   titleTap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  // Icon-only read as a bare glyph with no meaning. The label is what makes it a control.
-  titleBulkTap: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 17, backgroundColor: '#EFEFEA' },
+  // No fill: the tint read as green against the page. The label is the control.
+  // Keep the 34pt height + 12pt side padding so the hit area stays thumb-sized without it.
+  titleBulkTap: { flexDirection: 'row', alignItems: 'center', height: 34, paddingHorizontal: 12, borderRadius: 17 },
   titleBulkText: { fontSize: 14, fontWeight: '600', color: '#2c2c2c' },
   titleText: { fontSize: 26, fontWeight: '700', color: '#2c2c2c' },
   container: {

@@ -2,8 +2,6 @@ import React, { useCallback, useContext, useEffect, useRef, useState } from 'rea
 import { NavigationContainer, NavigationContainerRef, CommonActions } from '@react-navigation/native';
 import { AppState, AppStateStatus, StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { PortalProvider } from 'react-native-teleport';
-import { TELEPORT_AVAILABLE } from './src/components/sprout/teleportAvailability';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
@@ -70,9 +68,6 @@ WebBrowser.maybeCompleteAuthSession();
 initFlowLogger().catch(() => { });
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
-
-const OptionalPortalProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
-  TELEPORT_AVAILABLE ? <PortalProvider>{children}</PortalProvider> : <>{children}</>;
 
 const App: React.FC = () => {
   // One-time cleanup of any existing cache conflicts
@@ -742,7 +737,6 @@ const App: React.FC = () => {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <OptionalPortalProvider>
         <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
           {/* Convex (Clerk-authed) wraps the app so the chat can subscribe to live
               messages via useQuery. Inside ClerkProvider so it can read the session. */}
@@ -765,7 +759,6 @@ const App: React.FC = () => {
           </PostHogProvider>
         </ConvexProvider>
       </ClerkProvider>
-      </OptionalPortalProvider>
     </GestureHandlerRootView>
   );
 };

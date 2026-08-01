@@ -63,16 +63,19 @@ export interface ImportHubData {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  /** matches + photos + details — the single number the hero shows. */
+  /** questions + required — the single OWED number the hero shows. Polish never counts. */
   totalNeedsYou: number;
   scanning: ImportHubScanning[];
   /** Every enabled connection, for the hub's "Your stores" list. */
   connections: HubConnection[];
   recentImports: InboxRecentImport[];
   lanes: {
+    /** Questions — items waiting on a human answer (the deck). */
     matches: { count: number; byConnection: HubLaneConnection[] };
-    photos: { count: number };
-    details: { count: number };
+    /** Required — a connected store refuses these until fixed. OWED. */
+    required: { count: number; platforms: string[] };
+    /** Polish — publishable but thin. Invited, never owed, never in the hero. */
+    polish: { count: number };
   };
 }
 
@@ -168,9 +171,15 @@ async function fetchInboxSummary(token: string | null): Promise<InboxSummaryResp
 export function useImportHub(): ImportHubData {
   const { liveConnections } = usePlatformConnections();
 
-  // Optimizer gaps, catalog-wide (unscoped) so the hub's photos/details lanes
-  // match the standalone optimize entry exactly.
-  const { counts: optCounts, loading: optLoading, refresh: refreshOpt } = useOptimizerQueues();
+  // Optimizer gaps, catalog-wide (unscoped) so the hub's required/polish lanes
+  // match the standalone optimize entry exactly. Required-ness is platform-aware
+  // (registry requiredFields × the platforms each item is missing from).
+  const {
+    counts: optCounts,
+    requiredPlatforms,
+    loading: optLoading,
+    refresh: refreshOpt,
+  } = useOptimizerQueues();
 
   const enabled = useMemo(
     () => (liveConnections || []).filter(isVisiblePlatformConnection),
@@ -294,9 +303,9 @@ export function useImportHub(): ImportHubData {
     }));
   }, [summary]);
 
-  const photosCount = optCounts.photoNeeded;
-  const detailsCount = optCounts.dataNeeded + optCounts.manualQueue;
-  const totalNeedsYou = matchesCount + photosCount + detailsCount;
+  // The hero is only ever OWED work: questions + required. Polish is shown but
+  // never added — that's what lets the number truly reach zero.
+  const totalNeedsYou = matchesCount + optCounts.required;
 
   const initialLoading =
     (loading && !firstDoneRef.current) || (!optFirstDoneRef.current && optLoading);
@@ -311,8 +320,8 @@ export function useImportHub(): ImportHubData {
     recentImports: summary?.recentImports || [],
     lanes: {
       matches: { count: matchesCount, byConnection: matchesByConnection },
-      photos: { count: photosCount },
-      details: { count: detailsCount },
+      required: { count: optCounts.required, platforms: requiredPlatforms },
+      polish: { count: optCounts.polish },
     },
   };
 }

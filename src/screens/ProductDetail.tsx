@@ -5248,7 +5248,10 @@ const styles = StyleSheet.create({
   savePillText: { fontSize: 13, fontWeight: '600' },
   // Product card (hero + title + price + desc)
   ovProductCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
-  ovHero: { width: '100%', height: 190, borderRadius: 14, backgroundColor: '#ECECEF' },
+  // Hero is a cover-crop of the seller's own photo. 190 cropped a portrait shot down to
+  // a 2:1 letterbox that showed the top of the product and nothing else; 280 gives it a
+  // roughly 4:3 window so the whole item reads at a glance.
+  ovHero: { width: '100%', height: 280, borderRadius: 14, backgroundColor: '#ECECEF' },
   ovHeroEmpty: { alignItems: 'center', justifyContent: 'center' },
   ovThumbRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   ovThumb: { width: 58, height: 58, borderRadius: 11, backgroundColor: '#ECECEF' },

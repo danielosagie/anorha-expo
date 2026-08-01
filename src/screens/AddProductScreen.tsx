@@ -26,6 +26,7 @@ import { MatchPreview, MatchPreviewData } from './AddProduct/MatchPreview';
 import { AddDetailsSheet } from './AddProduct/AddDetailsSheet';
 import { ShelfFolderSheet } from './AddProduct/ShelfFolderSheet';
 import ErrorModal from '../components/ErrorModal';
+import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
@@ -45,7 +46,6 @@ import {
   Dimensions,
   Platform,
   Alert,
-  StatusBar,
   Pressable,
   Clipboard,
   ScrollView,
@@ -5710,7 +5710,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   if (hasPermission === null) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="black" />
+        <FocusAwareStatusBar barStyle="light-content" backgroundColor="black" />
         <View style={styles.permissionContainer}>
           <MaterialIcons name="camera-alt" size={80} color="#666" />
           <Text style={styles.permissionTitle}>Requesting Camera Permission...</Text>
@@ -5722,7 +5722,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   if (hasPermission === false) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="black" />
+        <FocusAwareStatusBar barStyle="light-content" backgroundColor="black" />
 
         <View style={styles.permissionContainer}>
           <MaterialIcons name="camera-alt" size={80} color="#666" />
@@ -5804,7 +5804,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="black" />
+      <FocusAwareStatusBar barStyle="light-content" backgroundColor="black" />
 
       {/* DEV/design-export preview Modal only. Real flows render the preview + folder page as
           opaque overlays INSIDE the cart sheet Modal (below) — iOS can't stack Modals. */}

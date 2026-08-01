@@ -434,25 +434,26 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
       ? `${receiptN} item${receiptN === 1 ? '' : 's'} · ${platforms.length} channel${platforms.length === 1 ? '' : 's'}`
       : `${receiptN} item${receiptN === 1 ? '' : 's'} ready`;
 
-  const optRemaining = optCounts.photoNeeded + optCounts.dataNeeded + optCounts.manualQueue;
+  // Only REQUIRED gaps carry the "Continue" push — polish is invited from the
+  // hub, never chained. That keeps this receipt's next-step honest: it only
+  // nags about items a connected store will refuse.
+  const optRemaining = optCounts.required;
   const hasNext = !optLoading && optRemaining > 0;
 
   const goReview = () => navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
   const goHub = () =>
     navigation.replace('ImportHub' as any, { completedLane: completedLane ?? 'matches', connectionId });
   const goOptimize = () =>
-    navigation.replace('BackfillOptimizer' as any, {
-      source: optCounts.photoNeeded > 0 ? 'hub-photos' : 'hub-details',
-    });
+    navigation.replace('BackfillOptimizer' as any, { source: 'hub-required' });
 
   // Hold a neutral label until optimizer counts settle so the CTA doesn't flip
   // from "Done" to "Continue — N" mid-read.
-  const primaryLabel = optLoading ? 'Checking what’s next…' : hasNext ? `Continue — ${optRemaining} need photos/details` : 'Done';
+  const primaryLabel = optLoading ? 'Checking what’s next…' : hasNext ? `Continue — ${optRemaining} to finish` : 'Done';
   const onPrimary = optLoading ? () => {} : hasNext ? goOptimize : goHub;
 
-  // Second status line: only when the optimizer still has gaps to fill.
+  // Second status line: only when required gaps remain.
   const nextLine = hasNext
-    ? `${optRemaining} item${optRemaining === 1 ? '' : 's'} still need photos or details`
+    ? `${optRemaining} item${optRemaining === 1 ? '' : 's'} still missing required details`
     : null;
 
   return (

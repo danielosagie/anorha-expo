@@ -75,6 +75,47 @@ const SyncInboxScreen: React.FC = () => {
   const summary = result?.summary;
   const groups = useMemo(() => groupItems(needsAttention), [needsAttention]);
 
+  // ── Quick confirm (the Avec "keep them checked" move) ─────────────────────
+  // Items where the backend has a recommendation AND the proposed resolution is
+  // a plain one-tap decision (link to its one canonical, or add-as-new with no
+  // candidates) surface as a pre-checked list with ONE confirm button — the
+  // bulk path. Group cards and the nuanced reasons (bundles, field conflicts,
+  // stale links) stay in the deck, where their full UI lives. commit_failed
+  // rows with a plain shape ride along: confirming simply retries the commit.
+  const quickItems = useMemo(
+    () =>
+      needsAttention.filter((it) => {
+        if (it.groupId) return false;
+        if (it.recommended == null) return false;
+        if (it.attention === 'bundle' || it.attention === 'field_conflict' || it.attention === 'stale_link') return false;
+        if (it.resolution.kind === 'link') return !!it.resolution.canonical?.id;
+        if (it.resolution.kind === 'create') return (it.candidates?.length ?? 0) === 0;
+        return false;
+      }),
+    [needsAttention],
+  );
+  // Default-checked; unchecking persists across refreshes (we remember the
+  // UNchecked ids, so a poll can't silently re-check a row the user pulled out).
+  const [uncheckedIds, setUncheckedIds] = useState<Set<string>>(new Set());
+  const checkedQuick = useMemo(
+    () => quickItems.filter((it) => !uncheckedIds.has(it.platformId)),
+    [quickItems, uncheckedIds],
+  );
+  const toggleQuick = useCallback((platformId: string) => {
+    setUncheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(platformId)) next.delete(platformId);
+      else next.add(platformId);
+      return next;
+    });
+  }, []);
+
+  // Run the checked decisions through the SAME per-item resolve the deck uses
+  // (settled-only tally via resolveSafe), a few at a time. Failures stay in the
+  // inbox (the hook refreshes them back); successes leave it.
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkNote, setBulkNote] = useState<string | null>(null);
+
   // View-state machine. Starts on the groups list; the deck is only ever entered
   // by an explicit tap. Because `mode:'deck'` is sticky until onDeckDone fires,
   // it IS the old mount-latch: the deck stays mounted through the resolver
@@ -89,13 +130,15 @@ const SyncInboxScreen: React.FC = () => {
 
   const enterDeck = useCallback(
     (groupKey: GroupKey | null) => {
+      if (bulkBusy) return; // a bulk confirm is mid-flight over these same rows
       const items = groupKey === null ? needsAttention.slice() : itemsForGroup(needsAttention, groupKey);
       if (items.length === 0) return;
       runIdRef.current += 1;
       setClearedNote(null);
+      setBulkNote(null);
       setView({ mode: 'deck', groupKey, runId: runIdRef.current, items });
     },
-    [needsAttention],
+    [needsAttention, bulkBusy],
   );
 
   // The real ending: the import variant of PublishConfirmation with the whole
@@ -129,6 +172,42 @@ const SyncInboxScreen: React.FC = () => {
       },
     });
   }, [navigation, connectionId, platformName, summary]);
+
+  // The bulk confirm: same per-item resolve as a swipe, three at a time. The
+  // start-of-run total decides whether this pass FINISHED the inbox (→ the
+  // completion arc) or left deck work behind (→ stay, with a quiet tally).
+  const confirmQuick = useCallback(async () => {
+    if (bulkBusy || checkedQuick.length === 0) return;
+    setBulkBusy(true);
+    setBulkNote(null);
+    const startTotal = needsAttention.length;
+    const queue = [...checkedQuick];
+    let ok = 0;
+    let failed = 0;
+    const worker = async () => {
+      for (;;) {
+        const it = queue.shift();
+        if (!it) return;
+        try {
+          if (it.resolution.kind === 'link') {
+            await resolveSafe(it.platformId, 'link', it.resolution.canonical.id);
+          } else {
+            await resolveSafe(it.platformId, 'create');
+          }
+          ok += 1;
+        } catch {
+          failed += 1; // hook refresh restores the row; it stays in the inbox
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    setBulkBusy(false);
+    if (failed === 0 && ok >= startTotal) {
+      goToCompletion();
+      return;
+    }
+    setBulkNote(failed > 0 ? `${ok} confirmed · ${failed} didn’t save` : `${ok} confirmed`);
+  }, [bulkBusy, checkedQuick, needsAttention.length, resolveSafe, goToCompletion]);
 
   // The deck hands control back here. No counts → the user backed out via the
   // deck's top arrow. Counts → a real completion of that run.
@@ -207,24 +286,81 @@ const SyncInboxScreen: React.FC = () => {
                 <Text style={styles.inlineNoteText}>{clearedNote} cleared</Text>
               </View>
             )}
+            {!!bulkNote && (
+              <View style={styles.inlineNote}>
+                <MaterialCommunityIcons name="check" size={15} color={IC.accent} />
+                <Text style={styles.inlineNoteText}>{bulkNote}</Text>
+              </View>
+            )}
 
-            {/* Avec's 'overall' — the emphasized all-items row */}
-            <GroupRow
-              label="All items"
-              count={total}
-              onPress={() => enterDeck(null)}
-              style={styles.allRow}
-            />
+            {/* ── Quick confirm — our best guesses, pre-checked, one button ── */}
+            {quickItems.length > 0 && (
+              <View style={styles.quickBlock}>
+                <Text style={styles.quickTitle}>Our best guesses</Text>
+                <Text style={styles.quickSub}>Keep them checked. Uncheck any to decide one by one.</Text>
+                {quickItems.map((it) => {
+                  const checked = !uncheckedIds.has(it.platformId);
+                  const decisionLine =
+                    it.resolution.kind === 'link'
+                      ? `Link · ${it.resolution.canonical.title || 'existing item'}`
+                      : 'Add as new';
+                  return (
+                    <TouchableOpacity
+                      key={it.platformId}
+                      style={styles.quickRow}
+                      activeOpacity={0.7}
+                      disabled={bulkBusy}
+                      onPress={() => toggleQuick(it.platformId)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.quickRowTitle} numberOfLines={1}>{it.title}</Text>
+                        <Text style={styles.quickRowSub} numberOfLines={1}>
+                          {it.attention === 'commit_failed' ? `Retry · ${decisionLine}` : decisionLine}
+                        </Text>
+                      </View>
+                      <MaterialCommunityIcons
+                        name={checked ? 'check-circle' : 'circle-outline'}
+                        size={24}
+                        color={checked ? IC.accent : IC.muted}
+                      />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
 
-            <View style={styles.groupsList}>
-              {groups.map((g) => (
-                <GroupRow key={g.key} label={g.label} count={g.items.length} onPress={() => enterDeck(g.key)} />
-              ))}
-            </View>
+            {/* ── Decide one by one — the deck, whole or by group ───────────── */}
+            {groups.length > 0 && (
+              <>
+                <Text style={styles.restCaption}>
+                  {quickItems.length > 0 ? 'Decide one by one' : ' '}
+                </Text>
+                <GroupRow
+                  label="All items"
+                  count={total}
+                  onPress={() => enterDeck(null)}
+                  style={styles.allRow}
+                />
+                <View style={styles.groupsList}>
+                  {groups.map((g) => (
+                    <GroupRow key={g.key} label={g.label} count={g.items.length} onPress={() => enterDeck(g.key)} />
+                  ))}
+                </View>
+              </>
+            )}
           </ScrollView>
 
           <View style={[styles.groupsFooter, { paddingBottom: insets.bottom + 18 }]}>
-            <PillButton label={`Review all ${total}`} onPress={() => enterDeck(null)} />
+            {checkedQuick.length > 0 ? (
+              <PillButton
+                label={bulkBusy ? 'Confirming…' : `Confirm ${checkedQuick.length}`}
+                onPress={bulkBusy ? () => {} : confirmQuick}
+              />
+            ) : (
+              <PillButton label={`Review all ${total}`} onPress={() => enterDeck(null)} />
+            )}
           </View>
         </View>
       ) : (
@@ -308,6 +444,24 @@ const styles = StyleSheet.create({
   inlineNote: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 14 },
   inlineNoteText: { fontSize: 14, color: IC.muted },
   allRow: { backgroundColor: IC.cardActive, borderWidth: 1, borderColor: IC.accent, marginBottom: 16 },
+
+  // Quick confirm — pre-checked best guesses over the deck rows.
+  quickBlock: { marginBottom: 22 },
+  quickTitle: { fontSize: 17, fontWeight: '700', color: IC.ink, letterSpacing: -0.3 },
+  quickSub: { fontSize: 14, color: IC.muted, lineHeight: 20, marginTop: 4, marginBottom: 10 },
+  quickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: IC.card,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  quickRowTitle: { fontSize: 15, fontWeight: '600', color: IC.ink },
+  quickRowSub: { fontSize: 13, color: IC.muted, marginTop: 2 },
+  restCaption: { fontSize: 13, fontWeight: '600', color: IC.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 10 },
   groupsList: {},
   groupsFooter: { paddingHorizontal: 20, paddingTop: 10, backgroundColor: IC.bg },
 

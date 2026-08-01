@@ -1241,15 +1241,17 @@ export const useLiquidationConversationController = ({
       resolvedDecisionIdsRef.current.add(decisionId);
       // A plan decision resolves the card right away (approve runs it; revise/follow_up drop it).
       if (prompt.planId) setPendingPlan(null);
-      setNotice(
-        prompt.decisionType === 'approval'
-          ? action === 'approve' ? 'Approved.' : 'Rejected.'
-          : action === 'approve'
-          ? 'Plan approved. Sprout is applying it.'
-          : action === 'revise'
-            ? 'Revision requested.'
-            : 'Follow-up sent.',
-      );
+      // An approval card that disappears IS the receipt. A green "Approved." banner on
+      // top of it says the same thing twice and then sits in the way of the next turn.
+      if (prompt.decisionType !== 'approval') {
+        setNotice(
+          action === 'approve'
+            ? 'Plan approved. Sprout is applying it.'
+            : action === 'revise'
+              ? 'Revision requested.'
+              : 'Follow-up sent.',
+        );
+      }
 
       // Refreshing the history/summary is secondary to the mutation. If the network
       // drops here, do not report the already-applied plan as failed or unlock it.

@@ -15,7 +15,7 @@ import { useIsNight } from '../hooks/useIsNight';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ShadowSurface from './ui/ShadowSurface';
 import { AnorhaFace } from './brand/AnorhaFace';
-import { openQuickChat } from './sprout/quickChatStore';
+import { openQuickChat, useQuickChatStore } from './sprout/quickChatStore';
 
 // Order here only gates which routes render; display order follows the navigator.
 const TAB_ICON: Record<string, string> = {
@@ -56,6 +56,10 @@ const TabBar: React.FC<TabBarProps> = ({
   rowHeight = 64,
 }) => {
   const isNight = useIsNight();
+  // Sprout's composer docks in exactly this spot. Two bottom bars stacked on each other
+  // reads as a bug, so the tab row stands down while the composer is up — same slot, one
+  // thing in it. The composer's own close button puts the tabs back.
+  const sproutDocked = useQuickChatStore().visible;
 
   const addRotateAnim = useRef(new Animated.Value(0)).current;
   const addRotate = addRotateAnim.interpolate({
@@ -87,6 +91,8 @@ const TabBar: React.FC<TabBarProps> = ({
   // Dark glass only on the home (Clearouts) screen — and only at night, so it
   // matches home's own day/night theme. Every other route stays light.
   const dark = isNight && focusedRouteName === 'Clearouts';
+
+  if (sproutDocked) return null;
 
   return (
     <View style={[styles.container, containerStyle]}>

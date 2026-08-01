@@ -147,11 +147,11 @@ export const ROUTES: ExportRoute[] = [
   { key: 'backfill', title: 'Backfill optimizer', group: 'Import', routeName: 'BackfillOptimizer',
     params: { newlyImportedIds: ['prod_1', 'prod_2'] },
     load: () => import('../BackfillOptimizerScreen').then((m: any) => ({ default: m.default || m.BackfillOptimizerScreen })) },
-  { key: 'optimize-photos', title: 'Optimize · Photos (from hub)', group: 'Import', routeName: 'BackfillOptimizer',
-    params: { source: 'hub-photos' },
+  { key: 'optimize-required', title: 'Optimize · Required (from hub)', group: 'Import', routeName: 'BackfillOptimizer',
+    params: { source: 'hub-required' },
     load: () => import('../BackfillOptimizerScreen').then((m: any) => ({ default: m.default || m.BackfillOptimizerScreen })) },
-  { key: 'optimize-details', title: 'Optimize · Details (from hub)', group: 'Import', routeName: 'BackfillOptimizer',
-    params: { source: 'hub-details' },
+  { key: 'optimize-polish', title: 'Optimize · Polish (from hub)', group: 'Import', routeName: 'BackfillOptimizer',
+    params: { source: 'hub-polish' },
     load: () => import('../BackfillOptimizerScreen').then((m: any) => ({ default: m.default || m.BackfillOptimizerScreen })) },
 ];
 

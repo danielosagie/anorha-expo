@@ -120,15 +120,20 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
   // → needsContent; missing Sku → manual. Keep the array <1000 so paging stops.
   const img = (seed: string) => ({ ImageUrl: `https://picsum.photos/seed/${seed}/400/400` });
   const demoVariants = [
-    { Id: 'v1', Title: 'Ceramic Pour-Over Coffee Dripper', Description: 'Hand-thrown stoneware dripper for slow mornings. Fits standard #2 filters and pours clean.', Sku: 'POUR-01', ProductImages: [img('v1a')] },
-    { Id: 'v2', Title: 'Walnut Serving Board', Description: 'Solid walnut, food-safe oil finish, juice groove on the flip side. 18 by 12 inches.', Sku: 'WAL-18', ProductImages: [] },
-    { Id: 'v3', Title: 'Linen Table Runner 72"', Description: 'Stonewashed European flax in sage. Machine washable, gets softer every cycle.', Sku: 'LIN-72', ProductImages: [img('v3a')] },
-    { Id: 'v4', Title: 'Stoneware Mug — Sage', Description: 'Short desc', Sku: 'MUG-SG', ProductImages: [img('v4a'), img('v4b')] },
-    { Id: 'v5', Title: 'Brass Plant Mister', Description: '', Sku: 'BRS-MST', ProductImages: [img('v5a'), img('v5b')] },
-    { Id: 'v6', Title: 'Oak', Description: 'Solid oak bookend pair with cork base, holds a full shelf of hardcovers without sliding.', Sku: 'OAK-BE', ProductImages: [img('v6a'), img('v6b')] },
-    { Id: 'v7', Title: 'Recycled Glass Carafe', Description: 'Mouth-blown recycled glass carafe with cork stopper, one liter, dishwasher safe.', Sku: null, ProductImages: [img('v7a'), img('v7b')] },
-    { Id: 'v8', Title: 'Hemp Market Tote', Description: '', Sku: null, ProductImages: [img('v8a')] },
-  ];
+    { Id: 'v1', Title: 'Ceramic Pour-Over Coffee Dripper', Description: 'Hand-thrown stoneware dripper for slow mornings. Fits standard #2 filters and pours clean.', Sku: 'POUR-01', Price: 24.99, ProductImages: [img('v1a')] },
+    { Id: 'v2', Title: 'Walnut Serving Board', Description: 'Solid walnut, food-safe oil finish, juice groove on the flip side. 18 by 12 inches.', Sku: 'WAL-18', Price: 54.5, ProductImages: [] },
+    { Id: 'v3', Title: 'Linen Table Runner 72"', Description: 'Stonewashed European flax in sage. Machine washable, gets softer every cycle.', Sku: 'LIN-72', Price: 38, ProductImages: [img('v3a')] },
+    { Id: 'v4', Title: 'Stoneware Mug — Sage', Description: 'Short desc', Sku: 'MUG-SG', Price: 18, ProductImages: [img('v4a'), img('v4b')] },
+    { Id: 'v5', Title: 'Brass Plant Mister', Description: '', Sku: 'BRS-MST', Price: 22, ProductImages: [img('v5a'), img('v5b')] },
+    { Id: 'v6', Title: 'Oak', Description: 'Solid oak bookend pair with cork base, holds a full shelf of hardcovers without sliding.', Sku: 'OAK-BE', Price: 32, ProductImages: [img('v6a'), img('v6b')] },
+    { Id: 'v7', Title: 'Recycled Glass Carafe', Description: 'Mouth-blown recycled glass carafe with cork stopper, one liter, dishwasher safe.', Sku: null, Price: 44, ProductImages: [img('v7a'), img('v7b')] },
+    { Id: 'v8', Title: 'Hemp Market Tote', Description: '', Sku: null, Price: null, ProductImages: [img('v8a')] },
+  ].map((v) => ({
+    // normalizeOptimizerVariantRow reads product copy off the Products join
+    // (item-model Phase 4B) — mirror it or every Description flattens to ''.
+    ...v,
+    Products: { Title: v.Title, Description: v.Description },
+  }));
 
   // CompareSheet fetches ONE variant with `.eq('Id', x).maybeSingle()`, which
   // PostgREST encodes as `?...&Id=eq.<value>`. Honor that filter so maybeSingle
@@ -145,9 +150,24 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
 
   // A route's value is either static data or a (url) => data function (the latter
   // lets ProductVariants honor PostgREST query filters); everything else stays static.
+  // Connected platforms for the consequence split: eBay requires
+  // description+images (+category), Square only title/sku/price — so the demo
+  // catalog shows BOTH a required lane (eBay refuses thin items) and a polish
+  // row. v1/v3 are "already on shopify" via the mapping's PlatformConnectionId.
+  const demoConnections = [
+    { Id: 'conn_shopify', PlatformType: 'shopify', DisplayName: 'My Shopify Store', Status: 'active', IsEnabled: true },
+    { Id: 'conn_ebay', PlatformType: 'ebay', DisplayName: 'eBay Seller Hub', Status: 'active', IsEnabled: true },
+  ];
+
   const routes: Array<[RegExp, any | ((url: string) => any)]> = [
+    [/\/api\/platform-connections\?/, demoConnections],
     [/\/rest\/v1\/ProductVariants/, productVariantsRoute],
-    [/\/rest\/v1\/PlatformProductMappings/, demoVariants.map((v) => ({ ProductVariantId: v.Id }))],
+    [/\/rest\/v1\/PlatformProductMappings/, demoVariants.map((v, i) => ({
+      ProductVariantId: v.Id,
+      // Odd rows live on Shopify already; even rows are unmapped → eBay+Shopify
+      // are both open targets for them.
+      PlatformConnectionId: i % 2 === 1 ? 'conn_shopify' : 'conn_none',
+    }))],
     [/\/sync\/inbox\/summary/, inboxSummary],
     [/\/sync\/connections\/[^/]+\/resolution/, resolution],
     [/\/sync\/connections\/[^/]+\/status/, connStatus],
