@@ -47,7 +47,7 @@ import {
   compactHeroBodyText,
   sanitizeDisplayText,
 } from '../features/liquidationConversation/displayText';
-import { MessageActions } from '../features/liquidationConversation/components/MessageActions';
+import { MessageActions, type NarrationState } from '../features/liquidationConversation/components/MessageActions';
 import { useMessageNarration } from '../features/liquidationConversation/useMessageNarration';
 import { NarrationPlayerHost } from '../context/NarrationContext';
 
@@ -569,14 +569,6 @@ const SproutHomeScreen: React.FC = () => {
     () => `home-insight:${insight?.fingerprint || insight?.id || insightHeadline || 'current'}`,
     [insight?.fingerprint, insight?.id, insightHeadline],
   );
-  const insightNarrationState =
-    loadingMessageId === insightActionId
-      ? 'loading'
-      : playingMessageId === insightActionId
-        ? 'playing'
-        : loadedMessageId === insightActionId
-          ? 'paused'
-          : 'idle';
   const handleInsightFeedback = useCallback((
     _messageId: string,
     vote: 'up' | 'down' | null,
@@ -954,6 +946,27 @@ const SproutHomeScreen: React.FC = () => {
   const showQuietInsight = !showSproutMessage && isShowingQuiet;
   const showActiveInsight = !showSproutMessage && isShowingInsight;
 
+  // Copy / speak / rate belong to whatever prose the card is actually showing. The row used to
+  // be gated on `showActiveInsight && insightBody`, which is a much narrower thing than "there
+  // is a message here" — so a digest, or the "Sprout is watching" line, left the bottom row
+  // holding nothing but the countdown. heroMessage IS the prose the card renders, so key the
+  // actions off that and fall back to the quiet line when the card is in its quiet form.
+  const heroAction = useMemo<{ id: string; text: string } | null>(() => {
+    if (showActiveInsight && insightBody) return { id: insightActionId, text: insightBody };
+    const heroText = heroMessage?.text?.trim();
+    if (heroText) return { id: `home-hero:${heroMessage!.id}`, text: heroText };
+    if (showQuietInsight) return { id: 'home-quiet', text: `All quiet.${quietSince ? ` ${quietSince}` : ''}` };
+    return null;
+  }, [showActiveInsight, insightBody, insightActionId, heroMessage, showQuietInsight, quietSince]);
+  const heroNarrationState: NarrationState =
+    loadingMessageId === heroAction?.id
+      ? 'loading'
+      : playingMessageId === heroAction?.id
+        ? 'playing'
+        : loadedMessageId === heroAction?.id
+          ? 'paused'
+          : 'idle';
+
   const reportTitle = useMemo(() => {
     const h = new Date().getHours();
     if (h < 12) return 'Morning Report';
@@ -1265,14 +1278,14 @@ const SproutHomeScreen: React.FC = () => {
               iconColor={THEME.faint}
             />
           ) : null}
-          {(showActiveInsight && insightBody) || insightNextCheckLine ? (
+          {heroAction || insightNextCheckLine ? (
             <View style={styles.insightCountdownRow}>
-              {showActiveInsight && insightBody ? (
+              {heroAction ? (
                 <MessageActions
-                  text={insightBody}
-                  messageId={insightActionId}
+                  text={heroAction.text}
+                  messageId={heroAction.id}
                   onFeedback={handleInsightFeedback}
-                  narrationState={insightNarrationState}
+                  narrationState={heroNarrationState}
                   onToggleNarration={(messageId, text) => {
                     void toggleNarration({ messageId, text });
                   }}
