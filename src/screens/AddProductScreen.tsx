@@ -5595,11 +5595,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [showBarcodeResultModal, matchSheetTranslateY]);
 
   // When starting a broad search or analysis, cancel any in-progress quick scan and reset camera state
-  const handleStartBroadSearch = useCallback(() => {
+  const handleStartBroadSearch = useCallback((options?: { forGeneration?: boolean }) => {
     log.debug('[BROAD SEARCH] Starting broad search: cancelling quick scan and resetting state');
     
     // Check if we are transitioning from shelf mode to take photos
-    if (cameraMode === 'shelf' && bulkItems.length > 0) {
+    if (!options?.forGeneration && cameraMode === 'shelf' && bulkItems.length > 0) {
       setCameraMode('camera');
       setActiveItemId(bulkItems[0].id);
       setCurrentInstruction('capturing');
