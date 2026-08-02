@@ -56,10 +56,11 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // State A: is Facebook connected (OAuth marker exists)? This is distinct from
   // the computer being offline (State B). Publishing needs the connection first,
   // so a user with no connection should be told to connect, not to link a computer.
-  const fbConnected = derivePlatformConnectStatus('facebook', liveConnections, {
+  const fbConnectStatus = derivePlatformConnectStatus('facebook', liveConnections, {
+    hasLinkedComputer: fbDispatch.hasLinkedComputer,
     computerOnline: fbDispatch.computerOnline,
     presenceLoaded: fbDispatch.presenceLoaded,
-  }).oauthConnected;
+  });
   // Pre-flight: Facebook posts through the user's computer. If none is online we
   // still queue the job (it posts when a computer comes on) — but say so calmly
   // and up front, with a one-tap way to link one, instead of surfacing it as an
@@ -73,12 +74,14 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // in degraded mode where onlineness is unknown.
   const fbAlreadyMoving = fbStatus?.tone === 'good' || fbStatus?.label === 'Live';
   // No Facebook connection yet → prompt to connect (State A), never "computer offline".
-  const showConnectFacebook = fbSelected && !fbConnected;
+  const showConnectFacebook = fbSelected && fbConnectStatus.uiState === 'not-connected';
+  const showComputerSetup =
+    fbSelected &&
+    fbConnectStatus.uiState === 'needs-computer' &&
+    !fbAlreadyMoving;
   const showComputerPreflight =
     fbSelected &&
-    fbConnected &&
-    fbDispatch.presenceLoaded &&
-    !fbDispatch.computerOnline &&
+    fbConnectStatus.offlineComputer &&
     !fbDispatch.degraded &&
     !fbAlreadyMoving;
 
@@ -357,8 +360,19 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 <TouchableOpacity activeOpacity={0.7} onPress={() => setLinkComputerOpen(true)} style={[styles.preflightCard, { marginTop: 6 }]}>
                   <Icon name="laptop" size={20} color="#BA7517" />
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.preflightTitle}>Posts when your computer’s on</Text>
-                    <Text style={styles.preflightBody}>Facebook goes live through your Mac. It’ll post automatically once Anorha is open, or link a computer now.</Text>
+                    <Text style={styles.preflightTitle}>Connected</Text>
+                    <Text style={styles.preflightBody}>Computer offline. Publishing waits.</Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color="#C4C8CE" />
+                </TouchableOpacity>
+              ) : null}
+
+              {showComputerSetup ? (
+                <TouchableOpacity activeOpacity={0.7} onPress={() => setLinkComputerOpen(true)} style={[styles.preflightCard, { marginTop: 6 }]}>
+                  <Icon name="laptop" size={20} color="#BA7517" />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.preflightTitle}>Finish setup</Text>
+                    <Text style={styles.preflightBody}>Link a computer to post.</Text>
                   </View>
                   <Icon name="chevron-right" size={18} color="#C4C8CE" />
                 </TouchableOpacity>
@@ -540,4 +554,3 @@ const styles = StyleSheet.create({
 });
 
 export default PublishConfirmationScreen;
-

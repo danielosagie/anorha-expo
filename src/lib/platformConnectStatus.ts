@@ -34,6 +34,8 @@ export function isVisiblePlatformConnection(
 
 /** Live computer-presence signal (from useFacebookJobStatus). */
 export interface ComputerPresence {
+  /** True when at least one computer has been linked, even if it is offline. */
+  hasLinkedComputer: boolean;
   computerOnline: boolean;
   /** False while the first presence result is still loading — do not read
    *  computerOnline=false as "offline" until this is true. */
@@ -47,9 +49,13 @@ export interface PlatformConnectStatus {
   oauthConnected: boolean;
   /** This platform posts through the user's computer. */
   requiresComputer: boolean;
+  /** At least one computer has been linked, regardless of current presence. */
+  hasLinkedComputer: boolean;
   computerOnline: boolean;
   /** Presence has loaded, so computerOnline is trustworthy. */
   computerKnown: boolean;
+  /** A linked computer exists, but none is currently online. */
+  offlineComputer: boolean;
   /** Every required step is satisfied. */
   isFullyConnected: boolean;
   /** Steps still to do, in order. */
@@ -58,10 +64,10 @@ export interface PlatformConnectStatus {
   nextStep?: ConnectStepKind;
   /**
    * What the row/pill should show:
-   *   'connected'      → every required step done (OAuth, and computer online when required).
-   *   'needs-computer' → OAuth done, computer required and KNOWN offline.
-   *   'checking'       → OAuth done, computer required, presence still loading (do NOT claim green).
-   *   'not-connected'  → no OAuth marker yet.
+   *   'connected'      means OAuth and computer linking are complete.
+   *   'needs-computer' means OAuth is done, but no computer has ever been linked.
+   *   'checking'       means OAuth is done and the computer list is still loading.
+   *   'not-connected'  means no OAuth marker exists.
    */
   uiState: 'connected' | 'needs-computer' | 'checking' | 'not-connected';
 }
@@ -82,31 +88,31 @@ export function derivePlatformConnectStatus(
     });
 
   const requiresComputer = steps.includes('linkComputer');
+  const hasLinkedComputer = !!presence.hasLinkedComputer;
   const computerOnline = !!presence.computerOnline;
   const computerKnown = !!presence.presenceLoaded;
+  const offlineComputer = requiresComputer && computerKnown && hasLinkedComputer && !computerOnline;
 
-  const stepDone = (s: ConnectStepKind) => (s === 'oauth' ? oauthConnected : computerOnline);
+  const stepDone = (s: ConnectStepKind) => (s === 'oauth' ? oauthConnected : hasLinkedComputer);
   const pendingSteps = steps.filter((s) => !stepDone(s));
 
-  // "Connected" requires the computer to be ONLINE when the platform needs one.
-  // Never claim connected optimistically while presence is still loading, or a
-  // Facebook row with no linked computer would briefly flash a green "Connected".
-  // When the computer is required but its status is unknown (presence loading),
-  // report 'checking' (a quiet, honest middle state) instead of green or amber.
+  // Linking satisfies setup. Online presence only decides whether publishing can
+  // start now or waits for a linked computer to return.
   let uiState: PlatformConnectStatus['uiState'];
   if (!oauthConnected) uiState = 'not-connected';
-  else if (!requiresComputer || computerOnline) uiState = 'connected';
-  else if (computerKnown) uiState = 'needs-computer';
-  else uiState = 'checking';
+  else if (!requiresComputer) uiState = 'connected';
+  else if (!computerKnown) uiState = 'checking';
+  else if (!hasLinkedComputer) uiState = 'needs-computer';
+  else uiState = 'connected';
 
   return {
     steps,
     oauthConnected,
     requiresComputer,
+    hasLinkedComputer,
     computerOnline,
     computerKnown,
-    // Green pill ONLY when truly connected (all steps satisfied). 'checking' and
-    // 'needs-computer' are NOT fully connected.
+    offlineComputer,
     isFullyConnected: uiState === 'connected' && steps.length > 0,
     pendingSteps,
     nextStep: pendingSteps[0],

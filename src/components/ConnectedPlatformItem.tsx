@@ -13,6 +13,7 @@ import { ensureSupabaseJwt } from '../lib/supabase';
 import BaseModal from './BaseModal';
 import { useOrg } from '../context/OrgContext';
 import { createLogger } from '../utils/logger';
+import type { PlatformConnectStatus } from '../lib/platformConnectStatus';
 const log = createLogger('ConnectedPlatformItem');
 
 // --- Types ---
@@ -49,11 +50,9 @@ export interface ConnectedPlatformItemProps {
     onPress?: () => void;
     navigation: any;
     /**
-     * FB-only computer-aware reality. ADDITIVE: the parent passes these ONLY for
-     * the facebook row (derived from the browserJobs subscription); every other
-     * platform passes nothing (undefined → byte-for-byte unchanged behavior).
+     * Shared connection truth for this platform.
      */
-    computerOnline?: boolean;
+    connectStatus?: PlatformConnectStatus;
     /** True when any FB browser job is paused / dead-lettered. */
     fbNeedsCheck?: boolean;
     /** Opens the "Link your computer" sheet (FB "Open" / "Computer offline"). */
@@ -166,7 +165,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     onFix,
     onPress,
     navigation,
-    computerOnline,
+    connectStatus,
     fbNeedsCheck,
     onOpenComputerSheet,
 }) => {
@@ -185,6 +184,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
         ? progressStatus
         : connection.Status;
     let statusInfo = getStatusDisplay(effectiveStatus);
+    let statusHint: string | undefined;
     const actionConnection = { ...connection, Status: effectiveStatus };
 
     // FB-only computer-aware override. Reuses the EXISTING status vocabulary
@@ -195,10 +195,14 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     if (isFacebookRow && effectiveStatus === CONNECTION_STATUS.ACTIVE) {
         if (fbNeedsCheck) {
             statusInfo = { label: 'Needs a check', color: '#BA7517', icon: 'alert-circle-outline' };
-        } else if (computerOnline === false) {
-            statusInfo = { label: 'Computer offline', color: '#FF9500', icon: 'monitor-off' };
+        } else if (connectStatus?.uiState === 'needs-computer') {
+            statusInfo = { label: 'Finish setup', color: '#BA7517', icon: 'monitor-plus' };
+        } else if (connectStatus?.uiState === 'checking') {
+            statusInfo = { label: 'Checking', color: '#9CA3AF', icon: 'clock-outline' };
+        } else if (connectStatus?.uiState === 'connected') {
+            statusInfo = { label: 'Connected', color: BRAND_PRIMARY, icon: 'check-circle' };
+            statusHint = connectStatus.offlineComputer ? 'Computer offline' : undefined;
         }
-        // else leave the existing green 'Connected'.
     }
 
     const isProgressActive = progressStatus === 'scanning' ||
@@ -318,6 +322,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                             {statusInfo.label}
                                         </Text>
                                     </View>
+                                    {statusHint ? <Text style={styles.statusHint}>{statusHint}</Text> : null}
                                     {connection.LastSyncSuccessAt && (
                                         <Text style={styles.lastSyncText}>
                                             Last synced: {formatSyncDate(connection.LastSyncSuccessAt)}
@@ -423,10 +428,13 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
                                 onPress={() => {
-                                    // FB rows needing attention (needs-a-check / computer offline)
-                                    // open the computer-link sheet; everything else keeps the
-                                    // existing generic flow.
-                                    if (isFacebookRow && onOpenComputerSheet && (fbNeedsCheck || computerOnline === false)) {
+                                    // FB rows needing attention open the computer sheet.
+                                    // Everything else keeps the existing generic flow.
+                                    if (
+                                        isFacebookRow &&
+                                        onOpenComputerSheet &&
+                                        (fbNeedsCheck || connectStatus?.uiState === 'needs-computer' || connectStatus?.offlineComputer)
+                                    ) {
                                         onOpenComputerSheet(connection.Id, platformConfig.name);
                                     } else if (connection.PlatformType === 'csv') {
                                         openManageMenu();
@@ -587,6 +595,11 @@ const styles = StyleSheet.create({
     statusText: {
         fontSize: 13,
         fontWeight: '500',
+    },
+    statusHint: {
+        fontSize: 11,
+        color: '#9CA3AF',
+        marginTop: 1,
     },
     lastSyncText: {
         fontSize: 11,

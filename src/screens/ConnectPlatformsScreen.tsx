@@ -48,7 +48,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const { hasLinkedComputer, computerOnline, presenceLoaded } = useFacebookJobStatus();
 
   const [query, setQuery] = useState('');
   const [flowPlatform, setFlowPlatform] = useState<PlatformKey | null>(null);
@@ -59,8 +59,12 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   // here and folded per row via the pure derive, not one subscription per row.
   const statusFor = useCallback(
     (def: PlatformDef) =>
-      derivePlatformConnectStatus(def.key, liveConnections, { computerOnline, presenceLoaded }),
-    [liveConnections, computerOnline, presenceLoaded],
+      derivePlatformConnectStatus(def.key, liveConnections, {
+        hasLinkedComputer,
+        computerOnline,
+        presenceLoaded,
+      }),
+    [liveConnections, hasLinkedComputer, computerOnline, presenceLoaded],
   );
 
   const { available, comingSoon } = useMemo(() => {
@@ -107,21 +111,23 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         <Text style={styles.soonText}>Soon</Text>
       </View>
     ) : st.uiState === 'connected' ? (
-      <View style={styles.connectedPill}>
-        <View style={styles.liveDot} />
-        <Text style={styles.connectedText}>Connected</Text>
+      <View style={styles.connectedState}>
+        <View style={styles.connectedPill}>
+          <View style={styles.liveDot} />
+          <Text style={styles.connectedText}>Connected</Text>
+        </View>
+        {st.offlineComputer ? <Text style={styles.offlineHint}>Computer offline</Text> : null}
       </View>
     ) : st.uiState === 'needs-computer' ? (
-      // OAuth done but the computer isn't linked — one tap resumes the flow at
+      // OAuth done but the computer isn't linked. One tap resumes the flow at
       // the link-computer step rather than restarting OAuth.
       <TouchableOpacity style={styles.finishBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
         <Text style={styles.finishBtnText}>Finish setup</Text>
       </TouchableOpacity>
     ) : st.uiState === 'checking' ? (
-      // OAuth done, computer status still loading — quiet neutral, never green.
       <View style={styles.connectedPill}>
         <View style={[styles.liveDot, { backgroundColor: '#9CA3AF' }]} />
-        <Text style={[styles.connectedText, { color: '#9CA3AF' }]}>Connected</Text>
+        <Text style={[styles.connectedText, { color: '#9CA3AF' }]}>Checking</Text>
       </View>
     ) : (
       <TouchableOpacity style={styles.connectBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>
@@ -339,8 +345,10 @@ const styles = StyleSheet.create({
     height: 36,
     flexShrink: 0,
   },
+  connectedState: { alignItems: 'flex-end', flexShrink: 0 },
   liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: BRAND_PRIMARY },
   connectedText: { color: '#18181B', fontSize: 13.5, fontWeight: '600' },
+  offlineHint: { color: '#9CA3AF', fontSize: 11, fontWeight: '500', marginTop: -5, paddingRight: 12 },
   soonPill: {
     backgroundColor: '#F3F4F6',
     borderRadius: 999,
