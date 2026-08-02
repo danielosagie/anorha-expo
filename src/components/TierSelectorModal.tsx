@@ -149,6 +149,10 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
             const { url } = await response.json();
             if (url) {
                 onClose();
+                // The RN Modal must finish dismissing before SFSafariViewController
+                // presents, or iOS hits the modal-over-modal presentation crash
+                // (same class as the AddProduct paywall crash fixed in 2db0d618).
+                await new Promise<void>(resolve => setTimeout(resolve, 500));
                 await WebBrowser.openBrowserAsync(url);
                 onSuccess?.();
             }
