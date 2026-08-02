@@ -278,6 +278,17 @@ export function setItemGenerate(
   cart$.entries[itemId].assign({ ...patch, updatedAt: now() });
 }
 
+/**
+ * Swap a shelf folder's source photo. The scan uploads a manipulateAsync copy (resized,
+ * EXIF orientation BAKED), and the backend's boxes are fractions of THOSE pixels — so the
+ * folder must crop and display that same image, never the original camera file whose
+ * unbaked pixel grid can be rotated 90° from what the model saw.
+ */
+export function setFolderSourcePhoto(folderId: string, sourcePhotoUri: string) {
+  if (!isFolder(getEntry(folderId))) return;
+  cart$.entries[folderId].assign({ sourcePhotoUri, updatedAt: now() });
+}
+
 /** Set an item or folder aside without losing it (excluded from checkout/subtotal). */
 export function setSavedForLater(id: string, saved: boolean) {
   if (!getEntry(id)) return;
