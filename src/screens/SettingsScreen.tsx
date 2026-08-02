@@ -154,7 +154,7 @@ const SettingsScreen = () => {
         <TouchableOpacity
           style={styles.sectionRow}
           activeOpacity={0.7}
-          onPress={() => navigation.navigate('ConnectPlatforms')}
+          onPress={() => navigation.navigate('Connections')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
           {hub.totalNeedsYou > 0 && (
@@ -178,7 +178,7 @@ const SettingsScreen = () => {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.platformName}>Connect your first platform</Text>
-                <Text style={styles.platformEmptySub}>Shopify, Square, eBay, Amazon and more</Text>
+                <Text style={styles.platformEmptySub}>Shopify, Square, eBay, Clover and more</Text>
               </View>
               <ChevronRight size={20} color="#D4D4D8" />
             </TouchableOpacity>
@@ -190,7 +190,7 @@ const SettingsScreen = () => {
                   key={c.Id}
                   style={[styles.platformRow, i > 0 && styles.platformRowBorder]}
                   activeOpacity={0.7}
-                  onPress={() => navigation.navigate('ConnectPlatforms')}
+                  onPress={() => navigation.navigate('Connections')}
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
                   <View style={{ flex: 1 }}>
