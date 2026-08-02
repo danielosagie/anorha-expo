@@ -739,14 +739,13 @@ function ChangeDetailBody({
 const PRICE_ROW = /(?:^|,\s*)([^,]+?)\s*(?:→|->)\s*(\$[\d,.]+)(?:\s*\(([^)]*)\))?(?=,\s*[^,]+?\s*(?:→|->)|[.]?$)/g;
 const ITEM_AT_PRICE = /^(.+?)\s+(?:at|to)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
 const BEFORE_PRICE = /\b(?:was|from|currently(?:\s+at)?|already\s+at)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
-const APPROACH = /\b(conservative|balanced|aggressive)(?:\s+sell-off)?\b/i;
 
 function pricingRowsFromPlanDetail(detail: string): PlanPriceChange[] {
   const clean = sanitizeDisplayText(detail);
   return [...clean.matchAll(PRICE_ROW)].map((match) => ({
     name: sanitizeDisplayText(match[1]),
     after: sanitizeDisplayText(match[2]),
-    approach: sanitizeDisplayText(match[3] || 'Market-based'),
+    approach: 'Market-based',
   }));
 }
 
@@ -772,12 +771,11 @@ function priceChangeFromPlanStep(title: string, detail: string): PlanPriceChange
   const beforeMatch = cleanDetail.match(BEFORE_PRICE);
   const before = beforeMatch?.[1] || (/^keep\b/i.test(cleanTitle) ? after : 'Not shown');
 
-  const approach = cleanDetail.match(APPROACH)?.[1];
   return {
     name: sanitizeDisplayText(itemMatch[1]),
     before,
     after,
-    approach: approach ? `${approach[0].toUpperCase()}${approach.slice(1).toLowerCase()}` : 'Set price',
+    approach: 'Set price',
   };
 }
 

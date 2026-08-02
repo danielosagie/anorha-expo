@@ -515,7 +515,7 @@ const CampaignThreadScreen = () => {
       const elapsed = (Date.now() - new Date(created).getTime()) / 86400000;
       return `${Math.max(0, Math.ceil(days - elapsed))}d left`;
     }
-    return controller.campaignConfig?.aggressiveness || 'balanced';
+    return 'No deadline';
   })();
   const hasPendingAsks = (controller.campaignOverview?.needsInput?.length || 0) > 0;
   const latestAsk = controller.campaignOverview?.needsInput?.[0];

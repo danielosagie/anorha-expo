@@ -778,7 +778,6 @@ const ProductDetailScreen = observer(
           title: name,
           targetRevenue: Math.max(50, Math.round(Number(detailedItem?.Price) || 100)),
           timeframeDays: 14,
-          aggressiveness: 'balanced',
           inventoryScope: 'all',
         });
         await campaignAdapter.addCampaignItems(camp.id, [detailedItem.Id]);

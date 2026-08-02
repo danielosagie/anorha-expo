@@ -23,7 +23,7 @@ export const createEmptyThreadState = (campaignId: string, threadId: string): Co
 });
 
 const PLAN_DECISION_COPY = new Set([
-  'please revise the strategy with a more conservative execution path.',
+  'please revise the strategy with lower risk and smaller price changes.',
   'can you provide a quick risk/reward comparison before we proceed?',
   'approved. proceed with the strategy.',
 ]);

@@ -913,14 +913,44 @@ const SproutHomeScreen: React.FC = () => {
         title: input.title,
         targetRevenue: input.targetRevenue,
         timeframeDays: input.timeframeDays,
-        aggressiveness: input.aggressiveness,
-        inventoryScope: input.productIds.length ? 'specific' : 'all',
+        inventoryScope: input.inventoryScope,
         productIds: input.productIds,
       });
+
+      let pricingApplyFailed = false;
+      const researchedPrices = Object.entries(input.launchPrices);
+      if (researchedPrices.length > 0) {
+        try {
+          const campaignItems = await adapter.getCampaignItems(campaign.id);
+          const campaignItemIdByProductId = new Map(campaignItems.map(item => [item.productId, item.id]));
+          const itemIdsByPrice = new Map<number, string[]>();
+          for (const [productId, price] of researchedPrices) {
+            const campaignItemId = campaignItemIdByProductId.get(productId);
+            if (!campaignItemId) {
+              pricingApplyFailed = true;
+              continue;
+            }
+            const itemIds = itemIdsByPrice.get(price) || [];
+            itemIds.push(campaignItemId);
+            itemIdsByPrice.set(price, itemIds);
+          }
+          await Promise.all(
+            Array.from(itemIdsByPrice.entries()).map(([price, itemIds]) =>
+              adapter.updateCampaignItems(campaign.id, itemIds, { price }),
+            ),
+          );
+        } catch {
+          pricingApplyFailed = true;
+        }
+      }
+
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       setCreateOpen(false);
       await controller.onRefresh();
       navigation.navigate('CampaignThreadScreen', { campaignId: campaign.id, title: campaign.title });
+      if (pricingApplyFailed) {
+        Alert.alert('Clearout started', 'Some researched prices could not be applied. Current prices were kept.');
+      }
     } catch (e: any) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       Alert.alert('Could not start clearout', String(e?.message || e));
@@ -964,7 +994,7 @@ const SproutHomeScreen: React.FC = () => {
       if (ledgerRows.length > 0) {
         return {
           id: `home-recap:${ledgerRows.map((row) => row.id).join(',')}`,
-          text: [recapLead, ...ledgerRows.map((row) => `${row.label} — ${row.status}`)].join('\n'),
+          text: [recapLead, ...ledgerRows.map((row) => `${row.label}: ${row.status}`)].join('\n'),
           kind: 'other',
         };
       }

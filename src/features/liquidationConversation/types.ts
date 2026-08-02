@@ -42,7 +42,6 @@ export interface CampaignConfig {
   orgId: string;
   targetRevenue: number;
   timeframeDays: number;
-  aggressiveness: 'conservative' | 'balanced' | 'aggressive';
   inventoryScope: 'all' | 'pool' | 'specific';
   poolId?: string;
   productIds: string[];
@@ -485,7 +484,6 @@ export interface CreateCampaignInput {
   productIds?: string[];
   inventoryScope?: 'all' | 'pool' | 'specific';
   poolId?: string;
-  aggressiveness?: 'conservative' | 'balanced' | 'aggressive';
 }
 
 export interface CreateThreadInput {
@@ -506,7 +504,8 @@ export interface DecisionSubmission {
 export interface CampaignConfigUpdate {
   targetRevenue?: number;
   timeframeDays?: number;
-  aggressiveness?: 'conservative' | 'balanced' | 'aggressive';
+  /** Client-only absolute deadline used to derive the backend's legacy pacing field. */
+  sellByDate?: string;
   inventoryScope?: 'all' | 'pool' | 'specific';
   poolId?: string;
   productIds?: string[];

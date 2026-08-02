@@ -50,6 +50,7 @@ import PlatformFilterChips from '../components/PlatformFilterChips';
 import InventoryListCard from '../components/InventoryListCard';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import BaseModal from '../components/BaseModal';
+import { ClearoutCalendar } from '../components/liquidation/ClearoutCalendar';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import SortByDropdown, { DEFAULT_SORT_OPTIONS } from '../components/SortByDropdown';
 import InventoryFilterSheet, { PartnerFilterChoice } from '../components/inventory/InventoryFilterSheet';
@@ -59,6 +60,7 @@ import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
 import { getVariantPlatforms } from '../lib/platforms';
+import { api } from '../lib/apiClient';
 import {
   buildPartnerInventoryOrigins,
   PartnerInventoryOrigin,
@@ -72,6 +74,14 @@ import type {
   InventoryBulkAction,
   InventorySelectionProposal,
 } from '../features/liquidationConversation/types';
+import {
+  addCalendarDays,
+  calendarDaysBetween,
+  deriveCampaignPacing,
+  describeCampaignDuration,
+  formatSellByDate,
+  startOfLocalDay,
+} from '../features/liquidationConversation/campaignTiming';
 const log = createLogger('InventoryOrdersScreen');
 
 
@@ -369,9 +379,10 @@ const InventoryOrdersScreen = observer(() => {
   const [liquidationModalVisible, setLiquidationModalVisible] = useState(false);
   const [tagsModalVisible, setTagsModalVisible] = useState(false);
   const [tagInput, setTagInput] = useState("");
-  const [liquidationTimeline, setLiquidationTimeline] = useState("");
+  const [liquidationDeadline, setLiquidationDeadline] = useState(() => addCalendarDays(new Date(), 30));
   const [liquidationAmount, setLiquidationAmount] = useState("");
-  const [liquidationStrategy, setLiquidationStrategy] = useState<'aggressive' | 'moderate' | 'conservative'>('moderate');
+  const liquidationToday = startOfLocalDay(new Date());
+  const liquidationDays = calendarDaysBetween(liquidationToday, liquidationDeadline);
   const [scrollEnabled, setScrollEnabled] = useState(true);
 
   // Drag-to-select refs
@@ -2105,6 +2116,7 @@ const InventoryOrdersScreen = observer(() => {
           <View style={{ gap: 12 }}>
             <TouchableOpacity style={styles.modalOption} onPress={() => {
               setMoreMenuVisible(false);
+              setLiquidationDeadline(addCalendarDays(new Date(), 30));
               setLiquidationModalVisible(true);
             }}>
               <View style={styles.modalOptionIconBg}>
@@ -2213,118 +2225,80 @@ const InventoryOrdersScreen = observer(() => {
         visible={liquidationModalVisible}
         onClose={() => setLiquidationModalVisible(false)}
         showCloseButton={true}
-        containerStyle={{ width: '85%', borderRadius: 24, padding: 24 }}
+        containerStyle={{ width: '90%', maxHeight: '90%', borderRadius: 24, padding: 24 }}
       >
-        <Text style={styles.modalTitle}>Start Liquidation</Text>
-        <Text style={styles.modalSubtitle}>Configure campaign for {selectedItems.size} items.</Text>
+        <ScrollView
+          style={styles.liquidationModalScroll}
+          contentContainerStyle={styles.liquidationModalContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.modalTitle}>Start Liquidation</Text>
+          <Text style={styles.modalSubtitle}>Configure campaign for {selectedItems.size} items.</Text>
 
-        <View style={{ width: '100%', marginBottom: 16 }}>
-          <Text style={styles.inputLabel}>Timeline (Days)</Text>
-          <TextInput
-            style={styles.modalInput}
-            placeholder="e.g. 30"
-            placeholderTextColor="#9ca3af"
-            keyboardType="number-pad"
-            returnKeyType="done"
-            value={liquidationTimeline}
-            onChangeText={setLiquidationTimeline}
-          />
+          <View style={{ width: '100%', marginBottom: 16 }}>
+            <View style={styles.sellByHeader}>
+              <Text style={styles.inputLabel}>Sell by</Text>
+              <Text style={styles.sellByDate}>{formatSellByDate(liquidationDeadline)}</Text>
+            </View>
+            <View style={styles.durationPill}>
+              <Text style={styles.durationPillText}>{describeCampaignDuration(liquidationDays)}</Text>
+            </View>
+            <ClearoutCalendar
+              selectedDate={liquidationDeadline}
+              onSelect={setLiquidationDeadline}
+              minDate={liquidationToday}
+            />
 
-          <Text style={styles.inputLabel}>Target Recovery ($)</Text>
-          <TextInput
-            style={styles.modalInput}
-            placeholder="e.g. 1500"
-            placeholderTextColor="#9ca3af"
-            keyboardType="numeric"
-            returnKeyType="done"
-            value={liquidationAmount}
-            onChangeText={setLiquidationAmount}
-          />
-        </View>
+            <Text style={styles.inputLabel}>Target recovery</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="e.g. 1500"
+              placeholderTextColor="#9ca3af"
+              keyboardType="numeric"
+              returnKeyType="done"
+              value={liquidationAmount}
+              onChangeText={setLiquidationAmount}
+            />
+          </View>
 
-        <Text style={styles.inputLabel}>Pricing Strategy</Text>
-        <View style={styles.strategyContainer}>
-          {(['aggressive', 'moderate', 'conservative'] as const).map(strategy => (
-            <TouchableOpacity
-              key={strategy}
-              style={[
-                styles.strategyOption,
-                liquidationStrategy === strategy && styles.strategyOptionSelected
-              ]}
-              onPress={() => setLiquidationStrategy(strategy)}
-            >
-              <Text style={[
-                styles.strategyText,
-                liquidationStrategy === strategy && styles.strategyTextSelected
-              ]}>
-                {strategy.charAt(0).toUpperCase() + strategy.slice(1)}
-              </Text>
+          <View style={styles.modalButtonsRow}>
+            <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setLiquidationModalVisible(false)}>
+              <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
-          ))}
-        </View>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.confirmButton]}
+              onPress={async () => {
+                try {
+                  const selectedProductIds = Array.from(selectedItems);
+                  const requestBody = {
+                    targetRevenue: parseFloat(liquidationAmount) || 500,
+                    timeframeDays: Math.max(1, liquidationDays),
+                    productIds: selectedProductIds,
+                    // Backward compatibility for the unchanged backend request shape.
+                    aggressiveness: deriveCampaignPacing(liquidationDeadline, liquidationToday),
+                  };
 
-        <View style={styles.modalButtonsRow}>
-          <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setLiquidationModalVisible(false)}>
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modalButton, styles.confirmButton]}
-            onPress={async () => {
-              try {
-                const token = await ensureSupabaseJwt();
-                if (!token) {
-                  Alert.alert('Error', 'Not authenticated');
-                  return;
+                  log.debug('[BulkLiquidate] Starting campaign with:', requestBody);
+                  const result = await api.post<{ sessionId: string }>(
+                    '/api/agent/quick/liquidation',
+                    requestBody,
+                  );
+                  log.debug('[BulkLiquidate] Campaign created:', result);
+                  setLiquidationModalVisible(false);
+                  handleExitSelectionMode();
+                  navigation.navigate('LiquidationCampaignScreen', { campaignId: result.sessionId });
+
+                } catch (error: any) {
+                  log.error('[BulkLiquidate] Failed:', error);
+                  Alert.alert('Error', error.message || 'Failed to start liquidation campaign');
                 }
-
-                // Get the selected product IDs
-                const selectedProductIds = Array.from(selectedItems);
-
-                // Build the request body
-                const requestBody = {
-                  targetRevenue: parseFloat(liquidationAmount) || 500,
-                  timeframeDays: parseInt(liquidationTimeline) || 30,
-                  productIds: selectedProductIds,
-                  aggressiveness: liquidationStrategy === 'moderate' ? 'balanced' : liquidationStrategy,
-                };
-
-                log.debug('[BulkLiquidate] Starting campaign with:', requestBody);
-
-                // Call the actual API
-                const response = await fetch(`${API_BASE_URL}/api/agent/quick/liquidation`, {
-                  method: 'POST',
-                  headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify(requestBody),
-                });
-
-                if (!response.ok) {
-                  const errorData = await response.json().catch(() => ({}));
-                  throw new Error(errorData.message || `Failed to start campaign: ${response.status}`);
-                }
-
-                const result = await response.json();
-                log.debug('[BulkLiquidate] Campaign created:', result);
-
-                setLiquidationModalVisible(false);
-                handleExitSelectionMode();
-
-                // Navigate to campaign screen with real session ID
-                navigation.navigate('LiquidationCampaignScreen', {
-                  campaignId: result.sessionId
-                });
-
-              } catch (error: any) {
-                log.error('[BulkLiquidate] Failed:', error);
-                Alert.alert('Error', error.message || 'Failed to start liquidation campaign');
-              }
-            }}
-          >
-            <Text style={styles.confirmButtonText}>Start Campaign</Text>
-          </TouchableOpacity>
-        </View>
+              }}
+            >
+              <Text style={styles.confirmButtonText}>Start Campaign</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
       </BaseModal>
 
     </View >
@@ -2838,31 +2812,20 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     marginTop: 4,
   },
-  strategyContainer: {
-    width: '100%',
-    gap: 8,
-  },
-  strategyOption: {
-    width: '100%',
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+  liquidationModalScroll: { width: '100%' },
+  liquidationModalContent: { width: '100%', paddingTop: 4, paddingBottom: 4 },
+  sellByHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sellByDate: { color: '#111827', fontSize: 13, fontWeight: '600' },
+  durationPill: {
+    alignSelf: 'flex-start',
     borderRadius: 12,
-    alignItems: 'center',
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(147,200,34,0.14)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
   },
-  strategyOptionSelected: {
-    borderColor: '#111',
-    backgroundColor: '#F9FAFB',
-  },
-  strategyText: {
-    fontSize: 15,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  strategyTextSelected: {
-    color: '#111',
-    fontWeight: '600',
-  },
+  durationPillText: { color: '#5D7E16', fontSize: 13, fontWeight: '600' },
 });
 
 export default InventoryOrdersScreen;
