@@ -46,6 +46,7 @@ export interface ConnectedPlatformItemProps {
     onReconnect: (id: string, platformKey: string, platformName: string) => void;
     onDisconnect: (id: string, name: string) => void;
     onFix: (id: string, name: string) => void;
+    onPress?: () => void;
     navigation: any;
     /**
      * FB-only computer-aware reality. ADDITIVE: the parent passes these ONLY for
@@ -163,6 +164,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     onReconnect,
     onDisconnect,
     onFix,
+    onPress,
     navigation,
     computerOnline,
     fbNeedsCheck,
@@ -211,6 +213,14 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     // --- CSV Manage Logic ---
     const [manageMenuVisible, setManageMenuVisible] = React.useState(false);
     const [isExporting, setIsExporting] = React.useState(false);
+
+    const handleDefaultPress = () => {
+        if (onPress) {
+            onPress();
+            return;
+        }
+        navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name });
+    };
 
     const openManageMenu = () => {
         setManageMenuVisible(true);
@@ -357,7 +367,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                             {/* Primary action is management, not the deck. */}
                             <TouchableOpacity
                                 style={[styles.actionButton, { backgroundColor: theme.colors.primary + '20' }]}
-                                onPress={() => navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name })}
+                                onPress={handleDefaultPress}
                             >
                                 <Icon name="cog" size={18} color={theme.colors.primary} />
                                 <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
@@ -368,7 +378,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                     {!connection.NeedsReauth && effectiveStatus === CONNECTION_STATUS.READY_TO_SYNC && (
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: theme.colors.primary + '15' }]}
-                            onPress={() => navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name })}
+                            onPress={handleDefaultPress}
                         >
                             <Icon name="cog" size={18} color={theme.colors.primary} />
                             <Text style={[styles.actionButtonText, { color: theme.colors.primary }]}>Manage</Text>
@@ -393,7 +403,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                 case 'rescan': onStartScan(connection.Id, platformConfig.name, true); break;
                                 case 'fix_resume': onFix(connection.Id, platformConfig.name); break;
                                 case 'manage':
-                                    navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name });
+                                    handleDefaultPress();
                                     break;
                             }
                         };
@@ -421,7 +431,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
                                     } else if (connection.PlatformType === 'csv') {
                                         openManageMenu();
                                     } else {
-                                        navigation.navigate('SyncRules', { connectionId: connection.Id, platformName: platformConfig.name });
+                                        handleDefaultPress();
                                     }
                                 }}
                             >

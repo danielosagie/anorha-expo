@@ -11,6 +11,7 @@ interface ConnectedPlatformListProps {
     onReconnect: (id: string, platformKey: string, platformName: string) => void;
     onDisconnect: (id: string, name: string) => void;
     onFix: (id: string, name: string) => void;
+    onPress?: () => void;
     navigation: any;
 }
 
@@ -24,6 +25,7 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
     onReconnect,
     onDisconnect,
     onFix,
+    onPress,
     navigation,
 }) => {
     const [currentPage, setCurrentPage] = useState(1);
@@ -90,6 +92,7 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
                         onReconnect={onReconnect}
                         onDisconnect={onDisconnect}
                         onFix={onFix}
+                        onPress={onPress}
                         navigation={navigation}
                     />
                 );
