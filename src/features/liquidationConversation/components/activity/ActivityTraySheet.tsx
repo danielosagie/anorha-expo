@@ -54,7 +54,7 @@ import {
 } from './documentExport';
 import { HorizontalFadeScroll } from '../HorizontalFadeScroll';
 import { compactDisplayText, sanitizeDisplayText } from '../../displayText';
-import { campaignItemPrice, getPlanDisplayTitle, matchPlanItem } from '../../planPresentation';
+import { campaignItemPrice, getPlanDisplayTitle, matchPlanItem, sanitizePlanDisplayText } from '../../planPresentation';
 
 const SCREEN_H = Dimensions.get('window').height;
 const DEFAULT_H = Math.round(SCREEN_H * 0.62);
@@ -118,7 +118,7 @@ export default function ActivityTraySheet({
   const [docDraft, setDocDraft] = useState('');
   const height = useSharedValue(0);
 
-  const rootTitle = sanitizeDisplayText(payload?.title || 'Details');
+  const rootTitle = sanitizePlanDisplayText(payload?.title || 'Details');
 
   // Mount on open; collapse then unmount on close.
   useEffect(() => {
@@ -431,15 +431,15 @@ function PageBody({
     if (!evidence) return <EmptyNote text="Nothing to show here." />;
     return (
       <View style={{ gap: 12 }}>
-        <Text style={styles.evidenceHeadline}>{evidence.headline}</Text>
+        <Text style={styles.evidenceHeadline}>{sanitizePlanDisplayText(evidence.headline)}</Text>
         {evidence.items.map((it, i) => (
           <View key={i} style={styles.evidenceRow}>
             {it.imageUrl ? <Image source={{ uri: it.imageUrl }} style={styles.evidenceThumb} /> : null}
             <View style={styles.flex}>
-              <Text style={styles.evidenceLabel} numberOfLines={2}>{it.label}</Text>
-              {it.sub ? <Text style={styles.evidenceSub} numberOfLines={1}>{it.sub}</Text> : null}
+              <Text style={styles.evidenceLabel} numberOfLines={2}>{sanitizePlanDisplayText(it.label)}</Text>
+              {it.sub ? <Text style={styles.evidenceSub} numberOfLines={1}>{sanitizePlanDisplayText(it.sub)}</Text> : null}
             </View>
-            {it.value ? <Text style={styles.evidenceValue}>{it.value}</Text> : null}
+            {it.value ? <Text style={styles.evidenceValue}>{sanitizePlanDisplayText(it.value)}</Text> : null}
           </View>
         ))}
       </View>
@@ -474,7 +474,7 @@ function PageBody({
           ) : null}
         </View>
 
-        {step.resultSummary ? <Text style={styles.stepDetailSummary}>{step.resultSummary}</Text> : null}
+        {step.resultSummary ? <Text style={styles.stepDetailSummary}>{sanitizePlanDisplayText(step.resultSummary)}</Text> : null}
         {step.reason ? <ReasonBanner text={step.reason} /> : null}
 
         {detail?.lines?.length ? (
@@ -482,7 +482,7 @@ function PageBody({
             {detail.lines.map((ln, i) => (
               <View key={i} style={styles.resultLineRow}>
                 <View style={styles.resultDot} />
-                <Text style={styles.resultLine}>{ln}</Text>
+                <Text style={styles.resultLine}>{sanitizePlanDisplayText(ln)}</Text>
               </View>
             ))}
           </View>
@@ -492,7 +492,7 @@ function PageBody({
           <View style={{ gap: 10 }}>
             {stepChanges.map((c, i) => (
               <View key={`${c.field}-${i}`} style={styles.detailBlock}>
-                {stepChanges.length > 1 ? <Text style={styles.heroLabel}>{c.itemName || c.label}</Text> : null}
+                {stepChanges.length > 1 ? <Text style={styles.heroLabel}>{c.itemName || sanitizePlanDisplayText(c.label)}</Text> : null}
                 <ValueDiff from={c.from} to={c.to} unit={c.unit} kind={c.kind} direction={c.direction} variant="hero" />
               </View>
             ))}
@@ -505,10 +505,10 @@ function PageBody({
             {detail.items.map((it, i) => (
               <View key={i} style={styles.resultItemRow}>
                 <View style={styles.flex}>
-                  <Text style={styles.resultItemLabel} numberOfLines={1}>{it.label}</Text>
-                  {it.sub ? <Text style={styles.resultItemSub} numberOfLines={1}>{it.sub}</Text> : null}
+                  <Text style={styles.resultItemLabel} numberOfLines={1}>{sanitizePlanDisplayText(it.label)}</Text>
+                  {it.sub ? <Text style={styles.resultItemSub} numberOfLines={1}>{sanitizePlanDisplayText(it.sub)}</Text> : null}
                 </View>
-                {it.value ? <Text style={styles.resultItemValue}>{it.value}</Text> : null}
+                {it.value ? <Text style={styles.resultItemValue}>{sanitizePlanDisplayText(it.value)}</Text> : null}
               </View>
             ))}
           </View>
@@ -517,15 +517,15 @@ function PageBody({
         {step.evidence ? (
           <View style={{ gap: 8 }}>
             <Text style={styles.sectionLabel}>BASED ON</Text>
-            <Text style={styles.evidenceHeadline}>{step.evidence.headline}</Text>
+            <Text style={styles.evidenceHeadline}>{sanitizePlanDisplayText(step.evidence.headline)}</Text>
             {step.evidence.items.map((it, i) => (
               <View key={i} style={styles.evidenceRow}>
                 {it.imageUrl ? <Image source={{ uri: it.imageUrl }} style={styles.evidenceThumb} /> : null}
                 <View style={styles.flex}>
-                  <Text style={styles.evidenceLabel} numberOfLines={2}>{it.label}</Text>
-                  {it.sub ? <Text style={styles.evidenceSub} numberOfLines={1}>{it.sub}</Text> : null}
+                  <Text style={styles.evidenceLabel} numberOfLines={2}>{sanitizePlanDisplayText(it.label)}</Text>
+                  {it.sub ? <Text style={styles.evidenceSub} numberOfLines={1}>{sanitizePlanDisplayText(it.sub)}</Text> : null}
                 </View>
-                {it.value ? <Text style={styles.evidenceValue}>{it.value}</Text> : null}
+                {it.value ? <Text style={styles.evidenceValue}>{sanitizePlanDisplayText(it.value)}</Text> : null}
               </View>
             ))}
           </View>
@@ -579,7 +579,7 @@ function PageBody({
               </View>
             )}
             <View style={styles.flex}>
-              <Text style={styles.listName} numberOfLines={1}>{c.itemName || c.label}</Text>
+              <Text style={styles.listName} numberOfLines={1}>{c.itemName || sanitizePlanDisplayText(c.label)}</Text>
               <View style={{ marginTop: 3 }}>
                 <ValueDiff from={c.from} to={c.to} unit={c.unit} kind={c.kind} direction={c.direction} variant="inline" />
               </View>
@@ -654,7 +654,7 @@ function PageBody({
               <Icon name="lightbulb-on-outline" size={14} color={CHAT_COLORS.brandDeep} />
               <Text style={styles.reasoningHeadText}>Thinking</Text>
             </View>
-            <Text style={styles.reasoningBody}>{payload.reasoning.trim()}</Text>
+            <Text style={styles.reasoningBody}>{sanitizePlanDisplayText(payload.reasoning)}</Text>
           </View>
         ) : null}
         {steps.map((step, i) => (
@@ -669,8 +669,8 @@ function PageBody({
               <Icon name={toolStepIcon(step.tool)} size={14} color={step.status === 'failed' ? CHAT_COLORS.error : CHAT_COLORS.brandDeep} />
             </View>
             <View style={styles.flex}>
-              <Text style={styles.stepLabel} numberOfLines={1}>{toolDoneLabel(step.tool, step.label)}</Text>
-              {step.resultSummary ? <Text style={styles.stepResult} numberOfLines={2}>{step.resultSummary}</Text> : null}
+              <Text style={styles.stepLabel} numberOfLines={1}>{sanitizePlanDisplayText(toolDoneLabel(step.tool, step.label))}</Text>
+              {step.resultSummary ? <Text style={styles.stepResult} numberOfLines={2}>{sanitizePlanDisplayText(step.resultSummary)}</Text> : null}
             </View>
             {step.status === 'failed' ? <Text style={styles.stepFail}>failed</Text> : null}
             {typeof step.durationMs === 'number' && step.durationMs > 0 ? (
@@ -706,7 +706,7 @@ function ChangeDetailBody({
   return (
     <View style={{ gap: 16 }}>
       <View style={styles.heroBlock}>
-        <Text style={styles.heroLabel}>{change.label}</Text>
+        <Text style={styles.heroLabel}>{sanitizePlanDisplayText(change.label)}</Text>
         <ValueDiff from={change.from} to={change.to} unit={change.unit} kind={change.kind} direction={change.direction} variant="hero" />
       </View>
 
@@ -741,7 +741,7 @@ const ITEM_AT_PRICE = /^(.+?)\s+(?:at|to)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
 const BEFORE_PRICE = /\b(?:was|from|currently(?:\s+at)?|already\s+at)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
 
 function pricingRowsFromPlanDetail(detail: string): PlanPriceChange[] {
-  const clean = sanitizeDisplayText(detail);
+  const clean = sanitizePlanDisplayText(detail);
   return [...clean.matchAll(PRICE_ROW)].map((match) => ({
     name: sanitizeDisplayText(match[1]),
     after: sanitizeDisplayText(match[2]),
@@ -762,8 +762,8 @@ type PlanContent = {
 };
 
 function priceChangeFromPlanStep(title: string, detail: string): PlanPriceChange | null {
-  const cleanTitle = sanitizeDisplayText(title);
-  const cleanDetail = sanitizeDisplayText(detail);
+  const cleanTitle = sanitizePlanDisplayText(title);
+  const cleanDetail = sanitizePlanDisplayText(detail);
   const itemMatch = cleanDetail.match(ITEM_AT_PRICE);
   if (!itemMatch) return null;
 
@@ -784,8 +784,8 @@ function planContent(plan: PlanPayload): PlanContent {
   const supporting: PlanStep[] = [];
 
   for (const step of plan.steps ?? []) {
-    const heading = sanitizeDisplayText(step.title);
-    const detail = sanitizeDisplayText(step.detail);
+    const heading = sanitizePlanDisplayText(step.title);
+    const detail = sanitizePlanDisplayText(step.detail);
     const priceChange = priceChangeFromPlanStep(heading, detail);
     if (priceChange) {
       prices.push(priceChange);
@@ -801,7 +801,7 @@ function planContent(plan: PlanPayload): PlanContent {
       continue;
     }
 
-    supporting.push(step);
+    supporting.push({ title: heading, detail });
   }
 
   return { prices, supporting };
@@ -816,7 +816,7 @@ function PlanPage({
   items: CampaignItem[];
   onOpenItem: (productId?: string | null) => void;
 }) {
-  const overview = compactDisplayText(plan.summary, { maxChars: 150, maxSentences: 1 });
+  const overview = compactDisplayText(sanitizePlanDisplayText(plan.summary), { maxChars: 150, maxSentences: 1 });
   const title = getPlanDisplayTitle(plan);
   const content = useMemo(() => planContent(plan), [plan]);
   const priceRows = useMemo(() => content.prices.map((change) => {
@@ -1226,7 +1226,7 @@ function Footer({
 const ReasonBanner = ({ text }: { text: string }) => (
   <View style={styles.reasonBanner}>
     <Icon name="information-outline" size={15} color={CHAT_COLORS.brandDeep} style={{ marginTop: 1 }} />
-    <Text style={styles.reasonText}>{text}</Text>
+    <Text style={styles.reasonText}>{sanitizePlanDisplayText(text)}</Text>
   </View>
 );
 
@@ -1252,7 +1252,7 @@ const DetailRow = ({ icon, label, value }: { icon: string; label: string; value:
   <View style={styles.detailRow}>
     <Icon name={icon} size={17} color={CHAT_COLORS.dim} />
     <Text style={styles.detailLabel}>{label}</Text>
-    <Text style={styles.detailValue} numberOfLines={2}>{value}</Text>
+    <Text style={styles.detailValue} numberOfLines={2}>{sanitizePlanDisplayText(value)}</Text>
   </View>
 );
 

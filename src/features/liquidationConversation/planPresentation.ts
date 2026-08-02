@@ -1,8 +1,17 @@
 import type { CampaignItem, PlanPayload } from './types';
 import { sanitizeDisplayText } from './displayText';
+import { rewriteLegacyPacingCopy } from './legacyPacingCopy';
 
 const ITEM_AT_PRICE = /^(.+?)\s+(?:at|to)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
 const BEFORE_PRICE = /\b(?:was|from|currently(?:\s+at)?|already\s+at)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
+
+/**
+ * Old campaigns can carry authored plan copy from the retired pacing selector.
+ * Keep the wire value intact while translating any cached plan text at render time.
+ */
+export function sanitizePlanDisplayText(value: string | null | undefined): string {
+  return rewriteLegacyPacingCopy(sanitizeDisplayText(value));
+}
 
 export type PlanPricePreview = {
   name: string;
@@ -14,8 +23,8 @@ export type PlanPricePreview = {
 export function getPlanPricePreviews(plan: PlanPayload): PlanPricePreview[] {
   const rows: PlanPricePreview[] = [];
   for (const step of plan.steps ?? []) {
-    const title = sanitizeDisplayText(step.title);
-    const detail = sanitizeDisplayText(step.detail);
+    const title = sanitizePlanDisplayText(step.title);
+    const detail = sanitizePlanDisplayText(step.detail);
     const match = detail.match(ITEM_AT_PRICE);
     if (!match) continue;
     const after = match[2];
@@ -33,9 +42,9 @@ export function getPlanDisplayTitle(plan: PlanPayload): string {
   const prices = getPlanPricePreviews(plan);
   if (prices.length) return `Price ${prices.length} items for launch`;
 
-  const firstStep = plan.steps?.find(step => sanitizeDisplayText(step.title).length > 0);
-  if (firstStep) return sanitizeDisplayText(firstStep.title);
-  return sanitizeDisplayText(plan.title || 'Proposed changes');
+  const firstStep = plan.steps?.find(step => sanitizePlanDisplayText(step.title).length > 0);
+  if (firstStep) return sanitizePlanDisplayText(firstStep.title);
+  return sanitizePlanDisplayText(plan.title || 'Proposed changes');
 }
 
 function normalizedName(value: string) {

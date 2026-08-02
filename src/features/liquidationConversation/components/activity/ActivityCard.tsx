@@ -27,7 +27,13 @@ import RoutineCard from './RoutineCard';
 import { TypingIndicator } from './Typing';
 import { activityGlyph, changeKindGlyph, humanizeChannel, toolActivePhrase } from './humanizers';
 import { sanitizeDisplayText } from '../../displayText';
-import { campaignItemPrice, getPlanDisplayTitle, getPlanPricePreviews, matchPlanItem } from '../../planPresentation';
+import {
+  campaignItemPrice,
+  getPlanDisplayTitle,
+  getPlanPricePreviews,
+  matchPlanItem,
+  sanitizePlanDisplayText,
+} from '../../planPresentation';
 import { DiaTextReveal } from '../../../../components/DiaTextReveal';
 import { useChatPreferences } from '../../chatPreferences';
 import { ThinkingText } from '../../../../components/ThinkingText';
@@ -277,7 +283,7 @@ function RichActivityCard({
           />
         </View>
         <View style={styles.richTextCol}>
-          <Text style={styles.richTitle} numberOfLines={1}>{payload.title}</Text>
+          <Text style={styles.richTitle} numberOfLines={1}>{sanitizePlanDisplayText(payload.title)}</Text>
           {subtitle ? <Text style={styles.richSub} numberOfLines={1}>{subtitle}</Text> : null}
         </View>
         <Icon name="chevron-right" size={18} color="#C4C4CC" />
@@ -299,7 +305,7 @@ function RichActivityCard({
               {previewRows.map((c, i) => (
                 <View key={`${c.field}-${i}`} style={styles.previewRow}>
                   <Icon name={changeKindGlyph(c.kind)} size={14} color={CHAT_COLORS.dim} />
-                  <Text style={styles.previewLabel} numberOfLines={1}>{c.itemName || c.label}</Text>
+                  <Text style={styles.previewLabel} numberOfLines={1}>{c.itemName || sanitizePlanDisplayText(c.label)}</Text>
                   <View style={styles.previewDiff}>
                     <ValueDiff from={c.from} to={c.to} unit={c.unit} kind={c.kind} direction={c.direction} variant="preview" />
                   </View>
@@ -328,7 +334,7 @@ function ToolRunCard({
   onOpenTray?: (payload: ActivityPayload) => void;
 }) {
   const steps = payload.steps ?? [];
-  const reasoning = payload.reasoning?.trim();
+  const reasoning = sanitizePlanDisplayText(payload.reasoning);
   const hasReasoning = !!reasoning;
   const count = steps.length;
   const { expandedActivity } = useChatPreferences();
@@ -339,7 +345,7 @@ function ToolRunCard({
 
   const lastStep = count ? steps[count - 1] : null;
   const livePhrase = lastStep ? toolActivePhrase(lastStep.tool) : 'Working on it';
-  const doneSummary = sanitizeDisplayText(payload.title || 'Finished the checks');
+  const doneSummary = sanitizePlanDisplayText(payload.title || 'Finished the checks');
   const canOpen = !streaming && (count > 0 || hasReasoning);
   const openTray = () => {
     if (!canOpen) return;
