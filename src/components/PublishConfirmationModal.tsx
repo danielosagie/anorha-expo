@@ -17,7 +17,7 @@ import { normalizeDisplayName } from '../config/platforms';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { createLogger } from '../utils/logger';
-import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 const log = createLogger('PublishConfirmationModal');
 
 // Brand-coloured logo chips (white glyph on the platform's colour) — matches the
@@ -80,6 +80,7 @@ export default function PublishConfirmationModal({
     onOptimize,
 }: PublishConfirmationModalProps) {
     const insets = useSafeAreaInsets();
+    const { hasLinkedComputer, computerOnline, computers, presenceLoaded } = useFacebookJobStatus(visible);
 
     // Which platforms are toggled on for publishing.
     const [selectedPlatforms, setSelectedPlatforms] = React.useState<Set<string>>(new Set());
@@ -96,12 +97,28 @@ export default function PublishConfirmationModal({
         return groups;
     }, [allConnections]);
 
+    const connectStatusByPlatform = React.useMemo(
+        () => Object.fromEntries(
+            Object.keys(platformGroups).map((platform) => [
+                platform,
+                derivePlatformConnectStatus(platform, allConnections, {
+                    hasLinkedComputer,
+                    computerOnline,
+                    presenceLoaded,
+                }),
+            ]),
+        ),
+        [platformGroups, allConnections, hasLinkedComputer, computerOnline, presenceLoaded],
+    );
+
     // Auto-select every connected platform when the sheet opens (default = publish to all
     // ready channels; the seller can toggle any off).
     useEffect(() => {
         if (!visible || allConnections.length === 0) return;
         log.debug('[PublishModal] opened with platforms:', Object.keys(platformGroups));
-        setSelectedPlatforms(new Set(Object.keys(platformGroups)));
+        setSelectedPlatforms(new Set(
+            Object.keys(platformGroups).filter((platform) => connectStatusByPlatform[platform]?.isFullyConnected),
+        ));
         const next: Record<string, string> = { ...selectedConnectionIds };
         let changed = false;
         Object.keys(platformGroups).forEach((p) => {
@@ -109,7 +126,7 @@ export default function PublishConfirmationModal({
         });
         if (changed) setSelectedConnectionIds(next);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [visible, allConnections]);
+    }, [visible, allConnections, connectStatusByPlatform]);
 
     const totalAccounts = React.useMemo(() => {
         let total = 0;
@@ -125,8 +142,8 @@ export default function PublishConfirmationModal({
 
     // Facebook posts through the seller's own computer — give an honest, non-blocking
     // heads-up if FB is on and no computer is currently online (publishing still queues).
-    const { computerOnline, computers } = useFacebookJobStatus(visible);
-    const showComputerHeadsUp = selectedPlatforms.has('facebook') && !computerOnline;
+    const facebookConnectStatus = connectStatusByPlatform.facebook;
+    const showComputerHeadsUp = selectedPlatforms.has('facebook') && facebookConnectStatus?.offlineComputer;
 
     // Optional pin: with 2+ linked computers, let the seller choose WHICH one posts
     // to Facebook (default = any available). Only pinnable computers (those with a
@@ -188,16 +205,36 @@ export default function PublishConfirmationModal({
                     ) : (
                         platforms.map((platform) => {
                             const selected = selectedPlatforms.has(platform);
+                            const connectStatus = connectStatusByPlatform[platform];
                             const opt = channelOptimization?.[platform];
                             const warn = opt?.tone === 'warn';
+                            const canSelect = connectStatus?.isFullyConnected === true;
+                            const statusLabel = connectStatus?.uiState === 'needs-computer'
+                                ? 'Finish setup'
+                                : connectStatus?.uiState === 'checking'
+                                    ? 'Checking'
+                                    : connectStatus?.requiresComputer
+                                        ? 'Connected'
+                                        : storeNameFor(platform);
                             return (
                                 <View key={platform} style={styles.platformCard}>
-                                    {/* Top row — selection */}
-                                    <TouchableOpacity style={styles.cardRow} activeOpacity={0.8} onPress={() => togglePlatform(platform)}>
+                                    {/* Top row: selection */}
+                                    <TouchableOpacity
+                                        style={styles.cardRow}
+                                        activeOpacity={0.8}
+                                        onPress={() => {
+                                            if (canSelect) togglePlatform(platform);
+                                            else if (connectStatus?.uiState === 'needs-computer') onAddChannel?.();
+                                        }}
+                                        disabled={!canSelect && connectStatus?.uiState !== 'needs-computer'}
+                                    >
                                         <PlatformBrandChip platform={platform} size={48} />
                                         <View style={{ flex: 1 }}>
                                             <Text style={styles.platformName}>{labelFor(platform)}</Text>
-                                            <Text style={styles.platformStatus} numberOfLines={1}>{storeNameFor(platform)}</Text>
+                                            <Text style={styles.platformStatus} numberOfLines={1}>{statusLabel}</Text>
+                                            {connectStatus?.offlineComputer ? (
+                                                <Text style={styles.platformHint} numberOfLines={1}>Computer offline</Text>
+                                            ) : null}
                                         </View>
                                         {selected ? (
                                             <View style={styles.checkOn}>
@@ -237,7 +274,7 @@ export default function PublishConfirmationModal({
                     {showComputerHeadsUp ? (
                         <View style={styles.computerNotice}>
                             <Icon name="monitor" size={16} color="#BA7517" style={{ marginTop: 1 }} />
-                            <Text style={styles.computerNoticeText}>Facebook posts via your computer.</Text>
+                            <Text style={styles.computerNoticeText}>Computer offline. Publishing waits.</Text>
                         </View>
                     ) : null}
 
@@ -309,6 +346,7 @@ const styles = StyleSheet.create({
     cardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 11 },
     platformName: { color: '#18181B', fontSize: 18, fontWeight: '700', lineHeight: 18 },
     platformStatus: { color: '#9CA3AF', fontSize: 16, fontWeight: '500', lineHeight: 16, marginTop: 1 },
+    platformHint: { color: '#9CA3AF', fontSize: 12, fontWeight: '500', lineHeight: 16, marginTop: 2 },
     checkOn: { width: 32, height: 32, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
     checkOff: { width: 32, height: 32, borderRadius: 7, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
     optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#F1F2F4' },

@@ -68,7 +68,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     setScanOpen(false);
     if (!s.oauthConnected && s.steps.includes('oauth')) {
       setPhase('consent');
-    } else if (s.requiresComputer && !s.computerOnline) {
+    } else if (s.requiresComputer && !s.hasLinkedComputer) {
       setPhase('linkComputer');
     } else {
       setPhase('done');
@@ -81,25 +81,23 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     onConnected();
   }, [onConnected]);
 
-  // After OAuth: go to the computer step if this platform needs a computer and one
-  // isn't already online; otherwise we're done.
+  // After OAuth, continue only when no computer has been linked yet.
   const advanceAfterOAuth = useCallback(() => {
     const s = statusRef.current;
-    if (s.requiresComputer && !s.computerOnline) {
+    if (s.requiresComputer && !s.hasLinkedComputer) {
       setPhase('linkComputer');
     } else {
       finish();
     }
   }, [finish]);
 
-  // Auto-finish if the computer comes online while we're on the link step: the
-  // user may open/link their computer out of band, or presence may just arrive.
+  // Auto-finish when a computer links while this step is open.
   // Without this the sheet would sit on "Link your computer" until manually closed.
   useEffect(() => {
-    if (phase === 'linkComputer' && status.computerOnline) {
+    if (phase === 'linkComputer' && status.hasLinkedComputer) {
       finish();
     }
-  }, [phase, status.computerOnline, finish]);
+  }, [phase, status.hasLinkedComputer, finish]);
 
   const completeOAuth = useCallback(async (shopifyShop?: string) => {
     if (!platform) return;

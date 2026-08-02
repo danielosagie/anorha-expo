@@ -52,22 +52,26 @@ export default function ConnectAccountsStep({
   onDone: () => void;
 }) {
   const { liveConnections, refresh } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const { hasLinkedComputer, computerOnline, presenceLoaded } = useFacebookJobStatus();
 
   // The platform whose combined connect flow (OAuth + link-computer) is open.
   const [flowPlatform, setFlowPlatform] = useState<ConnectablePlatform | null>(null);
   // Fully connected = every required step done (Facebook needs OAuth AND a linked
   // computer). Read server-backed connection rows only; OAuth completion alone
   // must not fabricate an importing state.
-  const isFullyConnected = useCallback(
+  const statusFor = useCallback(
     (key: ConnectablePlatform) =>
-      derivePlatformConnectStatus(key, liveConnections, { computerOnline, presenceLoaded }).isFullyConnected,
-    [liveConnections, computerOnline, presenceLoaded],
+      derivePlatformConnectStatus(key, liveConnections, {
+        hasLinkedComputer,
+        computerOnline,
+        presenceLoaded,
+      }),
+    [liveConnections, hasLinkedComputer, computerOnline, presenceLoaded],
   );
 
   const connectedCount = useMemo(
-    () => PLATFORMS.filter((p) => isFullyConnected(p.key)).length,
-    [isFullyConnected],
+    () => PLATFORMS.filter((p) => statusFor(p.key).isFullyConnected).length,
+    [statusFor],
   );
   const name = orgName?.trim() || 'My store';
   const initial = name.charAt(0).toUpperCase();
@@ -97,7 +101,8 @@ export default function ConnectAccountsStep({
         <Text style={styles.sectionLabel}>CONNECTED STORES</Text>
 
         {PLATFORMS.map((p, i) => {
-          const connected = isFullyConnected(p.key);
+          const connectStatus = statusFor(p.key);
+          const connected = connectStatus.isFullyConnected;
           const connection = liveConnections.find((item) => item.PlatformType.toLowerCase() === p.key && isVisiblePlatformConnection(item));
           const connectionStatus = String(connection?.Status || '').toLowerCase();
           const importing = ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync'].includes(connectionStatus);
@@ -110,6 +115,8 @@ export default function ConnectAccountsStep({
                 <Text style={styles.rowName}>{p.name}</Text>
                 {importing ? (
                   <Text style={styles.rowStatus} numberOfLines={1}>Importing inventory…</Text>
+                ) : connectStatus.offlineComputer ? (
+                  <Text style={styles.rowHint} numberOfLines={1}>Computer offline</Text>
                 ) : null}
               </View>
 
@@ -118,13 +125,17 @@ export default function ConnectAccountsStep({
                   <View style={styles.checkCircle}><Check size={11} color="#FFFFFF" /></View>
                   <Text style={styles.connectedText}>Connected</Text>
                 </View>
+              ) : connectStatus.uiState === 'checking' ? (
+                <Text style={styles.checkingText}>Checking</Text>
               ) : (
                 <TouchableOpacity
                   style={styles.connectPill}
                   onPress={() => setFlowPlatform(p.key)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.connectText}>Connect</Text>
+                  <Text style={styles.connectText}>
+                    {connectStatus.uiState === 'needs-computer' ? 'Finish setup' : 'Connect'}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -202,6 +213,7 @@ const styles = StyleSheet.create({
   rowInfo: { flex: 1 },
   rowName: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: INK },
   rowStatus: { fontSize: 12, fontFamily: 'Inter_500Medium', color: GREEN_DEEP, marginTop: 2 },
+  rowHint: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#9CA3AF', marginTop: 2 },
   rowError: { color: '#DC2626' },
 
   connectPill: {
@@ -214,6 +226,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   connectText: { color: GREEN_DEEP, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  checkingText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
 
   connectingPill: {
     flexDirection: 'row',

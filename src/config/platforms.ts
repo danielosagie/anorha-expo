@@ -441,18 +441,18 @@ export const ENABLED_PLATFORM_OPTIONS = ENABLED_PLATFORMS.map((key) => ({
 // Turn a platform on/off by editing EXPO_PUBLIC_ENABLED_PLATFORMS (a comma list,
 // e.g. `shopify,ebay,square,facebook`). A platform also needs status !== 'planned'
 // and a `connect` def to be connectable. Computer-write platforms (Facebook) need
-// the desktop helper linked — pass `computerOnline` to surface that cleanly
+// the desktop helper linked. Pass `hasLinkedComputer` to surface that cleanly
 // instead of letting the user hit a wall.
 export type PlatformAvailability = 'available' | 'needs-computer' | 'coming-soon';
 
 export const getPlatformAvailability = (
   raw?: string | null,
-  opts?: { computerOnline?: boolean },
+  opts?: { hasLinkedComputer?: boolean },
 ): PlatformAvailability => {
   const def = getPlatform(raw);
   if (!def || !def.connect || def.status === 'planned') return 'coming-soon';
   if (!ENABLED_PLATFORMS.includes(def.key)) return 'coming-soon';
-  if (def.capabilities.writeVia === 'computer' && opts?.computerOnline === false) return 'needs-computer';
+  if (def.capabilities.writeVia === 'computer' && opts?.hasLinkedComputer === false) return 'needs-computer';
   return 'available';
 };
 

@@ -197,6 +197,8 @@ export interface ConnectedComputer {
 }
 
 export interface FacebookJobStatus {
+  /** True when at least one Facebook-capable computer has ever been linked. */
+  hasLinkedComputer: boolean;
   /** True when at least one worker has beaten within PRESENCE_TTL_MS. */
   computerOnline: boolean;
   /** True when ANY FB job is paused or dead-lettered (drives the connection row). */
@@ -234,27 +236,31 @@ export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus
     return () => clearInterval(t);
   }, [enabled]);
 
+  const facebookPresence = useMemo(
+    () => (presence || []).filter((d) => !d.platform || d.platform.toLowerCase().includes('facebook')),
+    [presence],
+  );
+
+  const hasLinkedComputer = facebookPresence.length > 0;
+
   const computerOnline = useMemo(() => {
-    if (!presence || presence.length === 0) return false;
+    if (facebookPresence.length === 0) return false;
     const now = Date.now();
-    // A heartbeat with a missing platform is a generic worker = online for all;
-    // also count an explicit facebook worker.
-    return presence.some((d) => {
+    return facebookPresence.some((d) => {
       const fresh = now - (d.lastSeenAt || 0) < PRESENCE_TTL_MS;
-      const platformOk = !d.platform || d.platform.toLowerCase().includes('facebook');
-      return fresh && platformOk;
+      return fresh;
     });
     // `tick` forces a recompute against a fresh Date.now() every TICK_MS, so a
     // gone-stale heartbeat flips offline even with no new presence push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presence, tick]);
+  }, [facebookPresence, tick]);
 
   // The connected computers — one row per worker (presence is unique per worker),
   // newest heartbeat first. `tick` keeps `online` fresh as heartbeats go stale.
   const computers = useMemo<ConnectedComputer[]>(() => {
-    if (!presence || presence.length === 0) return [];
+    if (facebookPresence.length === 0) return [];
     const now = Date.now();
-    return [...presence]
+    return [...facebookPresence]
       .sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0))
       .map((d) => ({
         id: d._id,
@@ -263,7 +269,7 @@ export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus
         lastSeenAt: d.lastSeenAt || 0,
       }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presence, tick]);
+  }, [facebookPresence, tick]);
 
   const fbJobs = useMemo(
     () => (jobs || []).filter(isFacebook),
@@ -286,14 +292,14 @@ export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus
   }, [fbJobs, computerOnline]);
 
   return {
+    hasLinkedComputer,
     computerOnline,
     fbNeedsCheck,
     computers,
     statusForVariant,
     degraded: !client || !userId,
-    // useWatchedQuery yields undefined until the first result lands — that's
-    // "loading", not "no computers". (In degraded mode it never loads; treat
-    // as loaded so callers fall back to their degraded handling.)
-    presenceLoaded: !enabled || presence !== undefined || !client || !userId,
+    // useWatchedQuery yields undefined until the first result lands. That is an
+    // unknown computer list, not evidence that no computer has been linked.
+    presenceLoaded: !enabled || presence !== undefined,
   };
 }

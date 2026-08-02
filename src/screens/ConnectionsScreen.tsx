@@ -25,7 +25,7 @@ import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformCon
 import { useImportHub } from '../hooks/useImportHub';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
-import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import PartnerBadge from '../components/PartnerBadge';
 import { buildPartnerInventoryOrigins, PartnerInventoryOrigin } from '../lib/partnerInventory';
 
@@ -116,9 +116,18 @@ const ConnectionsScreen = () => {
   }, [navigation]);
 
   // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
-  const { computers } = useFacebookJobStatus();
+  const { hasLinkedComputer, computerOnline, computers, presenceLoaded } = useFacebookJobStatus();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+
+  const connectStatusFor = useCallback(
+    (platform: string) => derivePlatformConnectStatus(platform, liveConnections, {
+      hasLinkedComputer,
+      computerOnline,
+      presenceLoaded,
+    }),
+    [liveConnections, hasLinkedComputer, computerOnline, presenceLoaded],
+  );
 
   // Wire the global platform-picker overlay so choosing a platform from the
   // "Connect a platform" sheet shows the consent page, then opens the OAuth
@@ -311,7 +320,16 @@ const ConnectionsScreen = () => {
             <Text style={styles.empty}>No platforms connected yet.</Text>
           ) : (
             visibleConnections.map((c: any, i: number) => {
-              const st = statusOf(c.Status, c.IsEnabled !== false);
+              const connectStatus = connectStatusFor(c.PlatformType);
+              const usesComputerStatus =
+                connectStatus.requiresComputer && ['active', 'live'].includes(String(c.Status || '').toLowerCase());
+              const st = usesComputerStatus
+                ? connectStatus.uiState === 'needs-computer'
+                  ? { label: 'Finish setup', color: '#BA7517' }
+                  : connectStatus.uiState === 'checking'
+                    ? { label: 'Checking', color: '#9CA3AF' }
+                    : { label: 'Connected', color: '#43631A' }
+                : statusOf(c.Status, c.IsEnabled !== false);
               const attn = attentionByConn[c.Id] || 0;
               return (
                 <TouchableOpacity
@@ -319,6 +337,10 @@ const ConnectionsScreen = () => {
                   style={[styles.row, i > 0 && styles.rowBorder]}
                   activeOpacity={0.7}
                   onPress={() => {
+                    if (usesComputerStatus && connectStatus.uiState === 'needs-computer') {
+                      setScanOpen(true);
+                      return;
+                    }
                     if (c.IsEnabled === false || String(c.Status).toLowerCase() === 'inactive') {
                       void retryImport(c);
                       return;
@@ -349,6 +371,9 @@ const ConnectionsScreen = () => {
                       <View style={[styles.dot, { backgroundColor: st.color }]} />
                       <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
                     </View>
+                    {usesComputerStatus && connectStatus.offlineComputer ? (
+                      <Text style={styles.rowHint}>Computer offline</Text>
+                    ) : null}
                   </View>
                   {managing ? (
                     <View style={styles.manageActions}>
@@ -433,7 +458,9 @@ const ConnectionsScreen = () => {
             row (or "Link a computer") to check status / set one up. */}
         <Text style={[styles.section, { marginTop: 26 }]}>Computers</Text>
         <View style={styles.card}>
-          {computers.length === 0 ? (
+          {!presenceLoaded ? (
+            <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
+          ) : computers.length === 0 ? (
             <Text style={styles.empty}>No computers linked yet.</Text>
           ) : (
             computers.map((comp, i) => {
@@ -622,6 +649,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   dot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  rowHint: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#9CA3AF', marginTop: 1, marginLeft: 13 },
 
   poolIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
   poolIconPartner: { backgroundColor: 'rgba(162,97,26,0.12)' },

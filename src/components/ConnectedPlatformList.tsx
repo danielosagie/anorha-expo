@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import ConnectedPlatformItem, { PlatformConnection } from './ConnectedPlatformItem';
 import { getPlatform } from '../config/platforms';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 
 interface ConnectedPlatformListProps {
     connections: PlatformConnection[];
@@ -29,6 +32,17 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
     navigation,
 }) => {
     const [currentPage, setCurrentPage] = useState(1);
+    const { liveConnections } = usePlatformConnections();
+    const { hasLinkedComputer, computerOnline, presenceLoaded } = useFacebookJobStatus();
+
+    const connectStatusFor = useCallback(
+        (platform: string) => derivePlatformConnectStatus(platform, liveConnections, {
+            hasLinkedComputer,
+            computerOnline,
+            presenceLoaded,
+        }),
+        [liveConnections, hasLinkedComputer, computerOnline, presenceLoaded],
+    );
 
     const totalPages = Math.ceil(connections.length / PAGE_SIZE);
 
@@ -86,6 +100,7 @@ const ConnectedPlatformList: React.FC<ConnectedPlatformListProps> = ({
                         key={connection.Id}
                         connection={connection}
                         platformConfig={platformConfig}
+                        connectStatus={connectStatusFor(connection.PlatformType)}
                         isEditMode={isEditMode}
                         onStartScan={onStartScan}
                         onReview={onReview}

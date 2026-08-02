@@ -16,9 +16,13 @@ import {
 
 export function usePlatformConnectStatus(platform: string): PlatformConnectStatus {
   const { liveConnections } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const { hasLinkedComputer, computerOnline, presenceLoaded } = useFacebookJobStatus();
   return useMemo(
-    () => derivePlatformConnectStatus(platform, liveConnections, { computerOnline, presenceLoaded }),
-    [platform, liveConnections, computerOnline, presenceLoaded],
+    () => derivePlatformConnectStatus(platform, liveConnections, {
+      hasLinkedComputer,
+      computerOnline,
+      presenceLoaded,
+    }),
+    [platform, liveConnections, hasLinkedComputer, computerOnline, presenceLoaded],
   );
 }
