@@ -13,6 +13,7 @@ import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
 import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
+import { setItemPhotoUri } from '../../features/cart/cartStore';
 import { uploadProductImage } from '../../utils/uploadProductImage';
 import { createLogger } from '../../utils/logger';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
@@ -565,7 +566,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
 
 export const BulkItemsSheet: React.FC<{
   onClose: () => void;
-  onStartBroadSearch: () => void;
+  onStartBroadSearch: (options?: { forGeneration?: boolean }) => void;
   sheetStyle: any;
   photos: CapturedPhoto[];
   isBulkMode: boolean;
@@ -897,6 +898,7 @@ export const BulkItemsSheet: React.FC<{
     // never render in the gallery and never publish. Upload any local uri here first.
     const uploadResults = await Promise.all(products.map(async (p) => {
       const urls = Array.isArray(p.imageUrls) ? p.imageUrls : [];
+      const itemPhotos = bulkItems.find((item) => item.id === p.clientItemId)?.photos ?? [];
       let uploadFailed = false;
       const hosted = await Promise.all(urls.map(async (u, i) => {
         if (typeof u !== 'string' || !u.trim()) {
@@ -905,7 +907,10 @@ export const BulkItemsSheet: React.FC<{
         }
         if (/^https?:\/\//i.test(u)) return u; // already uploaded
         try {
-          return await uploadProductImage(u, `${p.productId || p.productIndex}-${i}`);
+          const hostedUrl = await uploadProductImage(u, `${p.productId || p.productIndex}-${i}`);
+          const photoId = itemPhotos[i]?.id;
+          if (hostedUrl && photoId) setItemPhotoUri(p.clientItemId, photoId, hostedUrl);
+          return hostedUrl;
         } catch (e) {
           uploadFailed = true;
           log.warn('[generate] image upload failed', e);
@@ -966,7 +971,7 @@ export const BulkItemsSheet: React.FC<{
       job: parsed as JobResponse | null,
       submittedItemIds: successfulUploads.map((result) => result.clientItemId),
     };
-  }, [connectedPlatformKeys, setItemLoadingStates]);
+  }, [bulkItems, connectedPlatformKeys, setItemLoadingStates]);
 
   // Shared handler: analyze and navigate to match/generate flow (accounts for quick scan selections).
   // keepSheetOpen: swipe-to-generate fires this per-card and the cart stays up so the
@@ -1012,7 +1017,7 @@ export const BulkItemsSheet: React.FC<{
       onListingCreationStarted?.({ ...opts.listingCreation, itemIds: creationItemIds });
     }
 
-    onStartBroadSearch();
+    onStartBroadSearch({ forGeneration: true });
 
     const loadingStates: Record<string, ItemLoadingState> = {};
     identifiableItems.forEach(item => {
@@ -1639,42 +1644,35 @@ export const BulkItemsSheet: React.FC<{
             <TouchableOpacity
               style={[
                 styles.searchForProductButton,
-                { backgroundColor: hasLoadingItems || allGenerated || (cameraMode !== 'shelf' && totalItems === 0) ? '#A3A3A3' : '#93C822' },
+                { backgroundColor: hasLoadingItems || allGenerated || totalItems === 0 ? '#A3A3A3' : '#93C822' },
               ]}
-              disabled={hasLoadingItems || allGenerated || (cameraMode !== 'shelf' && totalItems === 0)}
+              disabled={hasLoadingItems || allGenerated || totalItems === 0}
               onPress={() => {
-                if (cameraMode === 'shelf' && totalItems > 0) {
-                  // Direct transition from shelf to camera mode
-                  onStartBroadSearch(); // We'll hijack this prop or close modal
-                } else {
-                  // Create listings IN PLACE — keep the cart open so the items show their
-                  // own "Creating listing" spinner; nothing pushes the view up/away.
-                  // Already-generated items are excluded so we never re-create them.
-                  handleAnalyzeAndNavigate(
-                    bulkItems.filter((i) => !savedSet.has(i.id) && itemStageById?.[i.id] !== 'generated' && (!selectionActive || selectedIds.has(i.id))),
-                    {
-                      keepSheetOpen: true,
-                      listingCreation: { photoUri: ungeneratedTargets[0]?.photos?.[0]?.uri ?? null, count: checkoutCount },
-                    },
-                  );
-                }
+                // Create listings in place from the item identity and photos already in the
+                // cart. Shelf crops are valid listing photos, so checkout never requires a
+                // second capture pass.
+                handleAnalyzeAndNavigate(
+                  bulkItems.filter((i) => !savedSet.has(i.id) && itemStageById?.[i.id] !== 'generated' && (!selectionActive || selectedIds.has(i.id))),
+                  {
+                    keepSheetOpen: true,
+                    listingCreation: { photoUri: ungeneratedTargets[0]?.photos?.[0]?.uri ?? null, count: checkoutCount },
+                  },
+                );
               }}
             >
               {hasLoadingItems && (
                 <ActivityIndicator color="#FFFFFF" size="small" style={{ marginRight: 8 }} />
               )}
               <Text style={styles.searchForProductButtonText}>
-                {cameraMode === 'shelf' && totalItems > 0
-                    ? `Take Photos for ${totalItems} Item${totalItems > 1 ? 's' : ''}`
-                    : cameraMode !== 'shelf' && totalItems === 0
-                      ? 'Take a photo to continue'
-                      : hasLoadingItems
-                        ? (isListingCreationActive ? 'Creating listing' : 'Finding match')
-                        : allGenerated
-                          ? 'Listing created'
-                          : checkoutCount === 1
-                            ? 'Sell this item'
-                            : `Sell these ${checkoutCount} items`}
+                {totalItems === 0
+                  ? 'Take a photo to continue'
+                  : hasLoadingItems
+                    ? (isListingCreationActive ? 'Creating listing' : 'Finding match')
+                    : allGenerated
+                      ? 'Listing created'
+                      : checkoutCount === 1
+                        ? 'Sell this item'
+                        : `Sell these ${checkoutCount} items`}
               </Text>
             </TouchableOpacity>
           </View>
