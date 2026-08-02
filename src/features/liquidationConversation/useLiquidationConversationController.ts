@@ -1173,10 +1173,13 @@ export const useLiquidationConversationController = ({
   useEffect(() => {
     if (global) return;
     if (!activeCampaignId || !activeThreadId || isLoadingMessages) return;
+    // Opening a completed clearout is a read-only view. In particular, do not let
+    // an empty historical thread start a synthetic agent turn just because it was opened.
+    if (activeCampaign?.status === 'completed') return;
     if (surfaceState === 'home_overview') return;
     if ((activeThreadState?.messages.length || 0) > 0) return;
     void kickoffThread(activeCampaignId, activeThreadId);
-  }, [activeCampaignId, activeThreadId, global, isLoadingMessages, surfaceState, activeThreadState?.messages.length, kickoffThread]);
+  }, [activeCampaign?.status, activeCampaignId, activeThreadId, global, isLoadingMessages, surfaceState, activeThreadState?.messages.length, kickoffThread]);
 
   const submitAnswer = useCallback(async (prompt: QuestionPrompt, answers: Record<string, string[]>, other?: string) => {
     const campaignId = activeCampaignIdRef.current;

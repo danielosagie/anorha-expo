@@ -914,12 +914,14 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     await this.safeConvexMutation('threads:removeByCampaign', { campaignId });
   }
 
-  // Pause/resume a campaign from the home screen (PATCH the session status).
+  // Explicit campaign status changes must fail loudly so the controller can roll
+  // back its optimistic card state instead of showing a close that never persisted.
   async setCampaignStatus(campaignId: string, status: CampaignSummary['status']): Promise<void> {
-    await this.tryRequestNest(`/api/agent/sessions/${campaignId}/status`, {
+    await this.requestNest(`/api/agent/sessions/${campaignId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     });
+    await this.safeConvexMutation('campaigns:setStatus', { campaignId, status });
   }
 
   async renameThread(campaignId: string, threadId: string, title: string): Promise<CampaignThreadSummary> {

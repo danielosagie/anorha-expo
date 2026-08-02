@@ -9,6 +9,8 @@ const ensureIdentity = async (ctx: any) => {
   return identity;
 };
 
+const TERMINAL_CAMPAIGN_STATUSES = new Set(['closed', 'completed', 'archived']);
+
 /**
  * Look up a campaign and prove the caller owns it.
  *
@@ -52,13 +54,19 @@ export const upsertFromSession = mutation({
     const existing = await requireCampaignOwner(ctx, args.campaignId, identity);
 
     if (existing) {
+      // This mutation is a session/cache sync, not a reopen command. A stale
+      // "active" snapshot must never resurrect a campaign the seller closed.
+      // Explicit status changes use setStatus below.
+      const nextStatus = TERMINAL_CAMPAIGN_STATUSES.has(existing.status)
+        ? existing.status
+        : args.status;
       await ctx.db.patch(existing._id, {
         sessionId: args.sessionId,
         // Backfill ownership so older rows (inserted before userId existed) become
         // visible to their owner — and only their owner — via the by_user_id index.
         userId: existing.userId || identity.subject,
         title: args.title,
-        status: args.status,
+        status: nextStatus,
         primaryThreadId: args.primaryThreadId,
         metadata: args.metadata,
         updatedAt: now,
@@ -68,7 +76,7 @@ export const upsertFromSession = mutation({
         sessionId: args.sessionId,
         userId: existing.userId || identity.subject,
         title: args.title,
-        status: args.status,
+        status: nextStatus,
         primaryThreadId: args.primaryThreadId,
         metadata: args.metadata,
         updatedAt: now,
@@ -88,6 +96,33 @@ export const upsertFromSession = mutation({
     });
 
     return ctx.db.get(insertedId);
+  },
+});
+
+/**
+ * Explicit seller-requested status transition. Kept separate from the session
+ * sync above so reopening a terminal campaign can never happen as a side effect.
+ */
+export const setStatus = mutation({
+  args: {
+    campaignId: v.string(),
+    status: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ensureIdentity(ctx);
+    const existing = await requireCampaignOwner(ctx, args.campaignId, identity);
+    if (!existing) return null;
+
+    const updatedAt = Date.now();
+    await ctx.db.patch(existing._id, {
+      status: args.status,
+      updatedAt,
+    });
+    return {
+      ...existing,
+      status: args.status,
+      updatedAt,
+    };
   },
 });
 
