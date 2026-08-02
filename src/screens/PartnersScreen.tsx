@@ -930,7 +930,7 @@ export default function PartnersScreen() {
                         onPress={() => {
                             setOnboardingModal({ visible: false, message: '' });
                             refreshData();
-                            navigation.navigate('AccountSettings');
+                            navigation.navigate('ConnectPlatforms');
                         }}
                     >
                         <Text style={styles.modalButtonText}>Connect Now</Text>

@@ -152,7 +152,6 @@ export type AppStackParamList = {
   ImportHub: { completedLane?: 'matches' | 'required' | 'polish'; connectionId?: string } | undefined;
   SyncRules: { connectionId: string; platformName?: string };
   Profile: { refresh?: number };
-  AccountSettings: { refresh?: number } | undefined;
   Connections: undefined;
   ConnectPlatforms: undefined;
   PrivacySecurity: undefined;
@@ -469,10 +468,6 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="SyncInbox" component={sb(SyncInboxScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="ImportHub" component={sb(ImportHubScreen)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
-    {/* Legacy account/profile mega-screen. Registered ONLY as 'AccountSettings' —
-        a stack route also named 'Profile' collided with the Profile TAB and made
-        navigate('Profile') push this legacy screen over the tabs. */}
-    <AppStackNav.Screen name="AccountSettings" getComponent={() => sb(require('../screens/ProfileScreen').default)} />
     <AppStackNav.Screen name="Connections" getComponent={() => sb(require('../screens/ConnectionsScreen').default)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="ConnectPlatforms" getComponent={() => sb(require('../screens/ConnectPlatformsScreen').default)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="PrivacySecurity" getComponent={() => sb(require('../screens/PrivacySecurityScreen').default)} options={{ headerShown: false }} />
