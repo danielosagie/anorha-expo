@@ -17,7 +17,7 @@ import {
   StatusBar,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@clerk/expo';
 import PageHeader from '../components/ui/PageHeader';
@@ -121,6 +121,7 @@ const HealthBar = ({ used, limit, fillColor }: { used: number, limit: number, fi
 
 export default function BillingScreen() {
   const navigation = useNavigation();
+  const route = useRoute<any>();
   const { getToken } = useAuth();
   const insets = useSafeAreaInsets();
 
@@ -194,6 +195,14 @@ export default function BillingScreen() {
   useEffect(() => {
     refreshBillingData();
   }, []);
+
+  // BillingGateSheet's "Add credits" lands here with addCredits set.
+  useEffect(() => {
+    if (route?.params?.addCredits) {
+      setShowCreditsModal(true);
+      (navigation as any).setParams?.({ addCredits: undefined });
+    }
+  }, [route?.params?.addCredits]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -328,15 +337,20 @@ export default function BillingScreen() {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ amountCents: selectedCreditAmount * 100 }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.checkoutUrl) {
-          setShowCreditsModal(false);
-          await Linking.openURL(data.checkoutUrl);
-        }
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.checkoutUrl) {
+        setShowCreditsModal(false);
+        // Let the sheet finish dismissing before presenting the browser
+        // (modal-over-modal presentation crashes otherwise).
+        await new Promise<void>(resolve => setTimeout(resolve, 500));
+        await WebBrowser.openBrowserAsync(data.checkoutUrl);
+        refreshBillingData();
+      } else {
+        Alert.alert('Credits', data?.error || 'Could not start checkout. Try again.');
       }
     } catch (error) {
       log.error('Top-up error:', error);
+      Alert.alert('Credits', 'Could not start checkout. Try again.');
     } finally {
       setIsTopUpLoading(false);
     }
@@ -423,6 +437,11 @@ export default function BillingScreen() {
                 <HealthBar used={teamMembersCount} limit={teamMembersIncluded} fillColor={'#3B82F6'} />
                 {teamMembersExtra > 0 && <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {teamMembersExtra} extra member(s) ({formatCurrency(teamMembersCost)})</Text>}
               </View>
+              <View style={styles.separator} />
+              <TouchableOpacity style={styles.listItemAction} onPress={() => setShowCreditsModal(true)}>
+                <Text style={styles.listValue}>Add credits</Text>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
             </View>
 
             {usageHistoryEntries.length > 0 && (
@@ -563,6 +582,48 @@ export default function BillingScreen() {
 
       </ScrollView>
 
+      <Modal
+        visible={showCreditsModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowCreditsModal(false)}
+      >
+        <View style={styles.creditsOverlay}>
+          <View style={styles.creditsSheet}>
+            <View style={styles.creditsHandle} />
+            <Text style={styles.creditsTitle}>Add credits</Text>
+            <Text style={styles.creditsSubtitle}>More AI usage this month.</Text>
+            <View style={styles.creditsChipRow}>
+              {[5, 10, 25, 50].map(amount => (
+                <TouchableOpacity
+                  key={amount}
+                  style={[styles.creditsChip, selectedCreditAmount === amount && styles.creditsChipSelected]}
+                  onPress={() => setSelectedCreditAmount(amount)}
+                >
+                  <Text style={[styles.creditsChipText, selectedCreditAmount === amount && styles.creditsChipTextSelected]}>
+                    ${amount}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={styles.creditsButton}
+              onPress={handleAddCredits}
+              disabled={isTopUpLoading || !selectedCreditAmount}
+            >
+              {isTopUpLoading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.creditsButtonText}>Continue</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.creditsCancel} onPress={() => setShowCreditsModal(false)}>
+              <Text style={styles.creditsCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <TierSelectorModal
         visible={showTierSelector}
         onClose={() => setShowTierSelector(false)}
@@ -645,5 +706,89 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 4,
     backgroundColor: ANORHA_GREEN,
+  },
+  creditsOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  creditsSheet: {
+    backgroundColor: WHITE_BG,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 40,
+  },
+  creditsHandle: {
+    width: 42,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: '#D4D4D8',
+    alignSelf: 'center',
+    marginBottom: 18,
+  },
+  creditsTitle: {
+    fontSize: 22,
+    fontFamily: 'Inter_700Bold',
+    color: '#18181B',
+    textAlign: 'center',
+  },
+  creditsSubtitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: '#71717A',
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 22,
+  },
+  creditsChipRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  creditsChip: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    backgroundColor: WHITE_BG,
+  },
+  creditsChipSelected: {
+    borderColor: ANORHA_GREEN,
+    backgroundColor: 'rgba(147,200,34,0.12)',
+  },
+  creditsChipText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#71717A',
+  },
+  creditsChipTextSelected: {
+    color: '#18181B',
+  },
+  creditsButton: {
+    minHeight: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ANORHA_GREEN,
+  },
+  creditsButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontFamily: 'Inter_700Bold',
+  },
+  creditsCancel: {
+    alignSelf: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    marginTop: 4,
+  },
+  creditsCancelText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: '#71717A',
   },
 });

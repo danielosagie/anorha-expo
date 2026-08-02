@@ -5474,7 +5474,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [runAfterCartDismissal]);
 
   const openCreditsSafely = useCallback(() => {
-    runAfterCartDismissal(() => (navigation as any).navigate('Billing'));
+    runAfterCartDismissal(() => (navigation as any).navigate('Billing', { addCredits: true }));
   }, [navigation, runAfterCartDismissal]);
 
   const handleBillingGatePlans = useCallback(() => {
@@ -5491,7 +5491,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (paywallActionTimerRef.current) clearTimeout(paywallActionTimerRef.current);
     paywallActionTimerRef.current = setTimeout(() => {
       paywallActionTimerRef.current = null;
-      (navigation as any).navigate('Billing');
+      (navigation as any).navigate('Billing', { addCredits: true });
     }, 340);
   }, [closeBillingGateSheet, navigation]);
 

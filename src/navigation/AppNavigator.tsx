@@ -161,7 +161,7 @@ export type AppStackParamList = {
   DeleteAccountInfo: undefined;
   NotificationSettings: undefined;
   Team: undefined;
-  Billing: undefined;
+  Billing: { addCredits?: boolean } | undefined;
   BillingSupport: {
     context?: {
       planName?: string;
