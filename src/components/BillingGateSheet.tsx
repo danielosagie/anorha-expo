@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { X } from 'lucide-react-native';
 import BaseModal from './BaseModal';
 import { BillingGateResponse } from '../types/billingGate';
 import { BRAND_PRIMARY } from '../design/tokens';
@@ -55,9 +56,29 @@ export default function BillingGateSheet({
     ? `${gate.freeUsageCount} of ${gate.freeLimit} free scans`
     : `${truePct}% of monthly AI usage`;
 
+  // Overage: Add credits is the primary action; continuing the scan is the
+  // quiet path. Free tier: See plans stays primary. X (top right) dismisses.
+  const primaryLabel = unavailable
+    ? 'Try again'
+    : invoiceable
+      ? (onAddCredits ? 'Add credits' : 'Continue scan')
+      : 'See plans';
+  const primaryAction = unavailable
+    ? onClose
+    : invoiceable
+      ? (onAddCredits || onContinue || onClose)
+      : seePlans;
+  const secondaryLabel = !unavailable && invoiceable && onAddCredits ? 'Continue scan' : !unavailable && !invoiceable && onAddCredits ? 'Add credits' : null;
+  const secondaryAction = invoiceable ? (onContinue || onClose) : onAddCredits;
+
   return (
     <BaseModal visible={visible} onClose={onClose} position="bottom" containerStyle={styles.container}>
       <View style={styles.handle} />
+      <TouchableOpacity style={styles.closeButton} onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <View style={styles.closeButtonInner}>
+          <X size={18} color="#71717A" />
+        </View>
+      </TouchableOpacity>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.subtitle}>{body}</Text>
 
@@ -70,40 +91,15 @@ export default function BillingGateSheet({
         </View>
       ) : null}
 
-      <TouchableOpacity
-        onPress={invoiceable ? (onContinue || onClose) : unavailable ? onClose : seePlans}
-        style={styles.primaryButton}
-        activeOpacity={0.86}
-      >
-        <Text style={styles.primaryButtonText}>
-          {invoiceable ? 'Continue scan' : unavailable ? 'Try again' : 'See plans'}
-        </Text>
+      <TouchableOpacity onPress={primaryAction} style={styles.primaryButton} activeOpacity={0.86}>
+        <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
       </TouchableOpacity>
 
-      {!unavailable && !invoiceable && onAddCredits ? (
-        <TouchableOpacity
-          onPress={onAddCredits}
-          style={styles.secondaryButton}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.secondaryButtonText}>Add credits</Text>
+      {secondaryLabel && secondaryAction ? (
+        <TouchableOpacity onPress={secondaryAction} style={styles.secondaryButton} activeOpacity={0.75}>
+          <Text style={styles.secondaryButtonText}>{secondaryLabel}</Text>
         </TouchableOpacity>
       ) : null}
-
-      {!unavailable && invoiceable && onAddCredits ? (
-        <TouchableOpacity onPress={onAddCredits} style={styles.secondaryButton} activeOpacity={0.75}>
-          <Text style={styles.secondaryButtonText}>Add credits</Text>
-        </TouchableOpacity>
-      ) : null}
-      {!unavailable && invoiceable && !onAddCredits ? (
-        <TouchableOpacity onPress={seePlans} style={styles.secondaryButton} activeOpacity={0.75}>
-          <Text style={styles.secondaryButtonText}>See plans</Text>
-        </TouchableOpacity>
-      ) : null}
-
-      <TouchableOpacity onPress={onClose} style={styles.cancelButton} activeOpacity={0.7}>
-        <Text style={styles.cancelButtonText}>Cancel</Text>
-      </TouchableOpacity>
     </BaseModal>
   );
 }
@@ -122,6 +118,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#E6DDD2',
     alignSelf: 'center',
     marginBottom: 18,
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 10,
+  },
+  closeButtonInner: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F1EE',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   title: {
     fontSize: 22,
@@ -185,15 +195,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
     color: '#3F6212',
-  },
-  cancelButton: {
-    alignSelf: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  cancelButtonText: {
-    fontSize: 14,
-    fontFamily: 'Inter_500Medium',
-    color: '#71717A',
   },
 });
