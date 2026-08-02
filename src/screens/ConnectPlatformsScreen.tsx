@@ -6,7 +6,10 @@ import {
   ScrollView,
   TextInput,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
+import { BRAND_PRIMARY } from '../design/tokens';
+import { pickAndParseCsv } from '../utils/csvImport';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { StackScreenProps } from '@react-navigation/stack';
@@ -63,7 +66,8 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const { available, comingSoon } = useMemo(() => {
     const q = query.trim().toLowerCase();
     const match = (d: PlatformDef) => !q || d.label.toLowerCase().includes(q);
-    const all = listPlatforms().filter(match);
+    // Amazon is not happening; don't tease it as coming soon.
+    const all = listPlatforms().filter(match).filter((d) => d.key !== 'amazon');
     // The registry's ONE availability gate decides which rows get a live
     // Connect button — including the EXPO_PUBLIC_ENABLED_PLATFORMS kill
     // switch, so a platform hidden from the picker can't be connected here.
@@ -79,6 +83,22 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
     if (!def.connect && def.capabilities.writeVia !== 'computer') return;
     setFlowPlatform(def.key);
   }, []);
+
+  // CSV is an import, not an OAuth connect: pick a file, parse, hand off to
+  // column mapping (same contract as the Connections screen path).
+  const runCsvImport = useCallback(async () => {
+    try {
+      const picked = await pickAndParseCsv();
+      if (!picked) return;
+      navigation.navigate('CSVColumnMapping', {
+        csvHeaders: picked.headers,
+        csvData: picked.data,
+        sampleRow: picked.sampleRow,
+      });
+    } catch (e: any) {
+      Alert.alert('Import failed', e?.message || 'Could not read that CSV file.');
+    }
+  }, [navigation]);
 
   const renderRow = (def: PlatformDef, connectable: boolean) => {
     const st = statusFor(def);
@@ -167,7 +187,23 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         {available.length > 0 ? (
           <>
             <Text style={styles.sectionLabel}>AVAILABLE</Text>
-            <View style={styles.card}>{available.map((d) => renderRow(d, true))}</View>
+            <View style={styles.card}>
+              {available.map((d) => renderRow(d, true))}
+              <View style={styles.row}>
+                <View style={styles.logoWrap}>
+                  <Icon name="file-delimited-outline" size={24} color="#43631A" />
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={styles.name}>CSV file</Text>
+                  <Text style={styles.blurb} numberOfLines={2}>
+                    Import products from a spreadsheet.
+                  </Text>
+                </View>
+                <TouchableOpacity style={styles.connectBtn} onPress={runCsvImport} activeOpacity={0.85}>
+                  <Text style={styles.connectBtnText}>Import</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </>
         ) : null}
 
@@ -303,8 +339,8 @@ const styles = StyleSheet.create({
     height: 36,
     flexShrink: 0,
   },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#16A34A' },
-  connectedText: { color: '#16A34A', fontSize: 13.5, fontWeight: '600' },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: BRAND_PRIMARY },
+  connectedText: { color: '#18181B', fontSize: 13.5, fontWeight: '600' },
   soonPill: {
     backgroundColor: '#F3F4F6',
     borderRadius: 999,
