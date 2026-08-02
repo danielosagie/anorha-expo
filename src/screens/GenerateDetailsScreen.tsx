@@ -1970,14 +1970,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
-  // Advisory gate: if the listing is weak, surface "Before you publish" first.
-  // If it's strong, proceed straight to the normal publish flow (the modal).
+  // Keep Publish available. Required gaps use the existing fast completion wizard,
+  // whose final step returns here and continues into the publish settings.
   const handlePublishPress = () => {
-    // Go straight to the publish settings ("Publish where?"). The quality check already leads
-    // the Steps wizard, so re-gating publish behind the "Before you publish" sheet was both
-    // redundant AND broke the flow — closing that sheet and opening the publish modal in the
-    // same tick stacked two RN Modals and the publish modal never appeared (the "loop").
-    doPublish();
+    if (gapFields.length > 0) {
+      listingEditorRef.current?.startFixGaps(gapFields);
+      return;
+    }
+    void doPublish();
   };
 
   // Upload local image URIs to Supabase and return public URLs
@@ -2933,7 +2933,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   ? (hasMultipleResults ? `Publish item ${currentProductIndex + 1} to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}` : `Publish to ${readyPlatforms.length} platform${readyPlatforms.length === 1 ? '' : 's'}`)
                   : 'Publish listing'
               }
-              primaryDisabled={!canPublish}
+              primaryDisabled={false}
               onPrimary={handlePublishPress}
               secondaryLabel={'Save Draft'}
               onSecondary={doSaveToInventory}

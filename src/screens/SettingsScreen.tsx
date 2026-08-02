@@ -150,18 +150,11 @@ const SettingsScreen = () => {
           </View>
         </TouchableOpacity>
 
-        {/* Integrations preview — tap a row for its import overview; full
-            management (refresh/remove/connect) lives on the Connections page.
-            With owed work the header opens the Import inbox (the badge IS the
-            inbox count — tapping it goes to the work, not to management). */}
+        {/* Integrations preview. Every entry lands on the Connections list first. */}
         <TouchableOpacity
           style={styles.sectionRow}
           activeOpacity={0.7}
-          onPress={() =>
-            hub.totalNeedsYou > 0
-              ? navigation.navigate('ImportHub' as any)
-              : navigation.navigate('Connections')
-          }
+          onPress={() => navigation.navigate('ConnectPlatforms')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
           {hub.totalNeedsYou > 0 && (
@@ -178,7 +171,7 @@ const SettingsScreen = () => {
             <TouchableOpacity
               style={styles.platformEmptyRow}
               activeOpacity={0.7}
-              onPress={() => navigation.navigate('Connections')}
+              onPress={() => navigation.navigate('ConnectPlatforms')}
             >
               <View style={styles.platformEmptyIcon}>
                 <Plus size={18} color="#43631A" />
@@ -192,25 +185,12 @@ const SettingsScreen = () => {
           ) : (
             platformPreview.map((c: any, i: number) => {
               const st = statusOf(c.Status);
-              // Mid-import / failed rows open the Import inbox (hub owns
-              // progress + retry); settled rows keep their SyncRules tap.
-              const s = String(c.Status || '').toLowerCase();
-              const inFlight =
-                s === 'pending' || s === 'scanning' || s === 'syncing' || s === 'reconciling' ||
-                s === 'ready_to_sync' || s === 'error' || s.includes('fail');
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.platformRow, i > 0 && styles.platformRowBorder]}
                   activeOpacity={0.7}
-                  onPress={() =>
-                    inFlight
-                      ? navigation.navigate('ImportHub' as any, { connectionId: c.Id })
-                      : navigation.navigate('SyncRules', {
-                          connectionId: c.Id,
-                          platformName: c.PlatformType,
-                        })
-                  }
+                  onPress={() => navigation.navigate('ConnectPlatforms')}
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
                   <View style={{ flex: 1 }}>

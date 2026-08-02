@@ -212,7 +212,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
     if (idToUse) {
       log.debug('[PublishConfirmation] Navigating to ProductDetail with ID:', idToUse);
-      navigation.navigate('ProductDetail', { productId: idToUse });
+      navigation.navigate('ProductDetail', { productId: idToUse, initialMode: 'overview' });
     } else {
       log.debug('[PublishConfirmation] No valid ID, navigating to Inventory tab');
       navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
@@ -540,5 +540,4 @@ const styles = StyleSheet.create({
 });
 
 export default PublishConfirmationScreen;
-
 
