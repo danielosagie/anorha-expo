@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import type { DecisionPrompt } from '../types';
+import { sanitizePlanDisplayText } from '../planPresentation';
 
 type Props = {
   prompt: DecisionPrompt;
@@ -23,7 +24,7 @@ const PlanCard = ({ prompt, onDecision, submitting }: Props) => {
     ? 'New request'
     : isApproval
       ? 'Approval'
-      : `Plan${prompt.planType ? `: ${prompt.planType.replace(/_/g, ' ')}` : ''}`;
+      : `Plan${prompt.planType ? `: ${sanitizePlanDisplayText(prompt.planType.replace(/_/g, ' '))}` : ''}`;
 
   return (
     <View style={s.card}>
@@ -35,7 +36,7 @@ const PlanCard = ({ prompt, onDecision, submitting }: Props) => {
         />
         <Text style={s.kicker}>{kicker}</Text>
       </View>
-      <Text style={s.title}>{prompt.title}</Text>
+      <Text style={s.title}>{sanitizePlanDisplayText(prompt.title)}</Text>
       {prompt.inventoryAction ? (
         <View style={s.inventoryMeta}>
           <Text style={s.inventoryAction}>{inventoryActionLabel(prompt.inventoryAction.action)}</Text>
@@ -44,15 +45,15 @@ const PlanCard = ({ prompt, onDecision, submitting }: Props) => {
           </Text>
         </View>
       ) : null}
-      {prompt.summary ? <Text style={s.summary}>{prompt.summary}</Text> : null}
+      {prompt.summary ? <Text style={s.summary}>{sanitizePlanDisplayText(prompt.summary)}</Text> : null}
       {prompt.steps?.length ? (
         <View style={s.steps}>
           {prompt.steps.map((step, i) => (
             <View key={i} style={s.stepRow}>
               <Text style={s.stepNum}>{i + 1}</Text>
               <View style={{ flex: 1 }}>
-                <Text style={s.stepTitle}>{step.title}</Text>
-                {step.detail ? <Text style={s.stepDetail}>{step.detail}</Text> : null}
+                <Text style={s.stepTitle}>{sanitizePlanDisplayText(step.title)}</Text>
+                {step.detail ? <Text style={s.stepDetail}>{sanitizePlanDisplayText(step.detail)}</Text> : null}
               </View>
             </View>
           ))}

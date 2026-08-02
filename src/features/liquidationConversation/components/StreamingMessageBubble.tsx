@@ -18,6 +18,7 @@ import { TimestampRevealContext } from './timestampReveal';
 import ActivityCard from './activity/ActivityCard';
 import { deriveActivities } from './activity/deriveActivities';
 import { sanitizeDisplayText } from '../displayText';
+import { sanitizePlanDisplayText } from '../planPresentation';
 import { SproutDisclaimer } from './SproutDisclaimer';
 import { DiaTextReveal } from '../../../components/DiaTextReveal';
 import {
@@ -171,7 +172,7 @@ const buildBlocks = (raw: string, activities: ActivityPayload[]): AssistantBlock
 
 // One markdown text segment of an assistant reply (em-dashes stripped at render).
 const TextBlock = ({ text, streaming, animationKey }: { text: string; streaming: boolean; animationKey: string }) => {
-  const md = sanitizeDisplayText(text);
+  const md = sanitizePlanDisplayText(text);
   if (!md.trim()) return null;
   if (streaming) {
     return (
@@ -267,17 +268,17 @@ const normalizeFollowUps = (message: ConversationMessage, activities: ActivityPa
     const normalized = authored
       .map((suggestion: unknown): FollowUpSuggestion | null => {
         if (typeof suggestion === 'string') {
-          const label = suggestion.trim();
+          const label = sanitizePlanDisplayText(suggestion);
           return label ? { label, prompt: label } : null;
         }
         if (!suggestion || typeof suggestion !== 'object') return null;
         const record = suggestion as Record<string, unknown>;
         const label = typeof record.label === 'string'
-          ? record.label.trim()
+          ? sanitizePlanDisplayText(record.label)
           : typeof record.question === 'string'
-            ? record.question.trim()
+            ? sanitizePlanDisplayText(record.question)
             : '';
-        const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : label;
+        const prompt = typeof record.prompt === 'string' ? sanitizePlanDisplayText(record.prompt) : label;
         return label && prompt ? { label, prompt } : null;
       })
       .filter((suggestion: FollowUpSuggestion | null): suggestion is FollowUpSuggestion => !!suggestion)
@@ -365,7 +366,9 @@ const StreamingMessageBubbleBase = ({
   // Assistant text is kept raw for interleaving because card anchors are offsets into it.
   // Display punctuation is normalized after blocks are placed.
   const assistantRaw = isUser ? '' : (message.content || '');
-  const content = sanitizeDisplayText(isUser ? message.content : assistantRaw);
+  const content = isUser
+    ? sanitizeDisplayText(message.content)
+    : sanitizePlanDisplayText(assistantRaw);
   // Render assistant text as markdown the WHOLE time, including mid-stream, so it
   // never shows raw ** ## - syntax. (Previously markdown only rendered once the
   // turn finished, so the seller watched raw markdown the entire response.)
@@ -469,7 +472,7 @@ const StreamingMessageBubbleBase = ({
         ) : null}
 
         {message.actionMeta?.summary ? (
-          <Text style={styles.summaryText}>{message.actionMeta.summary}</Text>
+          <Text style={styles.summaryText}>{sanitizePlanDisplayText(message.actionMeta.summary)}</Text>
         ) : null}
 
         {/* Only surface status on actions or failures. The old code printed
@@ -480,9 +483,9 @@ const StreamingMessageBubbleBase = ({
 
         {!isUser && message.decisionPrompt ? (
           <View style={styles.decisionCard}>
-            <Text style={styles.decisionTitle}>{message.decisionPrompt.title}</Text>
+            <Text style={styles.decisionTitle}>{sanitizePlanDisplayText(message.decisionPrompt.title)}</Text>
             {message.decisionPrompt.description ? (
-              <Text style={styles.decisionBody}>{message.decisionPrompt.description}</Text>
+              <Text style={styles.decisionBody}>{sanitizePlanDisplayText(message.decisionPrompt.description)}</Text>
             ) : null}
             <View style={styles.decisionActions}>
               <TouchableOpacity

@@ -28,6 +28,7 @@ import { useLiquidationConversationController } from '../features/liquidationCon
 import QuestionCard from '../features/liquidationConversation/components/QuestionCard';
 import PlanCard from '../features/liquidationConversation/components/PlanCard';
 import type { CampaignItem, CampaignThreadSummary, ConversationMessage, PlanPayload } from '../features/liquidationConversation/types';
+import { sanitizePlanDisplayText } from '../features/liquidationConversation/planPresentation';
 import { useLegendState } from '../context/LegendStateContext';
 import { loadInventoryCatalog } from '../lib/inventoryCatalog';
 import { NarrationPlayerHost } from '../context/NarrationContext';
@@ -660,7 +661,7 @@ const CampaignThreadScreen = () => {
             onChangeText={controller.setComposerText}
             onSend={(photos) => {
               const contextPrefix = editingPlan
-                ? `Revise the pending plan "${editingPlan.title}"${editingPlan.pendingActionId ? ` (${editingPlan.pendingActionId})` : ''} based on this request:`
+                ? `Revise the pending plan "${sanitizePlanDisplayText(editingPlan.title)}"${editingPlan.pendingActionId ? ` (${editingPlan.pendingActionId})` : ''} based on this request:`
                 : undefined;
               void controller.sendComposer(photos, contextPrefix);
               setEditingPlan(null);

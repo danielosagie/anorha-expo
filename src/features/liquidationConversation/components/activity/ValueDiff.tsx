@@ -13,6 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { CHAT_COLORS, CHAT_FONT } from '../../../../design/chatGlass';
 import type { ValueChange } from '../../types';
 import { formatChangeValue, humanizeStatus, isFailureStatus, numericOf } from './humanizers';
+import { sanitizePlanDisplayText } from '../../planPresentation';
 
 export interface ValueDiffProps {
   from?: string | number | null;
@@ -46,8 +47,8 @@ export default function ValueDiff({ from, to, label, unit, kind = 'text', direct
   const isSetFirstTime = from === null || from === undefined || from === '';
   const isCleared = to === null || to === undefined || to === '';
 
-  const oldText = formatChangeValue(from ?? null, kind);
-  const newText = formatChangeValue(to ?? null, kind);
+  const oldText = sanitizePlanDisplayText(formatChangeValue(from ?? null, kind));
+  const newText = sanitizePlanDisplayText(formatChangeValue(to ?? null, kind));
 
   // ── Status: two pills, not bare text ──
   if (kind === 'status') {
@@ -59,7 +60,7 @@ export default function ValueDiff({ from, to, label, unit, kind = 'text', direct
           <>
             <View style={[styles.pill, styles.pillOld]}>
               <Text style={[styles.pillText, styles.pillTextOld, { fontSize: z.pill }]} numberOfLines={1}>
-                {humanizeStatus(from)}
+                {sanitizePlanDisplayText(humanizeStatus(from))}
               </Text>
             </View>
             <Icon name="arrow-right" size={z.arrow} color={CHAT_COLORS.faint} />
@@ -79,7 +80,7 @@ export default function ValueDiff({ from, to, label, unit, kind = 'text', direct
             ]}
             numberOfLines={1}
           >
-            {humanizeStatus(to)}
+            {sanitizePlanDisplayText(humanizeStatus(to))}
           </Text>
         </View>
       </View>
@@ -92,7 +93,7 @@ export default function ValueDiff({ from, to, label, unit, kind = 'text', direct
       <View style={[styles.row, { gap: z.gap }]}>
         <Text style={[styles.newText, tabular, { fontSize: z.neu }]} numberOfLines={hero ? 2 : 1}>
           {newText}
-          {unit ? <Text style={[styles.unit, { fontSize: z.old }]}> {unit}</Text> : null}
+          {unit ? <Text style={[styles.unit, { fontSize: z.old }]}> {sanitizePlanDisplayText(unit)}</Text> : null}
         </Text>
         {variant !== 'hero' ? <Text style={[styles.addedTag, { fontSize: z.pill }]}>Added</Text> : null}
       </View>
@@ -123,7 +124,7 @@ export default function ValueDiff({ from, to, label, unit, kind = 'text', direct
         <Icon name="arrow-right" size={z.arrow} color={CHAT_COLORS.faint} />
         <Text style={[styles.newText, tabular, { fontSize: z.neu }]} numberOfLines={1}>
           {newText}
-          {unit ? <Text style={[styles.unit, { fontSize: hero ? 14 : z.old }]}> {unit}</Text> : null}
+          {unit ? <Text style={[styles.unit, { fontSize: hero ? 14 : z.old }]}> {sanitizePlanDisplayText(unit)}</Text> : null}
         </Text>
       </View>
       {delta ? (
