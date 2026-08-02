@@ -30,7 +30,7 @@ import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import { enrichmentLabel } from '../features/generation/progressiveEnrichment';
@@ -3342,6 +3342,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       items: [],
     });
     activeShelfFolderIdRef.current = folderId;
+    // The adaptive upload went through performQuickScan's manipulateAsync, so the backend's
+    // boxes are fractions of an EXIF-BAKED image. Bake the same orientation locally (no
+    // resize needed — fractions are scale-free) and swap it in before boxes arrive, so the
+    // crops read from the pixel space the model actually saw.
+    void ImageManipulator.manipulateAsync(photo.uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG })
+      .then((baked) => {
+        if (activeShelfFolderIdRef.current !== folderId) return;
+        shelfScanSourceSizeRef.current = { width: baked.width, height: baked.height };
+        setFolderSourcePhoto(folderId, baked.uri);
+        setShelfPhotoUri(baked.uri);
+        shelfPhotoUriForDraftRef.current = baked.uri;
+      })
+      .catch(() => undefined);
 
     if (cartCloseTimerRef.current) {
       clearTimeout(cartCloseTimerRef.current);
@@ -3392,6 +3405,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG } // Compress aggressively to reduce payload
       );
       shelfScanSourceSizeRef.current = { width: compressedImage.width, height: compressedImage.height };
+      // THIS image — resized, EXIF orientation baked — is what the backend analyzes, so its
+      // pixels are the space the returned boxes live in. Cropping the original camera file
+      // instead is why shelf crops pointed at the wrong items: a portrait iOS photo stores
+      // rotated pixels + an orientation flag, and manipulateAsync bakes that flag in.
+      setFolderSourcePhoto(folderId, compressedImage.uri);
+      setShelfPhotoUri(compressedImage.uri);
+      shelfPhotoUriForDraftRef.current = compressedImage.uri;
 
       // Convert compressed image to base64
       const response = await fetch(compressedImage.uri);
