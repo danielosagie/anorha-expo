@@ -51,7 +51,7 @@ const STATUS_STYLE: Record<ItemStatus, { bg: string; fg: string }> = {
 const STATUS_LABEL: Record<ItemStatus, string> = {
   negotiating: 'negotiating',
   listed: 'listed',
-  sold: 'sold ✓',
+  sold: 'sold',
   at_floor: 'at floor',
   paused: 'paused',
 };
@@ -78,8 +78,6 @@ const LiquidationCampaignScreen = () => {
   const controller = useLiquidationConversationController({ adapter, initialCampaignId });
 
   /* ── local state ──────────────────────────────────────────────────── */
-  const [isConfigSheetOpen, setIsConfigSheetOpen] = useState(false);
-  const [configCampaignTarget, setConfigCampaignTarget] = useState<{ id: string; title: string } | null>(null);
   const insets = useSafeAreaInsets();
   const [headerH, setHeaderH] = useState(104);
   const [platformFilter, setPlatformFilter] = useState('All');
@@ -186,41 +184,12 @@ const LiquidationCampaignScreen = () => {
     return list;
   }, [items, platformFilter, searchQuery]);
 
-  const openCampaignConfig = async (campaignId: string, title: string) => {
-    setConfigCampaignTarget({ id: campaignId, title });
-    controller.setActiveCampaignId(campaignId);
-    controller.setCampaignConfig(null);
-    setIsConfigSheetOpen(true);
-    try { await controller.loadCampaignDetails(campaignId); }
-    catch (e: any) { Alert.alert('Could not load settings', e?.message || 'Unable to load'); }
-  };
-
-  const saveConfig = async () => {
-    const campaignId = configCampaignTarget?.id || controller.activeCampaignId;
-    if (!campaignId || !controller.campaignConfig) return;
-    try {
-      const updated = await adapter.updateCampaignConfig(campaignId, {
-        targetRevenue: controller.campaignConfig.targetRevenue,
-        timeframeDays: controller.campaignConfig.timeframeDays,
-        aggressiveness: controller.campaignConfig.aggressiveness,
-        inventoryScope: controller.campaignConfig.inventoryScope,
-        poolId: controller.campaignConfig.poolId,
-        productIds: controller.campaignConfig.productIds,
-        guardrails: controller.campaignConfig.guardrails,
-      });
-      controller.setCampaignConfig(updated);
-      setIsConfigSheetOpen(false);
-      setConfigCampaignTarget(null);
-      controller.setNotice('Settings updated');
-      await controller.loadCampaignDetails(campaignId);
-    } catch (e: any) { Alert.alert('Save failed', e?.message || 'Failed'); }
-  };
-
   // Items table handlers
   const toggleItem = (id: string) => {
     setSelectedItems(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -525,7 +494,7 @@ const LiquidationCampaignScreen = () => {
             <View style={s.titlePill}>
               <Text style={s.pillTitle} numberOfLines={1}>{controller.activeCampaign?.title || 'Campaign'}</Text>
               <Text style={s.pillSub} numberOfLines={1}>
-                {soldCount}/{totalCount} sold · {controller.campaignConfig?.aggressiveness || 'balanced'}
+                {soldCount}/{totalCount} sold
               </Text>
             </View>
 
@@ -584,29 +553,6 @@ const LiquidationCampaignScreen = () => {
         </View>
       </Modal>
 
-      {/* Config sheet */}
-      <Modal visible={isConfigSheetOpen} transparent animationType="fade"
-        onRequestClose={() => { setIsConfigSheetOpen(false); setConfigCampaignTarget(null); }}>
-        <View style={s.sheetBackdrop}>
-          <Pressable style={s.sheetBackdropTap} onPress={() => { setIsConfigSheetOpen(false); setConfigCampaignTarget(null); }} />
-          <View style={s.sheetPanel}>
-            <Text style={s.sheetTitle}>Campaign settings</Text>
-            <Text style={s.sheetHint}>{configCampaignTarget?.title || controller.activeCampaign?.title || 'Selected'}</Text>
-            <ConfigInput label="Target revenue" value={String(controller.campaignConfig?.targetRevenue || '')}
-              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, targetRevenue: Number(v || 0) }) : prev)} />
-            <ConfigInput label="Timeline (days)" value={String(controller.campaignConfig?.timeframeDays || '')}
-              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, timeframeDays: Number(v || 0) }) : prev)} />
-            <ConfigInput label="Aggressiveness" value={controller.campaignConfig?.aggressiveness || 'balanced'}
-              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, aggressiveness: (v || 'balanced').toLowerCase() as any }) : prev)} />
-            <ConfigInput label="Min offer (%)" value={String(controller.campaignConfig?.guardrails.minAcceptableOfferPercent || '')}
-              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, guardrails: { ...prev.guardrails, minAcceptableOfferPercent: Number(v || 0) } }) : prev)} />
-            <ConfigInput label="Max drop (%)" value={String(controller.campaignConfig?.guardrails.maxAutoPriceDropPercent || '')}
-              onChangeText={v => controller.setCampaignConfig(prev => prev ? ({ ...prev, guardrails: { ...prev.guardrails, maxAutoPriceDropPercent: Number(v || 0) } }) : prev)} />
-            <TouchableOpacity style={s.primaryBtn} onPress={saveConfig}><Text style={s.primaryBtnText}>Save settings</Text></TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       {/* Reprice sheet */}
       <Modal visible={isRepriceSheetOpen} transparent animationType="fade" onRequestClose={() => setIsRepriceSheetOpen(false)}>
         <View style={s.sheetBackdrop}>
@@ -653,7 +599,7 @@ const LiquidationCampaignScreen = () => {
             {detailItem ? (
               <>
                 <View style={s.detailTopRow}>
-                  <View style={s.detailThumb}><Text style={{ fontSize: 26 }}>{detailItem.emoji || '📦'}</Text></View>
+                  <View style={s.detailThumb}><Box size={24} color="#71717A" /></View>
                   <View style={{ flex: 1 }}>
                     <Text style={s.detailName}>{detailItem.name}</Text>
                     <Text style={s.detailCh}>{detailItem.channels} · <Text style={{ color: STATUS_STYLE[detailItem.status].fg }}>{STATUS_LABEL[detailItem.status]}</Text></Text>

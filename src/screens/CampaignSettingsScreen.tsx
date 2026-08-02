@@ -18,9 +18,17 @@ import { useAuth } from '@clerk/expo';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { ChevronLeft, ChevronDown, ChevronRight, MessageCircleMore, Target, Gauge, ShieldCheck, CheckCircle2, Pencil } from 'lucide-react-native';
+import { ChevronLeft, ChevronDown, ChevronRight, MessageCircleMore, Target, CalendarDays, ShieldCheck, CheckCircle2, Pencil } from 'lucide-react-native';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { useLiquidationConversationController } from '../features/liquidationConversation/useLiquidationConversationController';
+import { ClearoutCalendar } from '../components/liquidation/ClearoutCalendar';
+import {
+  calendarDaysBetween,
+  campaignSellByDate,
+  describeCampaignDuration,
+  formatSellByDate,
+  startOfLocalDay,
+} from '../features/liquidationConversation/campaignTiming';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -28,12 +36,6 @@ const CONVEX_TEMPLATE =
   'mobile';
 
 const BRAND = '#93C822';
-const PACE = ['conservative', 'balanced', 'aggressive'] as const;
-const PACE_LABEL: Record<string, string> = {
-  conservative: 'Conservative',
-  balanced: 'Balanced',
-  aggressive: 'Aggressive',
-};
 
 const CampaignSettingsScreen = () => {
   const navigation = useNavigation<any>();
@@ -57,7 +59,8 @@ const CampaignSettingsScreen = () => {
   const [headerH, setHeaderH] = useState(96);
   const [saving, setSaving] = useState(false);
   const [campaignName, setCampaignName] = useState(passedTitle || '');
-  const [open, setOpen] = useState<Record<string, boolean>>({ details: true, goal: true, pacing: true, guard: false, chat: true, danger: false });
+  const [open, setOpen] = useState<Record<string, boolean>>({ details: true, goal: true, guard: false, chat: true, danger: false });
+  const [deadlineOverride, setDeadlineOverride] = useState<Date | undefined>();
   const cfg = controller.campaignConfig;
 
   useEffect(() => {
@@ -78,6 +81,27 @@ const CampaignSettingsScreen = () => {
   const setGuard = (patch: Record<string, unknown>) =>
     controller.setCampaignConfig(prev => (prev ? ({ ...prev, guardrails: { ...prev.guardrails, ...patch } }) : prev));
 
+  const today = useMemo(() => startOfLocalDay(new Date()), []);
+  const campaignStart = useMemo(() => {
+    const parsed = new Date(controller.activeCampaign?.createdAt || Date.now());
+    return startOfLocalDay(Number.isNaN(parsed.getTime()) ? new Date() : parsed);
+  }, [controller.activeCampaign?.createdAt]);
+  const storedDeadline = useMemo(
+    () => campaignSellByDate(controller.activeCampaign?.createdAt, cfg?.timeframeDays || 0),
+    [cfg?.timeframeDays, controller.activeCampaign?.createdAt],
+  );
+  const deadline = deadlineOverride ?? storedDeadline;
+  const daysRemaining = calendarDaysBetween(today, deadline);
+
+  useEffect(() => {
+    setDeadlineOverride(undefined);
+  }, [campaignId]);
+
+  const selectDeadline = (date: Date) => {
+    setDeadlineOverride(date);
+    setField({ timeframeDays: Math.max(1, calendarDaysBetween(campaignStart, date)) });
+  };
+
   const save = async () => {
     if (!cfg) return;
     setSaving(true);
@@ -90,8 +114,8 @@ const CampaignSettingsScreen = () => {
       }
       await adapter.updateCampaignConfig(campaignId, {
         targetRevenue: cfg.targetRevenue,
-        timeframeDays: cfg.timeframeDays,
-        aggressiveness: cfg.aggressiveness,
+        timeframeDays: Math.max(1, calendarDaysBetween(campaignStart, deadline)),
+        sellByDate: deadline.toISOString(),
         guardrails: cfg.guardrails,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
@@ -158,21 +182,17 @@ const CampaignSettingsScreen = () => {
 
             <Section title="Goal" icon={<Target size={18} color="#43631A" />} open={open.goal} onToggle={() => toggleSec('goal')}>
               <Field label="Target revenue" prefix="$" value={cfg.targetRevenue} onChange={(v: number) =>setField({ targetRevenue: v })} />
-              <Field label="Timeline" suffix="days" value={cfg.timeframeDays} onChange={(v: number) =>setField({ timeframeDays: v })} />
-            </Section>
-
-            <Section title="Pacing" icon={<Gauge size={18} color="#43631A" />} open={open.pacing} onToggle={() => toggleSec('pacing')}>
-              <Text style={s.fieldLabel}>How hard should Sprout push?</Text>
-              <View style={s.segment}>
-                {PACE.map(p => {
-                  const active = cfg.aggressiveness === p;
-                  return (
-                    <TouchableOpacity key={p} style={[s.segBtn, active && s.segBtnActive]} onPress={() => setField({ aggressiveness: p })} activeOpacity={0.85}>
-                      <Text style={[s.segText, active && s.segTextActive]}>{PACE_LABEL[p]}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              <View style={s.deadlineHeader}>
+                <View style={s.deadlineTitleRow}>
+                  <CalendarDays size={17} color="#43631A" />
+                  <Text style={s.fieldLabel}>Sell by</Text>
+                </View>
+                <Text style={s.deadlineDate}>{formatSellByDate(deadline)}</Text>
               </View>
+              <View style={s.durationPill}>
+                <Text style={s.durationText}>{describeCampaignDuration(daysRemaining)}</Text>
+              </View>
+              <ClearoutCalendar selectedDate={deadline} onSelect={selectDeadline} minDate={today} />
             </Section>
 
             <Section title="Negotiation guardrails" icon={<ShieldCheck size={18} color="#43631A" />} open={open.guard} onToggle={() => toggleSec('guard')}>
@@ -316,11 +336,18 @@ const s = StyleSheet.create({
   fieldInput: { flex: 1, fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold', paddingVertical: 0 },
   affix: { fontSize: 15, color: '#9CA3AF', fontFamily: 'Inter_600SemiBold' },
 
-  segment: { flexDirection: 'row', backgroundColor: '#F4F4F1', borderRadius: 14, padding: 4, gap: 4 },
-  segBtn: { flex: 1, paddingVertical: 10, borderRadius: 11, alignItems: 'center' },
-  segBtnActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  segText: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_500Medium' },
-  segTextActive: { color: '#43631A', fontFamily: 'Inter_700Bold' },
+  deadlineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  deadlineTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  deadlineDate: { color: '#111827', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  durationPill: {
+    alignSelf: 'flex-start',
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(147,200,34,0.14)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  durationText: { color: '#5D7E16', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 
   switchRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 2 },
   switchLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 2 },

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -36,6 +36,12 @@ export const ClearoutCalendar: React.FC<Props> = ({ selectedDate, onSelect, minD
   const [viewMonth, setViewMonth] = useState(
     () => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1),
   );
+  const selectedYear = selectedDate.getFullYear();
+  const selectedMonth = selectedDate.getMonth();
+
+  useEffect(() => {
+    setViewMonth(new Date(selectedYear, selectedMonth, 1));
+  }, [selectedMonth, selectedYear]);
 
   const year = viewMonth.getFullYear();
   const month = viewMonth.getMonth();

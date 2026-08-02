@@ -3,7 +3,6 @@ import { sanitizeDisplayText } from './displayText';
 
 const ITEM_AT_PRICE = /^(.+?)\s+(?:at|to)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
 const BEFORE_PRICE = /\b(?:was|from|currently(?:\s+at)?|already\s+at)\s+(\$\d+(?:,\d{3})*(?:\.\d{1,2})?)/i;
-const APPROACH = /\b(conservative|balanced|aggressive)(?:\s+sell-off)?\b/i;
 
 export type PlanPricePreview = {
   name: string;
@@ -20,12 +19,11 @@ export function getPlanPricePreviews(plan: PlanPayload): PlanPricePreview[] {
     const match = detail.match(ITEM_AT_PRICE);
     if (!match) continue;
     const after = match[2];
-    const approach = detail.match(APPROACH)?.[1];
     rows.push({
       name: sanitizeDisplayText(match[1]),
       before: detail.match(BEFORE_PRICE)?.[1] || (/^keep\b/i.test(title) ? after : undefined),
       after,
-      approach: approach ? `${approach[0].toUpperCase()}${approach.slice(1).toLowerCase()}` : 'Set price',
+      approach: 'Set price',
     });
   }
   return rows;

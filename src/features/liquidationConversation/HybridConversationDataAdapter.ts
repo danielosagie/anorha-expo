@@ -40,6 +40,7 @@ import type {
 } from './types';
 import { createLogger } from '../../utils/logger';
 import { getChatPreferencesSnapshot } from './chatPreferences';
+import { addCalendarDays, deriveCampaignPacing } from './campaignTiming';
 const log = createLogger('HybridConversationDataAdapter');
 
 
@@ -86,7 +87,8 @@ type NestConfig = {
   orgId: string;
   targetRevenue: number;
   timeframeDays: number;
-  aggressiveness: 'conservative' | 'balanced' | 'aggressive';
+  /** Persisted legacy field. The mobile model ignores it and derives future writes from the deadline. */
+  aggressiveness?: unknown;
   inventoryScope: 'all' | 'pool' | 'specific';
   poolId?: string;
   productIds?: string[];
@@ -98,6 +100,18 @@ type NestConfig = {
   };
   updatedAt: string;
 };
+
+const mapNestConfig = (config: NestConfig): CampaignConfig => ({
+  sessionId: config.sessionId,
+  orgId: config.orgId,
+  targetRevenue: config.targetRevenue,
+  timeframeDays: config.timeframeDays,
+  inventoryScope: config.inventoryScope,
+  poolId: config.poolId,
+  productIds: config.productIds || [],
+  guardrails: config.guardrails,
+  updatedAt: config.updatedAt,
+});
 
 type StreamingEvent = {
   data?: string;
@@ -734,6 +748,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
   }
 
   async createCampaign(input: CreateCampaignInput): Promise<CampaignSummary> {
+    const now = new Date();
     const quick = await this.requestNest<{
       success: boolean;
       sessionId: string;
@@ -746,7 +761,8 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
         poolId: input.poolId,
         inventoryScope: input.inventoryScope,
         productIds: input.productIds,
-        aggressiveness: input.aggressiveness || 'balanced',
+        // Backward compatibility for the unchanged backend API. This is never user-selected.
+        aggressiveness: deriveCampaignPacing(addCalendarDays(now, input.timeframeDays), now),
       }),
     });
 
@@ -975,7 +991,7 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
 
     const fallbackContent =
       decision.action === 'revise'
-        ? 'Please revise the strategy with a more conservative execution path.'
+        ? 'Please revise the strategy with lower risk and smaller price changes.'
         : decision.action === 'follow_up'
           ? 'Can you provide a quick risk/reward comparison before we proceed?'
           : 'Approved. Proceed with the strategy.';
@@ -1033,24 +1049,30 @@ export class HybridConversationDataAdapter implements ConversationDataAdapter {
     const res = await this.requestNest<{ success: boolean; config: NestConfig }>(
       `/api/agent/sessions/${campaignId}/config`,
     );
-    return {
-      ...res.config,
-      productIds: res.config.productIds || [],
-    };
+    return mapNestConfig(res.config);
   }
 
   async updateCampaignConfig(campaignId: string, update: CampaignConfigUpdate): Promise<CampaignConfig> {
+    const now = new Date();
+    const { sellByDate, ...backendUpdate } = update;
+    const parsedSellBy = sellByDate ? new Date(sellByDate) : undefined;
+    const legacyPacing = parsedSellBy && !Number.isNaN(parsedSellBy.getTime())
+      ? deriveCampaignPacing(parsedSellBy, now)
+      : typeof update.timeframeDays === 'number'
+      ? deriveCampaignPacing(addCalendarDays(now, update.timeframeDays), now)
+      : undefined;
     const res = await this.requestNest<{ success: boolean; config: NestConfig }>(
       `/api/agent/sessions/${campaignId}/config`,
       {
         method: 'PATCH',
-        body: JSON.stringify(update),
+        body: JSON.stringify({
+          ...backendUpdate,
+          // Preserve the backend contract while keeping pacing out of the user-facing model.
+          ...(legacyPacing ? { aggressiveness: legacyPacing } : {}),
+        }),
       },
     );
-    return {
-      ...res.config,
-      productIds: res.config.productIds || [],
-    };
+    return mapNestConfig(res.config);
   }
 
   async getCampaignOverview(campaignId: string): Promise<CampaignOverview> {

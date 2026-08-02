@@ -1221,7 +1221,7 @@ export const useLiquidationConversationController = ({
           action === 'approve'
             ? 'Research current resale pricing for the items I just added from photos and suggest a start and floor price for each.'
             : action === 'revise'
-              ? 'List the items I just added from photos aggressively to move them fast. Set competitive prices and a tight deadline.'
+              ? 'Use the sell-by date to set competitive prices and markdown timing for the items I just added.'
               : 'Hold the items I just added from photos in this clearout for now; I will decide later.';
         await queueTextMessage(instr);
         resolvedDecisionIdsRef.current.add(decisionId);
