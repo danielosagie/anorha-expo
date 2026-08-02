@@ -15,6 +15,7 @@ import {
   Animated,
   AppState,
   StatusBar,
+  Platform,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -143,6 +144,7 @@ export default function BillingScreen() {
   const [selectedCreditAmount, setSelectedCreditAmount] = useState<number | null>(50);
   const [isTopUpLoading, setIsTopUpLoading] = useState(false);
   const [isAddingPaymentMethod, setIsAddingPaymentMethod] = useState(false);
+  const pendingCheckoutUrlRef = React.useRef<string | null>(null);
 
   const isPartner = userRole === 'partner';
   const hasSummaryData = !!summary && typeof summary === 'object';
@@ -288,8 +290,7 @@ export default function BillingScreen() {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
       if (!res.ok) {
-        const text = await res.text();
-        setActionError(text || 'Unable to open subscription portal.');
+        setActionError('Unable to open subscription portal.');
         return;
       }
       const data = await res.json().catch(() => null);
@@ -339,12 +340,21 @@ export default function BillingScreen() {
       });
       const data = await res.json().catch(() => null);
       if (res.ok && data?.success && data.checkoutUrl) {
+        // iOS: presenting SFSafariViewController while the RN Modal is mid-dismissal
+        // fails silently (dead modal host). Stash the URL and let the Modal's
+        // onDismiss (fires when dismissal truly completes) present the browser.
+        // A fixed delay is a timing bet that loses under CPU load.
+        pendingCheckoutUrlRef.current = data.checkoutUrl;
         setShowCreditsModal(false);
-        // Let the sheet finish dismissing before presenting the browser
-        // (modal-over-modal presentation crashes otherwise).
-        await new Promise<void>(resolve => setTimeout(resolve, 500));
-        await WebBrowser.openBrowserAsync(data.checkoutUrl);
-        refreshBillingData();
+        if (Platform.OS !== 'ios') {
+          // Android Custom Tabs are activities; no UIKit presentation race.
+          const url = pendingCheckoutUrlRef.current;
+          pendingCheckoutUrlRef.current = null;
+          if (url) {
+            await WebBrowser.openBrowserAsync(url);
+            refreshBillingData();
+          }
+        }
       } else {
         Alert.alert('Credits', data?.error || 'Could not start checkout. Try again.');
       }
@@ -355,6 +365,19 @@ export default function BillingScreen() {
       setIsTopUpLoading(false);
     }
   };
+
+  const handleCreditsModalDismiss = useCallback(async () => {
+    const url = pendingCheckoutUrlRef.current;
+    pendingCheckoutUrlRef.current = null;
+    if (!url) return;
+    try {
+      await WebBrowser.openBrowserAsync(url);
+      refreshBillingData();
+    } catch (error) {
+      log.error('Checkout browser error:', error);
+      Alert.alert('Credits', 'Could not open checkout. Try again.');
+    }
+  }, [refreshBillingData]);
 
   const openInvoiceUrl = (inv: any) => {
     const url = inv.hosted_invoice_url || inv.hosted_url || inv.url;
@@ -415,6 +438,10 @@ export default function BillingScreen() {
             </TouchableOpacity>
           )}
         </View>
+
+        {actionError ? (
+          <Text style={styles.actionErrorText}>{actionError}</Text>
+        ) : null}
 
         {hasSummaryData && (
           <>
@@ -587,6 +614,7 @@ export default function BillingScreen() {
         animationType="slide"
         transparent={true}
         onRequestClose={() => setShowCreditsModal(false)}
+        onDismiss={handleCreditsModalDismiss}
       >
         <View style={styles.creditsOverlay}>
           <View style={styles.creditsSheet}>
@@ -706,6 +734,14 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 4,
     backgroundColor: ANORHA_GREEN,
+  },
+  actionErrorText: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: '#DC2626',
+    marginTop: -16,
+    marginBottom: 24,
+    marginLeft: 4,
   },
   creditsOverlay: {
     flex: 1,

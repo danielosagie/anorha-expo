@@ -13,6 +13,7 @@ import {
     Alert,
     Image,
     SafeAreaView,
+    Platform,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { X } from 'lucide-react-native';
@@ -109,6 +110,23 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     // Default selected tier is growth
     const [selectedTierId, setSelectedTierId] = useState<'growth' | 'teams'>(TIERS[0].id);
     const [isLoading, setIsLoading] = useState(false);
+    const pendingCheckoutUrlRef = React.useRef<string | null>(null);
+
+    // iOS presents SFSafariViewController only after the Modal has fully
+    // dismissed; onDismiss is the deterministic signal (a fixed delay loses
+    // under CPU load and the browser silently never appears).
+    const handleModalDismiss = async () => {
+        const url = pendingCheckoutUrlRef.current;
+        pendingCheckoutUrlRef.current = null;
+        if (!url) return;
+        try {
+            await WebBrowser.openBrowserAsync(url);
+            onSuccess?.();
+        } catch (error: any) {
+            log.error('[TierSelector] Checkout browser error:', error);
+            Alert.alert('Checkout Error', 'Failed to open checkout. Please try again.');
+        }
+    };
 
     const handleCheckout = async () => {
         if (!selectedTierId) return;
@@ -148,13 +166,14 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
 
             const { url } = await response.json();
             if (url) {
-                onClose();
-                // The RN Modal must finish dismissing before SFSafariViewController
-                // presents, or iOS hits the modal-over-modal presentation crash
-                // (same class as the AddProduct paywall crash fixed in 2db0d618).
-                await new Promise<void>(resolve => setTimeout(resolve, 500));
-                await WebBrowser.openBrowserAsync(url);
-                onSuccess?.();
+                if (Platform.OS === 'ios') {
+                    pendingCheckoutUrlRef.current = url;
+                    onClose();
+                } else {
+                    onClose();
+                    await WebBrowser.openBrowserAsync(url);
+                    onSuccess?.();
+                }
             }
         } catch (error: any) {
             log.error('[TierSelector] Checkout error:', error);
@@ -212,6 +231,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
             animationType="slide"
             transparent={true}
             onRequestClose={onClose}
+            onDismiss={handleModalDismiss}
         >
             <View style={styles.overlay}>
                 <View style={[styles.container, { paddingBottom: 34 + 20 }]}>
