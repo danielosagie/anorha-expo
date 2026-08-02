@@ -335,6 +335,9 @@ const parseOAuthResult = (result: any, platformName: string): { success: boolean
 const ProfileScreen = () => {
   const theme = useTheme();
   const navigation = useNavigation<ProfileScreenNavigationProp>();
+  const handleConnectionPress = useCallback(() => {
+    navigation.navigate('ConnectPlatforms');
+  }, [navigation]);
   const { getToken } = useAuth();
   const authContext = useContext(AuthContext);
   const route = useRoute<RouteProp<ProfileScreenRouteParams, 'Profile'>>();
@@ -1747,6 +1750,7 @@ const ProfileScreen = () => {
                       onReconnect={handleReconnectPlatform}
                       onDisconnect={handleDisconnectPlatform}
                       onFix={(id: string, name: string) => fixAndResumeConnection(id, name)}
+                      onPress={handleConnectionPress}
                       navigation={navigation}
                     />
                   );

@@ -146,7 +146,7 @@ export type AppStackParamList = {
       params?: any;
     };
   };
-  ProductDetail: { productId: string };
+  ProductDetail: { productId: string; initialMode?: 'overview' | 'edit' };
   PastScans: undefined;
   SyncInbox: { connectionId: string; platformName: string };
   ImportHub: { completedLane?: 'matches' | 'required' | 'polish'; connectionId?: string } | undefined;

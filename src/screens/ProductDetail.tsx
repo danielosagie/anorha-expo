@@ -152,6 +152,7 @@ interface ProductDetailRouteProps {
   params: {
     item?: ProductDetailItem;
     productId?: string;
+    initialMode?: 'overview' | 'edit';
   };
 }
 
@@ -310,7 +311,10 @@ const ProductDetailScreen = observer(
     const bottomSafePadding = insets.bottom + 28;
     // Overview (read-only summary, the mockup's landing) vs Edit (the field form).
     // Edit mode is the existing screen verbatim, so no functionality is lost.
-    const [mode, setMode] = useState<'overview' | 'edit'>('overview');
+    const [mode, setMode] = useState<'overview' | 'edit'>(() => route.params?.initialMode ?? 'overview');
+    useEffect(() => {
+      setMode(route.params?.initialMode ?? 'overview');
+    }, [productId, route.params?.initialMode]);
 
     // 🚨 DEBUG: Intercept all fetch calls from this component
     React.useEffect(() => {
@@ -4907,7 +4911,10 @@ const ProductDetailScreen = observer(
           <View style={styles.glassHeaderRow}>
             <TouchableOpacity
               style={styles.navCircle}
-              onPress={() => { if (mode === 'edit') { setMode('overview'); } else { navigation.goBack(); } }}
+              onPress={() => {
+                if (mode === 'edit' && route.params?.initialMode !== 'edit') setMode('overview');
+                else navigation.goBack();
+              }}
               activeOpacity={0.85}
             >
               <ChevronLeft size={22} color="#18181B" />
