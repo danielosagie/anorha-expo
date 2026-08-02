@@ -163,7 +163,7 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
                             {quietButtonText && onQuietPress ? (
                                 <View style={styles.stackedButtonContainer}>
                                     <TouchableOpacity
-                                        style={[styles.primaryButton, styles.buttonFull, { backgroundColor: primaryColor || CHAT_COLORS.brand }]}
+                                        style={[styles.primaryButton, { backgroundColor: primaryColor || CHAT_COLORS.brand }]}
                                         onPress={onPrimaryPress || onClose}
                                         activeOpacity={0.8}
                                     >
@@ -171,7 +171,7 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
                                     </TouchableOpacity>
                                     {secondaryButtonText && onSecondaryPress ? (
                                         <TouchableOpacity
-                                            style={[styles.secondaryButton, styles.buttonFull]}
+                                            style={styles.secondaryButton}
                                             onPress={onSecondaryPress}
                                             activeOpacity={0.7}
                                         >
@@ -186,7 +186,7 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
                                 <View style={styles.buttonContainer}>
                                     {secondaryButtonText && onSecondaryPress && (
                                         <TouchableOpacity
-                                            style={styles.secondaryButton}
+                                            style={[styles.secondaryButton, styles.buttonWithSecondary]}
                                             onPress={onSecondaryPress}
                                             activeOpacity={0.7}
                                         >
@@ -288,7 +288,6 @@ const styles = StyleSheet.create({
         fontFamily: 'Inter_600SemiBold',
     },
     secondaryButton: {
-        flex: 1,
         borderRadius: 12,
         paddingVertical: 14,
         paddingHorizontal: 24,
@@ -297,7 +296,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#F3F4F6',
     },
     secondaryButtonText: {
-        color: '#666',
+        color: CHAT_COLORS.ink,
         fontSize: 16,
         fontFamily: 'Inter_600SemiBold',
     },
