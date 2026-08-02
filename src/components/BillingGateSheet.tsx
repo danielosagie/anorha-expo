@@ -44,11 +44,31 @@ export default function BillingGateSheet({
         : 'Choose a plan or add credits to keep scanning.';
   const seePlans = onSeePlans || onOpenBilling || onClose;
 
+  // Usage bar: free-tier gates show scans used; paid gates show AI usage cents.
+  const usesFreeTier = typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number' && gate.freeLimit > 0;
+  const barUsed = usesFreeTier ? gate.freeUsageCount! : gate.currentUsageCents;
+  const barLimit = usesFreeTier ? gate.freeLimit! : gate.allowanceCents;
+  // Fill clamps at 100; the label tells the truth past it (149%, not "100%").
+  const truePct = barLimit > 0 ? Math.round((barUsed / barLimit) * 100) : 0;
+  const barPct = Math.min(100, truePct);
+  const barLabel = usesFreeTier
+    ? `${gate.freeUsageCount} of ${gate.freeLimit} free scans`
+    : `${truePct}% of monthly AI usage`;
+
   return (
     <BaseModal visible={visible} onClose={onClose} position="bottom" containerStyle={styles.container}>
       <View style={styles.handle} />
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.subtitle}>{body}</Text>
+
+      {!unavailable && barLimit > 0 ? (
+        <View style={styles.usageWrap}>
+          <View style={styles.usageTrack}>
+            <View style={[styles.usageFill, { width: `${barPct}%` }]} />
+          </View>
+          <Text style={styles.usageLabel}>{barLabel}</Text>
+        </View>
+      ) : null}
 
       <TouchableOpacity
         onPress={invoiceable ? (onContinue || onClose) : unavailable ? onClose : seePlans}
@@ -70,7 +90,12 @@ export default function BillingGateSheet({
         </TouchableOpacity>
       ) : null}
 
-      {!unavailable && invoiceable ? (
+      {!unavailable && invoiceable && onAddCredits ? (
+        <TouchableOpacity onPress={onAddCredits} style={styles.secondaryButton} activeOpacity={0.75}>
+          <Text style={styles.secondaryButtonText}>Add credits</Text>
+        </TouchableOpacity>
+      ) : null}
+      {!unavailable && invoiceable && !onAddCredits ? (
         <TouchableOpacity onPress={seePlans} style={styles.secondaryButton} activeOpacity={0.75}>
           <Text style={styles.secondaryButtonText}>See plans</Text>
         </TouchableOpacity>
@@ -112,6 +137,28 @@ const styles = StyleSheet.create({
     color: '#71717A',
     textAlign: 'center',
     marginBottom: 22,
+  },
+  usageWrap: {
+    width: '100%',
+    marginBottom: 20,
+    gap: 8,
+  },
+  usageTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EFE9DF',
+    overflow: 'hidden',
+  },
+  usageFill: {
+    height: '100%',
+    borderRadius: 4,
+    backgroundColor: BRAND_PRIMARY,
+  },
+  usageLabel: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: '#71717A',
+    textAlign: 'center',
   },
   primaryButton: {
     width: '100%',
