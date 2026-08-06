@@ -20,6 +20,7 @@ import type {
 } from '../types';
 import { useMessageNarration } from '../useMessageNarration';
 import { useChatPreferences } from '../chatPreferences';
+import { getSproutTheme } from '../../../design/sproutTheme';
 
 type MessageWithTime = ConversationMessage & { time: string };
 const CHAT_SCROLL_BEHAVIOR = {
@@ -69,6 +70,7 @@ type Props = {
   scrollRequestKey?: number;
   ListEmptyComponent?: React.ReactElement | null;
   scrollEnabled?: boolean;
+  dark?: boolean;
 };
 
 export const ConversationList = ({
@@ -97,7 +99,9 @@ export const ConversationList = ({
   scrollRequestKey,
   ListEmptyComponent,
   scrollEnabled = true,
+  dark = false,
 }: Props) => {
+  const theme = getSproutTheme(dark);
   // One review-tray instance for the whole feed (hoisted here so FlashList
   // recycling can never unmount an open tray as its row scrolls off).
   const { openTray, trayProps } = useActivityTray();
@@ -217,7 +221,7 @@ export const ConversationList = ({
     return (
       <View style={styles.loadingWrap}>
         <ActivityIndicator size="small" color={BRAND_PRIMARY} />
-        <Text style={styles.loadingText}>Loading messages...</Text>
+        <Text style={[styles.loadingText, { color: theme.chat.textSecondary }]}>Loading messages...</Text>
       </View>
     );
   }
@@ -240,6 +244,7 @@ export const ConversationList = ({
         ListHeaderComponent={ListHeaderComponent}
         renderItem={({ item }) => (
           <StreamingMessageBubble
+            dark={dark}
             message={item}
             onDecision={onDecision}
             onRetry={onRetry}
@@ -268,9 +273,9 @@ export const ConversationList = ({
         )}
         ListEmptyComponent={ListEmptyComponent === undefined ? (
           <View style={styles.emptyState}>
-            <Icon name="chat-outline" size={24} color="#71717A" />
-            <Text style={styles.emptyTitle}>Start the conversation</Text>
-            <Text style={styles.emptyText}>Ask the liquidation agent what to do next or trigger an action from Home.</Text>
+            <Icon name="chat-outline" size={24} color={theme.chat.textSecondary} />
+            <Text style={[styles.emptyTitle, dark && { color: theme.chat.text }]}>Start the conversation</Text>
+            <Text style={[styles.emptyText, dark && { color: theme.chat.textSecondary }]}>Ask the liquidation agent what to do next or trigger an action from Home.</Text>
           </View>
         ) : ListEmptyComponent}
         scrollEnabled={scrollEnabled}
@@ -292,7 +297,10 @@ export const ConversationList = ({
 
       {showJumpToLatest && canJump ? (
         <TouchableOpacity
-          style={styles.jumpButton}
+          style={[
+            styles.jumpButton,
+            { backgroundColor: theme.chat.surface, borderColor: theme.chat.border },
+          ]}
           onPress={() => {
             nearBottomRef.current = true;
             setShowJumpToLatest(false);
@@ -301,7 +309,7 @@ export const ConversationList = ({
           activeOpacity={0.85}
           accessibilityLabel="Jump to latest"
         >
-          <Icon name="chevron-down" size={22} color="#18181B" />
+          <Icon name="chevron-down" size={22} color={theme.chat.text} />
         </TouchableOpacity>
       ) : null}
 

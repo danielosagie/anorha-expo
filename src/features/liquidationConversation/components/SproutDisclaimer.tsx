@@ -2,17 +2,19 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AnorhaFace } from '../../../components/brand/AnorhaFace';
+import { getSproutTheme } from '../../../design/sproutTheme';
 
-export const SproutDisclaimer = () => (
-  <View style={styles.wrap}>
+export const SproutDisclaimer = ({ dark = false }: { dark?: boolean }) => {
+  const theme = getSproutTheme(dark);
+  return <View style={styles.wrap}>
     <View style={styles.mark}>
       <AnorhaFace size={20} />
     </View>
     <View style={styles.textMark}>
-      <Text style={styles.text}>Sprout can make mistakes. Check important details.</Text>
+      <Text style={[styles.text, { color: theme.chat.textMuted }]}>Sprout can make mistakes. Check important details.</Text>
     </View>
-  </View>
-);
+  </View>;
+};
 
 const styles = StyleSheet.create({
   wrap: {

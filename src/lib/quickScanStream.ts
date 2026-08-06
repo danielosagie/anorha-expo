@@ -66,6 +66,8 @@ export function openQuickScanStream(options: QuickScanStreamOptions): QuickScanS
     onStallChange,
     onConnectionError,
     stallAfterMs = 12_000,
+    // Absolute whole-stream ceiling for a single scan. Shelf callers opt into their
+    // own longer bound, while a lost terminal event returns control promptly here.
     hardTimeoutMs = 75_000,
   } = options;
 
@@ -99,16 +101,19 @@ export function openQuickScanStream(options: QuickScanStreamOptions): QuickScanS
     source.close();
   };
 
-  const scheduleWatchdogs = () => {
+  const scheduleStallTimer = () => {
     if (closed) return;
     if (stallTimer) clearTimeout(stallTimer);
-    if (hardTimeoutTimer) clearTimeout(hardTimeoutTimer);
-
     stallTimer = setTimeout(() => {
       if (closed) return;
       setStalled(true);
     }, stallAfterMs);
+  };
 
+  // The hard deadline is ABSOLUTE for the whole stream — armed once, never reset by
+  // activity. Heartbeats used to reschedule it, so a stream that heartbeat forever
+  // without a terminal event spun the UI forever (QA 2026-08-02 pilot-02).
+  const scheduleHardTimeout = () => {
     hardTimeoutTimer = setTimeout(() => {
       if (closed) return;
       const timeoutEvent: QuickScanStreamEvent = {
@@ -127,7 +132,7 @@ export function openQuickScanStream(options: QuickScanStreamOptions): QuickScanS
   const markActivity = () => {
     if (closed) return;
     setStalled(false);
-    scheduleWatchdogs();
+    scheduleStallTimer();
   };
 
   const source = new EventSource(url, {
@@ -169,7 +174,8 @@ export function openQuickScanStream(options: QuickScanStreamOptions): QuickScanS
     close();
   });
 
-  scheduleWatchdogs();
+  scheduleStallTimer();
+  scheduleHardTimeout();
 
   return { close };
 }

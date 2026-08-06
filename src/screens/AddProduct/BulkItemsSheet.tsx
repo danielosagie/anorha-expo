@@ -12,7 +12,6 @@ import { CapturedPhoto } from '../../components/camera/PhotoStack';
 import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
-import { buildGenerateDetailsLaunch } from '../../features/cart/flowPayloads';
 import { setItemPhotoUri } from '../../features/cart/cartStore';
 import { uploadProductImage } from '../../utils/uploadProductImage';
 import { createLogger } from '../../utils/logger';
@@ -23,7 +22,13 @@ import { resolveImageUri } from '../../utils/resolveImageUri';
 const log = createLogger('BulkItemsSheet');
 
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const windowHeight = Dimensions.get('window').height;
+const screenHeight = Dimensions.get('screen').height;
+const SCREEN_HEIGHT = Number.isFinite(windowHeight) && windowHeight > 0
+  ? windowHeight
+  : Number.isFinite(screenHeight) && screenHeight > 0
+    ? screenHeight
+    : 800;
 const MAX_BATCH_ITEMS = 100;
 
 type BulkCartItem = { id: string; photos: CapturedPhoto[]; title?: string; isActive?: boolean; quantity?: number; shelfBox?: ShelfItemBox };
@@ -243,7 +248,7 @@ const FolderCartRow = React.memo(function FolderCartRow({
               ? 'Match found'
               : matchCount > 0
                 ? `${matchCount} match${matchCount === 1 ? '' : 'es'} found`
-                : 'Needs review';
+                : null;
             const pricingResearch = candidate?.pricingResearch ?? scannedCandidate?.pricingResearch;
             const comps = soldCompCount(pricingResearch);
             const pricingPending = Boolean(shelfPricingPendingByItemId?.[item.id]);
@@ -276,23 +281,24 @@ const FolderCartRow = React.memo(function FolderCartRow({
                 )}
                 <View style={styles.folderItemCopy}>
                   <Text style={styles.folderItemTitle} numberOfLines={1}>{title}</Text>
-                  <Pressable
-                    style={styles.folderItemStatusRow}
-                    onPress={isInventoryMatch && onOpenLocalMatch ? (event) => {
-                      event.stopPropagation();
-                      onOpenLocalMatch(item.id);
-                    } : undefined}
-                    disabled={!isInventoryMatch || !onOpenLocalMatch}
-                    hitSlop={4}
-                    accessibilityRole={isInventoryMatch && onOpenLocalMatch ? 'button' : undefined}
-                  >
-                    <View style={[
-                      styles.folderItemStatusDot,
-                      isInventoryMatch && styles.folderItemStatusDotInventory,
-                      !isInventoryMatch && matchCount === 0 && styles.folderItemStatusDotNeedsReview,
-                    ]} />
-                    <Text style={[styles.folderItemSub, isInventoryMatch && styles.folderItemInventoryText]} numberOfLines={1}>{subtitle}</Text>
-                  </Pressable>
+                  {subtitle ? (
+                    <Pressable
+                      style={styles.folderItemStatusRow}
+                      onPress={isInventoryMatch && onOpenLocalMatch ? (event) => {
+                        event.stopPropagation();
+                        onOpenLocalMatch(item.id);
+                      } : undefined}
+                      disabled={!isInventoryMatch || !onOpenLocalMatch}
+                      hitSlop={4}
+                      accessibilityRole={isInventoryMatch && onOpenLocalMatch ? 'button' : undefined}
+                    >
+                      <View style={[
+                        styles.folderItemStatusDot,
+                        isInventoryMatch && styles.folderItemStatusDotInventory,
+                      ]} />
+                      <Text style={[styles.folderItemSub, isInventoryMatch && styles.folderItemInventoryText]} numberOfLines={1}>{subtitle}</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
                 {price != null ? (
                   <View style={styles.folderPriceWrap}>
@@ -334,6 +340,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
   isGenerated,
   navigation,
   onGenerate,
+  onReviewGeneratedItem,
   onOpenItem,
   onOpenPhotoModal,
   onOpenAddDetails,
@@ -355,6 +362,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
   isGenerated: boolean;
   navigation: any;
   onGenerate: (item: BulkCartItem) => void;
+  onReviewGeneratedItem?: (itemId: string) => void;
   onOpenItem: (itemId: string, isLocalInventoryMatch: boolean) => void;
   onOpenPhotoModal?: (itemId: string) => void;
   onOpenAddDetails?: (itemId: string) => void;
@@ -403,9 +411,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
             ? 'Already in this cart'
             : confirmedMatch
               ? 'Match confirmed'
-              : needsReview
-                ? 'Needs review'
-              : selectedMatch
+              : selectedMatch && !needsReview
                 ? `${matchCount} match${matchCount === 1 ? '' : 'es'} found`
                 : null;
 
@@ -544,8 +550,7 @@ const BulkCartRow = React.memo(function BulkCartRow({
           {isGenerated ? (
             <TouchableOpacity style={[styles.cartReviewPill, styles.cartReviewPillBrand]} onPress={(event) => {
               event.stopPropagation?.();
-              const launch = buildGenerateDetailsLaunch(item.id);
-              if (launch) navigation.navigate('GenerateDetailsScreen', launch);
+              onReviewGeneratedItem?.(item.id);
             }}>
               <Text style={styles.cartReviewPillText}>Review listing</Text>
             </TouchableOpacity>
@@ -586,11 +591,16 @@ export const BulkItemsSheet: React.FC<{
     itemsForAnalyze?: Array<{ id: string }>,
   ) => Promise<any>;
   sheetTranslateY: any;
+  /** True while a finger is actively dragging the sheet, so the host can tell a live
+   *  gesture apart from a wedged Modal. */
+  onSheetDragStateChange?: (dragging: boolean) => void;
   jobResponse: JobResponse | null;
   navigation: any;
   quickScanStore?: Record<string, { matchData: MatchResponse; matchRows: any[] }>;
   onOpenQuickMatches?: (itemId: string) => void;
   onOpenItemPreview?: (itemId: string) => void;
+  /** Dismiss the cart's native Modal before pushing the generated listing editor. */
+  onReviewGeneratedItem?: (itemId: string) => void;
   cartTree?: CartTreeNode[];
   onOpenFolder?: (folderId: string) => void;
   /** Queue items for in-place async generation instead of navigating to LoadingScreen. */
@@ -631,7 +641,7 @@ export const BulkItemsSheet: React.FC<{
   freemium?: { usageCount: number; freeLimit: number; exhausted: boolean } | null;
   onUpgrade?: () => void;
   onAddCredits?: () => void;
-}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems, activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, cartTree, onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, inventoryMatchByItemId = {}, shelfPricingPendingByItemId = {}, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, onListingCreationFinished, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onCapturePhoto, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
+}> = ({ onClose, onStartBroadSearch, sheetStyle, photos, isBulkMode, bulkItems = [], activeItemId, onAddNewItem, onImageUpload, performAnalyze, onDeleteItem, onMovePhoto, onSelectItem, onSetCoverPhoto, onRemovePhoto, sheetTranslateY, onSheetDragStateChange, navigation, setJobResponse, jobResponse, quickScanStore, onOpenQuickMatches, onOpenItemPreview, onReviewGeneratedItem, cartTree = [], onOpenFolder, onQueueGeneration, onRetryItemScan, onOpenPhotoModal, itemLoadingStates, setItemLoadingStates, itemStageById, confirmedQuickMatchByItemId = {}, connectedPlatformKeys = [], currentInstruction, onOpenLocalMatch, inventoryMatchByItemId = {}, shelfPricingPendingByItemId = {}, shelfPhotoUri, shelfProgress, onRetryShelfScan, onRetakeShelfScan, onUpdateItemQuery, onUpdateItemTitle, onUpdateItemQuantity, onSubmitItemsForProcessing, onSaveDraft, onListingCreationStarted, onListingCreationFinished, cameraMode = 'camera', savedForLaterIds, onToggleSavedForLater, onCapturePhoto, onOpenAddDetails, freemium, onUpgrade, onAddCredits }) => {
 
 
   // SIMPLIFIED: Always use bulkItems (no more virtual items)
@@ -1290,6 +1300,7 @@ export const BulkItemsSheet: React.FC<{
         isGenerated={itemStageById?.[item.id] === 'generated'}
         navigation={navigation}
         onGenerate={handleGenerateItem}
+        onReviewGeneratedItem={onReviewGeneratedItem}
         onOpenItem={handleOpenCartItem}
         onOpenPhotoModal={onOpenPhotoModal}
         onOpenAddDetails={onOpenAddDetails}
@@ -1306,6 +1317,7 @@ export const BulkItemsSheet: React.FC<{
     cameraMode,
     currentInstruction,
     handleGenerateItem,
+    onReviewGeneratedItem,
     handleOpenCartItem,
     handleOpenFolderItem,
     folderExpansionById,
@@ -1353,6 +1365,11 @@ export const BulkItemsSheet: React.FC<{
             sheetTranslateY.value = newY;
           }}
           onHandlerStateChange={(event) => {
+            // A held drag can park the sheet fully down for seconds with the finger
+            // still on glass. Tell the host so its wedged-Modal tripwire does not
+            // mistake a live gesture for a stuck sheet and unmount mid-drag.
+            const { state } = event.nativeEvent;
+            onSheetDragStateChange?.(state === State.BEGAN || state === State.ACTIVE);
             if (event.nativeEvent.state === State.END) {
               const { translationY, velocityY } = event.nativeEvent;
               // Dragged / flung down far enough → close; otherwise spring back open.

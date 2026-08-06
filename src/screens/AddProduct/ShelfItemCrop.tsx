@@ -13,9 +13,23 @@ type ShelfItemCropProps = {
 };
 
 const validSize = (width?: number, height?: number): ImageSize | null =>
-  typeof width === 'number' && width > 0 && typeof height === 'number' && height > 0
+  typeof width === 'number' && Number.isFinite(width) && width > 0
+    && typeof height === 'number' && Number.isFinite(height) && height > 0
     ? { width, height }
     : null;
+
+const validBox = (box: ShelfItemBox): boolean => (
+  Number.isFinite(box.x)
+  && Number.isFinite(box.y)
+  && Number.isFinite(box.width)
+  && Number.isFinite(box.height)
+  && box.x >= 0
+  && box.y >= 0
+  && box.width > 0
+  && box.height > 0
+  && box.x < 1
+  && box.y < 1
+);
 
 export const ShelfItemCrop = memo(function ShelfItemCrop({
   uri,
@@ -47,29 +61,42 @@ export const ShelfItemCrop = memo(function ShelfItemCrop({
     return () => { active = false; };
   }, [box.sourceHeight, box.sourceWidth, uri]);
 
-  const containerStyle = useMemo(() => ({ width, height, borderRadius }), [borderRadius, height, width]);
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 1;
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : 1;
+  const safeBorderRadius = Number.isFinite(borderRadius) && borderRadius >= 0 ? borderRadius : 0;
+  const containerStyle = useMemo(
+    () => ({ width: safeWidth, height: safeHeight, borderRadius: safeBorderRadius }),
+    [safeBorderRadius, safeHeight, safeWidth],
+  );
   const imageStyle = useMemo(() => {
-    if (!imageSize) return null;
+    if (!imageSize || !validBox(box)) return null;
     const cropWidth = box.width * imageSize.width;
     const cropHeight = box.height * imageSize.height;
-    if (cropWidth <= 0 || cropHeight <= 0) return null;
+    if (![cropWidth, cropHeight].every(Number.isFinite) || cropWidth <= 0 || cropHeight <= 0) return null;
 
-    const scale = Math.max(width / cropWidth, height / cropHeight);
+    const scale = Math.max(safeWidth / cropWidth, safeHeight / cropHeight);
     const scaledCropWidth = cropWidth * scale;
     const scaledCropHeight = cropHeight * scale;
-    const translateX = (width - scaledCropWidth) / 2 - box.x * imageSize.width * scale;
-    const translateY = (height - scaledCropHeight) / 2 - box.y * imageSize.height * scale;
+    const translateX = (safeWidth - scaledCropWidth) / 2 - box.x * imageSize.width * scale;
+    const translateY = (safeHeight - scaledCropHeight) / 2 - box.y * imageSize.height * scale;
+    const renderedWidth = imageSize.width * scale;
+    const renderedHeight = imageSize.height * scale;
+    if (![scale, scaledCropWidth, scaledCropHeight, translateX, translateY, renderedWidth, renderedHeight].every(Number.isFinite)) {
+      return null;
+    }
 
     return {
-      width: imageSize.width * scale,
-      height: imageSize.height * scale,
+      width: renderedWidth,
+      height: renderedHeight,
       transform: [{ translateX }, { translateY }],
     };
-  }, [box.height, box.width, box.x, box.y, height, imageSize, width]);
+  }, [box, imageSize, safeHeight, safeWidth]);
 
   return (
     <View style={[styles.container, containerStyle]}>
-      {imageStyle ? <Image source={{ uri }} style={imageStyle} /> : null}
+      {imageStyle
+        ? <Image source={{ uri }} style={imageStyle} />
+        : <Image source={{ uri }} style={styles.fallbackImage} resizeMode="cover" />}
     </View>
   );
 });
@@ -79,5 +106,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#ECEDE8',
   },
+  fallbackImage: {
+    width: '100%',
+    height: '100%',
+  },
 });
-

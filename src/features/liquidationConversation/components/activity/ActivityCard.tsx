@@ -10,7 +10,7 @@
 //
 // Every finished activity is tappable and opens ONE review tray. Calm law: the
 // normal finished turn stays quiet; only failed / out-of-sync goes loud.
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import * as Haptics from 'expo-haptics';
@@ -24,13 +24,10 @@ import type {
 } from '../../types';
 import ValueDiff from './ValueDiff';
 import RoutineCard from './RoutineCard';
-import { TypingIndicator } from './Typing';
 import { activityGlyph, changeKindGlyph, humanizeChannel, toolActivePhrase } from './humanizers';
 import { sanitizeDisplayText } from '../../displayText';
 import { campaignItemPrice, getPlanDisplayTitle, getPlanPricePreviews, matchPlanItem } from '../../planPresentation';
 import { DiaTextReveal } from '../../../../components/DiaTextReveal';
-import { useChatPreferences } from '../../chatPreferences';
-import { ThinkingText } from '../../../../components/ThinkingText';
 
 export interface ActivityCardProps {
   payload: ActivityPayload;
@@ -331,15 +328,18 @@ function ToolRunCard({
   const reasoning = payload.reasoning?.trim();
   const hasReasoning = !!reasoning;
   const count = steps.length;
-  const { expandedActivity } = useChatPreferences();
-  const [expanded, setExpanded] = useState(expandedActivity);
-  useEffect(() => setExpanded(expandedActivity), [expandedActivity]);
-
   if (!streaming && !count && !hasReasoning) return null;
 
   const lastStep = count ? steps[count - 1] : null;
-  const livePhrase = lastStep ? toolActivePhrase(lastStep.tool) : 'Working on it';
-  const doneSummary = sanitizeDisplayText(payload.title || 'Finished the checks');
+  // Reasoning is a tool run like any other, so it uses the same live phrase → grey
+  // receipt → tray path. It used to get its own bordered card with a lightbulb and a
+  // chevron, which read as a separate green drawer sitting beside the real work.
+  const livePhrase = lastStep
+    ? toolActivePhrase(lastStep.tool)
+    : hasReasoning ? 'Thinking' : 'Working on it';
+  const doneSummary = sanitizeDisplayText(
+    payload.title || (count === 0 && hasReasoning ? 'Thought it through' : 'Finished the checks'),
+  );
   const canOpen = !streaming && (count > 0 || hasReasoning);
   const openTray = () => {
     if (!canOpen) return;
@@ -347,40 +347,12 @@ function ToolRunCard({
     onOpenTray?.(payload);
   };
 
-  // The reasoning trace, shown inline (not buried in the tray): it streams live while
-  // the model is still thinking, then collapses to a tappable "Thought it through" row.
-  const thinkingLive = streaming && count === 0;
-  const showReasoningBody = hasReasoning && (expanded || thinkingLive);
-  // Once tool steps have completed, the receipt already opens the tray containing
-  // the reasoning. Rendering a second "Thought it through" card beside "Done" made
-  // successful plan turns look like several unrelated operations.
-  const showReasoningCard = hasReasoning && (streaming || count === 0);
-  // Suppress the "Working on it" pill during the pure-thinking phase so the reasoning
-  // block stands alone; once steps land (or there's no reasoning) the receipt shows.
-  const showStepsRow = count > 0 || (streaming && !hasReasoning);
+  // One row for the whole run, thinking included. The reasoning body itself lives in the
+  // tray behind the same chevron as every other tool step.
+  const showStepsRow = count > 0 || streaming || hasReasoning;
 
   return (
     <View style={styles.toolRunWrap}>
-      {showReasoningCard ? (
-        <TouchableOpacity style={styles.reasoningCard} activeOpacity={0.7} onPress={() => setExpanded((e) => !e)}>
-          <View style={styles.reasoningHead}>
-            <Icon name="lightbulb-on-outline" size={13} color={CHAT_COLORS.brandDeep} />
-            {thinkingLive ? (
-              // Only active reasoning shimmers so completion stays visually settled.
-              <ThinkingText style={styles.reasoningLabel}>Thinking</ThinkingText>
-            ) : (
-              <Text style={styles.reasoningLabel}>Thought it through</Text>
-            )}
-            {thinkingLive ? <TypingIndicator color="#B6BCC4" size={4} /> : null}
-            <View style={styles.activitySpacer} />
-            <Icon name={showReasoningBody ? 'chevron-up' : 'chevron-down'} size={16} color="#C4C4CC" />
-          </View>
-          {showReasoningBody ? (
-            <Text style={styles.reasoningBody} numberOfLines={expanded ? undefined : 8}>{reasoning}</Text>
-          ) : null}
-        </TouchableOpacity>
-      ) : null}
-
       {showStepsRow ? (
         <Pressable
           style={styles.activitySummary}
@@ -549,23 +521,6 @@ const styles = StyleSheet.create({
 
   // ── Tool-run receipt (reasoning block + live pill / done summary) ──
   toolRunWrap: { alignSelf: 'flex-start', maxWidth: '100%', gap: 6, marginBottom: 6 },
-  reasoningCard: {
-    borderRadius: 14,
-    backgroundColor: '#FAFAF7',
-    borderWidth: 1,
-    borderColor: '#ECEBE6',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  reasoningHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  reasoningLabel: { fontSize: 12, color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.semibold },
-  reasoningBody: {
-    marginTop: 7,
-    fontSize: 12.5,
-    lineHeight: 18,
-    color: CHAT_COLORS.dim,
-    fontFamily: CHAT_FONT.regular,
-  },
   activitySummary: {
     alignSelf: 'flex-start',
     maxWidth: '100%',

@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -11,11 +11,11 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useIsNight } from '../hooks/useIsNight';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import ShadowSurface from './ui/ShadowSurface';
 import { AnorhaFace } from './brand/AnorhaFace';
-import { openQuickChat, useQuickChatStore } from './sprout/quickChatStore';
+import { openQuickChat, setQuickChatDarkMode, useQuickChatStore } from './sprout/quickChatStore';
+import { sproutDarkTheme } from '../design/sproutTheme';
 
 // Order here only gates which routes render; display order follows the navigator.
 const TAB_ICON: Record<string, string> = {
@@ -28,10 +28,6 @@ const ACTIVE_GREEN = '#84CC16';
 const ACTIVE_BG = 'rgba(132, 204, 22, 0.18)';
 const ADD_GREEN = '#84CC16';
 const INACTIVE_GRAY = '#9CA3AF';
-// Night glass (mockup: rgba(0,0,0,0.3) over rgba(44,44,44,0.6) + backdrop blur);
-// flattened since RN views can't backdrop-blur.
-const NIGHT_SURFACE = 'rgba(28, 30, 24, 0.94)';
-const NIGHT_INACTIVE = 'rgba(255, 255, 255, 0.85)';
 const SIDE_BUTTON_SIZE = 56;
 const ADD_BUTTON_SIZE = 60;
 const SPROUT_GLYPH_SIZE = 18;
@@ -55,7 +51,6 @@ const TabBar: React.FC<TabBarProps> = ({
   bottomInset = 18,
   rowHeight = 64,
 }) => {
-  const isNight = useIsNight();
   // Sprout's composer docks in exactly this spot. Two bottom bars stacked on each other
   // reads as a bug, so the tab row stands down while the composer is up — same slot, one
   // thing in it. The composer's own close button puts the tabs back.
@@ -87,10 +82,16 @@ const TabBar: React.FC<TabBarProps> = ({
   };
 
   const focusedRouteName = state.routes[state.index]?.name;
+  const focusedRouteKey = state.routes[state.index]?.key;
   const isTransparentBgRoute = focusedRouteName === 'AddProduct';
-  // Dark glass only on the home (Clearouts) screen — and only at night, so it
-  // matches home's own day/night theme. Every other route stays light.
-  const dark = isNight && focusedRouteName === 'Clearouts';
+  // SproutHome is the only appearance-reactive entry point. It publishes this
+  // explicit option so the shared tab bar and quick chat remain light elsewhere.
+  const dark = focusedRouteName === 'Clearouts'
+    && descriptors[focusedRouteKey]?.options?.sproutDark === true;
+
+  useEffect(() => {
+    if (sproutDocked) setQuickChatDarkMode(dark);
+  }, [dark, sproutDocked]);
 
   if (sproutDocked) return null;
 
@@ -132,7 +133,7 @@ const TabBar: React.FC<TabBarProps> = ({
         ]}
       >
         <TouchableOpacity
-          onPress={() => openQuickChat()}
+          onPress={() => openQuickChat({ dark })}
           accessibilityRole="button"
           accessibilityLabel="Open Sprout chat"
           activeOpacity={0.9}
@@ -170,7 +171,11 @@ const TabBar: React.FC<TabBarProps> = ({
               }
             };
 
-            const tint = isFocused ? (dark ? '#FFFFFF' : ACTIVE_GREEN) : dark ? NIGHT_INACTIVE : INACTIVE_GRAY;
+            const tint = isFocused
+              ? (dark ? sproutDarkTheme.colors.text : ACTIVE_GREEN)
+              : dark
+                ? sproutDarkTheme.colors.textSecondary
+                : INACTIVE_GRAY;
 
             return (
               <TouchableOpacity
@@ -240,8 +245,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sideButtonNight: {
-    backgroundColor: NIGHT_SURFACE,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
+    backgroundColor: sproutDarkTheme.colors.surface,
+    borderColor: sproutDarkTheme.colors.border,
   },
   pillOuter: {
     flex: 1,
@@ -256,8 +261,8 @@ const styles = StyleSheet.create({
   },
   // Wins over the navigator-provided white surfaceStyle after dark (mockup glass pill).
   surfaceNight: {
-    backgroundColor: NIGHT_SURFACE,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: sproutDarkTheme.colors.surface,
+    borderColor: sproutDarkTheme.colors.border,
   },
   tabItem: {
     flex: 1,
@@ -277,9 +282,9 @@ const styles = StyleSheet.create({
   tabInnerActive: {
     backgroundColor: ACTIVE_BG,
   },
-  // Home/night selection: translucent white pill + white icon (per design).
+  // Home dark selection uses the palette's elevated control surface.
   tabInnerActiveDark: {
-    backgroundColor: 'rgba(255, 255, 255, 0.4)',
+    backgroundColor: sproutDarkTheme.chat.surfaceMuted,
   },
   tabLabel: {
     fontSize: 12,
@@ -298,10 +303,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // On home/night the + becomes dark glass like the search button (per design).
+  // On dark home the + uses the same elevated surface as the tab pill.
   addButtonNight: {
-    backgroundColor: NIGHT_SURFACE,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
+    backgroundColor: sproutDarkTheme.colors.surface,
+    borderColor: sproutDarkTheme.colors.border,
   },
 });
 

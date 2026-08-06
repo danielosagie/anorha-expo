@@ -26,6 +26,7 @@ import type {
   CartStatus,
   ItemStage,
   LegacyBulkItem,
+  ShelfItemBox,
 } from './types';
 import { isFolder, isItem } from './types';
 import { canTransition, STATUS_HISTORY_LIMIT } from './transitions';
@@ -51,6 +52,65 @@ const emptyState = (): CartState => ({
 export const cart$ = observable<CartState>(emptyState());
 
 const getEntry = (id: string): CartEntry | undefined => cart$.entries[id].get();
+
+function normalizeHydratedShelfBox(value: unknown): ShelfItemBox | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const box = value as Record<string, unknown>;
+  const numberField = (key: string): number | undefined => {
+    const candidate = box[key];
+    return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : undefined;
+  };
+
+  let x = numberField('x');
+  let y = numberField('y');
+  let width = numberField('width');
+  let height = numberField('height');
+  const sourceWidth = numberField('sourceWidth');
+  const sourceHeight = numberField('sourceHeight');
+
+  if (x === undefined || y === undefined || width === undefined || height === undefined) {
+    return undefined;
+  }
+
+  // Older drafts may contain pixel coordinates. Normalize them when the source
+  // dimensions are available so every consumer receives the current 0...1 shape.
+  if ((x > 1 || width > 1) && sourceWidth !== undefined && sourceWidth > 0) {
+    x /= sourceWidth;
+    width /= sourceWidth;
+  }
+  if ((y > 1 || height > 1) && sourceHeight !== undefined && sourceHeight > 0) {
+    y /= sourceHeight;
+    height /= sourceHeight;
+  }
+
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    x < 0 ||
+    y < 0 ||
+    x >= 1 ||
+    y >= 1 ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return undefined;
+  }
+
+  const normalizedWidth = Math.min(width, 1 - x);
+  const normalizedHeight = Math.min(height, 1 - y);
+  if (normalizedWidth <= 0 || normalizedHeight <= 0) return undefined;
+
+  return {
+    x,
+    y,
+    width: normalizedWidth,
+    height: normalizedHeight,
+    ...(sourceWidth !== undefined && sourceWidth > 0 ? { sourceWidth } : {}),
+    ...(sourceHeight !== undefined && sourceHeight > 0 ? { sourceHeight } : {}),
+  };
+}
 
 // A child item is "resolved" once it no longer needs the pipeline's attention.
 const RESOLVED: CartStatus[] = ['matched', 'ready_to_list', 'listed', 'error'];
@@ -816,7 +876,7 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
       status: ctx ? 'matched' : photos.length ? 'searching' : 'capturing',
       match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows, confirmed: ctx.confirmed } : undefined,
       preSelectedSource: s.preSelectedSource,
-      shelfBox: s.shelfBox,
+      shelfBox: normalizeHydratedShelfBox(s.shelfBox),
       createdAt: ts,
       updatedAt: ts,
     };
@@ -862,8 +922,16 @@ export async function hydrateCartSnapshot(): Promise<boolean> {
     if (!raw) return false;
     const parsed = JSON.parse(raw) as CartState;
     if (parsed && parsed.entries && Array.isArray(parsed.order)) {
+      const normalizedEntries = Object.fromEntries(
+        Object.entries(parsed.entries).map(([id, entry]) => [
+          id,
+          isItem(entry)
+            ? { ...entry, shelfBox: normalizeHydratedShelfBox(entry.shelfBox) }
+            : entry,
+        ]),
+      ) as Record<string, CartEntry>;
       cart$.set({
-        entries: parsed.entries,
+        entries: normalizedEntries,
         order: parsed.order,
         activeItemId: parsed.activeItemId ?? null,
         processedItemIds: Array.isArray(parsed.processedItemIds) ? parsed.processedItemIds : [],

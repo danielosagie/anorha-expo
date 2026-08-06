@@ -50,6 +50,19 @@ export const closeQuickChat = () => {
   emit();
 };
 
+/** Keep an already-open dock matched to its host screen without reading the OS here. */
+export const setQuickChatDarkMode = (dark: boolean) => {
+  if (!snapshot.visible || snapshot.options?.dark === dark) return;
+  snapshot = {
+    ...snapshot,
+    options: {
+      ...(snapshot.options || {}),
+      dark,
+    },
+  };
+  emit();
+};
+
 export const getQuickChatSnapshot = (): QuickChatSnapshot => snapshot;
 
 export const useQuickChatStore = (): QuickChatSnapshot =>

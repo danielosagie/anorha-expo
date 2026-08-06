@@ -7,17 +7,20 @@ import React, { useMemo, useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Check, ChevronLeft } from 'lucide-react-native';
 import type { QuestionItem, QuestionPrompt } from '../types';
+import { getSproutTheme } from '../../../design/sproutTheme';
 
 interface QuestionCardProps {
   prompt: QuestionPrompt;
   submitting?: boolean;
   onSubmit: (answers: Record<string, string[]>, other?: string) => void;
+  dark?: boolean;
 }
 
 // Always index-scoped so two questions sharing a header don't collide in `selected`.
 const keyFor = (q: QuestionItem, i: number) => `${i}:${q.header?.trim() || 'q'}`;
 
-const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmit }) => {
+const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmit, dark = false }) => {
+  const theme = getSproutTheme(dark);
   const total = prompt.questions.length;
   const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState<Record<string, string[]>>({});
@@ -66,7 +69,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
   const primaryDisabled = (isLast ? !allAnswered : !currentAnswered) || !!submitting;
 
   return (
-    <View style={s.card}>
+    <View style={[s.card, dark && { backgroundColor: theme.chat.surface, borderColor: theme.chat.border }]}>
       <View style={s.head}>
         {total > 1 ? (
           <View style={s.stepper}>
@@ -75,12 +78,12 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
               disabled={current === 0 || submitting}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <ChevronLeft size={16} color={current === 0 ? '#D4D4D8' : '#71717A'} />
+              <ChevronLeft size={16} color={current === 0 ? theme.chat.textMuted : theme.chat.textSecondary} />
             </TouchableOpacity>
-            <Text style={s.stepText}>{current + 1} of {total}</Text>
+            <Text style={[s.stepText, dark && { color: theme.chat.textSecondary }]}>{current + 1} of {total}</Text>
           </View>
         ) : null}
-        <Text style={[s.question, s.questionFlex]}>{q.question}</Text>
+        <Text style={[s.question, s.questionFlex, dark && { color: theme.chat.text }]}>{q.question}</Text>
       </View>
 
       {q.options.map((opt, oi) => {
@@ -88,22 +91,41 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
         return (
           <TouchableOpacity
             key={`${opt.label}-${oi}`}
-            style={[s.option, (on || opt.recommended) && s.optionAccent, on && s.optionOn]}
+            style={[
+              s.option,
+              dark && { borderColor: theme.chat.border },
+              (on || opt.recommended) && s.optionAccent,
+              dark && (on || opt.recommended) && { backgroundColor: theme.chat.surfaceMuted },
+              on && s.optionOn,
+            ]}
             activeOpacity={0.75}
             disabled={submitting}
             onPress={() => choose(opt.label)}
           >
-            <View style={[s.mark, q.multiSelect ? s.markBox : s.markRadio, on && s.markOn]}>
-              {on && <Check size={13} color="#FFFFFF" />}
+            <View style={[
+              s.mark,
+              q.multiSelect ? s.markBox : s.markRadio,
+              { borderColor: on ? theme.colors.primary : theme.chat.textMuted },
+              on && s.markOn,
+            ]}>
+              {on && <Check size={13} color={theme.colors.onPrimary} />}
             </View>
             <View style={s.optBody}>
               <View style={s.optLabelRow}>
-                <Text style={[s.optLabel, (on || opt.recommended) && s.optLabelAccent]}>{opt.label}</Text>
-                {opt.recommended && <Text style={s.recPill}>Recommended</Text>}
+                <Text style={[
+                  s.optLabel,
+                  dark && { color: theme.chat.text },
+                  (on || opt.recommended) && { color: dark ? theme.colors.primary : '#3B6D11' },
+                ]}>{opt.label}</Text>
+                {opt.recommended && <Text style={[s.recPill, dark && { color: theme.colors.primary }]}>Recommended</Text>}
               </View>
               {!!opt.description && (
                 <Text
-                  style={[s.optDesc, (on || opt.recommended) && s.optDescAccent]}
+                  style={[
+                    s.optDesc,
+                    dark && { color: theme.chat.textSecondary },
+                    (on || opt.recommended) && { color: dark ? theme.colors.primary : '#3B6D11' },
+                  ]}
                   numberOfLines={2}
                 >
                   {opt.description}
@@ -115,11 +137,14 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
       })}
 
       <TextInput
-        style={s.other}
+        style={[
+          s.other,
+          dark && { color: theme.chat.text, backgroundColor: theme.chat.surfaceElevated, borderColor: theme.chat.border },
+        ]}
         value={other}
         onChangeText={setOther}
         placeholder="Or type your own answer…"
-        placeholderTextColor="#9CA3AF"
+        placeholderTextColor={theme.chat.textMuted}
         editable={!submitting}
       />
 
@@ -130,7 +155,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
           onPress={isLast ? submit : goNext}
           activeOpacity={0.85}
         >
-          <Text style={s.sendText}>{submitting ? 'Sending…' : isLast ? 'Send' : 'Next'}</Text>
+          <Text style={[s.sendText, { color: theme.colors.onPrimary }]}>{submitting ? 'Sending…' : isLast ? 'Send' : 'Next'}</Text>
         </TouchableOpacity>
       )}
     </View>
