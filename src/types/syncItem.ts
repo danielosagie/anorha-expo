@@ -1,5 +1,5 @@
 // Mobile mirror of the backend resolver contract
-// (anorha-bknd/src/sync-engine/sync-resolver/sync-item.ts). The SyncInbox renders
+// (anorha-bknd/src/sync-engine/sync-resolver/sync-item.ts). Import review renders
 // this shape directly from GET /api/sync/connections/:id/resolution — no
 // re-derivation from MappingSuggestion. Keep in sync with the backend.
 
@@ -28,8 +28,9 @@ export type AttentionReason =
   | 'field_conflict'
   | 'bundle'
   | 'stale_link'
+  | 'title_quality'
   // The commit ran and failed — resolving again retries it. Rows arrive with
-  // this on the AttentionReason column (backend sync-item.ts has 8 values;
+  // this on the AttentionReason column (backend sync-item.ts has 9 values;
   // omitting one here rendered a LABEL-LESS group row).
   | 'commit_failed';
 
@@ -44,8 +45,15 @@ export interface SyncItem {
   direction: SyncDirection;
   sourceHash?: string;
   productShape?: string;
+  /** Row-level CAS token returned by the rows-backed resolver. */
+  version?: number;
+  /** Optional Imports batch stamp when the resolver is filtered by importId. */
+  importId?: string | null;
 
   resolution: SyncResolution;
+
+  /** Server-ranked match confidence. Queue helpers preserve this server order. */
+  confidence?: number | null;
 
   attention?: AttentionReason;
   candidates?: CanonicalRef[];
@@ -55,6 +63,18 @@ export interface SyncItem {
   reason?: string;
   groupId?: string;
   groupTitle?: string;
+  /** Structured conflict details, when the source includes them. */
+  fieldConflicts?: Array<{
+    field?: string;
+    incomingValue?: string | number | null;
+    canonicalValue?: string | number | null;
+    platformValue?: string | number | null;
+    catalogValue?: string | number | null;
+  }>;
+  /** Detected bundle members, when the source can name them individually. */
+  bundleParts?: Array<{ sku?: string | null; title?: string | null }>;
+  /** Full-fidelity photo passthrough used by title generation. */
+  imageUrls?: string[];
 }
 
 export interface ResolveResult {
@@ -78,9 +98,46 @@ export interface ResolveResult {
 
 export type ResolveChoice = 'link' | 'create' | 'ignore';
 
+export type ResolveValueOverride =
+  | boolean
+  | string
+  | {
+      title?: string;
+      generateTitleFromPhoto?: boolean;
+      groupMode?: 'combine' | 'separate';
+      bundleMode?: 'set' | 'separate';
+      groupId?: string;
+    };
+
+export interface ResolveOptions {
+  version?: number;
+  importId?: string;
+  valueOverride?: ResolveValueOverride;
+}
+
 export interface ResolveResponse {
   success: boolean;
   jobId?: string;
   committedCount?: number;
   alreadyResolved?: boolean;
+  version?: number;
+}
+
+export interface BulkResolveItem {
+  platformId: string;
+  choice: ResolveChoice;
+  canonicalId?: string;
+  valueOverride?: ResolveValueOverride;
+  version: number;
+}
+
+export interface BulkResolveResult {
+  platformId: string;
+  status: 'ok' | 'conflict' | 'alreadyResolved' | 'error';
+  version?: number;
+  message?: string;
+}
+
+export interface BulkResolveResponse {
+  results: BulkResolveResult[];
 }

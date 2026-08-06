@@ -224,12 +224,18 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         platform={flowPlatform}
         orgId={currentOrg?.id}
         onCancel={() => setFlowPlatform(null)}
-        onConnected={() => {
+        onConnected={(connectionId) => {
           setFlowPlatform(null);
           // The backend commits the connection row on the OAuth callback; nudge
           // twice so the row flips to Connected without a manual reload.
           refresh?.();
           setTimeout(() => refresh?.(), 2500);
+          if (connectionId) {
+            navigation.navigate('ImportQuestionQueue', {
+              connectionId,
+              platformName: flowPlatform ?? 'Platform',
+            });
+          }
         }}
       />
     </View>

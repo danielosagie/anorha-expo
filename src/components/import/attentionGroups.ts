@@ -1,6 +1,6 @@
 // attentionGroups — pure, unit-testable helpers that turn the resolver's flat
 // `needsAttention: SyncItem[]` into the Avec-style "grouped issues" list the
-// SyncInbox shows before the swipe deck. No React, no side effects: given a
+// question queue shows before its review cards. No React, no side effects: given a
 // SyncItem[] it returns ordered groups keyed by AttentionReason (items with no
 // reason fall under 'other'). Keep this dependency-light so it stays testable
 // with plain node:test.
@@ -23,6 +23,7 @@ export const REASON_LABELS: Record<GroupKey, string> = {
   field_conflict: 'Details disagree',
   bundle: 'Bundles / multi-packs',
   stale_link: 'Links to re-confirm',
+  title_quality: 'Titles to write',
   other: 'Other',
 };
 

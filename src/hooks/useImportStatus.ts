@@ -7,7 +7,7 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOptimizerQueues } from './useOptimizerQueues';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
-const log = createLogger('useImportHub');
+const log = createLogger('useImportStatus');
 
 // Same `/api` normalization the rest of the app uses (see useResolution) so a
 // base URL that already ends in `/api` never composes `/api/api/…`.
@@ -41,7 +41,7 @@ export interface HubLaneConnection {
 // connection, whether or not it needs attention). Additive to the hub's output —
 // derived from the same aggregate/fan-out data the lanes already consume.
 export interface HubConnection {
-  /** PlatformConnections.Id — used to deep-link into SyncInbox / SyncRules. */
+  /** PlatformConnections.Id used to open import review or sync settings. */
   connectionId: string;
   /** Friendly display name (bold row title), e.g. "myshop". */
   platformName: string;
@@ -53,19 +53,19 @@ export interface HubConnection {
   needsAttention: number;
 }
 
-export interface ImportHubScanning {
+export interface ImportScanning {
   connectionId: string;
   platformName: string;
   state: string;
 }
 
-export interface ImportHubData {
+export interface ImportStatusData {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   /** questions + required — the single OWED number the hero shows. Polish never counts. */
   totalNeedsYou: number;
-  scanning: ImportHubScanning[];
+  scanning: ImportScanning[];
   /** Every enabled connection, for the hub's "Your stores" list. */
   connections: HubConnection[];
   recentImports: InboxRecentImport[];
@@ -168,7 +168,7 @@ async function fetchInboxSummary(token: string | null): Promise<InboxSummaryResp
  * Refetches on focus and whenever the enabled-connection set changes; polls
  * every 20s while anything is still scanning/syncing.
  */
-export function useImportHub(): ImportHubData {
+export function useImportStatus(): ImportStatusData {
   const { liveConnections } = usePlatformConnections();
 
   // Optimizer gaps, catalog-wide (unscoped) so the hub's required/polish lanes
@@ -252,7 +252,7 @@ export function useImportHub(): ImportHubData {
     refreshAll();
   }, [focused, connSig, refreshAll]);
 
-  const scanning = useMemo<ImportHubScanning[]>(() => {
+  const scanning = useMemo<ImportScanning[]>(() => {
     return (summary?.connections || [])
       .filter((c) => c.state === 'scanning' || c.state === 'syncing')
       .map((c) => ({

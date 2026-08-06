@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
-import type { ResolveResult, ResolveChoice, ResolveResponse } from '../types/syncItem';
+import type {
+  ResolveResult,
+  ResolveChoice,
+  ResolveResponse,
+  ResolveOptions,
+  BulkResolveItem,
+  BulkResolveResponse,
+} from '../types/syncItem';
 
 const log = createLogger('useResolution');
 
@@ -18,21 +25,20 @@ const API_BASE = (() => {
 // buckets and applies one inbox decision. It does NOT touch the legacy import
 // endpoints — the certain buckets are already synced by auto-pilot on connect;
 // this only resolves the rare `needsAttention` item, non-blocking.
-export function useResolution(connectionId: string | null | undefined) {
+export function useResolution(connectionId: string | null | undefined, importId?: string | null) {
   const [result, setResult] = useState<ResolveResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
-  // Guards against the 3s poll (below) stacking overlapping refreshes: a slow/stalled load
-  // must not spawn a second in-flight fetch every tick. The poll only reschedules when
-  // `result` changes, so an in-flight refresh naturally paces the next tick to after it lands.
+  // Guards explicit refreshes from stacking. This hook intentionally does not poll;
+  // callers refresh after a commit or while they own an in-flight scan surface.
   const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!connectionId) return;
     if (inFlightRef.current) return;
     inFlightRef.current = true;
-    // Without a timeout the inbox fetch could hang forever → permanent SyncInbox spinner.
+    // Without a timeout the review fetch could hang forever and leave a permanent spinner.
     // Abort at 12s so it lands in the error state the screen already renders (with Retry).
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 12000);
@@ -40,12 +46,24 @@ export function useResolution(connectionId: string | null | undefined) {
       setLoading(true);
       setError(null);
       const token = await ensureSupabaseJwt();
-      const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolution`, {
+      const query = importId ? `?importId=${encodeURIComponent(importId)}` : '';
+      const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolution${query}`, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Failed to load inbox: ${res.status}`);
-      setResult((await res.json()) as ResolveResult);
+      const payload = (await res.json()) as ResolveResult;
+      // Version was added to the rows-backed payload after the original mobile
+      // mirror. Accept either casing during the rolling deployment.
+      payload.needsAttention = (payload.needsAttention ?? []).map((item: any) => ({
+        ...item,
+        version: Number.isInteger(item?.version)
+          ? item.version
+          : Number.isInteger(item?.Version)
+            ? item.Version
+            : undefined,
+      }));
+      setResult(payload);
     } catch (err: any) {
       const msg = err?.name === 'AbortError' ? 'Loading the inbox timed out — pull to retry.' : (err?.message ?? 'Failed to load inbox');
       log.warn('refresh failed', msg);
@@ -55,7 +73,7 @@ export function useResolution(connectionId: string | null | undefined) {
       inFlightRef.current = false;
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [connectionId, importId]);
 
   useEffect(() => {
     refresh();
@@ -65,7 +83,12 @@ export function useResolution(connectionId: string | null | undefined) {
   // failed resolve (or a failed reconcile refresh) can never leave an item hidden
   // while the server still considers it unresolved.
   const resolve = useCallback(
-    async (platformId: string, choice: ResolveChoice, canonicalId?: string): Promise<ResolveResponse | null> => {
+    async (
+      platformId: string,
+      choice: ResolveChoice,
+      canonicalId?: string,
+      options: ResolveOptions = {},
+    ): Promise<ResolveResponse | null> => {
       if (!connectionId) return null;
       setResolving(platformId);
       const controller = new AbortController();
@@ -75,7 +98,14 @@ export function useResolution(connectionId: string | null | undefined) {
         const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ platformId, choice, canonicalId }),
+          body: JSON.stringify({
+            platformId,
+            choice,
+            canonicalId,
+            valueOverride: options.valueOverride,
+            version: options.version,
+            importId: options.importId ?? importId ?? undefined,
+          }),
           signal: controller.signal,
         });
         // 409 = the row's Version CAS was stale: another device/session resolved
@@ -104,8 +134,55 @@ export function useResolution(connectionId: string | null | undefined) {
         setResolving(null);
       }
     },
-    [connectionId, refresh],
+    [connectionId, importId, refresh],
   );
 
-  return { result, loading, error, resolving, refresh, resolve };
+  // Apply up to 500 independent CAS decisions. Only confirmed rows are removed
+  // locally; conflicts and errors remain/reappear after the authoritative refresh.
+  const resolveBulk = useCallback(
+    async (items: BulkResolveItem[], bulkImportId?: string): Promise<BulkResolveResponse> => {
+      if (!connectionId) return { results: [] };
+      if (items.length > 500) throw new Error('A bulk answer can include at most 500 items.');
+      if (items.length === 0) return { results: [] };
+
+      setResolving('bulk');
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+      try {
+        const token = await ensureSupabaseJwt();
+        const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve-bulk`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ importId: bulkImportId ?? importId ?? undefined, items }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`Bulk answer failed: ${res.status}`);
+        const payload = (await res.json()) as BulkResolveResponse;
+        const results = Array.isArray(payload?.results) ? payload.results : [];
+        const settled = new Set(
+          results
+            .filter((entry) => entry.status === 'ok' || entry.status === 'alreadyResolved')
+            .map((entry) => entry.platformId),
+        );
+        setResult((previous) => previous
+          ? { ...previous, needsAttention: previous.needsAttention.filter((item) => !settled.has(item.platformId)) }
+          : previous);
+        // Reconcile summary counts and return every conflicted/error row to the
+        // queue. One stale row must never hide the rest of the batch outcome.
+        await refresh();
+        return { results };
+      } catch (err: any) {
+        log.warn('bulk resolve failed', err?.name === 'AbortError' ? 'request timed out' : err?.message);
+        await refresh();
+        if (err?.name === 'AbortError') throw new Error('Saving those answers timed out. They are back in the queue.');
+        throw err;
+      } finally {
+        clearTimeout(timer);
+        setResolving(null);
+      }
+    },
+    [connectionId, importId, refresh],
+  );
+
+  return { result, loading, error, resolving, refresh, resolve, resolveBulk };
 }

@@ -22,7 +22,7 @@ import CreatePoolSheet from '../components/pools/CreatePoolSheet';
 import { PageHeader } from '../components/ui/PageHeader';
 import { getPlatform, normalizeDisplayName } from '../config/platforms';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
-import { useImportHub } from '../hooks/useImportHub';
+import { useImportStatus } from '../hooks/useImportStatus';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
@@ -86,12 +86,12 @@ const ConnectionsScreen = () => {
   );
 
   // Import attention remains on each connection row; there is no aggregate card.
-  const hub = useImportHub();
+  const importStatus = useImportStatus();
   const attentionByConn = useMemo(() => {
     const m: Record<string, number> = {};
-    for (const b of hub.lanes.matches.byConnection) m[b.connectionId] = b.count;
+    for (const b of importStatus.lanes.matches.byConnection) m[b.connectionId] = b.count;
     return m;
-  }, [hub.lanes.matches.byConnection]);
+  }, [importStatus.lanes.matches.byConnection]);
   const [pools, setPools] = useState<Pool[]>([]);
   const [partners, setPartners] = useState<PartnerInventoryOrigin[]>([]);
   const [managing, setManaging] = useState(false);
@@ -160,6 +160,12 @@ const ConnectionsScreen = () => {
       if (res.success) {
         setConsentPlatform(null);
         refresh?.();
+        if (res.connectionId) {
+          navigation.navigate('ImportQuestionQueue', {
+            connectionId: res.connectionId,
+            platformName: consentPlatform,
+          });
+        }
       } else if (!res.cancelled && res.errorMessage) {
         setConnectError(res.errorMessage);
       }
@@ -167,7 +173,7 @@ const ConnectionsScreen = () => {
     } finally {
       setConnecting(false);
     }
-  }, [consentPlatform, connect, refresh]);
+  }, [consentPlatform, connect, navigation, refresh]);
 
   // Hold the latest handler in a ref so the focus effect below can stay stable.
   const startConnectRef = useRef(handleStartConnect);
@@ -324,19 +330,20 @@ const ConnectionsScreen = () => {
                       return;
                     }
                     // Anything mid-import (scanning/pending/syncing/…) or failed
-                    // opens the Import inbox with this store's row highlighted —
-                    // the hub owns in-flight progress and failure retry. This is
-                    // the hub's front door from Connections.
+                    // opens this store's import review.
                     const s = String(c.Status || '').toLowerCase();
                     const inFlight =
                       s === 'pending' || s === 'scanning' || s === 'syncing' || s === 'reconciling' ||
                       s === 'ready_to_sync' || s === 'error' || s.includes('fail');
                     if (inFlight) {
-                      navigation.navigate('ImportHub', { connectionId: c.Id });
+                      navigation.navigate('ImportQuestionQueue', {
+                        connectionId: c.Id,
+                        platformName: c.PlatformType,
+                      });
                       return;
                     }
                     if (attn > 0) {
-                      navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType });
+                      navigation.navigate('ImportQuestionQueue', { connectionId: c.Id, platformName: c.PlatformType });
                       return;
                     }
                     navigation.navigate('SyncRules', { connectionId: c.Id, platformName: c.PlatformType });
@@ -377,7 +384,7 @@ const ConnectionsScreen = () => {
                           hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                           onPress={(e: any) => {
                             e.stopPropagation?.();
-                            navigation.navigate('SyncInbox', { connectionId: c.Id, platformName: c.PlatformType });
+                            navigation.navigate('ImportQuestionQueue', { connectionId: c.Id, platformName: c.PlatformType });
                           }}
                         >
                           <Text style={styles.attnPillText}>{attn} need you</Text>
