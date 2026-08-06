@@ -236,7 +236,7 @@ const rowStyles = StyleSheet.create({
   },
 });
 
-type Props = {
+export type ListingEditorFormProps = {
   platforms: PlatformsData;
   updateCounter?: number; // Signal when platforms ref content changes
   isGenerationMode?: boolean; // Control whether to show generation-specific UI (overrides etc)
@@ -252,6 +252,8 @@ type Props = {
   // Optional publish-ignore controls
   onToggleIgnorePlatform?: (platformKey: string, ignored: boolean) => void;
   isPlatformIgnored?: (platformKey: string) => boolean;
+  /** Remove a channel from this listing's target set without touching shared product fields. */
+  onRemovePlatform?: (platformKey: string) => void;
   // Live external updates (green indicator for values changed while editing)
   externalUpdates?: Record<string, { value?: any; quantity?: number; price?: number; updatedAt: number }>;
   onAdoptExternalUpdate?: (key: string, value: any) => void;
@@ -265,6 +267,10 @@ type Props = {
   /** Invoked when the Steps wizard reaches its final "Ready to publish" step — hands off to
    *  the parent's publish flow (pre-publish quality check → publish modal). */
   onRequestPublish?: () => void;
+  /** Render only one of the listing editor's existing field bodies inside a parent flow. */
+  inlineField?: string;
+  /** Platform context for an inline field. Use `all` for shared canonical edits. */
+  inlinePlatform?: string;
 };
 
 export type ListingEditorFormRef = {
@@ -272,6 +278,8 @@ export type ListingEditorFormRef = {
   /** Open a specific field's edit sheet (optionally on a given platform tab). Used by the
    *  action-bar "needs you" pill and the missing-fields checklist to jump straight to the gap. */
   openFieldSheet: (field: string, platform?: string) => void;
+  /** Scroll the full editor to a composed section that is not represented by a field sheet. */
+  scrollToSection: (section: 'variants' | 'inventory') => void;
   /** Steps mode: walk the listing's key fields in the full-screen wizard. */
   startStepsWalk: () => void;
   /** Open the full-screen wizard over the empty required fields. Pass an explicit field
@@ -403,7 +411,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish }: Props, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish, inlineField, inlinePlatform }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
   const latestPlatformsRef = useRef(platforms);
   latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
@@ -424,7 +432,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
   // Default to 'all' tab instead of first platform
   const [variantSearchQuery, setVariantSearchQuery] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<string>('all');
+  const [activeTab, setActiveTab] = useState<string>(inlinePlatform || 'all');
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
@@ -446,6 +454,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [photoSizeTab, setPhotoSizeTab] = useState<string | null>(null);
   // "More details" expander for the publish-optional long-tail fields.
   const [moreOpen, setMoreOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!inlineField) return;
+    setActiveTab(inlinePlatform || 'all');
+  }, [inlineField, inlinePlatform]);
 
   useEffect(() => {
     // Auto-scroll to highlighted field
@@ -578,9 +591,13 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       };
       setOpenField(map[field] || field);
     },
+    scrollToSection: (section) => {
+      const offset = fieldYOffsets.current[section];
+      if (offset !== undefined) onScrollToOffset?.(offset);
+    },
     startStepsWalk: () => startStepsWalkRef.current(),
     startFixGaps: (fields?: string[]) => startFixGapsRef.current(fields),
-  }), [platformPickerOverlay, platforms]);
+  }), [onScrollToOffset, platformPickerOverlay, platforms]);
 
   const lastPlatformRef = useRef<string>('');
   const lastOptionsRef = useRef<string>('');
@@ -1321,6 +1338,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     for (const key of new Set([...Object.keys(prev), ...Object.keys(nextPlatform)])) {
       if ((prev as any)[key] !== (nextPlatform as any)[key]) minimalPatch[key] = (nextPlatform as any)[key];
     }
+    // The updater returned prev untouched (e.g. autofill found nothing missing).
+    // Emitting an empty patch reads as an edit upstream and arms autosave.
+    if (Object.keys(minimalPatch).length === 0) return;
     latestPlatformsRef.current = { ...current, [activePlatformKey]: nextPlatform };
     onChangePlatforms({ [activePlatformKey]: minimalPatch });
   };
@@ -1465,7 +1485,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
 
     if (!opts.length) {
       log.debug('[recomputeVariants] No options, clearing variants');
-      patchPlatform(prev => ({ ...prev, variants: [] }));
+      // Nothing to clear when the platform never had variants. Writing [] over an
+      // absent field reads as an edit upstream and arms autosave on first load.
+      patchPlatform(prev => (prev.variants?.length ? { ...prev, variants: [] } : prev));
       return;
     }
 
@@ -2163,7 +2185,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 style={{ flex: 1, fontSize: 15, color: '#111827', paddingVertical: 0 }}
                 value={activeTaxonomyQuery}
                 onChangeText={(text) => setTaxonomyQueries((prev) => ({ ...prev, [catLower]: text }))}
-                placeholder="Describe it — a few words"
+                placeholder="Describe it in a few words"
                 placeholderTextColor="#9CA3AF"
               />
               {loading ? <ActivityIndicator size="small" color="#9CA3AF" /> : null}
@@ -2266,7 +2288,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         const count = (images || []).filter(Boolean).length;
         return (
           <View>
-            <Text style={{ fontSize: 14, color: CHAT_COLORS.dim, marginBottom: 14 }}>{count > 0 ? `${count} photo${count > 1 ? 's' : ''} added` : 'No photos yet — buyers need to see it.'}</Text>
+            <Text style={{ fontSize: 14, color: CHAT_COLORS.dim, marginBottom: 14 }}>{count > 0 ? `${count} photo${count > 1 ? 's' : ''} added` : 'No photos yet. Buyers need to see it.'}</Text>
             <TouchableOpacity style={rowStyles.researchBtn} onPress={() => (onOpenImageCapture || (() => { }))((uris: string[]) => onChangeImages?.([...(images || []).filter(Boolean), ...uris]))}>
               <Icon name="camera-plus-outline" size={16} color={BRAND_PRIMARY} />
               <Text style={rowStyles.researchBtnText}>Add photos</Text>
@@ -2732,6 +2754,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     );
   };
 
+  if (inlineField) {
+    return (
+      <View style={styles.inlineFieldBody}>
+        {renderStepEditor(inlineField === 'images' ? 'photos' : inlineField)}
+      </View>
+    );
+  }
+
   return (
     <View style={{ paddingBottom: bottomSafePadding }}>
       {/* Media — drag to reorder, tap to set cover, ✕ to remove */}
@@ -2842,7 +2872,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 onPress={() => setActiveTab(key)}
                 style={[styles.pill, activeTab === key && styles.pillActive, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
               >
-                <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All</Text>
+                <Text style={[styles.pillText, activeTab === key && styles.pillTextActive]}>All {platformKeys.length}</Text>
                 {allMissingCount && allMissingCount > 0 ? (
                   <View style={{ height: 16, minWidth: 16, paddingHorizontal: 4, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}>
                     <Text style={{ fontSize: 10, fontWeight: '700', color: '#ef4444' }}>{allMissingCount}</Text>
@@ -2906,7 +2936,32 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           <Text style={styles.pillText}>+ Add Platform</Text>
         </TouchableOpacity>
       </ScrollView>
-      {activeTab !== 'all' && onToggleIgnorePlatform && (
+      {activeTab !== 'all' && platformKeys.length > 1 && onRemovePlatform ? (
+        <Pressable
+          style={({ pressed }) => [styles.removePlatformRow, pressed && styles.removePlatformRowPressed]}
+          onPress={() => {
+            const label = getPlatform(activePlatformKey)?.label || activePlatformKey;
+            Alert.alert(
+              'Remove platform',
+              `Remove ${label} from this listing?`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Remove',
+                  style: 'destructive',
+                  onPress: () => {
+                    setActiveTab('all');
+                    onRemovePlatform(activePlatformKey);
+                  },
+                },
+              ],
+            );
+          }}
+        >
+          <Icon name="minus-circle-outline" size={16} color={CHAT_COLORS.dim} />
+          <Text style={styles.removePlatformText}>Remove platform</Text>
+        </Pressable>
+      ) : activeTab !== 'all' && onToggleIgnorePlatform ? (
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 8 }}>
           <TouchableOpacity
             style={[styles.btnSecondary, { backgroundColor: ignoredForPublish ? '#FFEFEF' : '#FFF', borderColor: ignoredForPublish ? '#ef4444' : '#E5E5E5' }]}
@@ -2915,7 +2970,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             <Text style={{ color: ignoredForPublish ? '#ef4444' : '#000' }}>{ignoredForPublish ? 'Will NOT publish' : 'Publish enabled'}</Text>
           </TouchableOpacity>
         </View>
-      )}
+      ) : null}
       {/* Details — clickable rows; each opens its focused field sheet */}
       {renderDetailsCard()}
       {renderFieldSheets()}
@@ -2964,7 +3019,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Variants: only for platforms that support variants */}
       {
         supportsVariants && (
-          <View style={styles.card}>
+          <View style={styles.card} onLayout={recordFieldLayout('variants')}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <Text style={styles.sectionTitle}>Variants</Text>
             </View>
@@ -3324,7 +3379,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Additional platform fields now render as rows inside the MORE DETAILS card. */}
 
       {/* Inventory — last section, sits directly above Active Listings (per UJK-0) */}
-      <View style={styles.darkerCard}>
+      <View style={styles.darkerCard} onLayout={recordFieldLayout('inventory')}>
         <View style={{ marginVertical: 8, flexDirection: 'column', gap: 8 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={{ fontSize: 14, fontWeight: '500', color: '#666666' }}>Inventory</Text>
@@ -3966,9 +4021,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   );
 }
 
-export default forwardRef<ListingEditorFormRef, Props>(ListingEditorFormInner);
+export default forwardRef<ListingEditorFormRef, ListingEditorFormProps>(ListingEditorFormInner);
 
 const styles = StyleSheet.create({
+  inlineFieldBody: { width: '100%' },
   mediaRow: { paddingVertical: 10, borderBottomColor: '#E5E5E5', borderBottomWidth: 1, paddingBottom: 10, marginBottom: 10, gap: 8 },
   thumbWrap: { width: 86, height: 86, borderRadius: 8, overflow: 'hidden', marginRight: 8, borderWidth: 1, borderColor: '#E5E5E5', backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
   thumb: { width: '100%', height: '100%' },
@@ -3981,6 +4037,9 @@ const styles = StyleSheet.create({
   pillText: { color: '#3F3F46', fontWeight: '500' },
   pillTextActive: { color: '#FFFFFF', fontWeight: '700' },
   pillDashed: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB', marginRight: 8 },
+  removePlatformRow: { alignSelf: 'flex-end', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 10 },
+  removePlatformRowPressed: { opacity: 0.62 },
+  removePlatformText: { color: '#71717A', fontSize: 13, fontFamily: CHAT_FONT.medium, fontWeight: '500' },
   // Flattened: sections are borderless now (stripped-down look).
   card: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 14 },
   darkerCard: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#F1F2F4', padding: 12 },

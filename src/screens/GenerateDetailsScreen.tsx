@@ -3,22 +3,22 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing, BackHandler } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import PyramidGrid from '../components/PyramidGrid';
 import { getPlatformRequirements } from '../utils/platformRequirements';
-import { getListingQuality } from '../utils/listingQuality';
-import { Boxes, X, Pencil, ChevronLeft, PencilIcon } from 'lucide-react-native';
+import { Boxes, X, Pencil, ChevronLeft, ChevronRight, PencilIcon } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { ProgressiveBlurView } from '../components/ProgressiveBlurView';
 import { CHAT_COLORS, CHAT_FONT, CHAT_SHADOWS, GLASS, GLASS_HEADER_STYLES } from '../design/chatGlass';
 import KeyboardAwareBottomActionBar from '../components/KeyboardAwareBottomActionBar';
 import { MessageComposer } from '../components/chat/MessageComposer';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
+import PlatformLogo from '../components/PlatformLogo';
 import FieldSheet from '../components/ListingEditor/FieldSheet';
-import PrePublishQualitySheet from '../components/ListingEditor/PrePublishQualitySheet';
+import PublishFlowSheet from '../components/ListingEditor/PublishFlowSheet';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { hydratePlatformsFromBackend, normalizeForListingEditor, isEmpty } from '../utils/platformDataHydration';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
@@ -30,10 +30,10 @@ import { useJobsOptional } from '../context/JobsContext';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useJobProgress } from '../hooks/useJobProgress';
 import { useCollaboration } from '../hooks/useCollaboration';
-import PublishConfirmationModal from '../components/PublishConfirmationModal';
 import ErrorModal from '../components/ErrorModal';
 import { PLATFORM_META } from '../utils/platformConstants';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
@@ -126,6 +126,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [listingEditorY, setListingEditorY] = useState(0);
   const insets = useSafeAreaInsets();
   const bottomSafePadding = ACTION_BAR_HEIGHT + ACTION_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+  const [mode, setMode] = useState<'overview' | 'edit'>('overview');
 
   // Bottom tray hides on scroll-down, returns on scroll-up.
   const trayY = useRef(new Animated.Value(0)).current;
@@ -165,6 +166,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   // Chat-style "wanna change something" composer text (replaces SmartCommandInput).
   const [quickFixText, setQuickFixText] = useState('');
+  useEffect(() => {
+    if (mode === 'overview') {
+      setIsInputExpanded(false);
+      setQuickFixText('');
+    }
+  }, [mode]);
 
   // Wire up the platform picker overlay so "+ Add Platform" works in ListingEditorForm
   const platformPickerOverlay = usePlatformPickerOverlay();
@@ -393,8 +400,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     lastScheduledRef.current = null;
     draftEditVersionRef.current += 1;
     setSaveState('idle');
+    setMode('overview');
     forceUpdate({});
   }, [editorSessionKey]);
+
+  useEffect(() => {
+    if (!isFocused || mode !== 'edit') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setMode('overview');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [isFocused, mode]);
 
   // Listen for socket updates for ANY regeneration job we started
   const { onJobProgress } = useCollaboration();
@@ -875,7 +892,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   };
 
   const formatDiffValue = (v: any): string => {
-    if (v == null || v === '') return '—';
+    if (v == null || v === '') return 'Not set';
     if (Array.isArray(v)) return v.join(', ');
     if (typeof v === 'object') return JSON.stringify(v);
     return String(v);
@@ -887,7 +904,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [mediaModalVisible, setMediaModalVisible] = useState(false);
   const [selectedVariantForMedia, setSelectedVariantForMedia] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [qualitySheetOpen, setQualitySheetOpen] = useState(false);
+  const pendingPublishNavigationRef = useRef<null | (() => void)>(null);
+  const finishPendingPublishNavigation = useCallback(() => {
+    const navigate = pendingPublishNavigationRef.current;
+    if (!navigate) return;
+    pendingPublishNavigationRef.current = null;
+    setIsPublishing(false);
+    navigate();
+  }, []);
+
+  // React Native's Modal onDismiss is iOS-only. On Android, visible=false is
+  // committed before this effect runs, so it is safe to perform the handoff.
+  useEffect(() => {
+    if (Platform.OS !== 'ios' && !publishModalOpen) {
+      finishPendingPublishNavigation();
+    }
+  }, [finishPendingPublishNavigation, publishModalOpen]);
   const openScanner = (onResult: (code: string) => void) => {
     scannerHeight.stopAnimation();
     scannerHeight.setValue(0);
@@ -1113,17 +1145,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     ?? (effectiveResult?.draftReady && status !== 'completed' ? 'pending' : undefined);
   const enrichmentStateLabel = enrichmentLabel(enrichmentStatus);
 
-  // Advisory pre-publish quality check — scores the canonical (shopify-else-first)
-  // platform + the same filtered photo set the form sees. Pure heuristic; never blocks.
-  const listingQuality = useMemo(() => {
-    const keys = Object.keys(displayedPlatforms || {});
-    const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
-    const canonical = (displayedPlatforms?.[canonicalKey] || {}) as any;
-    const photoCount = (userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || [])
-      .filter((url: string) => typeof url === 'string' && url.trim().length > 0).length;
-    return getListingQuality({ canonical, photoCount });
-  }, [displayedPlatforms, userImagesByIndex, effectiveResult]);
-
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [ignoredPlatforms, setIgnoredPlatforms] = useState<string[]>([]);
@@ -1277,24 +1298,35 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     for (const key of platformsToPublish) {
       const p: any = (displayedPlatforms as any)?.[key] || {};
       let total = 0;
+      let hasQuantity = false;
       if (Array.isArray(p.variants) && p.variants.length) {
         for (const v of p.variants) {
           const inv = v?.inventoryByLocation;
           if (inv && typeof inv === 'object') {
             Object.values(inv).forEach((loc: any) => {
-              const q = Number(loc?.quantity ?? 0);
-              if (!Number.isNaN(q)) total += q;
+              if (loc?.quantity === undefined || loc?.quantity === null || loc?.quantity === '') return;
+              const q = Number(loc.quantity);
+              if (Number.isFinite(q)) {
+                hasQuantity = true;
+                total += q;
+              }
             });
           }
         }
       }
-      if (total === 0) {
+      if (!hasQuantity) {
         const candidates = [p.quantity, p.inventoryQuantity, p?.listingDetails?.quantity, p?.locationQuantities?.default];
         for (const c of candidates) {
-          if (typeof c === 'number' && !Number.isNaN(c)) { total = c; break; }
+          if (c === undefined || c === null || c === '') continue;
+          const parsed = Number(c);
+          if (Number.isFinite(parsed)) {
+            total = parsed;
+            hasQuantity = true;
+            break;
+          }
         }
       }
-      out[key] = total || 0;
+      if (hasQuantity) out[key] = total;
     }
     return out;
   }, [platformsToPublish, displayedPlatforms]);
@@ -1433,6 +1465,18 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     );
     return Array.from(new Set(mapped.filter((f) => allowed.includes(f))));
   }, [allMissingRequiredFields]);
+
+  const publishNeedsRows = useMemo(
+    () => allMissingRequiredFields.map((missing) => ({
+      key: `${missing.platform}:${missing.field}`,
+      field: missing.field,
+      platform: missing.platform,
+      label: missing.label,
+      ok: false,
+      hint: `${(PLATFORM_META as any)[missing.platform]?.label || missing.platform} needs this`,
+    })),
+    [allMissingRequiredFields],
+  );
 
   // Per-platform "how well set up to rank" status for the publish sheet. Required fields
   // gate publishing; these are the OPTIONAL boosts (SEO, specifics, condition…) that lift a
@@ -1645,10 +1689,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           title: canonical.title || '',
           sku: String(canonical.sku || `DRAFT-${(effectiveResult?.productId || '').slice(0, 8)}`),
           price: (() => {
-            const raw = (canonical as any).price;
-            if (typeof raw === 'number') return raw;
-            const cleaned = parseFloat(String(raw ?? '').replace(/[^0-9.]/g, ''));
-            return Number.isFinite(cleaned) ? cleaned : 0;
+            const parsed = parseNumeric(canonical.price);
+            return parsed !== undefined && parsed > 0 ? parsed : undefined;
           })(),
           description: canonical.description || '',
           compareAtPrice: parseNumeric(canonical.compareAtPrice),
@@ -1788,7 +1830,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const variantId = (route.params as any)?.variantId || effectiveResult?.variantId;
       if (!baseUrl || !productId || !variantId || !token) {
         log.debug('[doSaveToInventory] Missing required data', { productId, variantId, token: !!token });
-        showErrorModal('Couldn’t save', !token ? 'Your session expired — sign in again.' : "This item isn't ready to save yet. Give it a moment and try again.", 'warning');
+        showErrorModal('Couldn’t save', !token ? 'Your session expired. Sign in again.' : "This item isn't ready to save yet. Give it a moment and try again.", 'warning');
         return;
       }
 
@@ -1847,6 +1889,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         // We construct the params similar to doPublish
         const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
         const canonical = displayedPlatforms[canonicalKey] || {};
+        const coverIndex = typeof payload.media?.coverImageIndex === 'number' ? payload.media.coverImageIndex : 0;
+        const savedImages = Array.isArray(payload.media?.imageUris) ? payload.media.imageUris : [];
 
         navigation.navigate('PublishConfirmation', {
           productId,
@@ -1854,8 +1898,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           title: canonical.title,
           description: canonical.description,
           price: canonical.price,
-          imageUrl: (effectiveResult as any)?.imageUrl, // Use original image URL or from payload if available
+          imageUrl: savedImages[coverIndex] || effectiveResult?.sourceImageUrl || '',
           platforms: [], // No external platforms
+          quantityByPlatform: quantityByPlatformComputed,
           savedToInventory: true, // Flag for UI
           origin: 'generate'
         } as any);
@@ -1903,36 +1948,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       const canonical = payload.platformDetails?.canonical || {};
       log.debug('doPublish - Canonical payload:', canonical);
 
-      // Validate readiness with flexible pricing
-      const missingByPlatform: Record<string, string[]> = {};
-
-      for (const platform of readyPlatforms) {
-        const platformKey = String(platform).toLowerCase();
-        // Mirror the shared photo-strip images in before validating — the seller's photos live
-        // in the shared strip (sent via media.imageUris), not always in each platform's `.images`.
-        // Without this, a listing WITH a cover photo falsely fails as "Missing images".
-        const platformData = withSharedImages((payload.platformDetails as any)?.[platformKey] || {});
-        const missing = getMissingPlatformFields(platformData, platformKey);
-
-        if (missing.length > 0) {
-          log.debug(`doPublish - ${platformKey} missing fields:`, missing);
-          missingByPlatform[platformKey] = missing;
-        } else {
-          log.debug(`doPublish - ${platformKey} is ready to publish`);
-        }
-      }
-      log.debug('doPublish - Missing by platform:', missingByPlatform);
-
       log.debug('[doPublish] Using already-fetched connections:', allConnections);
       log.debug('[doPublish] Connections count:', allConnections?.length);
-
-      if (Object.keys(missingByPlatform).length) {
-        const lines = Object.entries(missingByPlatform).map(([plat, fields]) =>
-          `${(PLATFORM_META as any)[plat]?.label || plat}: ${fields.join(', ')}`
-        );
-        showErrorModal('Finish these first', `${lines.join('\n')}`, 'warning');
-        return;
-      }
 
       // Extract locations from connections (no longer needed for modal, but keep for compatibility)
       const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
@@ -1957,7 +1974,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
       setPlatformLocations(locsByPlatform);
 
-      // Set empty selections initially - PublishConfirmationModal will handle default 'ALL' selection
+      // Set empty selections initially; the confirmation step defaults each channel to all accounts.
       setSelectedConnectionIds({});
 
       // Show modal - connections are already in allConnections state from mount
@@ -1970,13 +1987,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     }
   };
 
-  // Keep Publish available. Required gaps use the existing fast completion wizard,
-  // whose final step returns here and continues into the publish settings.
+  // Publish always opens one continuous host. Required gaps become its first,
+  // advisory step; acknowledging them swaps to confirmation without closing it.
   const handlePublishPress = () => {
-    if (gapFields.length > 0) {
-      listingEditorRef.current?.startFixGaps(gapFields);
-      return;
-    }
     void doPublish();
   };
 
@@ -2049,7 +2062,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     return publicUrls;
   };
 
-  const confirmAndPublish = async (opts?: { targetWorkerId?: string }) => {
+  const confirmAndPublish = async (opts: { selectedPlatforms: string[]; targetWorkerId?: string }) => {
     let facebookRequested = false;
     try {
       log.debug('[confirmAndPublish] Starting publish...');
@@ -2069,11 +2082,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         setPublishModalOpen(false);
         // Surface WHY instead of silently doing nothing (the seller tapped Publish and "nothing happened").
         const reason = !token
-          ? 'your session expired — sign in again'
+          ? 'your session expired. Sign in again'
           : (!productId || !variantId)
             ? "this item isn't fully saved yet. Tap Save Draft, wait for “Saved”, then publish"
             : 'a connection setting is missing';
-        showErrorModal('Couldn’t publish', `We couldn’t publish — ${reason}.`, 'warning');
+        showErrorModal('Couldn’t publish', `We couldn’t publish because ${reason}.`, 'warning');
         return;
       }
 
@@ -2098,9 +2111,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // Expand "ALL" selections to actual connection IDs
       const actualConnectionIds: Record<string, string[]> = {};
       const accountNamesList: string[] = [];
-      for (const [platform, selection] of Object.entries(selectedConnectionIds)) {
+      for (const platform of opts.selectedPlatforms) {
+        const selection = selectedConnectionIds[platform];
+        if (selection === undefined) continue;
         const platformConns = allConnections.filter((c: any) =>
-          c.PlatformType?.toLowerCase() === platform.toLowerCase() && c.IsEnabled
+          c.PlatformType?.toLowerCase() === platform.toLowerCase() && isVisiblePlatformConnection(c)
         );
 
         if (selection === 'ALL') {
@@ -2113,7 +2128,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
       }
 
-      const platformsToPublish = Object.keys(actualConnectionIds);
+      const platformsToPublish = opts.selectedPlatforms.filter((platform) => (
+        Array.isArray(actualConnectionIds[platform]) && actualConnectionIds[platform].length > 0
+      ));
+      if (platformsToPublish.length !== opts.selectedPlatforms.length) {
+        throw new Error('A selected channel no longer has an active connection.');
+      }
       facebookRequested = platformsToPublish.map(p => p.toLowerCase()).includes('facebook');
 
       const publishPayload = {
@@ -2141,17 +2161,50 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         return arr[idx] || effectiveResult?.sourceImageUrl || '';
       })();
 
+      // The receipt reads from the exact data being published. Prefer a checked
+      // platform's values, then canonical, and never synthesize a zero price.
+      const platformDetailsByKey: Record<string, typeof canonical> = payload.platformDetails;
+      const summarySources = [
+        ...platformsToPublish.map((platform) => platformDetailsByKey[platform]),
+        canonical,
+      ].filter((source) => source && typeof source === 'object');
+      const summaryTitle = summarySources
+        .map((source: any) => String(source.title || '').trim())
+        .find(Boolean);
+      const summaryPrice = (() => {
+        for (const source of summarySources as any[]) {
+          const flat = Number(source.price);
+          if (source.price !== undefined && source.price !== null && source.price !== '' && Number.isFinite(flat) && flat > 0) {
+            return flat;
+          }
+          if (Array.isArray(source.variants)) {
+            const variantPrice = source.variants
+              .map((variant: any) => Number(variant?.price))
+              .find((candidate: number) => Number.isFinite(candidate) && candidate > 0);
+            if (variantPrice !== undefined) return variantPrice;
+          }
+        }
+        return undefined;
+      })();
+      const selectedQuantityByPlatform = Object.fromEntries(
+        platformsToPublish.flatMap((platform) => (
+          quantityByPlatformComputed[platform] === undefined
+            ? []
+            : [[platform, quantityByPlatformComputed[platform]]]
+        )),
+      );
+
       const navigationParams = {
         productId,
         variantId,
-        title: canonical.title,
+        title: summaryTitle,
         description: canonical.description,
-        price: Number(canonical.price || 0),
+        price: summaryPrice,
         sku: canonical.sku,
         imageUrl,
         platforms: platformsToPublish,
         accountNames: accountNamesList,
-        quantityByPlatform: quantityByPlatformComputed,
+        quantityByPlatform: selectedQuantityByPlatform,
         origin: 'generate',
         sourcePlatform: platformsToPublish[0] || 'shopify',
         isPublishing: true, // Tell the confirmation screen we're still publishing
@@ -2161,15 +2214,17 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // request runs, and only morphs to "Published!" on a real 2xx — on failure it shows an
       // inline error + Retry (no false success, no abrupt pop-back). Hand it the ready-to-send
       // payload + the display params + the publish endpoint.
-      navigation.navigate('PublishConfirmation', {
-        ...navigationParams,
-        mode: 'publishing',
-        publishPayload,
-        facebookRequested,
-      } as any);
-      // Now that the receipt screen is pushed underneath, dismiss the sheet — it slides away
-      // to reveal the receipt rather than the editor. Defer so the push settles first.
-      setTimeout(() => { setPublishModalOpen(false); setIsPublishing(false); }, 0);
+      pendingPublishNavigationRef.current = () => {
+        navigation.navigate('PublishConfirmation', {
+          ...navigationParams,
+          mode: 'publishing',
+          publishPayload,
+          facebookRequested,
+        } as any);
+      };
+      // Dismiss the native modal first. iOS calls onDismiss after its host view is
+      // gone; only then do we push the receipt, leaving no transparent touch layer.
+      setPublishModalOpen(false);
 
     } catch (err) {
       log.error('[confirmAndPublish] Error preparing publish:', err);
@@ -2514,6 +2569,365 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     });
   };
 
+  const mergeEditorPlatformChanges = (next: GeneratedPlatformDetails) => {
+    log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
+    updatePlatforms(prev => {
+      const merged = { ...prev };
+      for (const [platformKey, platformData] of Object.entries(next)) {
+        const prevPlatform = prev[platformKey] || {};
+        merged[platformKey] = { ...prevPlatform, ...platformData };
+        if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
+          merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
+            const prevVariant = prevPlatform.variants?.find((variant: any) => variant.id === newVariant.id);
+            return prevVariant?.inventoryByLocation
+              ? {
+                  ...newVariant,
+                  inventoryByLocation: {
+                    ...prevVariant.inventoryByLocation,
+                    ...(newVariant.inventoryByLocation || {}),
+                  },
+                }
+              : newVariant;
+          });
+        }
+      }
+      log.debug('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
+      return merged;
+    });
+  };
+
+  const openEditorImageCapture = async (onResult: (uris: string[]) => void) => {
+    try {
+      const assets = await captureOrPickImageAssets({ multiple: true });
+      if (!assets.length) return;
+      const localUris = assets.map(asset => asset.uri);
+      let urisToShow = localUris;
+      try {
+        const uploadedUrls = await uploadLocalImagesToSupabase(localUris);
+        if (uploadedUrls.length > 0) urisToShow = uploadedUrls;
+      } catch (uploadErr) {
+        log.error('[GEN-DETAILS] Photo upload failed; showing local copy, will upload at publish:', uploadErr);
+      }
+      onResult(urisToShow);
+    } catch (error: any) {
+      log.error('Error picking images:', error);
+      showErrorModal('Couldn’t add photo', error?.message || 'We couldn’t add those images. Please try again.', 'error');
+    }
+  };
+
+  const removeTargetPlatform = (platformKey: string) => {
+    updatePlatforms(prev => {
+      const keys = Object.keys(prev);
+      if (keys.length <= 1 || !prev[platformKey]) return prev;
+      const removed = prev[platformKey] || {};
+      const next = { ...prev };
+      delete next[platformKey];
+
+      // Shared product identity must survive even when the removed channel happened to
+      // be the canonical source used by this draft.
+      const nextCanonicalKey = Object.keys(next)[0];
+      if (nextCanonicalKey) {
+        const nextCanonical = { ...(next[nextCanonicalKey] || {}) };
+        for (const field of ['title', 'description', 'price', 'sku', 'images', 'tags', 'options', 'variants']) {
+          const current = nextCanonical[field];
+          const empty = current == null || current === '' || (Array.isArray(current) && current.length === 0);
+          if (empty && removed[field] != null) nextCanonical[field] = removed[field];
+        }
+        next[nextCanonicalKey] = nextCanonical;
+      }
+      return next;
+    });
+    setIgnoredPlatforms(prev => prev.filter(key => key !== platformKey));
+    setSelectedPlatforms(prev => prev.filter(key => key !== platformKey));
+    setSelectedConnectionIds(prev => {
+      const next = { ...prev };
+      delete next[platformKey];
+      return next;
+    });
+  };
+
+  const renderOverviewSummary = () => {
+    const keys = Object.keys(displayedPlatforms || {});
+    const canonicalKey = keys.includes('shopify') ? 'shopify' : keys[0];
+    const canonical: any = canonicalKey ? displayedPlatforms[canonicalKey] || {} : {};
+    const images = (currentItemImages || []).filter(
+      (url: any): url is string => typeof url === 'string' && url.trim().length > 0,
+    );
+    const cover = images[0];
+    const thumbs = images.slice(1, 4);
+    const priceNumber = Number(canonical.price);
+    const priceText = Number.isFinite(priceNumber) && priceNumber > 0
+      ? `$${priceNumber.toFixed(2)}`
+      : 'Not set';
+    const realVariants = (Array.isArray(canonical.variants) ? canonical.variants : []).filter(
+      (variant: any) => String(variant?.variantType || variant?.VariantType || '').toLowerCase() !== 'base',
+    );
+
+    const inventoryTotal = (inventory: any): number => {
+      if (!inventory || typeof inventory !== 'object') return 0;
+      return Object.values(inventory).reduce((sum: number, location: any) => {
+        const quantity = typeof location === 'number' ? location : Number(location?.quantity ?? location?.Quantity ?? 0);
+        return sum + (Number.isFinite(quantity) ? quantity : 0);
+      }, 0);
+    };
+    const stockForVariant = (variant: any): number => {
+      const byLocation = inventoryTotal(variant?.inventoryByLocation);
+      if (byLocation > 0) return byLocation;
+      const quantity = Number(variant?.inventoryQuantity ?? variant?.quantity ?? variant?.Quantity ?? 0);
+      return Number.isFinite(quantity) ? quantity : 0;
+    };
+    const variantStock = realVariants.reduce((sum: number, variant: any) => sum + stockForVariant(variant), 0);
+    const rootStock = inventoryTotal(canonical.inventoryByLocation)
+      || Number(canonical.inventoryQuantity ?? canonical.quantity ?? canonical.Quantity ?? 0)
+      || 0;
+    const totalStock = variantStock || rootStock;
+    const sizeCount = realVariants.length;
+
+    const displayText = (value: any): string | null => {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (Array.isArray(value) && value.length > 0) return value.map(String).join(' / ');
+      if (value && typeof value === 'object') {
+        const nested = value.label || value.name || value.title || value.path;
+        if (typeof nested === 'string' && nested.trim()) return nested.trim();
+      }
+      return null;
+    };
+    const categoryText = displayText(
+      canonical.categoryPath || canonical.category || canonical.productCategory || canonical.categorySuggestion,
+    );
+    const tags = Array.isArray(canonical.tags) ? canonical.tags.filter(Boolean).map(String) : [];
+    const conditionLabels: Record<string, string> = {
+      new: 'New',
+      like_new: 'Like New',
+      good: 'Good',
+      fair: 'Fair',
+      used: 'Used',
+      refurbished: 'Refurbished',
+      for_parts: 'For Parts',
+    };
+    const rawCondition = displayText(canonical.condition);
+    const conditionText = rawCondition
+      ? conditionLabels[rawCondition.toLowerCase()] || rawCondition
+      : null;
+    const descriptionText = displayText(canonical.description);
+    const skuText = displayText(canonical.sku);
+    const barcodeText = displayText(canonical.barcode);
+    const brandText = displayText(canonical.brand || canonical.vendor);
+    const seoTitleText = displayText(canonical.seoTitle || canonical.metaTitle);
+    const optionName = displayText(canonical.options?.[0]?.name);
+    const variantCountLabel = optionName?.toLowerCase() === 'size'
+      ? `${sizeCount} size${sizeCount === 1 ? '' : 's'}`
+      : `${sizeCount} variant${sizeCount === 1 ? '' : 's'}`;
+    const metaGray: string[] = [];
+    metaGray.push(`${totalStock} in stock`);
+    if (sizeCount > 0) metaGray.push(variantCountLabel);
+    const priceStockSummary = `${priceText} · Qty ${totalStock}`;
+
+    const openInEdit = (field: string) => {
+      setMode('edit');
+      setTimeout(() => listingEditorRef.current?.openFieldSheet(field), 140);
+    };
+    const openSectionInEdit = (section: 'variants' | 'inventory') => {
+      setMode('edit');
+      setTimeout(() => listingEditorRef.current?.scrollToSection(section), 180);
+    };
+    const overviewRow = (label: string, value: string | null, placeholder: string, field: string) => (
+      <TouchableOpacity
+        style={[styles.ovDetailRow, styles.ovDetailDivider]}
+        activeOpacity={0.6}
+        onPress={() => openInEdit(field)}
+      >
+        <Text style={styles.ovDetailLabel} numberOfLines={1}>{label}</Text>
+        <View style={{ flex: 1 }} />
+        <Text style={[styles.ovDetailValue, !value && styles.ovDetailValueEmpty]} numberOfLines={1}>
+          {value || placeholder}
+        </Text>
+        <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+      </TouchableOpacity>
+    );
+
+    return (
+      <View>
+        <View style={styles.ovProductCard}>
+          <TouchableOpacity activeOpacity={0.85} onPress={() => openInEdit('photos')}>
+            {cover ? (
+              <Image source={{ uri: cover }} style={styles.ovHero} />
+            ) : (
+              <View style={[styles.ovHero, styles.ovHeroEmpty]}>
+                <Icon name="image-outline" size={32} color="#C4C8CE" />
+              </View>
+            )}
+            {thumbs.length > 0 ? (
+              <View style={styles.ovThumbRow}>
+                {thumbs.map((url: string, index: number) => (
+                  <Image key={`${url}-${index}`} source={{ uri: url }} style={styles.ovThumb} />
+                ))}
+              </View>
+            ) : null}
+          </TouchableOpacity>
+          <TouchableOpacity activeOpacity={0.7} onPress={() => openInEdit('title')}>
+            <Text style={styles.ovTitle}>{canonical.title || 'Untitled product'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity activeOpacity={0.7} onPress={() => openInEdit('price')} style={styles.ovPriceRow}>
+            <Text style={styles.ovPrice}>{priceText}</Text>
+            {metaGray.length > 0 ? <Text style={styles.ovPriceMeta}>{`· ${metaGray.join(' · ')}`}</Text> : null}
+          </TouchableOpacity>
+          {descriptionText ? (
+            <TouchableOpacity activeOpacity={0.7} onPress={() => openInEdit('description')}>
+              <Text style={styles.ovDesc} numberOfLines={3}>{descriptionText}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        <View style={styles.ovCard}>
+          <Text style={[styles.ovCardLabel, styles.ovCardLabelSolo]}>DETAILS</Text>
+          {overviewRow('Price & stock', priceStockSummary, 'Set a price', 'price')}
+          {sizeCount > 0 ? (
+            <TouchableOpacity
+              style={[styles.ovDetailRow, styles.ovDetailDivider]}
+              activeOpacity={0.6}
+              onPress={() => openSectionInEdit('variants')}
+            >
+              <Text style={styles.ovDetailLabel}>Variants</Text>
+              <View style={{ flex: 1 }} />
+              <Text style={styles.ovDetailValue}>{variantCountLabel}</Text>
+              <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
+          ) : null}
+          {overviewRow('Category', categoryText, 'Add a category', 'category')}
+          {overviewRow('Description', descriptionText, 'Add a description', 'description')}
+          <TouchableOpacity
+            style={[styles.ovDetailRow, styles.ovDetailDivider]}
+            activeOpacity={0.6}
+            onPress={() => openInEdit('photos')}
+          >
+            <Text style={styles.ovDetailLabel}>Photos</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={[styles.ovDetailValue, images.length === 0 && styles.ovDetailValueEmpty]}>
+              {images.length || 'Add photos'}
+            </Text>
+            <ChevronRight size={17} color="#C4C8CE" style={{ marginLeft: 6 }} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.ovTagsRow} activeOpacity={0.6} onPress={() => openInEdit('tags')}>
+            <Text style={styles.ovDetailLabel}>Tags</Text>
+            <View style={styles.ovTagsWrap}>
+              {tags.length > 0 ? tags.slice(0, 6).map((tag: string, index: number) => (
+                <View key={`${tag}-${index}`} style={styles.ovTagChip}>
+                  <Text style={styles.ovTagChipText}>{tag}</Text>
+                </View>
+              )) : (
+                <Text style={[styles.ovDetailValue, styles.ovDetailValueEmpty]}>Add tags</Text>
+              )}
+              {tags.length > 6 ? (
+                <View style={styles.ovTagChip}><Text style={styles.ovTagChipText}>{tags.length - 6}+ more</Text></View>
+              ) : null}
+              <ChevronRight size={17} color="#C4C8CE" style={{ alignSelf: 'center' }} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {sizeCount > 0 ? (
+          <View style={styles.ovCard}>
+            <View style={styles.ovInvHeader}>
+              <Text style={styles.ovCardLabel}>INVENTORY</Text>
+              <View style={styles.ovInvColHead}>
+                <Text style={styles.ovInvColLabel}>Price</Text>
+                <Text style={[styles.ovInvColLabel, styles.ovInvQtyCol]}>Inv</Text>
+              </View>
+            </View>
+            {realVariants.map((variant: any, index: number) => {
+              const variantPriceNumber = Number(variant?.price ?? variant?.Price ?? canonical.price);
+              const variantPrice = Number.isFinite(variantPriceNumber) && variantPriceNumber > 0
+                ? `$${variantPriceNumber.toFixed(2)}`
+                : 'Not set';
+              const optionValues = variant?.optionValues && typeof variant.optionValues === 'object'
+                ? Object.values(variant.optionValues).filter(Boolean).map(String).join(' / ')
+                : [variant?.option1_value, variant?.option2_value, variant?.option3_value].filter(Boolean).map(String).join(' / ');
+              const variantName = optionValues || variant?.title || variant?.Title || variant?.name || variant?.sku || variant?.Sku || `Variant ${index + 1}`;
+              const variantSku = variant?.sku || variant?.Sku || null;
+              const variantImage = variant?.imageUrl || variant?.ImageUrl || variant?.image || variant?.Image || cover || null;
+              return (
+                <TouchableOpacity
+                  key={variant?.id || variant?.Id || index}
+                  style={[styles.ovInvRow, index < realVariants.length - 1 && styles.ovInvDivider]}
+                  activeOpacity={0.65}
+                  onPress={() => openSectionInEdit('inventory')}
+                >
+                  {variantImage ? (
+                    <Image source={{ uri: variantImage }} style={styles.ovInvThumb} />
+                  ) : (
+                    <View style={[styles.ovInvThumb, styles.ovHeroEmpty]}>
+                      <Icon name="image-outline" size={16} color="#C4C8CE" />
+                    </View>
+                  )}
+                  <View style={styles.ovInvNameCol}>
+                    <Text style={styles.ovInvName} numberOfLines={1}>{String(variantName)}</Text>
+                    {variantSku ? <Text style={styles.ovInvSku} numberOfLines={1}>{String(variantSku)}</Text> : null}
+                  </View>
+                  <Text style={styles.ovInvPrice}>{variantPrice}</Text>
+                  <Text style={[styles.ovInvStock, styles.ovInvQtyCol]}>{stockForVariant(variant)}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : null}
+
+        <View style={styles.draftChannelsCard}>
+          <View style={styles.draftChannelsHeader}>
+            <Text style={styles.draftChannelsTitle}>Target channels</Text>
+            <View style={styles.draftChannelsActions}>
+              <TouchableOpacity style={styles.draftChannelsManage} onPress={() => setMode('edit')} activeOpacity={0.75}>
+                <Text style={styles.draftChannelsManageText}>Manage</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.draftChannelsPublish} onPress={handlePublishPress} activeOpacity={0.82}>
+                <Text style={styles.draftChannelsPublishText}>Publish</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          <View style={styles.draftChannelsInner}>
+            {keys.map((platformKey, index) => {
+              const missing = getMissingPlatformFields(
+                withSharedImages((displayedPlatforms as any)?.[platformKey] || {}),
+                platformKey,
+              );
+              const needsDetails = missing.length > 0;
+              const label = (PLATFORM_META as any)[platformKey]?.label
+                || platformKey.charAt(0).toUpperCase() + platformKey.slice(1);
+              return (
+                <View
+                  key={platformKey}
+                  style={[styles.draftChannelRow, index < keys.length - 1 && styles.draftChannelDivider]}
+                >
+                  <View style={styles.draftChannelLogo}>
+                    <PlatformLogo type={platformKey} size={20} fallbackIcon="store" />
+                  </View>
+                  <View style={styles.draftChannelInfo}>
+                    <Text style={styles.draftChannelName}>{label}</Text>
+                    <View style={styles.draftChannelStatusLine}>
+                      <View style={[styles.draftChannelDot, needsDetails && styles.draftChannelDotNeeds]} />
+                      <Text style={[styles.draftChannelStatus, needsDetails && styles.draftChannelStatusNeeds]}>
+                        {needsDetails ? `${missing.length} detail${missing.length === 1 ? '' : 's'} needed` : 'Ready to publish'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.ovCard}>
+          <Text style={[styles.ovCardLabel, styles.ovCardLabelSolo]}>MORE DETAILS</Text>
+          {overviewRow('Brand', brandText, 'Add a brand', 'brand')}
+          {overviewRow('Condition', conditionText, 'Select condition', 'condition')}
+          {overviewRow('SKU', skuText, 'Add a SKU', 'sku')}
+          {overviewRow('Barcode', barcodeText, 'Add or scan', 'barcode')}
+          {overviewRow('SEO title', seoTitleText, 'Add an SEO title', 'seoTitle')}
+        </View>
+      </View>
+    );
+  };
+
 
   return (
     <View style={{ flex: 1 }}>
@@ -2548,18 +2962,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       )}
-      <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingBottom: bottomSafePadding }]} onScroll={handleTrayScroll} scrollEventThrottle={16}>
-        <ScrollView ref={mainScrollRef} onScroll={handleTrayScroll} scrollEventThrottle={16}>
+      <ScrollView
+        ref={mainScrollRef}
+        style={styles.container}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + 64, paddingBottom: bottomSafePadding }]}
+        onScroll={handleTrayScroll}
+        scrollEventThrottle={16}
+      >
           {effectiveResult ? (
 
             <>
               {enrichmentStateLabel ? (
                 <View style={styles.enrichmentNotice}>
-                  {enrichmentStatus === 'pending' ? (
-                    <ActivityIndicator size="small" color={CHAT_COLORS.dim} />
-                  ) : (
-                    <Icon name="information-outline" size={16} color={CHAT_COLORS.dim} />
-                  )}
+                  <ActivityIndicator size="small" color={CHAT_COLORS.dim} />
                   <Text style={styles.enrichmentNoticeText}>{enrichmentStateLabel}</Text>
                 </View>
               ) : null}
@@ -2571,7 +2986,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
 
 
-              {/* Editor form that matches the product page design */}
+              {mode === 'overview' ? renderOverviewSummary() : (
               <View onLayout={(e) => setListingEditorY(e.nativeEvent.layout.y)}>
                 <ListingEditorForm
                   ref={listingEditorRef}
@@ -2586,66 +3001,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   images={(userImagesByIndex[(effectiveResult?.productIndex as number) ?? 0] || []).filter((url: string) => typeof url === 'string' && url.trim().length > 0)}
                   onChangeImages={handleImagesChange}
                   platformLocations={platformLocations}
-                  onChangePlatforms={(next) => {
-                    log.debug('[GEN-DETAILS] onChangePlatforms received - deep merge to preserve all data');
-                    // DEEP merge: preserve all existing fields while updating changed ones
-                    // This preserves user edits AND keeps all loaded backend data
-                    updatePlatforms(prev => {
-                      const merged = { ...prev };
-                      for (const [platformKey, platformData] of Object.entries(next)) {
-                        const prevPlatform = prev[platformKey] || {};
-
-                        // Deep merge platform data
-                        merged[platformKey] = {
-                          ...prevPlatform,
-                          ...platformData
-                        };
-
-                        // CRITICAL: Preserve variant inventoryByLocation when merging variants array
-                        if (Array.isArray(platformData?.variants) && Array.isArray(prevPlatform.variants)) {
-                          merged[platformKey].variants = platformData.variants.map((newVariant: any) => {
-                            const prevVariant = prevPlatform.variants?.find((v: any) => v.id === newVariant.id);
-                            if (prevVariant?.inventoryByLocation) {
-                              return {
-                                ...newVariant,
-                                inventoryByLocation: {
-                                  ...prevVariant.inventoryByLocation,
-                                  ...(newVariant.inventoryByLocation || {})
-                                }
-                              };
-                            }
-                            return newVariant;
-                          });
-                        }
-                      }
-                      log.debug('[GEN-DETAILS] Deep merged platforms, keys:', Object.keys(merged));
-                      return merged;
-                    });
-                  }}
+                  onChangePlatforms={mergeEditorPlatformChanges}
                   onOpenBarcodeScanner={(onResult) => {
                     openScanner(onResult);
                   }}
-                  onOpenImageCapture={async (onResult) => {
-                    try {
-                      const assets = await captureOrPickImageAssets({ multiple: true });
-                      if (!assets.length) return;
-                      const localUris = assets.map(asset => asset.uri);
-                      // Never let an upload hiccup hide the photo. Try to host it on Supabase,
-                      // but ALWAYS fall back to the local capture so it shows immediately — local
-                      // files get re-uploaded at publish time (uploadLocalImagesToSupabase runs there too).
-                      let urisToShow = localUris;
-                      try {
-                        const uploadedUrls = await uploadLocalImagesToSupabase(localUris);
-                        if (uploadedUrls.length > 0) urisToShow = uploadedUrls;
-                      } catch (uploadErr) {
-                        log.error('[GEN-DETAILS] Photo upload failed; showing local copy, will upload at publish:', uploadErr);
-                      }
-                      onResult(urisToShow);
-                    } catch (error: any) {
-                      log.error('Error picking images:', error);
-                      showErrorModal('Couldn’t add photo', error?.message || 'We couldn’t add those images. Please try again.', 'error');
-                    }
-                  }}
+                  onOpenImageCapture={openEditorImageCapture}
                   onAddMissingField={(platformKey: string) => {
                     setSelectedMissingPlatform(platformKey);
                     setFieldSearchQuery('');
@@ -2654,20 +3014,20 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   getMissingFieldsCount={(platformKey: string) => getMissingPlatformFields(displayedPlatforms[platformKey] || {}, platformKey).filter(f => f === 'category').length}
                   allMissingCount={allMissingRequiredFields.filter(m => m.field !== 'category').length}
                   onGeneratePlatform={generatePlatform}
+                  onRemovePlatform={removeTargetPlatform}
                   generatingPlatformKeys={generatingPlatformKeys}
                   isGenerationMode={true}
                 />
               </View>
+              )}
             </>
           ) : (
             <Text style={styles.meta}>No results</Text>
           )}
-        </ScrollView>
-
       </ScrollView>
 
-      {/* ── Floating glass header (chat-style): back · item pill · switcher ── */}
-      <View style={[styles.glassHeader, { paddingTop: insets.top + 6 }]}>
+      {/* Floating glass header: overview entry, edit save state, and item switcher. */}
+      <View style={[styles.glassHeader, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
         <View pointerEvents="none" style={StyleSheet.absoluteFill}>
           <ProgressiveBlurView intensity={Platform.OS === 'ios' ? 50 : 28} tint="light" direction="down" />
           <LinearGradient
@@ -2677,76 +3037,49 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           />
         </View>
         <View style={styles.glassHeaderRow}>
-          <TouchableOpacity style={styles.navCircle} onPress={() => navigation.goBack()} activeOpacity={0.85}>
-            <ChevronLeft size={22} color={CHAT_COLORS.ink} />
+          <TouchableOpacity
+            style={styles.navCircle}
+            onPress={() => {
+              if (mode === 'edit') setMode('overview');
+              else navigation.goBack();
+            }}
+            activeOpacity={0.85}
+          >
+            <ChevronLeft size={22} color="#18181B" />
           </TouchableOpacity>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            {/* When fields are missing, the Steps slot becomes a loud "N fields need you"
-                signal that opens the wizard over just the gaps. When complete, it's the
-                Form | Steps toggle (Steps = walk the key fields for a review). */}
-            {(() => {
-              const gapCount = gapFields.length;
-              if (gapCount > 0) {
-                return (
-                  <TouchableOpacity style={styles.gapPill} activeOpacity={0.85} onPress={() => listingEditorRef.current?.startFixGaps(gapFields)}>
-                    <View style={styles.gapPillDot} />
-                    <Text style={styles.gapPillText}>{gapCount} field{gapCount !== 1 ? 's' : ''} need you</Text>
-                  </TouchableOpacity>
-                );
-              }
-              return (
-                <View style={styles.modeToggle}>
-                  <View style={[styles.modeSeg, styles.modeSegActive]}>
-                    <Text style={[styles.modeSegText, styles.modeSegTextActive]}>Form</Text>
-                  </View>
-                  <TouchableOpacity style={styles.modeSeg} activeOpacity={0.8} onPress={() => listingEditorRef.current?.startStepsWalk()}>
-                    <Text style={styles.modeSegText}>Steps</Text>
-                  </TouchableOpacity>
-                </View>
-              );
-            })()}
-            {items.length > 1 ? (
-              <TouchableOpacity style={styles.itemsPill} onPress={() => setItemMenuOpen(open => !open)} activeOpacity={0.85}>
-                <Boxes size={16} color={CHAT_COLORS.ink} />
-                <Text style={styles.itemsPillText}>{currentItemPosition}/{items.length}</Text>
+          <View style={{ alignItems: 'center', justifyContent: 'center', minHeight: 34 }}>
+            {mode === 'overview' ? (
+              <TouchableOpacity style={styles.modeToggle} onPress={() => setMode('edit')} activeOpacity={0.85}>
+                <Text style={styles.modeToggleText}>Edit details</Text>
               </TouchableOpacity>
-            ) : null}
+            ) : saveState === 'saving' ? (
+              <View style={styles.savePill}>
+                <ActivityIndicator size="small" color={BRAND_PRIMARY} />
+                <Text style={[styles.savePillText, { color: BRAND_PRIMARY }]}>Saving…</Text>
+              </View>
+            ) : saveState === 'error' ? (
+              <TouchableOpacity onPress={() => { void flushDraft(); }} activeOpacity={0.7} style={styles.savePill}>
+                <Icon name="alert-circle-outline" size={14} color="#DC2626" />
+                <Text style={[styles.savePillText, { color: '#DC2626' }]}>Save failed · Retry</Text>
+              </TouchableOpacity>
+            ) : (
+              <Animated.View
+                style={[styles.savePill, { opacity: saveState === 'saved' && saveStatusVisible ? 1 : 0 }]}
+                pointerEvents="none"
+              >
+                <Icon name="check" size={14} color="#4A7C00" />
+                <Text style={[styles.savePillText, { color: '#4A7C00' }]}>Saved</Text>
+              </Animated.View>
+            )}
           </View>
-
-          {/* Title pill — absolutely centered in the header so it's ALWAYS dead-center,
-              independent of the back button + right-side controls' widths. */}
-          <View pointerEvents="box-none" style={styles.headerCenter}>
-            <TouchableOpacity
-              style={styles.titlePill}
-              activeOpacity={0.85}
-              onPress={() => setItemMenuOpen(open => !open)}
-            >
-              {(() => {
-                // While the save signal is up it OWNS the pill — the "Item N" title gives way
-                // to a clean "Saved" (with a check), so we never show "Item 1 · Saved" stacked.
-                const saveLabel = saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Save failed' : '';
-                if (saveStatusVisible && saveLabel) {
-                  const isSaved = saveState === 'saved';
-                  const color = saveState === 'error' ? CHAT_COLORS.error : isSaved ? '#3B6300' : CHAT_COLORS.dim;
-                  return (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                      {isSaved ? <Icon name="check-circle" size={14} color="#3B6300" /> : null}
-                      <Text style={[styles.pillTitle, { color }]} numberOfLines={1}>{saveLabel}</Text>
-                    </View>
-                  );
-                }
-                return (
-                  <>
-                    <Text style={styles.pillTitle} numberOfLines={1}>{currentItemTitle}</Text>
-                    {items.length > 1 ? (
-                      <Text style={[styles.pillSub, { color: CHAT_COLORS.dim }]} numberOfLines={1}>{`Item ${currentItemPosition} of ${items.length}`}</Text>
-                    ) : null}
-                  </>
-                );
-              })()}
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={[styles.navCircle, items.length <= 1 && { opacity: 0 }]}
+            onPress={() => setItemMenuOpen(open => !open)}
+            disabled={items.length <= 1}
+            activeOpacity={0.85}
+          >
+            <Boxes size={19} color="#18181B" />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -2823,7 +3156,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           />
 
           <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}>
-            {isInputExpanded ? (
+            {mode === 'edit' ? (isInputExpanded ? (
             <View style={{ flexDirection: 'column', justifyContent: "center", alignItems: 'flex-start', gap: 8, marginBottom: 4, minWidth: "100%" }}>
               <TouchableOpacity
                 onPress={() => { setIsInputExpanded(false); setQuickFixText(''); }}
@@ -2916,10 +3249,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               <PencilIcon size={15} color={CHAT_COLORS.inkSoft} />
               <Text style={{ fontSize: 14, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.inkSoft }}>Wanna change something?</Text>
             </TouchableOpacity>
-            )}
+            )) : null}
 
             <KeyboardAwareBottomActionBar
-              visible={!isInputExpanded}
+              visible={mode === 'overview' || !isInputExpanded}
               style={{
                 position: 'relative',
                 bottom: 0,
@@ -3066,20 +3399,30 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         </>
       )}
 
-      {/* Pre-publish quality check — advisory gate before the publish modal */}
-      <PrePublishQualitySheet
-        visible={qualitySheetOpen}
-        rows={listingQuality.rows}
-        onClose={() => setQualitySheetOpen(false)}
-        onPublishAnyway={() => { setQualitySheetOpen(false); doPublish(); }}
-      />
-
-      {/* Publish Confirmation Modal */}
-      <PublishConfirmationModal
+      <PublishFlowSheet
         visible={publishModalOpen}
-        onClose={() => setPublishModalOpen(false)}
+        needsRows={publishNeedsRows}
+        editorProps={{
+          platforms: displayedPlatforms,
+          updateCounter,
+          images: currentItemImages,
+          onChangeImages: handleImagesChange,
+          platformLocations,
+          onChangePlatforms: mergeEditorPlatformChanges,
+          onOpenBarcodeScanner: openScanner,
+          onOpenImageCapture: openEditorImageCapture,
+          onGeneratePlatform: generatePlatform,
+          onRemovePlatform: removeTargetPlatform,
+          generatingPlatformKeys,
+          isGenerationMode: true,
+        }}
+        onClose={() => {
+          if (!isPublishing) setPublishModalOpen(false);
+        }}
+        onDismiss={finishPendingPublishNavigation}
         onConfirm={confirmAndPublish}
         readyPlatforms={readyPlatforms}
+        targetPlatforms={platformKeys}
         allConnections={allConnections}
         selectedConnectionIds={selectedConnectionIds}
         setSelectedConnectionIds={setSelectedConnectionIds}
@@ -3092,7 +3435,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         onSaveToInventory={() => { setPublishModalOpen(false); doSaveToInventory(); }}
         onAddChannel={() => { setPublishModalOpen(false); navigation.navigate('Connections'); }}
         channelOptimization={channelOptimization}
-        onOptimize={() => setPublishModalOpen(false)}
+        onOptimize={() => {
+          setPublishModalOpen(false);
+          setMode('edit');
+        }}
       />
 
       {/* In-app error/notice modal — replaces native alert() so publish/save messages match the app */}
@@ -3212,27 +3558,29 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 export default GenerateDetailsScreen;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: "20%" },
+  container: { flex: 1, backgroundColor: '#F7F7F8' },
   content: { padding: 16 },
 
   // Chat-style floating glass header + item switcher
   glassHeader: { ...GLASS_HEADER_STYLES.header },
   glassHeaderRow: { ...GLASS_HEADER_STYLES.headerRow },
   navCircle: { ...GLASS_HEADER_STYLES.navCircle },
-  titlePill: { ...GLASS_HEADER_STYLES.titlePill },
-  gapPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(186,117,23,0.12)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  gapPillDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#BA7517' },
-  gapPillText: { fontSize: 12.5, fontWeight: '700', color: '#BA7517' },
-  headerCenter: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  modeToggle: { flexDirection: 'row', alignItems: 'center', backgroundColor: CHAT_COLORS.bubble, borderRadius: 999, padding: 3 },
-  modeSeg: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999 },
-  modeSegActive: { backgroundColor: CHAT_COLORS.white },
-  modeSegText: { fontSize: 12.5, fontWeight: '600', color: CHAT_COLORS.dim },
-  modeSegTextActive: { color: CHAT_COLORS.ink, fontWeight: '700' },
-  pillTitle: { ...GLASS_HEADER_STYLES.pillTitle },
-  pillSub: { ...GLASS_HEADER_STYLES.pillSub },
-  itemsPill: { ...GLASS_HEADER_STYLES.actionPill },
-  itemsPillText: { ...GLASS_HEADER_STYLES.actionPillText },
+  modeToggle: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  modeToggleText: { fontSize: 14, fontWeight: '700', color: '#18181B' },
+  savePill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7 },
+  savePillText: { fontSize: 13, fontWeight: '600' },
   itemDropdown: { ...GLASS_HEADER_STYLES.dropdown, minWidth: 260, maxWidth: 330, paddingVertical: 8 },
   itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 11, borderRadius: 14, marginHorizontal: 6 },
   itemRowActive: { backgroundColor: CHAT_COLORS.brandSoft },
@@ -3240,6 +3588,61 @@ const styles = StyleSheet.create({
   itemRowMeta: { fontSize: 12, fontFamily: CHAT_FONT.medium, marginTop: 2 },
   itemThumb: { width: 34, height: 34, borderRadius: 10, backgroundColor: CHAT_COLORS.bubble },
   itemDot: { width: 8, height: 8, borderRadius: 4 },
+  // Read-only overview, duplicated from ProductDetail so the generated draft lands
+  // in the same visual and interaction model without touching that reference screen.
+  ovProductCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  ovHero: { width: '100%', height: 280, borderRadius: 14, backgroundColor: '#ECECEF' },
+  ovHeroEmpty: { alignItems: 'center', justifyContent: 'center' },
+  ovThumbRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  ovThumb: { width: 58, height: 58, borderRadius: 11, backgroundColor: '#ECECEF' },
+  ovTitle: { fontSize: 18, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827', marginTop: 13, lineHeight: 23, letterSpacing: -0.2 },
+  ovPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 7, flexWrap: 'wrap' },
+  ovPrice: { fontSize: 22, fontFamily: CHAT_FONT.bold, fontWeight: '800', color: '#111827', letterSpacing: -0.2 },
+  ovPriceMeta: { fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#9CA3AF' },
+  ovDesc: { fontSize: 13.5, fontFamily: CHAT_FONT.regular, fontWeight: '400', color: '#3F3F46', marginTop: 6, lineHeight: 20 },
+  ovCard: { backgroundColor: '#FFFFFF', borderRadius: 18, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  ovCardLabel: { fontSize: 11, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.7 },
+  ovCardLabelSolo: { paddingTop: 14, paddingBottom: 2 },
+  ovInvHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, paddingBottom: 4 },
+  ovInvColHead: { flexDirection: 'row', alignItems: 'center' },
+  ovInvColLabel: { width: 64, textAlign: 'right', fontSize: 11.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
+  ovInvQtyCol: { width: 44 },
+  ovInvRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, gap: 11 },
+  ovInvDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  ovInvThumb: { width: 36, height: 36, borderRadius: 9, backgroundColor: '#ECECEF' },
+  ovInvNameCol: { flex: 1, minWidth: 0 },
+  ovInvName: { fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+  ovInvSku: { fontSize: 12, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#9CA3AF', marginTop: 1 },
+  ovInvPrice: { width: 64, textAlign: 'right', fontSize: 13, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#6B7280' },
+  ovInvStock: { textAlign: 'right', fontSize: 14, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#111827' },
+  ovDetailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, gap: 10 },
+  ovDetailDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F1F2F4' },
+  ovDetailLabel: { flexShrink: 0, fontSize: 15, fontFamily: CHAT_FONT.semibold, fontWeight: '600', color: '#111827' },
+  ovDetailValue: { fontSize: 13.5, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#6B7280', textAlign: 'right' },
+  ovDetailValueEmpty: { color: '#C4C8CE' },
+  ovTagsRow: { paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#F1F2F4' },
+  ovTagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 8, alignItems: 'center' },
+  ovTagChip: { backgroundColor: '#F3F4F6', borderRadius: 999, paddingHorizontal: 11, paddingVertical: 5 },
+  ovTagChipText: { fontSize: 12.5, fontFamily: CHAT_FONT.medium, fontWeight: '500', color: '#3F3F46' },
+  draftChannelsCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#EDEEF1' },
+  draftChannelsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  draftChannelsTitle: { color: '#71717A', fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500' },
+  draftChannelsActions: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  draftChannelsManage: { minHeight: 32, justifyContent: 'center', borderRadius: 999, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', paddingHorizontal: 12 },
+  draftChannelsManageText: { color: '#6B7280', fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
+  draftChannelsPublish: { minHeight: 32, justifyContent: 'center', borderRadius: 999, backgroundColor: BRAND_PRIMARY, paddingHorizontal: 14 },
+  draftChannelsPublishText: { color: '#FFFFFF', fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
+  draftChannelsInner: { borderRadius: 14, overflow: 'hidden' },
+  draftChannelRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11 },
+  draftChannelDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  draftChannelLogo: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  draftChannelInfo: { flex: 1, minWidth: 0 },
+  draftChannelName: { color: '#111827', fontSize: 15, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
+  draftChannelStatusLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  draftChannelDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#9CA3AF' },
+  draftChannelDotNeeds: { backgroundColor: '#BA7517' },
+  draftChannelStatus: { color: '#71717A', fontSize: 12.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+  draftChannelStatusNeeds: { color: '#BA7517' },
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },

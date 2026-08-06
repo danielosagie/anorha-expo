@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, ActivityIndicator, BackHandler, Image } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PlatformLogo from '../components/PlatformLogo';
@@ -19,6 +19,77 @@ import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
 import { IC, InboxHeader, SuccessBlock, PillButton, SectionCaption } from '../components/importinbox/InboxKit';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationScreen');
+
+type UnknownRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): UnknownRecord | null => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null
+);
+
+const finiteNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const quantityFromLocations = (value: unknown): number | null => {
+  const locations = asRecord(value);
+  if (!locations) return null;
+  let found = false;
+  let total = 0;
+  for (const location of Object.values(locations)) {
+    const locationRecord = asRecord(location);
+    const quantity = finiteNumber(locationRecord?.quantity ?? location);
+    if (quantity === null) continue;
+    found = true;
+    total += quantity;
+  }
+  return found ? total : null;
+};
+
+const quantityFromPlatformDetail = (value: unknown): number | null => {
+  const detail = asRecord(value);
+  if (!detail) return null;
+
+  if (Array.isArray(detail.variants) && detail.variants.length > 0) {
+    let found = false;
+    let total = 0;
+    for (const variantValue of detail.variants) {
+      const variant = asRecord(variantValue);
+      if (!variant) continue;
+      const quantity = quantityFromLocations(variant.inventoryByLocation)
+        ?? finiteNumber(variant.inventoryQuantity)
+        ?? finiteNumber(variant.quantity);
+      if (quantity === null) continue;
+      found = true;
+      total += quantity;
+    }
+    if (found) return total;
+  }
+
+  const listingDetails = asRecord(detail.listingDetails);
+  const locationQuantities = asRecord(detail.locationQuantities);
+  return quantityFromLocations(detail.inventoryByLocation)
+    ?? finiteNumber(detail.inventoryQuantity)
+    ?? finiteNumber(detail.quantity)
+    ?? finiteNumber(listingDetails?.quantity)
+    ?? finiteNumber(locationQuantities?.default);
+};
+
+const priceFromPlatformDetail = (value: unknown): number | null => {
+  const detail = asRecord(value);
+  if (!detail) return null;
+  const direct = finiteNumber(detail.price);
+  if (direct !== null) return direct;
+  if (!Array.isArray(detail.variants)) return null;
+  for (const variantValue of detail.variants) {
+    const price = finiteNumber(asRecord(variantValue)?.price);
+    if (price !== null) return price;
+  }
+  return null;
+};
 
 
 type Props = StackScreenProps<AppStackParamList, 'PublishConfirmation'>;
@@ -47,11 +118,43 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     publishPayload,  // the ready-to-send body for /api/products/publish
   } = params;
 
+  const publishPayloadRecord = asRecord(publishPayload);
+  const payloadPlatformDetails = asRecord(publishPayloadRecord?.platformDetails);
+  const payloadSelectedPlatforms: string[] = Array.isArray(publishPayloadRecord?.selectedPlatformsToPublish)
+    ? publishPayloadRecord.selectedPlatformsToPublish
+      .filter((platform: unknown): platform is string => typeof platform === 'string' && platform.length > 0)
+    : [];
+  const paramPlatforms: string[] = Array.isArray(platforms)
+    ? platforms.filter((platform: unknown): platform is string => typeof platform === 'string' && platform.length > 0)
+    : [];
+  const publishedPlatforms: string[] = Array.from(new Set<string>(
+    (payloadSelectedPlatforms.length > 0 ? payloadSelectedPlatforms : paramPlatforms)
+      .map((platform) => platform.toLowerCase()),
+  ));
+  const receiptSources = [
+    ...publishedPlatforms.map((platform) => payloadPlatformDetails?.[platform]),
+    payloadPlatformDetails?.canonical,
+  ];
+  const payloadMedia = asRecord(publishPayloadRecord?.media);
+  const payloadImages: string[] = Array.isArray(payloadMedia?.imageUris)
+    ? payloadMedia.imageUris.filter((uri: unknown): uri is string => typeof uri === 'string' && uri.length > 0)
+    : [];
+  const coverImageIndex = finiteNumber(payloadMedia?.coverImageIndex) ?? 0;
+  const receiptImageUrl = payloadImages[coverImageIndex] || imageUrl;
+  const receiptTitle = receiptSources
+    .map((source) => asRecord(source)?.title)
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    ?? title;
+  const receiptPrice = receiptSources
+    .map(priceFromPlatformDetail)
+    .find((value): value is number => value !== null)
+    ?? finiteNumber(price);
+
   // Facebook posts asynchronously through the user's computer — show its live
   // dispatch status here instead of implying a synchronous "Published!".
   const fbDispatch = useFacebookJobStatus();
   const { liveConnections } = usePlatformConnections();
-  const fbSelected = (platforms || []).map((p: string) => String(p).toLowerCase()).includes('facebook');
+  const fbSelected = publishedPlatforms.includes('facebook');
   const fbStatus = fbSelected ? fbDispatch.statusForVariant(variantId) : null;
   // State A: is Facebook connected (OAuth marker exists)? This is distinct from
   // the computer being offline (State B). Publishing needs the connection first,
@@ -82,10 +185,16 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     !fbDispatch.degraded &&
     !fbAlreadyMoving;
 
-  // Representative quantity for the summary line (the largest per-channel inventory, ≥1).
+  // Representative quantity for the summary line from the exact publish details.
   const summaryQty = (() => {
-    const vals = Object.values(quantityByPlatform || {}).map((v: any) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
-    return vals.length ? Math.max(...vals) : 1;
+    const payloadQuantities = receiptSources
+      .map(quantityFromPlatformDetail)
+      .filter((value): value is number => value !== null);
+    if (payloadQuantities.length > 0) return Math.max(...payloadQuantities);
+    const paramQuantities = Object.values(quantityByPlatform || {})
+      .map(finiteNumber)
+      .filter((value): value is number => value !== null);
+    return paramQuantities.length > 0 ? Math.max(...paramQuantities) : null;
   })();
 
   // ── Publish phase ──────────────────────────────────────────────────────────
@@ -100,6 +209,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // Per-platform outcome from the publish response's `results` array (keyed lowercase).
   // Absent for older backends / non-owning callers — rows then read as before.
   const [publishResults, setPublishResults] = useState<Record<string, { success: boolean; error?: string }>>({});
+  const [imageFailed, setImageFailed] = useState(false);
   const ranRef = useRef(false);
   // ONE idempotency key per publish intent. This screen is mounted fresh per publish (new
   // route params), so a per-instance key is the intent's identity — and "Try again" reuses
@@ -110,21 +220,39 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   if (!publishIdemKeyRef.current) {
     publishIdemKeyRef.current = `publish-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
+  const activePublishSubsetRef = useRef<string[] | null>(null);
+  const activePublishIdemKeyRef = useRef(publishIdemKeyRef.current);
+  const retrySequenceRef = useRef(0);
 
-  const runPublish = useCallback(async () => {
+  const runPublish = useCallback(async (platformSubset?: string[]) => {
     if (!publishPayload) { setPhase('done'); return; }
+    if (platformSubset) {
+      activePublishSubsetRef.current = platformSubset;
+      retrySequenceRef.current += 1;
+      activePublishIdemKeyRef.current = `${publishIdemKeyRef.current}-retry-${retrySequenceRef.current}`;
+    }
+    const requestedPlatforms = activePublishSubsetRef.current;
+    const requestPayload = requestedPlatforms
+      ? {
+        ...publishPayload,
+        selectedPlatformsToPublish: requestedPlatforms,
+        connectionIds: Object.fromEntries(
+          Object.entries(publishPayload.connectionIds || {}).filter(([platform]) => requestedPlatforms.includes(platform)),
+        ),
+      }
+      : publishPayload;
     setPhase('publishing');
     setErrorMsg('');
     try {
       const token = await ensureSupabaseJwt();
-      if (!token) { setErrorMsg('Your session expired — sign in again.'); setPhase('error'); return; }
+      if (!token) { setErrorMsg('Your session expired. Sign in again.'); setPhase('error'); return; }
       // Route through apiFetch (auth + Idempotency-Key + the client's default 18s timeout)
       // so a stalled POST throws instead of pinning "Publishing…" forever, and a retry is
       // deduped by the stable key above.
       const res = await apiFetch('/api/products/publish', {
         method: 'POST',
-        body: publishPayload,
-        idempotencyKey: publishIdemKeyRef.current,
+        body: requestPayload,
+        idempotencyKey: activePublishIdemKeyRef.current,
       });
       if (!res.ok) {
         const text = await res.text();
@@ -136,8 +264,19 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             ? `“${j.details.sku}” is already used by another product. Change the SKU and try again.`
             : (j.message || text);
         } catch { /* keep raw text */ }
-        setErrorMsg(msg || 'Something went wrong while publishing.');
-        setPhase('error');
+        if (requestedPlatforms) {
+          setPublishResults((previous) => {
+            const next = { ...previous };
+            requestedPlatforms.forEach((platform) => {
+              next[platform] = { success: false, error: msg || 'Couldn’t publish this channel.' };
+            });
+            return next;
+          });
+          setPhase('done');
+        } else {
+          setErrorMsg(msg || 'Something went wrong while publishing.');
+          setPhase('error');
+        }
         return;
       }
       // Capture the live-listing URLs the publish endpoint resolved (eBay item, Shopify
@@ -154,13 +293,25 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         for (const r of body.results) {
           if (r?.platform) map[String(r.platform).toLowerCase()] = { success: r.success !== false, error: r.error };
         }
-        setPublishResults(map);
+        setPublishResults((previous) => requestedPlatforms ? { ...previous, ...map } : map);
         const entries = Object.values(map);
         if (entries.length && entries.every((r) => !r.success)) {
-          setErrorMsg(entries.find((r) => r.error)?.error || 'None of your channels accepted the listing.');
-          setPhase('error');
+          if (requestedPlatforms) {
+            setPhase('done');
+          } else {
+            setErrorMsg(entries.find((r) => r.error)?.error || 'None of your channels accepted the listing.');
+            setPhase('error');
+          }
           return;
         }
+      } else if (requestedPlatforms) {
+        setPublishResults((previous) => {
+          const next = { ...previous };
+          requestedPlatforms.forEach((platform) => {
+            next[platform] = { success: true };
+          });
+          return next;
+        });
       }
       setPhase('done'); // success → resolves to the calm "Published!" summary
     } catch (e: any) {
@@ -169,10 +320,21 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
       // "taking too long" nudge; the same stable idempotency key makes "Try again" safe.
       const msg =
         e instanceof ApiError && e.status === 0
-          ? 'This is taking longer than expected — please try again.'
+          ? 'This is taking longer than expected. Please try again.'
           : 'Something went wrong while publishing. Please try again.';
-      setErrorMsg(msg);
-      setPhase('error');
+      if (requestedPlatforms) {
+        setPublishResults((previous) => {
+          const next = { ...previous };
+          requestedPlatforms.forEach((platform) => {
+            next[platform] = { success: false, error: msg };
+          });
+          return next;
+        });
+        setPhase('done');
+      } else {
+        setErrorMsg(msg);
+        setPhase('error');
+      }
     }
   }, [publishPayload]);
 
@@ -183,10 +345,30 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   }, [mode, runPublish]);
 
   // True once at least one channel has resolved a real live-listing link.
-  const anyLiveLink = (platforms.length ? platforms : ['shopify']).some((p: string) => {
+  const anyLiveLink = (publishedPlatforms.length ? publishedPlatforms : ['shopify']).some((p: string) => {
     const l: any = (liveUrls || {})[String(p).toLowerCase()];
     return typeof l === 'string' ? !!l : !!l?.url;
   });
+
+  const goBack = useCallback(() => {
+    if (backRoute?.name) {
+      navigation.navigate(backRoute.name as any, backRoute.params as any);
+      return;
+    }
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
+  }, [backRoute, navigation]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [goBack]);
 
   const handleCreateAnother = () => {
     // Go to the add product flow in the current stack
@@ -236,21 +418,29 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // back to the inbox). Extracted so its useOptimizerQueues() only runs on the import
   // path, never single-publish.
   if (origin === 'import') {
-    return <ImportCompleteView params={params} navigation={navigation} />;
+    return <ImportCompleteView params={params} navigation={navigation} onBack={goBack} />;
   }
 
   // Single-product publish — a calm "Publishing…" state runs while the POST is in flight,
   // then resolves into the Avec "Published!" summary: green check, a muted summary line,
   // and per-channel calm rows (live deep-links + every dispatch nuance preserved).
-  const goBack = () => { if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any); else navigation.goBack(); };
-
-  const doneTitle = savedToInventory ? 'Saved to inventory' : 'Published!';
+  const channelKeys: string[] = publishedPlatforms.length ? publishedPlatforms : ['shopify'];
+  const failedChannelCount = channelKeys.filter((platform) => publishResults[platform]?.success === false).length;
+  const hasPublishOutcomes = Object.keys(publishResults).length > 0;
+  const successfulChannelCount = hasPublishOutcomes
+    ? channelKeys.filter((platform) => publishResults[platform]?.success === true).length
+    : channelKeys.length;
+  const isPartialPublish = !savedToInventory && failedChannelCount > 0 && successfulChannelCount > 0;
+  const doneTitle = savedToInventory
+    ? 'Saved to inventory'
+    : isPartialPublish
+      ? `Published to ${successfulChannelCount} of ${channelKeys.length}`
+      : 'Published!';
   const summaryLine = [
-    title ? String(title) : null,
-    platforms.length ? `${platforms.length} channel${platforms.length === 1 ? '' : 's'}` : null,
-    `Qty ${summaryQty}`,
+    receiptTitle ? String(receiptTitle) : null,
+    channelKeys.length ? `${channelKeys.length} channel${channelKeys.length === 1 ? '' : 's'}` : null,
+    summaryQty !== null ? `Qty ${summaryQty}` : null,
   ].filter(Boolean).join(' · ');
-  const channelKeys: string[] = platforms.length ? platforms : ['shopify'];
 
   return (
     <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: insets.top + 6 }}>
@@ -269,7 +459,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
           </View>
           <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
             <PillButton label="Back to editor" variant="secondary" onPress={goBack} />
-            <PillButton label="Try again" onPress={runPublish} />
+            <PillButton label="Try again" onPress={() => { void runPublish(); }} />
           </View>
         </>
       ) : phase === 'publishing' ? (
@@ -282,10 +472,45 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         <>
           <ScrollView contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
             <View style={{ paddingTop: 28, paddingBottom: 14 }}>
-              <SuccessBlock title={doneTitle} lines={[summaryLine]} />
+              {isPartialPublish ? (
+                <View style={styles.partialBlock}>
+                  <View style={styles.partialCircle}>
+                    <Icon name="alert-outline" size={32} color="#6B7280" />
+                  </View>
+                  <Text style={styles.partialTitle}>{doneTitle}</Text>
+                  {!!summaryLine && <Text style={styles.partialLine}>{summaryLine}</Text>}
+                </View>
+              ) : (
+                <SuccessBlock title={doneTitle} lines={[summaryLine]} />
+              )}
             </View>
 
             <View style={{ paddingHorizontal: 20 }}>
+              <View style={styles.itemCard}>
+                {receiptImageUrl && !imageFailed ? (
+                  <Image
+                    source={{ uri: receiptImageUrl }}
+                    style={styles.itemImage}
+                    resizeMode="cover"
+                    onError={() => setImageFailed(true)}
+                  />
+                ) : (
+                  <View style={[styles.itemImage, styles.itemImageEmpty]}>
+                    <Icon name="image-outline" size={24} color="#C4C8CE" />
+                  </View>
+                )}
+                <View style={styles.itemInfo}>
+                  <Text style={styles.itemTitle} numberOfLines={2}>{receiptTitle || 'Untitled product'}</Text>
+                  <View style={styles.itemMetaRow}>
+                    <Text style={styles.itemPrice}>
+                      {receiptPrice !== null ? `$${receiptPrice.toFixed(2)}` : 'Price not set'}
+                    </Text>
+                    <Text style={styles.itemMetaDot}>·</Text>
+                    <Text style={styles.itemQuantity}>{summaryQty !== null ? `Qty ${summaryQty}` : 'Quantity not set'}</Text>
+                  </View>
+                </View>
+              </View>
+
               <SectionCaption>{savedToInventory ? 'In inventory' : 'Live on'}</SectionCaption>
 
               {channelKeys.map((p: string, i: number) => {
@@ -302,7 +527,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 // unless this was an inventory-only save, where nothing is live yet.
                 const failed = publishResults[lower]?.success === false;
                 const st = failed
-                  ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish — tap to manage' }
+                  ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish' }
                   : isFb
                     ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
                     : savedToInventory
@@ -317,13 +542,30 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                     key={`${p}-${i}`}
                     disabled={!tappable}
                     activeOpacity={0.85}
-                    onPress={() => { if (url) Linking.openURL(url).catch(() => undefined); else handleReviewInInventory(); }}
-                    style={styles.channelRow}
+                    onPress={() => {
+                      if (failed) {
+                        void runPublish([lower]);
+                      } else if (url) {
+                        Linking.openURL(url).catch(() => undefined);
+                      } else {
+                        handleReviewInInventory();
+                      }
+                    }}
+                    style={[styles.channelRow, failed && styles.channelRowFailed]}
+                    accessibilityLabel={failed ? `Retry ${platformLabel(lower)}` : undefined}
                   >
                     <PlatformBrandChip platform={lower} size={34} />
                     <Text style={styles.channelName} numberOfLines={1}>{platformLabel(lower)}</Text>
                     <View style={styles.channelRight}>
-                      {hasLink ? (
+                      {failed ? (
+                        <>
+                          <Text style={styles.failedStatus}>Didn’t publish</Text>
+                          <View style={styles.retryAction}>
+                            <Icon name="refresh" size={16} color="#8A5A12" />
+                            <Text style={styles.retryActionText}>Retry</Text>
+                          </View>
+                        </>
+                      ) : hasLink ? (
                         <View style={styles.liveLink}>
                           <Text style={styles.liveLinkText}>Live</Text>
                           <Icon name="arrow-top-right" size={15} color={IC.accent} />
@@ -334,7 +576,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                           <Text style={[styles.statusText, { color: st.color }]} numberOfLines={2}>{st.label}</Text>
                         </>
                       )}
-                      {tappable && !hasLink ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
+                      {tappable && !hasLink && !failed ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
                     </View>
                   </TouchableOpacity>
                 );
@@ -394,7 +636,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 // Shows the session tally (only non-zero rows) on the receipt subtitle, then a
 // smart primary: continue into the optimizer if it still has gaps, else Done →
 // back to the (now all-clear) inbox. Replaces so Back can't re-enter the deck.
-const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params, navigation }) => {
+const ImportCompleteView: React.FC<{ params: any; navigation: any; onBack: () => void }> = ({ params, navigation, onBack }) => {
   const insets = useSafeAreaInsets();
   // Cheap gap check — same catalog-wide counts the hub/optimizer use.
   const { counts: optCounts, loading: optLoading, error: optError, refresh: optRefresh } = useOptimizerQueues();
@@ -404,9 +646,8 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
     importCount,
     importCounts,
     savedToInventory,
-    backRoute,
     connectionId,
-    completedLane,
+    platformName,
   } = params;
 
   const linked = importCounts?.linked ?? 0;
@@ -441,15 +682,23 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
   const hasNext = !optLoading && optRemaining > 0;
 
   const goReview = () => navigation.navigate('TabNavigator' as any, { screen: 'Inventory' } as any);
-  const goHub = () =>
-    navigation.replace('ImportHub' as any, { completedLane: completedLane ?? 'matches', connectionId });
+  const goQueue = () => {
+    if (!connectionId) {
+      goReview();
+      return;
+    }
+    navigation.replace('ImportQuestionQueue' as any, {
+      connectionId,
+      platformName: platformName || platforms[0] || 'Platform',
+    });
+  };
   const goOptimize = () =>
     navigation.replace('BackfillOptimizer' as any, { source: 'hub-required' });
 
   // Hold a neutral label until optimizer counts settle so the CTA doesn't flip
   // from "Done" to "Continue — N" mid-read.
-  const primaryLabel = optLoading ? 'Checking what’s next…' : hasNext ? `Continue — ${optRemaining} to finish` : 'Done';
-  const onPrimary = optLoading ? () => {} : hasNext ? goOptimize : goHub;
+  const primaryLabel = optLoading ? 'Checking what’s next…' : hasNext ? `Continue, ${optRemaining} to finish` : 'Done';
+  const onPrimary = optLoading ? () => {} : hasNext ? goOptimize : goQueue;
 
   // Second status line: only when required gaps remain.
   const nextLine = hasNext
@@ -459,10 +708,7 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any }> = ({ params
   return (
     <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: insets.top + 6 }}>
       <InboxHeader
-        onBack={() => {
-          if (backRoute && backRoute.name) navigation.navigate(backRoute.name as any, backRoute.params as any);
-          else navigation.goBack();
-        }}
+        onBack={onBack}
       />
       <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 24 }}>
         <SuccessBlock
@@ -523,14 +769,34 @@ const styles = StyleSheet.create({
   publishingText: { fontSize: 18, fontWeight: '600', color: IC.ink, letterSpacing: -0.3 },
   publishingSub: { fontSize: 14, color: IC.muted, textAlign: 'center', lineHeight: 20 },
 
+  partialBlock: { alignItems: 'center', paddingHorizontal: 24 },
+  partialCircle: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#F1F1EF', alignItems: 'center', justifyContent: 'center' },
+  partialTitle: { fontSize: 26, fontWeight: '700', color: IC.ink, letterSpacing: -0.6, marginTop: 20, textAlign: 'center' },
+  partialLine: { fontSize: 15, color: IC.muted, marginTop: 8, textAlign: 'center', lineHeight: 21 },
+
+  // Published item — a quiet receipt card before the per-channel rows.
+  itemCard: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EDEEF1', borderRadius: 16, padding: 12, marginBottom: 18 },
+  itemImage: { width: 72, height: 72, borderRadius: 12, backgroundColor: '#ECECEF' },
+  itemImageEmpty: { alignItems: 'center', justifyContent: 'center' },
+  itemInfo: { flex: 1, minWidth: 0, gap: 7 },
+  itemTitle: { fontSize: 16, lineHeight: 21, fontWeight: '700', color: IC.ink, letterSpacing: -0.2 },
+  itemMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  itemPrice: { fontSize: 14, fontWeight: '700', color: IC.ink },
+  itemMetaDot: { fontSize: 13, color: '#C4C8CE' },
+  itemQuantity: { fontSize: 13, fontWeight: '600', color: IC.muted },
+
   // Channel rows — calm Avec soft-card rows: logo · name · right-side link/status.
   channelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: IC.card, borderRadius: 16, paddingVertical: 13, paddingHorizontal: 14, marginBottom: 10 },
+  channelRowFailed: { backgroundColor: '#FBF5EA', borderWidth: 1, borderColor: '#EEDAB7' },
   channelName: { fontSize: 16, fontWeight: '700', color: IC.ink, letterSpacing: -0.2 },
   channelRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 13, fontWeight: '600', textAlign: 'right', flexShrink: 1 },
   liveLink: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   liveLinkText: { fontSize: 14, fontWeight: '700', color: IC.accent, letterSpacing: -0.1 },
+  failedStatus: { fontSize: 12, fontWeight: '600', color: '#8A5A12', flexShrink: 1 },
+  retryAction: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DDBE88', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
+  retryActionText: { fontSize: 13, fontWeight: '800', color: '#8A5A12' },
   channelHint: { fontSize: 13, color: IC.muted, marginTop: 8, marginBottom: 2, marginLeft: 4 },
 
   // Facebook pre-flight prompts (connect / computer-offline) — warm attention cards.
@@ -540,4 +806,3 @@ const styles = StyleSheet.create({
 });
 
 export default PublishConfirmationScreen;
-

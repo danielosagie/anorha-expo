@@ -80,6 +80,43 @@ const ENABLE_AUTOSAVE = true;
 
 type SerializedSaveSender = (token: number, isLatest: () => boolean) => Promise<boolean>;
 
+function sameValue(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return a == null && b == null;
+  if (typeof a !== typeof b || typeof a !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) if (!sameValue(a[k], b[k])) return false;
+  return true;
+}
+
+/**
+ * Does this form patch actually change a value?
+ *
+ * The editor re-emits equal values on mount from programmatic normalizations
+ * (autofill-from-canonical, variant recompute) that no seller asked for. Counting
+ * those as edits meant merely OPENING an item armed autosave, so the screen PUT
+ * whatever it was displaying back to the server — and when it had hydrated from a
+ * stale local cache, that stale title overwrote a newer save. Only a real value
+ * change is an edit.
+ */
+function patchChangesValue(prev: Record<string, any>, next: Record<string, any>): boolean {
+  for (const [platformKey, patch] of Object.entries(next || {})) {
+    if (!patch || typeof patch !== 'object') continue;
+    const prevPlatform = prev?.[platformKey];
+    if (!prevPlatform) return true; // platform added
+    for (const [field, value] of Object.entries(patch)) {
+      // An absent field and an empty list mean the same thing here, so normalizing
+      // one into the other is not an edit.
+      const blank = (v: any) => v == null || (Array.isArray(v) && v.length === 0);
+      if (blank(prevPlatform[field]) && blank(value)) continue;
+      if (!sameValue(prevPlatform[field], value)) return true;
+    }
+  }
+  return false;
+}
+
 // Single-flight, latest-at-send serializer. Requests made during a send share one
 // trailing pass; incrementing requestToken also invalidates response-side effects
 // from the older pass immediately.
@@ -2993,33 +3030,58 @@ const ProductDetailScreen = observer(
       }
     };
 
-    // In the delete handler
     const handleDelete = () => {
       Alert.alert(
-        'Archive product',
-        'Archive this product?',
+        'Delete product',
+        'Delete this product permanently?',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Archive', onPress: () => archiveProduct() },
+          { text: 'Delete', style: 'destructive', onPress: () => { void deleteProduct(); } },
         ]
       );
     };
 
-    // Add functions
     const archiveProduct = async () => {
       if (!detailedItem?.Id) return;
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('Authentication required');
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/archive`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
+        const url = `${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`;
+        const payload = { IsArchived: true };
+        const response = await fetch(url, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
-        if (!response.ok) throw new Error('Archive failed');
+        const responseBody = await response.text().catch(() => '');
+        if (!response.ok) {
+          throw new Error(`Archive failed (${response.status}): ${responseBody || 'Empty response'}`);
+        }
         navigation.goBack();
       } catch (error) {
         log.error('Error archiving product:', error);
         Alert.alert('Archive failed', 'Please try again.');
+      }
+    };
+
+    const deleteProduct = async () => {
+      if (!detailedItem?.Id) return;
+      try {
+        const token = await ensureSupabaseJwt();
+        if (!token) throw new Error('Authentication required');
+        const url = `${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`;
+        const response = await fetch(url, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const responseBody = await response.text().catch(() => '');
+        if (!response.ok) {
+          throw new Error(`Delete failed (${response.status}): ${responseBody || 'Empty response'}`);
+        }
+        navigation.goBack();
+      } catch (error) {
+        log.error('Error deleting product:', error);
+        Alert.alert('Delete failed', 'Please try again.');
       }
     };
 
@@ -4565,6 +4627,10 @@ const ProductDetailScreen = observer(
               platformLocations={buildPlatformLocations()}
               onChangePlatforms={(next) => {
                 log.debug('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
+                // A patch that changes nothing is a normalization, not an edit. Arming
+                // autosave for it made opening an item PUT its displayed values back to
+                // the server, clobbering a newer save with a stale local one.
+                if (!patchChangesValue(displayedPlatformsRef.current, next)) return;
                 // Genuine user edit: advance the autosave version token and clear
                 // any prior save error so autosave re-arms.
                 editVersionRef.current += 1;
