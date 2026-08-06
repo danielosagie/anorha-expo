@@ -32,15 +32,19 @@ import {
 } from '../components/importinbox/InboxKit';
 import {
   buildQuestionCards,
+  buildHandoffOffer,
   candidateForItem,
+  advanceHandoffStreak,
+  decisionLabelForCard,
   generatedTitleDecisions,
   groupDecisions,
-  HANDOFF_REASONS,
+  handoffKey,
   manualTitleDecision,
   pairDecision,
   retryCommitDecision,
   whichOneDecision,
   type CardAnswer,
+  type HandoffStreak,
   type QuestionCardModel,
   type QueueDecision,
 } from '../components/import/questionQueue';
@@ -81,14 +85,8 @@ interface LedgerEntry {
   item: SyncItem;
   outcome: LedgerOutcome;
   catalogTitle?: string | null;
+  decisionLabel?: string;
   updatedAt: number;
-}
-
-interface PairStreak {
-  reason: QuestionCardModel['reason'];
-  answer: Exclude<CardAnswer, 'unsure'>;
-  count: number;
-  thumbnails: Array<string | null>;
 }
 
 interface HandoffState {
@@ -97,6 +95,7 @@ interface HandoffState {
   items: SyncItem[];
   decisions: QueueDecision[];
   thumbnails: Array<string | null>;
+  decisionLabel: string;
 }
 
 const seenKey = (connectionId: string) => `@anorha/question-queue/seen/${connectionId}`;
@@ -163,7 +162,7 @@ export default function ImportQuestionQueueScreen() {
 
   const finishRef = useRef(false);
   const returnToListRef = useRef(false);
-  const streakRef = useRef<PairStreak | null>(null);
+  const streakRef = useRef<HandoffStreak | null>(null);
   const suppressedHandoffsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -195,10 +194,11 @@ export default function ImportQuestionQueueScreen() {
   // A killed app resumes directly in the queue. Rebuild the progress baseline
   // from the authoritative remaining cards on that first resumed render.
   useEffect(() => {
-    if (stage === 'queue' && queueStartCount === 0 && mainCards.length > 0) {
-      setQueueStartCount(mainCards.length);
+    const attentionCount = result?.needsAttention.length ?? 0;
+    if (stage === 'queue' && queueStartCount === 0 && attentionCount > 0) {
+      setQueueStartCount(attentionCount);
     }
-  }, [mainCards.length, queueStartCount, stage]);
+  }, [queueStartCount, result?.needsAttention.length, stage]);
 
   useEffect(() => {
     setSelectedCandidateId(null);
@@ -281,6 +281,7 @@ export default function ImportQuestionQueueScreen() {
     decisions: QueueDecision[],
     sourceItems: SyncItem[],
     bulkResults?: BulkResolveResult[],
+    decisionLabel?: string,
   ) => {
     const settledIds = bulkResults
       ? new Set(bulkResults.filter(isSettled).map((entry) => entry.platformId))
@@ -310,6 +311,7 @@ export default function ImportQuestionQueueScreen() {
           },
           outcome: itemDecision.outcome,
           catalogTitle: candidate?.title ?? null,
+          decisionLabel,
           updatedAt: Date.now(),
         });
       }
@@ -344,11 +346,13 @@ export default function ImportQuestionQueueScreen() {
       void finishQueue();
       return;
     }
-    setQueueStartCount(mainCards.length);
+    setQueueStartCount(
+      result?.needsAttention.length ?? mainCards.reduce((total, card) => total + card.items.length, 0),
+    );
     setQueueNotice(null);
     void AsyncStorage.setItem(activeKey(connectionId), '1');
     setStage('queue');
-  }, [connectionId, finishQueue, mainCards.length]);
+  }, [connectionId, finishQueue, mainCards, result?.needsAttention.length]);
 
   useEffect(() => {
     if (stage !== 'queue' || !result || loading || currentCard || finishRef.current) return;
@@ -378,6 +382,27 @@ export default function ImportQuestionQueueScreen() {
     return true;
   }, [refresh]);
 
+  const offerHandoffAfter = useCallback((
+    card: QuestionCardModel,
+    answer: CardAnswer,
+    remainingCards: QuestionCardModel[],
+  ): boolean => {
+    const firstItem = card.items[0];
+    const thumbnail = firstItem
+      ? incomingDetails[firstItem.platformId]?.imageUrl ?? firstItem.imageUrl ?? null
+      : null;
+    const next = advanceHandoffStreak(streakRef.current, card, answer, thumbnail);
+    streakRef.current = next;
+    const offer = buildHandoffOffer(next, remainingCards);
+    if (!offer || suppressedHandoffsRef.current.has(handoffKey(offer.reason, offer.answer))) {
+      return false;
+    }
+    setHandoff(offer);
+    setHandoffError(null);
+    setStage('handoff');
+    return true;
+  }, [incomingDetails]);
+
   const answerPair = useCallback(async (answer: CardAnswer) => {
     const card = currentCard;
     const item = card?.items[0];
@@ -389,45 +414,13 @@ export default function ImportQuestionQueueScreen() {
       if (await returnAfterTarget()) return;
 
       const otherCards = mainCards.filter((entry) => entry.id !== card.id);
-      if (answer === 'unsure' || !HANDOFF_REASONS.has(card.reason)) {
-        streakRef.current = null;
-      } else {
-        const previous = streakRef.current;
-        const thumb = incomingDetails[item.platformId]?.imageUrl ?? item.imageUrl ?? null;
-        const next: PairStreak = previous && previous.reason === card.reason && previous.answer === answer
-          ? {
-              reason: card.reason,
-              answer,
-              count: previous.count + 1,
-              thumbnails: [...previous.thumbnails, thumb].slice(-3),
-            }
-          : { reason: card.reason, answer, count: 1, thumbnails: [thumb] };
-        streakRef.current = next;
-        const remainingClassCards = otherCards.filter((entry) => entry.reason === card.reason && entry.kind === 'pair');
-        if (
-          next.count === 3 &&
-          remainingClassCards.length > 0 &&
-          !suppressedHandoffsRef.current.has(String(card.reason))
-        ) {
-          const remainingItems = remainingClassCards.flatMap((entry) => entry.items);
-          setHandoff({
-            reason: card.reason,
-            answer,
-            items: remainingItems,
-            decisions: remainingItems.map((entry) => pairDecision(entry, answer)),
-            thumbnails: next.thumbnails,
-          });
-          setHandoffError(null);
-          setStage('handoff');
-          return;
-        }
-      }
+      if (offerHandoffAfter(card, answer, otherCards)) return;
 
       if (otherCards.length === 0) await finishQueue();
     } catch (resolveError) {
       setActionError(displayError(resolveError));
     }
-  }, [currentCard, finishQueue, incomingDetails, mainCards, resolveOne, returnAfterTarget]);
+  }, [currentCard, finishQueue, mainCards, offerHandoffAfter, resolveOne, returnAfterTarget]);
 
   const answerWhichOne = useCallback(async (answer: CardAnswer) => {
     const card = currentCard;
@@ -439,17 +432,26 @@ export default function ImportQuestionQueueScreen() {
       await resolveOne(item, itemDecision);
       setSelectedCandidateId(null);
       if (await returnAfterTarget()) return;
-      if (mainCards.filter((entry) => entry.id !== card.id).length === 0) await finishQueue();
+      const otherCards = mainCards.filter((entry) => entry.id !== card.id);
+      if (offerHandoffAfter(card, answer, otherCards)) return;
+      if (otherCards.length === 0) await finishQueue();
     } catch (resolveError) {
       setActionError(displayError(resolveError));
     }
-  }, [currentCard, finishQueue, mainCards, resolveOne, returnAfterTarget, selectedCandidateId]);
+  }, [currentCard, finishQueue, mainCards, offerHandoffAfter, resolveOne, returnAfterTarget, selectedCandidateId]);
 
-  const runBulkCardAnswer = useCallback(async (card: QuestionCardModel, decisions: QueueDecision[]) => {
+  const runBulkCardAnswer = useCallback(async (
+    card: QuestionCardModel,
+    decisions: QueueDecision[],
+    answer?: CardAnswer,
+  ) => {
     setActionError(null);
     try {
       const response = await resolveBulk(decisions, importId ?? undefined);
-      recordDecisions(decisions, card.items, response.results);
+      const decisionLabel = answer && answer !== 'unsure'
+        ? decisionLabelForCard(card, answer)
+        : undefined;
+      recordDecisions(decisions, card.items, response.results, decisionLabel);
       const outcome = bulkResolutionSummary(response.results);
       const failed = outcome.conflicts + outcome.errors;
       setQueueNotice(
@@ -457,16 +459,18 @@ export default function ImportQuestionQueueScreen() {
       );
       if (await returnAfterTarget()) return;
       const otherCards = mainCards.filter((entry) => entry.id !== card.id);
+      if (failed === 0 && answer && offerHandoffAfter(card, answer, otherCards)) return;
+      if (failed > 0) streakRef.current = null;
       if (failed === 0 && otherCards.length === 0) await finishQueue();
       else setStage('queue');
     } catch (bulkError) {
       setActionError(displayError(bulkError, 'Those answers did not save. They are back in the queue.'));
     }
-  }, [finishQueue, importId, mainCards, recordDecisions, resolveBulk, returnAfterTarget]);
+  }, [finishQueue, importId, mainCards, offerHandoffAfter, recordDecisions, resolveBulk, returnAfterTarget]);
 
   const answerGroup = useCallback((answer: CardAnswer) => {
     if (!currentCard) return;
-    void runBulkCardAnswer(currentCard, groupDecisions(currentCard, answer));
+    void runBulkCardAnswer(currentCard, groupDecisions(currentCard, answer), answer);
   }, [currentCard, runBulkCardAnswer]);
 
   const generateTitles = useCallback(() => {
@@ -512,7 +516,7 @@ export default function ImportQuestionQueueScreen() {
     setHandoffError(null);
     try {
       const response = await resolveBulk(handoff.decisions, importId ?? undefined);
-      recordDecisions(handoff.decisions, handoff.items, response.results);
+      recordDecisions(handoff.decisions, handoff.items, response.results, handoff.decisionLabel);
       const outcome = bulkResolutionSummary(response.results);
       const failed = outcome.conflicts + outcome.errors;
       setQueueNotice(
@@ -529,7 +533,7 @@ export default function ImportQuestionQueueScreen() {
   }, [finishQueue, handoff, importId, mainCards, recordDecisions, resolveBulk]);
 
   const keepShowing = useCallback(() => {
-    if (handoff) suppressedHandoffsRef.current.add(String(handoff.reason));
+    if (handoff) suppressedHandoffsRef.current.add(handoffKey(handoff.reason, handoff.answer));
     streakRef.current = null;
     setHandoff(null);
     setHandoffError(null);
@@ -554,9 +558,9 @@ export default function ImportQuestionQueueScreen() {
     if (!card) return;
     returnToListRef.current = true;
     setTargetCardId(card.id);
-    setQueueStartCount(cards.length);
+    setQueueStartCount(result?.needsAttention.length ?? card.items.length);
     setStage('queue');
-  }, [cards]);
+  }, [cards, result?.needsAttention.length]);
 
   const changeSettledEntry = useCallback(async (entry: LedgerEntry) => {
     setListError(null);
@@ -565,7 +569,7 @@ export default function ImportQuestionQueueScreen() {
     const itemDecision: QueueDecision = {
       platformId: entry.platformId,
       choice,
-      version: Number.isInteger(entry.item.version) ? (entry.item.version as number) : 0,
+      version: Number.isInteger(entry.item.version) ? (entry.item.version as number) : undefined,
       outcome,
     };
     try {
@@ -581,11 +585,18 @@ export default function ImportQuestionQueueScreen() {
 
   const summary = result?.summary;
   const questionItemCount = mainCards.reduce((total, card) => total + card.items.length, 0);
-  const remainingCount = targetCardId ? cards.length : mainCards.length;
+  const remainingCount = result?.needsAttention.length ?? questionItemCount;
   const progressTotal = Math.max(queueStartCount, remainingCount, 1);
   const progressPct = ((progressTotal - remainingCount) / progressTotal) * 100;
   const busy = resolving != null;
   const hasUnresolved = cards.length > 0 || (summary?.needsAttention ?? 0) > 0;
+  const pendingCommitCount = summary?.pendingCommit ?? 0;
+
+  useEffect(() => {
+    if (stage !== 'receipt' || pendingCommitCount === 0) return;
+    const timer = setTimeout(() => void refresh(), 1500);
+    return () => clearTimeout(timer);
+  }, [pendingCommitCount, refresh, stage]);
 
   if ((stage === 'loading' || (loading && !result)) && !error) {
     return (
@@ -796,6 +807,18 @@ export default function ImportQuestionQueueScreen() {
     );
   }
 
+  if (stage === 'receipt' && pendingCommitCount > 0) {
+    return (
+      <View style={[styles.center, { paddingTop: insets.top }]}>
+        <ActivityIndicator color={IC.accent} />
+        <Text style={styles.doneTitle}>Finishing your import</Text>
+        <Text style={styles.screenSubtitle}>
+          {countLabel(pendingCommitCount, 'item')} still being added to your catalog.
+        </Text>
+      </View>
+    );
+  }
+
   if (stage === 'receipt' && !hasUnresolved) {
     const catalogTotal = (summary?.autoLinked ?? 0) + (summary?.autoCreated ?? 0);
     return (
@@ -824,9 +847,11 @@ export default function ImportQuestionQueueScreen() {
   }
 
   const needsRows = result?.needsAttention ?? [];
-  const linkedRows = ledger.filter((entry) => entry.outcome === 'linked');
-  const addedRows = ledger.filter((entry) => entry.outcome === 'added');
-  const skippedRows = ledger.filter((entry) => entry.outcome === 'skipped');
+  const needsIds = new Set(needsRows.map((item) => item.platformId));
+  const linkedRows = ledger.filter((entry) => entry.outcome === 'linked' && !needsIds.has(entry.platformId));
+  const addedRows = ledger.filter((entry) => entry.outcome === 'added' && !needsIds.has(entry.platformId));
+  const skippedRows = ledger.filter((entry) => entry.outcome === 'skipped' && !needsIds.has(entry.platformId));
+  const ledgerById = new Map(ledger.map((entry) => [entry.platformId, entry]));
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
@@ -853,7 +878,11 @@ export default function ImportQuestionQueueScreen() {
             >
               <View style={styles.listCopy}>
                 <Text style={styles.listTitle} numberOfLines={1}>{item.title || 'Untitled item'}</Text>
-                <Text style={styles.listSub} numberOfLines={2}>{item.reason || 'Choose what to do'}</Text>
+                <Text style={styles.listSub} numberOfLines={2}>
+                  {ledgerById.get(item.platformId)?.decisionLabel
+                    ? `${ledgerById.get(item.platformId)?.decisionLabel}. ${item.reason || 'It did not finish importing.'}`
+                    : item.reason || 'Choose what to do'}
+                </Text>
               </View>
               <MaterialCommunityIcons name="chevron-right" size={21} color={IC.muted} />
             </Pressable>
@@ -871,7 +900,7 @@ export default function ImportQuestionQueueScreen() {
             <OutcomeRow
               key={entry.platformId}
               title={entry.item.title || 'Untitled item'}
-              sub={entry.catalogTitle || 'Your catalog item'}
+              sub={entry.decisionLabel || entry.catalogTitle || 'Your catalog item'}
               action="Undo"
               busy={resolving === entry.platformId}
               onAction={() => void changeSettledEntry(entry)}
@@ -890,6 +919,7 @@ export default function ImportQuestionQueueScreen() {
             <OutcomeRow
               key={entry.platformId}
               title={entry.item.title || 'Untitled item'}
+              sub={entry.decisionLabel}
               action="Undo"
               busy={resolving === entry.platformId}
               onAction={() => void changeSettledEntry(entry)}

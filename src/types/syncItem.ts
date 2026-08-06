@@ -89,6 +89,10 @@ export interface ResolveResult {
     autoLinked: number;
     autoCreated: number;
     needsAttention: number;
+    /** Rows whose decision is saved but whose catalog write is still running. */
+    pendingCommit?: number;
+    pendingLinked?: number;
+    pendingCreated?: number;
     skipped: number;
     pushSide: number;
     clean: boolean;

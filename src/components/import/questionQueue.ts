@@ -7,6 +7,11 @@ import type {
   SyncItem,
 } from '../../types/syncItem';
 import { buildLookAlikeGroupDecisions } from '../../lib/groupResolution';
+import {
+  advanceAnswerStreak,
+  selectHandoffCards,
+  type HandoffStreak as AnswerStreak,
+} from '../../lib/handoffStreak';
 
 export type QuestionCardKind =
   | 'pair'
@@ -31,11 +36,45 @@ export interface QueueDecision extends BulkResolveItem {
   outcome: 'linked' | 'added' | 'skipped';
 }
 
+export type HandoffStreak = AnswerStreak<QuestionCardModel['reason']>;
+
+export interface QuestionHandoffOffer {
+  reason: QuestionCardModel['reason'];
+  answer: Exclude<CardAnswer, 'unsure'>;
+  items: SyncItem[];
+  decisions: QueueDecision[];
+  thumbnails: Array<string | null>;
+  decisionLabel: string;
+}
+
 export const HANDOFF_REASONS: ReadonlySet<GroupKey> = new Set([
+  'multiple_candidates',
   'weak_match',
   'field_conflict',
   'stale_link',
+  'look_alike_group',
+  'duplicate_target',
+  'bundle',
 ]);
+
+const HANDOFF_CARD_KINDS: ReadonlySet<QuestionCardKind> = new Set([
+  'pair',
+  'which_one',
+  'look_alike_group',
+  'duplicate_target',
+  'bundle',
+]);
+
+function canHandoff(card: QuestionCardModel, answer: CardAnswer): boolean {
+  if (answer === 'unsure') return false;
+  if (!HANDOFF_REASONS.has(card.reason) || !HANDOFF_CARD_KINDS.has(card.kind)) return false;
+  // Candidate identities vary by card. "It's new" is reusable, but selecting
+  // a candidate is not.
+  if (card.kind === 'which_one') return answer === 'secondary';
+  // A bundle row has one real CAS identity, but its detected parts do not.
+  // Applying "Separate items" across cards would require inventing part ids.
+  return card.kind !== 'bundle' || answer === 'primary';
+}
 
 function cardKindFor(reason: GroupKey): QuestionCardKind {
   switch (reason) {
@@ -189,6 +228,70 @@ export function groupDecisions(card: QuestionCardModel, answer: CardAnswer): Que
   }
 
   return card.items.map((item) => decision(item, answer === 'primary' ? 'create' : 'ignore'));
+}
+
+export function decisionsForCard(card: QuestionCardModel, answer: CardAnswer): QueueDecision[] {
+  if (card.kind === 'pair' && card.items[0]) return [pairDecision(card.items[0], answer)];
+  if (card.kind === 'which_one' && card.items[0]) return [whichOneDecision(card.items[0], answer)];
+  if (HANDOFF_CARD_KINDS.has(card.kind)) return groupDecisions(card, answer);
+  return [];
+}
+
+export function handoffKey(
+  reason: QuestionCardModel['reason'],
+  answer: Exclude<CardAnswer, 'unsure'>,
+): string {
+  return `${reason}:${answer}`;
+}
+
+export function advanceHandoffStreak(
+  previous: HandoffStreak | null,
+  card: QuestionCardModel,
+  answer: CardAnswer,
+  thumbnail: string | null,
+): HandoffStreak | null {
+  return advanceAnswerStreak(
+    previous,
+    card,
+    answer,
+    thumbnail,
+    canHandoff(card, answer),
+  );
+}
+
+export function decisionLabelForCard(
+  card: QuestionCardModel,
+  answer: Exclude<CardAnswer, 'unsure'>,
+): string {
+  if (card.kind === 'look_alike_group') return answer === 'primary' ? 'Combined' : 'Kept separate';
+  if (card.kind === 'duplicate_target') return answer === 'primary' ? 'Merged' : 'Kept separate';
+  if (card.kind === 'bundle') return answer === 'primary' ? 'Kept as one set' : 'Split into separate items';
+  return answer === 'primary' ? 'Accepted the suggested match' : 'Added as a new item';
+}
+
+export function buildHandoffOffer(
+  streak: HandoffStreak | null,
+  remainingCards: QuestionCardModel[],
+): QuestionHandoffOffer | null {
+  const selection = selectHandoffCards(
+    streak,
+    remainingCards,
+    (card) => canHandoff(card, streak?.answer ?? 'unsure'),
+  );
+  if (!selection) return null;
+
+  const items = selection.cards.flatMap((card) => card.items);
+  const decisions = selection.cards.flatMap((card) => decisionsForCard(card, selection.answer));
+  if (decisions.length !== items.length) return null;
+
+  return {
+    reason: selection.reason,
+    answer: selection.answer,
+    items,
+    decisions,
+    thumbnails: selection.thumbnails,
+    decisionLabel: decisionLabelForCard(selection.cards[0], selection.answer),
+  };
 }
 
 export function generatedTitleDecisions(items: SyncItem[]): QueueDecision[] {

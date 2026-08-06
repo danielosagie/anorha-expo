@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildLookAlikeGroupDecisions } from '../src/lib/groupResolution.ts';
 import {
+  advanceAnswerStreak,
+  selectHandoffCards,
+} from '../src/lib/handoffStreak.ts';
+import {
   bulkResolutionSummary,
   chunkBulkResolveItems,
   reconcileNeedsAttentionAfterBulk,
@@ -92,4 +96,46 @@ test('an item with no CAS token is never sent as a fabricated version 0', () => 
   assert.deepEqual(unsendable.map((i) => i.platformId), ['b']);
   // SyncItems.Version is NOT NULL DEFAULT 1, so a 0 could never match CAS.
   assert.ok(!sendable.some((i) => i.version === 0));
+});
+
+test('three same-answer group cards offer a handoff for the remaining reason class', () => {
+  const cards = ['group-a', 'group-b', 'group-c', 'group-d'].map((groupId, groupIndex) => ({
+    reason: 'look_alike_group',
+    kind: 'look_alike_group',
+    id: groupId,
+    items: [
+      { ...syncItem(`${groupId}-1`, groupIndex * 2 + 1), groupId },
+      { ...syncItem(`${groupId}-2`, groupIndex * 2 + 2), groupId },
+    ],
+  }));
+  let streak = null;
+  for (const card of cards.slice(0, 3)) {
+    streak = advanceAnswerStreak(streak, card, 'secondary', null, true);
+  }
+
+  const offer = selectHandoffCards(streak, cards.slice(3), () => true);
+  assert.ok(offer);
+  assert.equal(offer.reason, 'look_alike_group');
+  assert.equal(offer.answer, 'secondary');
+  const decisions = offer.cards.flatMap((card) => buildLookAlikeGroupDecisions(card.items, card.id, offer.answer));
+  assert.deepEqual(offer.cards.flatMap((card) => card.items).map((item) => item.platformId), ['group-d-1', 'group-d-2']);
+  assert.deepEqual(decisions.map((decision) => [decision.platformId, decision.version]), [
+    ['group-d-1', 7],
+    ['group-d-2', 8],
+  ]);
+  assert.ok(decisions.every((decision) => decision.platformId && decision.version !== 0));
+});
+
+test('a mixed group answer resets the reason-plus-answer streak and does not offer a handoff', () => {
+  const cards = ['group-a', 'group-b', 'group-c', 'group-d'].map((id) => ({
+    reason: 'look_alike_group',
+    kind: 'look_alike_group',
+    id,
+  }));
+  let streak = advanceAnswerStreak(null, cards[0], 'secondary', null, true);
+  streak = advanceAnswerStreak(streak, cards[1], 'primary', null, true);
+  streak = advanceAnswerStreak(streak, cards[2], 'secondary', null, true);
+
+  assert.equal(streak?.count, 1);
+  assert.equal(selectHandoffCards(streak, cards.slice(3), () => true), null);
 });
