@@ -75,6 +75,13 @@ export interface SyncItem {
   bundleParts?: Array<{ sku?: string | null; title?: string | null }>;
   /** Full-fidelity photo passthrough used by title generation. */
   imageUrls?: string[];
+  /** Source-grounded title-generation signals preserved from CSV/file imports. */
+  description?: string | null;
+  quantity?: number | null;
+  brand?: string | null;
+  category?: string | null;
+  importDecision?: { keepCanonical?: boolean };
+  commitError?: string;
 }
 
 export interface ResolveResult {
@@ -145,8 +152,16 @@ export interface BulkResolveResult {
   status: 'ok' | 'conflict' | 'alreadyResolved' | 'error';
   version?: number;
   message?: string;
+  generatedTitle?: string;
 }
 
 export interface BulkResolveResponse {
   results: BulkResolveResult[];
+  timing?: {
+    readMs: number;
+    prepareMs: number;
+    casMs: number;
+    enqueueMs: number;
+    totalMs: number;
+  };
 }

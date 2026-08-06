@@ -201,5 +201,57 @@ export function useResolution(connectionId: string | null | undefined, importId?
     [connectionId, importId, refresh],
   );
 
-  return { result, loading, error, resolving, refresh, resolve, resolveBulk };
+  const generateTitlesBulk = useCallback(
+    async (items: BulkResolveItem[], bulkImportId?: string): Promise<
+      BulkResolveResponse & { summary: ReturnType<typeof bulkResolutionSummary> }
+    > => {
+      if (!connectionId || items.length === 0) {
+        return { results: [], summary: bulkResolutionSummary([]) };
+      }
+
+      setResolving('title-generation');
+      try {
+        const token = await ensureSupabaseJwt();
+        const results = [] as BulkResolveResponse['results'];
+        for (const chunk of chunkBulkResolveItems(items)) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 20000);
+          try {
+            const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/generate-titles`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                importId: bulkImportId ?? importId ?? undefined,
+                items: chunk.map(({ platformId, version }) => ({ platformId, version })),
+              }),
+              signal: controller.signal,
+            });
+            if (!res.ok) {
+              const message = `Title generation failed: ${res.status}`;
+              results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
+              continue;
+            }
+            const payload = (await res.json()) as BulkResolveResponse;
+            results.push(...normalizeBulkResolveResults(chunk, payload?.results));
+          } catch (chunkError: any) {
+            const message = chunkError?.name === 'AbortError'
+              ? 'Generating this title batch timed out.'
+              : (chunkError?.message ?? 'Could not generate this title batch.');
+            results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+        setResult((previous) => previous
+          ? { ...previous, needsAttention: reconcileNeedsAttentionAfterBulk(previous.needsAttention, results) }
+          : previous);
+        return { results, summary: bulkResolutionSummary(results) };
+      } finally {
+        setResolving(null);
+      }
+    },
+    [connectionId, importId],
+  );
+
+  return { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk };
 }

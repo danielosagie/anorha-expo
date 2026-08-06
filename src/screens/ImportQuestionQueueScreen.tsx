@@ -138,7 +138,7 @@ export default function ImportQuestionQueueScreen() {
   const insets = useSafeAreaInsets();
   const { connectionId, platformName, importId } = route.params;
   const platform = platformLabel(platformName);
-  const { result, loading, error, resolving, refresh, resolve, resolveBulk } = useResolution(connectionId, importId);
+  const { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk } = useResolution(connectionId, importId);
 
   const [stage, setStage] = useState<Stage>('loading');
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
@@ -175,11 +175,12 @@ export default function ImportQuestionQueueScreen() {
       if (!alive) return;
       setLedger(safeLedger(savedLedger));
       if (route.params.startAt === 'list') setStage('list');
+      else if (route.params.startAt === 'front') setStage('front');
       else if (active === '1') setStage('queue');
       else setStage(seen === '1' ? 'front' : 'explainer');
     }).catch(() => {
       if (!alive) return;
-      setStage('explainer');
+      setStage(route.params.startAt === 'front' ? 'front' : 'explainer');
     });
     return () => {
       alive = false;
@@ -227,15 +228,18 @@ export default function ImportQuestionQueueScreen() {
       item.resolution.kind === 'link' ? item.resolution.canonical.id : '',
     ]).filter(Boolean)));
     setDetailsLoading(true);
-    void Promise.all([
-      Promise.all(items.map(async (item) => {
+    const incomingHydration = platform.toLowerCase() === 'csv'
+      ? Promise.resolve(Object.entries(initialIncoming))
+      : Promise.all(items.map(async (item) => {
         try {
           return [item.platformId, await fetchImportIncomingItemDetails(item, platform)] as const;
         } catch (hydrateError) {
           log.warn('incoming hydration failed', item.platformId, hydrateError);
           return [item.platformId, incomingItemDetailsFromPayload(item, platform)] as const;
         }
-      })),
+      }));
+    void Promise.all([
+      incomingHydration,
       fetchImportCandidateDetails(candidateIds, platform).catch((hydrateError) => {
         log.warn('candidate hydration failed', hydrateError);
         return {};
@@ -471,10 +475,26 @@ export default function ImportQuestionQueueScreen() {
     void runBulkCardAnswer(currentCard, groupDecisions(currentCard, answer), answer);
   }, [currentCard, runBulkCardAnswer]);
 
-  const generateTitles = useCallback(() => {
+  const generateTitles = useCallback(async () => {
     if (!currentCard || currentCard.kind !== 'title_quality') return;
-    void runBulkCardAnswer(currentCard, generatedTitleDecisions(currentCard.items));
-  }, [currentCard, runBulkCardAnswer]);
+    setActionError(null);
+    const decisions = generatedTitleDecisions(currentCard.items);
+    try {
+      const response = await generateTitlesBulk(decisions, importId ?? undefined);
+      const titleById = new Map(response.results.map((entry) => [entry.platformId, entry.generatedTitle]));
+      const titledItems = currentCard.items.map((item) => ({
+        ...item,
+        title: titleById.get(item.platformId) || item.title,
+      }));
+      recordDecisions(decisions, titledItems, response.results, 'Title generated');
+      const failed = response.summary.conflicts + response.summary.errors;
+      setQueueNotice(bulkResolutionNotice(response.summary));
+      if (failed === 0 && mainCards.length === 1) await finishQueue();
+      else setStage('queue');
+    } catch (generationError) {
+      setActionError(displayError(generationError, 'Those titles were not generated. The rows are still in the queue.'));
+    }
+  }, [currentCard, finishQueue, generateTitlesBulk, importId, mainCards.length, recordDecisions]);
 
   const enterManualTitles = useCallback(() => {
     if (!currentCard || currentCard.kind !== 'title_quality') return;

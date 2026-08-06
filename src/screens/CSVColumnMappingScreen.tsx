@@ -337,6 +337,7 @@ export function CSVColumnMappingScreen() {
                         navigation.replace('ImportQuestionQueue', {
                             connectionId: newConnection.Id,
                             platformName: 'csv',
+                            startAt: 'front',
                         });
                         return;
                     }
@@ -359,6 +360,7 @@ export function CSVColumnMappingScreen() {
             navigation.replace('ImportQuestionQueue', {
                 connectionId: newConnection.Id,
                 platformName: 'csv',
+                startAt: 'front',
             });
         } catch (error) {
             log.error('[CSVColumnMapping] Error processing data:', error);

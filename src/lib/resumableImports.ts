@@ -33,10 +33,7 @@ export function findResumableCsvImports(
   for (const connection of status.connections) {
     if (connection.platformType?.toLowerCase() !== 'csv') continue;
     const recent = recentByConnection.get(connection.connectionId);
-    const importPending = recent
-      ? Math.max(0, recent.itemsTotal - recent.itemsCommitted)
-      : 0;
-    const pendingItems = Math.max(connection.needsAttention, importPending);
+    const pendingItems = Math.max(0, connection.needsAttention);
     const importOpen = recent && recent.status.toLowerCase() !== 'complete';
     if (pendingItems <= 0 && !importOpen) continue;
 
@@ -60,7 +57,7 @@ export function findResumableCsvImports(
     entries.set(recent.connectionId, {
       connectionId: recent.connectionId,
       importId: recent.importId || undefined,
-      pendingItems: Math.max(0, recent.itemsTotal - recent.itemsCommitted),
+      pendingItems: Math.max(0, recent.itemsFailed),
       status: recent.status,
     });
   }
