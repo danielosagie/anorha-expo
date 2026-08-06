@@ -21,6 +21,8 @@ type Props = {
   armed?: string;
   /** Width of the left-edge grab strip. */
   edgeWidth?: number;
+  /** Optional top inset that keeps an in-screen header back button tappable. */
+  edgeTop?: number;
   /** How far (px) the page slides right at a full pull. */
   shift?: number;
   /** Solid color revealed behind the sliding page (never the previous screen). */
@@ -60,6 +62,7 @@ export const SwipeBackRing: React.FC<Props> = ({
   accent = '#9CA3AF',
   armed = '#333333',
   edgeWidth = 32,
+  edgeTop = 0,
   shift = 110,
   surface = '#FFFFFF',
   enabled = true,
@@ -205,7 +208,7 @@ export const SwipeBackRing: React.FC<Props> = ({
     return (
       <View style={styles.root}>
         {children}
-        <View {...pan.panHandlers} style={[styles.edge, { width: edgeWidth }]} />
+        <View {...pan.panHandlers} style={[styles.edge, { width: edgeWidth, top: edgeTop }]} />
         <Animated.View
           pointerEvents="none"
           style={[styles.pinRing, {
@@ -252,7 +255,7 @@ export const SwipeBackRing: React.FC<Props> = ({
       </Animated.View>
 
       {/* Left-edge grab strip. */}
-      <View {...pan.panHandlers} style={[styles.edge, { width: edgeWidth }]} />
+      <View {...pan.panHandlers} style={[styles.edge, { width: edgeWidth, top: edgeTop }]} />
 
       {/* Floating ring affordance at the thumb — appears only while pulling. */}
       <Animated.View

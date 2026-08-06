@@ -133,11 +133,6 @@ export const ROUTES: ExportRoute[] = [
     load: () => import('../DeleteAccountInfoScreen') },
 
   // ---------- Import ----------
-  { key: 'import-hub', title: 'Import inbox (hub)', group: 'Import', routeName: 'ImportHub',
-    load: () => import('../ImportHubScreen') },
-  { key: 'sync-inbox', title: 'Match resolver deck', group: 'Import', routeName: 'SyncInbox',
-    params: { connectionId: 'conn_shopify', platformName: 'My Shopify Store' },
-    load: () => import('../SyncInboxScreen') },
   { key: 'import-complete', title: 'Import complete (summary)', group: 'Import', routeName: 'PublishConfirmation',
     params: { origin: 'import', importCounts: { linked: 3, created: 1, ignored: 0, autoLinked: 121, autoCreated: 57 }, connectionId: 'conn_shopify', platformName: 'My Shopify Store', platforms: ['shopify'] },
     load: () => import('../PublishConfirmationScreen') },

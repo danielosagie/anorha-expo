@@ -67,7 +67,7 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     marketingUpdates: false,
   };
 
-  // ---- Import Hub / SyncInbox demo data ----
+  // ---- Import review demo data ----
   const inboxSummary = {
     totalNeedsAttention: 7,
     byReason: { multiple_candidates: 4, weak_match: 3 },
@@ -135,7 +135,7 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !(win
     Products: { Title: v.Title, Description: v.Description },
   }));
 
-  // CompareSheet fetches ONE variant with `.eq('Id', x).maybeSingle()`, which
+  // Candidate detail fetches ONE variant with `.eq('Id', x).maybeSingle()`, which
   // PostgREST encodes as `?...&Id=eq.<value>`. Honor that filter so maybeSingle
   // gets exactly the matching row instead of all 8 (which makes it error/return
   // null and the sheet fall back). Unfiltered calls (the optimizer queues page

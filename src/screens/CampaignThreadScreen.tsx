@@ -4,6 +4,7 @@ import {
   Keyboard,
   PanResponder,
   Platform,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -539,6 +540,9 @@ const CampaignThreadScreen = () => {
     (!controller.pendingPlan.threadId || controller.pendingPlan.threadId === controller.activeThreadId)
       ? controller.pendingPlan
       : null;
+  // Sprout is waiting on a decision, so the decision is the screen. Everything that isn't
+  // the card stands down: the header, the composer chrome, and taps on the transcript.
+  const decisionPending = !!pendingQuestionForThread || (!!pendingPlanForThread && !planShownInline);
 
   return (
     <View style={s.root}>
@@ -603,10 +607,11 @@ const CampaignThreadScreen = () => {
         scrollRequestKey={messageJump?.key}
       />
 
-      {/* ── Faded scrim behind the question/plan card so it reads as a focused tray sitting
-          where the keyboard was. Non-interactive (taps fall through to scroll the feed). ── */}
-      {(pendingQuestionForThread || (pendingPlanForThread && !planShownInline)) ? (
-        <View pointerEvents="none" style={s.cardScrim} />
+      {/* ── Faded scrim behind the question/plan card. It SWALLOWS taps: the seller was
+          able to select and open items in the transcript while an approval sat unanswered,
+          which is how you approve one thing having navigated to another. ── */}
+      {decisionPending ? (
+        <Pressable style={s.cardScrim} onPress={() => undefined} accessible={false} />
       ) : null}
 
       {/* ── Composer + pending question ride the keyboard. Absolute bottom anchor whose
@@ -623,18 +628,19 @@ const CampaignThreadScreen = () => {
         <View onLayout={e => setFooterH(e.nativeEvent.layout.height)}>
         {/* ── Sprout's proposed plan (Accept / Revise / Follow-up), above the composer ── */}
         {pendingPlanForThread && !planShownInline && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+          <View style={{ paddingHorizontal: 16, paddingBottom: (insets.bottom || 10) + 12 }}>
             <PlanCard
               prompt={pendingPlanForThread}
               onDecision={controller.submitDecision}
               submitting={!!controller.submittingDecisionId}
+              items={planItems}
             />
           </View>
         )}
 
         {/* ── Sprout's structured question (tappable options), above the composer ── */}
         {pendingQuestionForThread && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+          <View style={{ paddingHorizontal: 16, paddingBottom: (insets.bottom || 10) + 12 }}>
             <QuestionCard
               prompt={pendingQuestionForThread}
               submitting={controller.answeringQuestion}
@@ -645,7 +651,11 @@ const CampaignThreadScreen = () => {
           </View>
         )}
 
-        {/* ── Bottom: floating glass composer (no border, progressive blur to white) ─ */}
+        {/* ── Bottom: floating glass composer (no border, progressive blur to white) ─
+            A pending card owns the turn — its buttons ARE the input. Leaving a composer
+            under it splits the seller's attention and invites a typed answer the card will
+            never read, so the composer stands down until the card is resolved. ── */}
+        {decisionPending ? null : (
         <ChatComposerFooter
           bottomPadding={(insets.bottom || 10) + 12}
           error={controller.error}
@@ -673,10 +683,20 @@ const CampaignThreadScreen = () => {
             focusRequestKey={composerFocusKey}
           />
         </ChatComposerFooter>
+        )}
         </View>
       </Animated.View>
 
-      {/* ── Top: floating glass header (white at top → transparent, blur) ─ */}
+      {/* ── Top: floating glass header (white at top → transparent, blur) ─
+          While a decision is pending the nav goes but the wash stays: it is what keeps the
+          transcript from running into the clock, and dropping it entirely put message text
+          under the status bar. ── */}
+      {decisionPending ? (
+        <ChatChromeHeader
+          topInset={insets.top}
+          onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+        />
+      ) : (
       <ChatChromeHeader
         title={campaignTitle}
         subtitle={`${soldCount}/${itemCount} sold · ${daysLeftLabel}`}
@@ -712,6 +732,7 @@ const CampaignThreadScreen = () => {
           </TouchableOpacity>
         ) : null}
       </ChatChromeHeader>
+      )}
 
       {/* ── Threads drawer: pull right from the left edge ──────── */}
       <View style={[s.edgeSwipe, { top: insets.top + 50 }]} {...edgePan.panHandlers} />

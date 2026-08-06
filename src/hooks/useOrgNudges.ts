@@ -379,7 +379,7 @@ const resolveSnapshot = (
 
 /**
  * Hook to fetch AI-generated dashboard insights for an organization
- * Handles idle → loading → error → success state flow
+ * Handles idle, loading, and success while treating advisory failures as empty data.
  */
 export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const session = useContext(SessionContext);
@@ -390,7 +390,6 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const [quiet, setQuiet] = useState(false);
   const [nothingNewSince, setNothingNewSince] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [cacheExpiresAt, setCacheExpiresAt] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
@@ -400,6 +399,17 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
   const snapshotRef = useRef<PersistedInsightSnapshot | null>(null);
   const fetchSequenceRef = useRef(0);
   const storageWriteRef = useRef<Promise<void>>(Promise.resolve());
+
+  const clearNudges = useCallback(() => {
+    setInsight(null);
+    setLastInsight(null);
+    setQuiet(false);
+    setNothingNewSince(null);
+    setLastUpdated(null);
+    setCacheExpiresAt(null);
+    setGeneratedAt(null);
+    setNextRefreshAt(null);
+  }, []);
 
   const applySnapshot = useCallback((snapshot: PersistedInsightSnapshot) => {
     snapshotRef.current = snapshot;
@@ -422,7 +432,6 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     setNextRefreshAt(null);
     setLastUpdated(null);
     setCacheExpiresAt(null);
-    setError(null);
     setHydratedStorageKey(null);
 
     if (!persistenceKey) {
@@ -463,16 +472,13 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
     if (!session?.bridgeReady) {
       const jwtState = getSupabaseJwtState().state;
-      const nextError = isSupabaseBridgeWarmingUp(jwtState)
-        ? 'Refreshing your live session before loading insights.'
-        : 'Live insights are temporarily unavailable.';
+      log.debug(`[useOrgNudges] Skipping fetch while session bridge is ${jwtState}`);
+      clearNudges();
       setLoading(false);
-      setError(nextError);
       return;
     }
 
     setLoading(true);
-    setError(null);
     const requestSequence = ++fetchSequenceRef.current;
     const requestStorageKey = persistenceKey;
 
@@ -481,7 +487,6 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
       if (!token) {
         const jwtState = getSupabaseJwtState().state;
-        log.error(`[useOrgNudges] ❌ No token available from bridge (${jwtState})`);
         throw new Error(
           isSupabaseBridgeWarmingUp(jwtState)
             ? 'Refreshing your live session before loading insights.'
@@ -501,14 +506,12 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await response.text().catch(() => '');
         const isForbidden = response.status === 403;
         if (isForbidden) {
-          log.warn(`[useOrgNudges] 403 for org ${orgId} (org context may be syncing)`);
+          log.debug(`[useOrgNudges] 403 for org ${orgId} (org context may be syncing)`);
           throw new Error('Insights are syncing for this workspace.');
         }
-        log.error(`[useOrgNudges] ❌ Fetch failed: ${response.status} ${response.statusText}`);
-        log.error(`[useOrgNudges] ❌ Error body: ${errorText.substring(0, 200)}`);
         throw new Error(`Failed to fetch insights: ${response.status} - ${errorText.substring(0, 100)}`);
       }
 
@@ -535,7 +538,13 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         : normalizedLastInsightBase;
 
       if (!normalizedInsight) {
-        log.warn('[useOrgNudges] ⚠️ Response missing or invalid insight data');
+        log.warn('[useOrgNudges] Response missing or invalid insight data');
+        if (
+          requestSequence === fetchSequenceRef.current &&
+          activeStorageKeyRef.current === requestStorageKey
+        ) {
+          clearNudges();
+        }
         return;
       }
 
@@ -564,8 +573,6 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       const resolvedTimestamp = coerceText(data?.timestamp, identifiedInsight.timestamp || new Date().toISOString());
       setLastUpdated(resolvedTimestamp);
       setCacheExpiresAt(coerceText(data?.cacheExpiresAt) || null);
-      setError(null);
-
       const write = storageWriteRef.current
         .catch(() => undefined)
         .then(() => AsyncStorage.setItem(requestStorageKey, JSON.stringify(resolved)));
@@ -577,15 +584,12 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'Failed to fetch insights';
-      const isSoftError = errorMessage.includes('syncing for this workspace');
-      if (!isSoftError) {
-        log.error('[useOrgNudges] ❌ Fetch error:', errorMessage);
-      }
+      log.debug('[useOrgNudges] Fetch unavailable:', errorMessage);
       if (
         requestSequence === fetchSequenceRef.current &&
         activeStorageKeyRef.current === requestStorageKey
       ) {
-        setError(errorMessage);
+        clearNudges();
       }
     } finally {
       if (
@@ -595,35 +599,43 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         setLoading(false);
       }
     }
-  }, [applySnapshot, hydratedStorageKey, orgId, persistenceKey, session?.bridgeReady]);
+  }, [applySnapshot, clearNudges, hydratedStorageKey, orgId, persistenceKey, session?.bridgeReady]);
 
   useEffect(() => {
     if (orgId && persistenceKey && hydratedStorageKey === persistenceKey) {
       if (!session?.bridgeReady) {
+        clearNudges();
         setLoading(false);
         return;
       }
       void fetchNudges();
     }
-  }, [fetchNudges, hydratedStorageKey, orgId, persistenceKey, session?.bridgeReady]);
+  }, [clearNudges, fetchNudges, hydratedStorageKey, orgId, persistenceKey, session?.bridgeReady]);
 
   const forceRefresh = useCallback(async () => {
     if (!orgId) return;
     if (!session?.bridgeReady) {
-      setError('Live insights are temporarily unavailable while the session reconnects.');
+      clearNudges();
       return;
     }
 
+    let token: string | null;
     try {
-      const token = await ensureSupabaseJwt();
-      if (!token) {
-        throw new Error('No JWT token available');
-      }
+      token = await ensureSupabaseJwt();
+    } catch (e) {
+      log.debug('[useOrgNudges] Force refresh session unavailable:', e);
+      clearNudges();
+      return;
+    }
+    if (!token) {
+      log.debug('[useOrgNudges] Force refresh session unavailable');
+      clearNudges();
+      return;
+    }
 
-      const apiBase = API_BASE_URL;
-      const url = `${apiBase}/api/insights/orgs/${orgId}/nudges`;
-
-      // Clear cache on backend
+    const apiBase = API_BASE_URL;
+    const url = `${apiBase}/api/insights/orgs/${orgId}/nudges`;
+    try {
       const clearResponse = await fetch(url, {
         method: 'DELETE',
         headers: {
@@ -635,15 +647,11 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
       if (!clearResponse.ok) {
         log.warn(`[useOrgNudges] Failed to clear cache: ${clearResponse.status}`);
       }
-
-      // Then fetch new insight
-      await fetchNudges();
     } catch (e) {
-      log.error('[useOrgNudges] Force refresh error:', e);
-      // Still try to fetch
-      await fetchNudges();
+      log.debug('[useOrgNudges] Force refresh cache clear unavailable:', e);
     }
-  }, [orgId, fetchNudges, session?.bridgeReady]);
+    await fetchNudges();
+  }, [clearNudges, orgId, fetchNudges, session?.bridgeReady]);
 
   const dismissInsight = useCallback(async (
     fingerprint?: string,
@@ -693,12 +701,8 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
             normalizeIsoDate(insight?.timestamp),
         );
       }
-      setError(null);
     } catch (dismissError) {
-      log.error('[useOrgNudges] Failed to dismiss insight:', dismissError);
-      if (activeStorageKeyRef.current === requestStorageKey) {
-        setError('Could not dismiss insight.');
-      }
+      log.debug('[useOrgNudges] Failed to dismiss insight:', dismissError);
     }
   }, [insight, orgId, persistenceKey]);
 
@@ -708,7 +712,7 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
     quiet,
     nothingNewSince,
     loading,
-    error,
+    error: null,
     lastUpdated,
     cacheExpiresAt,
     generatedAt,

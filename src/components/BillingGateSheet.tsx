@@ -9,6 +9,7 @@ interface BillingGateSheetProps {
   visible: boolean;
   gate: BillingGateResponse | null;
   onClose: () => void;
+  onDismiss?: () => void;
   onSeePlans?: () => void;
   onAddCredits?: () => void;
   /** Backward-compatible alias used by design-export fixtures. */
@@ -20,6 +21,7 @@ export default function BillingGateSheet({
   visible,
   gate,
   onClose,
+  onDismiss,
   onSeePlans,
   onAddCredits,
   onOpenBilling,
@@ -72,7 +74,7 @@ export default function BillingGateSheet({
   const secondaryAction = invoiceable ? (onContinue || onClose) : onAddCredits;
 
   return (
-    <BaseModal visible={visible} onClose={onClose} position="bottom" containerStyle={styles.container}>
+    <BaseModal visible={visible} onClose={onClose} onDismiss={onDismiss} position="bottom" containerStyle={styles.container}>
       <View style={styles.handle} />
       <TouchableOpacity style={styles.closeButton} onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
         <View style={styles.closeButtonInner}>

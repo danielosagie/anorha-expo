@@ -23,6 +23,7 @@ interface ErrorModalProps {
     message: string;
     buttonText?: string;
     onClose: () => void;
+    onDismiss?: () => void;
     onPrimaryPress?: () => void;
     primaryColor?: string;
     primaryTextColor?: string;
@@ -77,6 +78,7 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
     message,
     buttonText = 'Got It',
     onClose,
+    onDismiss,
     onPrimaryPress,
     primaryColor,
     primaryTextColor,
@@ -130,6 +132,7 @@ const ErrorModal: React.FC<ErrorModalProps> = ({
             transparent
             animationType="none"
             onRequestClose={onClose}
+            onDismiss={onDismiss}
         >
             <TouchableWithoutFeedback onPress={onClose}>
                 <View style={styles.overlay}>

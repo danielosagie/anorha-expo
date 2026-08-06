@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { getSproutTheme } from '../../design/sproutTheme';
 
 const BRAND = '#93C822';
 const FONT = {
@@ -24,13 +25,15 @@ type Props = {
   onSelect: (date: Date) => void;
   /** Earliest selectable day (inclusive). Defaults to today. */
   minDate?: Date;
+  dark?: boolean;
 };
 
 /**
  * Compact month calendar adapted from the habit-tracker MonthCalendar:
  * brand-green selected day, prev/next month nav, past days disabled, Inter type.
  */
-export const ClearoutCalendar: React.FC<Props> = ({ selectedDate, onSelect, minDate }) => {
+export const ClearoutCalendar: React.FC<Props> = ({ selectedDate, onSelect, minDate, dark = false }) => {
+  const theme = getSproutTheme(dark);
   const today = useMemo(() => startOfDay(new Date()), []);
   const min = minDate ? startOfDay(minDate) : today;
   const [viewMonth, setViewMonth] = useState(
@@ -74,21 +77,31 @@ export const ClearoutCalendar: React.FC<Props> = ({ selectedDate, onSelect, minD
         <TouchableOpacity
           onPress={() => canPrev && go(-1)}
           disabled={!canPrev}
-          style={[styles.navBtn, !canPrev && styles.navBtnDisabled]}
+          style={[
+            styles.navBtn,
+            !canPrev && styles.navBtnDisabled,
+            dark && { backgroundColor: theme.chat.surfaceMuted, opacity: canPrev ? 1 : 0.45 },
+          ]}
           activeOpacity={0.7}
         >
-          <Icon name="chevron-left" size={22} color={canPrev ? '#3F3F46' : '#D4D4D8'} />
+          <Icon
+            name="chevron-left"
+            size={22}
+            color={dark
+              ? canPrev ? theme.colors.text : theme.colors.textMuted
+              : canPrev ? '#3F3F46' : '#D4D4D8'}
+          />
         </TouchableOpacity>
-        <Text style={styles.monthLabel}>{MONTHS[month]} {year}</Text>
-        <TouchableOpacity onPress={() => go(1)} style={styles.navBtn} activeOpacity={0.7}>
-          <Icon name="chevron-right" size={22} color="#3F3F46" />
+        <Text style={[styles.monthLabel, dark && { color: theme.colors.text }]}>{MONTHS[month]} {year}</Text>
+        <TouchableOpacity onPress={() => go(1)} style={[styles.navBtn, dark && { backgroundColor: theme.chat.surfaceMuted }]} activeOpacity={0.7}>
+          <Icon name="chevron-right" size={22} color={dark ? theme.colors.text : '#3F3F46'} />
         </TouchableOpacity>
       </View>
 
       <View style={styles.weekRow}>
         {WEEKDAYS.map((w, i) => (
           <View key={i} style={styles.weekCell}>
-            <Text style={styles.weekText}>{w}</Text>
+            <Text style={[styles.weekText, dark && { color: theme.colors.textMuted }]}>{w}</Text>
           </View>
         ))}
       </View>
@@ -111,9 +124,12 @@ export const ClearoutCalendar: React.FC<Props> = ({ selectedDate, onSelect, minD
                 <Text
                   style={[
                     styles.dayNum,
+                    dark && { color: theme.colors.text },
                     disabled && styles.dayDisabled,
+                    disabled && dark && { color: theme.colors.textMuted },
                     !selected && isToday && styles.dayToday,
                     selected && styles.daySelectedText,
+                    selected && dark && { color: theme.colors.onPrimary },
                   ]}
                 >
                   {d.getDate()}

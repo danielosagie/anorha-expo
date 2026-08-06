@@ -18,6 +18,7 @@ type Options = {
   pinLeft?: number;
   accent?: string;
   armed?: string;
+  edgeTop?: number;
   /** Custom back action (gets the screen's navigation). Defaults to navigation.goBack().
    *  Use to match a screen's real back button (e.g. goBack-or-navigate fallback). */
   onBack?: (navigation: any) => void;

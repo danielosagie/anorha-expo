@@ -36,7 +36,7 @@ interface Props {
   /** Backed out before finishing (soft — never an error). */
   onCancel: () => void;
   /** All required steps are satisfied (or the user finished the flow). */
-  onConnected: () => void;
+  onConnected: (connectionId?: string) => void;
 }
 
 const TEXT_SECONDARY = '#6B7280';
@@ -52,6 +52,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
   const [connectError, setConnectError] = useState<string | null>(null);
   const [failedConnectionId, setFailedConnectionId] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
+  const connectedConnectionIdRef = useRef<string | undefined>(undefined);
 
   const steps = platform ? connectStepsFor(platform) : [];
   const def = platform ? getPlatform(platform) : undefined;
@@ -66,6 +67,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     setConnectError(null);
     setFailedConnectionId(null);
     setScanOpen(false);
+    connectedConnectionIdRef.current = undefined;
     if (!s.oauthConnected && s.steps.includes('oauth')) {
       setPhase('consent');
     } else if (s.requiresComputer && !s.computerOnline) {
@@ -78,7 +80,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
 
   const finish = useCallback(() => {
     setPhase('done');
-    onConnected();
+    onConnected(connectedConnectionIdRef.current);
   }, [onConnected]);
 
   // After OAuth: go to the computer step if this platform needs a computer and one
@@ -108,6 +110,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     try {
       const res = await connect(platform as ConnectablePlatform, { shopifyShop });
       if (res.success) {
+        connectedConnectionIdRef.current = res.connectionId;
         refresh?.();
         // Nudge once more after the callback row commits, then decide next step.
         setTimeout(() => refresh?.(), 2500);

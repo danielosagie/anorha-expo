@@ -19,7 +19,7 @@ import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
 import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { normalizeDisplayName } from '../config/platforms';
-import { useImportHub } from '../hooks/useImportHub';
+import { useImportStatus } from '../hooks/useImportStatus';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 type Card = {
@@ -49,7 +49,7 @@ const SettingsScreen = () => {
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
   // Import inbox aggregate — feeds the passive "needs you" badge on Integrations.
-  const hub = useImportHub();
+  const importStatus = useImportStatus();
 
   useEffect(() => {
     refresh?.();
@@ -157,9 +157,9 @@ const SettingsScreen = () => {
           onPress={() => navigation.navigate('Connections')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
-          {hub.totalNeedsYou > 0 && (
+          {importStatus.totalNeedsYou > 0 && (
             <View style={styles.needsBadge}>
-              <Text style={styles.needsBadgeText}>{hub.totalNeedsYou}</Text>
+              <Text style={styles.needsBadgeText}>{importStatus.totalNeedsYou}</Text>
             </View>
           )}
           <View style={styles.sectionChevron}>

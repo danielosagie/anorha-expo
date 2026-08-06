@@ -8,6 +8,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from '
 import { Plus, ArrowRight, Mic, X, Check, Clock, Pencil, Camera, Images, Paperclip } from 'lucide-react-native';
 import { API_BASE_URL } from '../../config/env';
 import { persistPendingVoice, getPendingVoice, clearPendingVoice, fileExists } from '../../features/liquidationConversation/pendingVoice';
+import { getSproutTheme } from '../../design/sproutTheme';
 
 // The reusable chat composer (extracted from the liquidation conversation). Rounded pill,
 // attach menu (camera / photo library / file), and a simple tap-to-record voice memo that
@@ -37,6 +38,8 @@ type Props = {
   hideAttach?: boolean;
   /** Publish capture state so feedback can live at the window edge. */
   onRecordingChange?: (recording: boolean) => void;
+  /** Explicit opt-in from the Sprout home dock. Shared call sites remain light. */
+  dark?: boolean;
 };
 
 const BRAND = '#93C822';
@@ -75,7 +78,9 @@ export const MessageComposer = ({
   focusRequestKey = 0,
   hideAttach = false,
   onRecordingChange,
+  dark = false,
 }: Props) => {
+  const theme = getSproutTheme(dark);
   // Metering on, so the waveform reacts to the seller's actual voice level (Claude-style)
   // instead of a canned pulse.
   const recordOptions = useMemo(() => ({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true }), []);
@@ -428,29 +433,35 @@ export const MessageComposer = ({
     <View style={styles.wrap}>
       {/* Only surfaced when messages are actually queued behind the current one. */}
       {queuedCount > 1 ? (
-        <View style={styles.queueBanner}>
-          <Clock size={13} color="#5D7E16" />
-          <Text style={styles.queueText}>
+        <View style={[styles.queueBanner, dark && { borderColor: theme.chat.border }]}>
+          <Clock size={13} color={theme.colors.primary} />
+          <Text style={[styles.queueText, { color: dark ? theme.colors.primary : '#5D7E16' }]}>
             {queuedCount - 1} message{queuedCount - 1 === 1 ? '' : 's'} queued.
           </Text>
         </View>
       ) : null}
 
       {voiceError ? (
-        <View style={styles.voiceErrorBanner}>
-          <Text style={styles.voiceErrorText}>{voiceError}</Text>
+        <View style={[
+          styles.voiceErrorBanner,
+          { backgroundColor: theme.colors.errorBackground, borderColor: theme.colors.errorBorder },
+        ]}>
+          <Text style={[styles.voiceErrorText, { color: theme.colors.errorText }]}>{voiceError}</Text>
           {voiceErrorSettings ? (
             <TouchableOpacity onPress={() => Linking.openSettings().catch(() => undefined)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-              <Text style={styles.voiceErrorAction}>Settings</Text>
+              <Text style={[styles.voiceErrorAction, { color: theme.colors.errorText }]}>Settings</Text>
             </TouchableOpacity>
           ) : null}
         </View>
       ) : null}
 
       {recording ? (
-        <View style={styles.recordingBar}>
-          <TouchableOpacity style={styles.recCancel} onPress={cancelRecording} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <X size={20} color="#6B7280" />
+        <View style={[
+          styles.recordingBar,
+          dark && { backgroundColor: theme.chat.surface, borderWidth: 1, borderColor: theme.chat.border },
+        ]}>
+          <TouchableOpacity style={[styles.recCancel, dark && { backgroundColor: theme.chat.surfaceMuted }]} onPress={cancelRecording} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <X size={20} color={theme.chat.textSecondary} />
           </TouchableOpacity>
           <View style={styles.recCenter}>
             <View style={styles.recDot} />
@@ -465,7 +476,7 @@ export const MessageComposer = ({
             <Text style={styles.recTimer}>{fmt(duration)}</Text>
           </View>
           <TouchableOpacity style={styles.recDone} onPress={finishRecording} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Check size={20} color="#FFFFFF" />
+            <Check size={20} color={theme.colors.onPrimary} />
           </TouchableOpacity>
         </View>
       ) : (
@@ -474,54 +485,75 @@ export const MessageComposer = ({
             <>
               <Animated.View
                 pointerEvents={attachMenuOpen ? 'auto' : 'none'}
-                style={[styles.attachMenu, attachMenuStyle]}
+                style={[
+                  styles.attachMenu,
+                  dark && { backgroundColor: theme.chat.surface, borderWidth: 1, borderColor: theme.chat.border },
+                  attachMenuStyle,
+                ]}
                 accessibilityViewIsModal={attachMenuOpen}
               >
                 <Pressable
-                  style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+                  style={({ pressed }) => [
+                    styles.attachOption,
+                    pressed && (dark ? { backgroundColor: theme.chat.surfaceMuted } : styles.attachOptionPressed),
+                  ]}
                   onPress={() => runAttachAction(() => void pickFromCamera())}
                   accessibilityRole="button"
                   accessibilityLabel="Open camera"
                 >
-                  <View style={styles.attachOptionIcon}><Camera size={20} color="#3F3F46" strokeWidth={2} /></View>
-                  <Text style={styles.attachOptionText}>Camera</Text>
+                  <View style={[styles.attachOptionIcon, dark && { backgroundColor: theme.chat.surfaceMuted }]}><Camera size={20} color={dark ? theme.chat.text : '#3F3F46'} strokeWidth={2} /></View>
+                  <Text style={[styles.attachOptionText, { color: theme.chat.text }]}>Camera</Text>
                 </Pressable>
                 <Pressable
-                  style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+                  style={({ pressed }) => [
+                    styles.attachOption,
+                    pressed && (dark ? { backgroundColor: theme.chat.surfaceMuted } : styles.attachOptionPressed),
+                  ]}
                   onPress={() => runAttachAction(() => void pickFromLibrary())}
                   accessibilityRole="button"
                   accessibilityLabel="Choose photos"
                 >
-                  <View style={styles.attachOptionIcon}><Images size={20} color="#3F3F46" strokeWidth={2} /></View>
-                  <Text style={styles.attachOptionText}>Photos</Text>
+                  <View style={[styles.attachOptionIcon, dark && { backgroundColor: theme.chat.surfaceMuted }]}><Images size={20} color={dark ? theme.chat.text : '#3F3F46'} strokeWidth={2} /></View>
+                  <Text style={[styles.attachOptionText, { color: theme.chat.text }]}>Photos</Text>
                 </Pressable>
                 <Pressable
-                  style={({ pressed }) => [styles.attachOption, pressed && styles.attachOptionPressed]}
+                  style={({ pressed }) => [
+                    styles.attachOption,
+                    pressed && (dark ? { backgroundColor: theme.chat.surfaceMuted } : styles.attachOptionPressed),
+                  ]}
                   onPress={() => runAttachAction(() => void pickFile())}
                   accessibilityRole="button"
                   accessibilityLabel="Choose files"
                 >
-                  <View style={styles.attachOptionIcon}><Paperclip size={20} color="#3F3F46" strokeWidth={2} /></View>
-                  <Text style={styles.attachOptionText}>Files</Text>
+                  <View style={[styles.attachOptionIcon, dark && { backgroundColor: theme.chat.surfaceMuted }]}><Paperclip size={20} color={dark ? theme.chat.text : '#3F3F46'} strokeWidth={2} /></View>
+                  <Text style={[styles.attachOptionText, { color: theme.chat.text }]}>Files</Text>
                 </Pressable>
               </Animated.View>
 
               <Pressable onPress={toggleAttachMenu} accessibilityRole="button" accessibilityLabel={attachMenuOpen ? 'Close attachment menu' : 'Add to chat'}>
                 {({ pressed }) => (
-                  <Animated.View style={[styles.attachBtn, attachButtonStyle, pressed && styles.attachBtnPressed]}>
-                    <Plus size={22} color="#18181B" strokeWidth={2.2} />
+                  <Animated.View style={[
+                    styles.attachBtn,
+                    dark && { backgroundColor: theme.chat.surface, borderWidth: 1, borderColor: theme.chat.border },
+                    attachButtonStyle,
+                    pressed && styles.attachBtnPressed,
+                  ]}>
+                    <Plus size={22} color={theme.chat.text} strokeWidth={2.2} />
                   </Animated.View>
                 )}
               </Pressable>
             </>
           ) : null}
 
-          <View style={styles.card}>
+          <View style={[
+            styles.card,
+            dark && { backgroundColor: theme.chat.surface, borderWidth: 1, borderColor: theme.chat.border },
+          ]}>
             {contextAttachment ? (
               <View style={styles.contextRow}>
                 <View style={styles.contextChip}>
-                  <Pencil size={13} color="#5D7E16" />
-                  <Text style={styles.contextText}>{contextAttachment.label}</Text>
+                  <Pencil size={13} color={theme.colors.primary} />
+                  <Text style={[styles.contextText, { color: dark ? theme.colors.primary : '#5D7E16' }]}>{contextAttachment.label}</Text>
                   {onRemoveContextAttachment ? (
                     <TouchableOpacity
                       style={styles.contextRemove}
@@ -529,7 +561,7 @@ export const MessageComposer = ({
                       accessibilityRole="button"
                       accessibilityLabel={`Remove ${contextAttachment.label}`}
                     >
-                      <X size={13} color="#5D7E16" />
+                      <X size={13} color={theme.colors.primary} />
                     </TouchableOpacity>
                   ) : null}
                 </View>
@@ -553,9 +585,9 @@ export const MessageComposer = ({
             <View style={styles.inputRow}>
               <TextInput
                 ref={inputRef}
-                style={styles.input}
+                style={[styles.input, { color: theme.chat.text }]}
                 placeholder={placeholder}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor={theme.chat.textMuted}
                 multiline
                 autoFocus={autoFocus}
                 value={value}
@@ -564,25 +596,29 @@ export const MessageComposer = ({
                 editable={!transcribing}
               />
               {transcribing ? (
-                <View style={[styles.actionBtn, styles.neutralBtn]}>
-                  <ActivityIndicator size="small" color="#71717A" />
+                <View style={[styles.actionBtn, styles.neutralBtn, dark && { backgroundColor: theme.chat.surfaceMuted }]}>
+                  <ActivityIndicator size="small" color={theme.chat.textSecondary} />
                 </View>
               ) : (
                 <>
                   {/* Tap to record a voice memo (mic stays available even with text so
                       voice keeps appending). */}
                   <TouchableOpacity
-                    style={[styles.actionBtn, styles.voiceBtn]}
+                    style={[
+                      styles.actionBtn,
+                      styles.voiceBtn,
+                      dark && { backgroundColor: theme.chat.surfaceMuted },
+                    ]}
                     onPress={startRecording}
                     activeOpacity={0.85}
                     accessibilityRole="button"
                     accessibilityLabel="Record a voice memo"
                   >
-                    <Mic size={19} color="#FFFFFF" />
+                    <Mic size={19} color={dark ? theme.chat.text : '#FFFFFF'} />
                   </TouchableOpacity>
                   {canSend ? (
                     <TouchableOpacity style={[styles.actionBtn, styles.sendBtn]} onPress={send} activeOpacity={0.85}>
-                      <ArrowRight size={19} color="#FFFFFF" />
+                      <ArrowRight size={19} color={theme.colors.onPrimary} />
                     </TouchableOpacity>
                   ) : null}
                 </>

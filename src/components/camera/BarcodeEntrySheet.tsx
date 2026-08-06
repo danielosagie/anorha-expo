@@ -19,6 +19,7 @@ type Props = {
   onChangeBarcode: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  onDismiss?: () => void;
   loading?: boolean;
   errorMessage?: string;
 };
@@ -31,6 +32,7 @@ const BarcodeEntrySheet: React.FC<Props> = ({
   onChangeBarcode,
   onSubmit,
   onCancel,
+  onDismiss,
   loading = false,
   errorMessage,
 }) => {
@@ -53,6 +55,7 @@ const BarcodeEntrySheet: React.FC<Props> = ({
       animationType="slide"
       statusBarTranslucent
       onRequestClose={onCancel}
+      onDismiss={onDismiss}
       presentationStyle="overFullScreen"
     >
       <View style={styles.backdrop}>
@@ -251,4 +254,3 @@ const styles = StyleSheet.create({
 });
 
 export default BarcodeEntrySheet;
-

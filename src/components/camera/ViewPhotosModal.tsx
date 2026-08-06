@@ -30,6 +30,7 @@ export interface CapturedPhoto {
 interface ViewPhotosModalProps {
   visible: boolean;
   onClose: () => void;
+  onDismiss?: () => void;
   photos: CapturedPhoto[];
   activeItemId: string | null;
   totalItems: number;
@@ -46,6 +47,7 @@ interface ViewPhotosModalProps {
 const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
   visible,
   onClose,
+  onDismiss,
   photos,
   activeItemId,
   totalItems,
@@ -115,6 +117,7 @@ const ViewPhotosModal: React.FC<ViewPhotosModalProps> = ({
       animationType="none"
       transparent
       onRequestClose={onClose}
+      onDismiss={onDismiss}
     >
       {/* RN Modals are separate native windows — RNGH gestures (incl. the
           draggable grid's long-press drag) are dead inside one unless the Modal

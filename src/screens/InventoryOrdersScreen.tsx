@@ -1611,7 +1611,7 @@ const InventoryOrdersScreen = observer(() => {
     if (isSelectionMode) {
       handleToggleSelection(id);
     } else {
-      navigation.navigate('ProductDetail', { productId: id, initialMode: 'edit' });
+      navigation.navigate('ProductDetail', { productId: id, initialMode: 'overview' });
     }
   }, [isSelectionMode, navigation, handleToggleSelection]); // Dependencies need check
 

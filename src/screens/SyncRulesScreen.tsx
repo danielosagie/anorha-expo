@@ -7,7 +7,7 @@
 // syncs (inventory / prices), and direction. The fields this screen has no UI
 // for — sourceOfTruth, mode, schedule, destinations — are ROUND-TRIPPED from the
 // loaded rules so a calm edit here never clobbers what the engine had. Payload
-// shape stays identical to SyncPreferencesSheet / the engine contract.
+// shape stays identical to the engine contract.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -25,7 +25,7 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import { supabase } from '../../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { normalizeDisplayName } from '../config/platforms';
-import { useImportHub } from '../hooks/useImportHub';
+import { useImportStatus } from '../hooks/useImportStatus';
 import PageHeader from '../components/ui/PageHeader';
 import PlatformAvatar from '../components/PlatformAvatar';
 import ErrorModal from '../components/ErrorModal';
@@ -119,8 +119,8 @@ const SyncRulesScreen = () => {
   });
 
   // Passive "needs you" signal — the ONE explicit deep-link into the review deck.
-  const hub = useImportHub();
-  const attn = hub.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
+  const importStatus = useImportStatus();
+  const attn = importStatus.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRequestRef = useRef(0);
@@ -302,7 +302,14 @@ const SyncRulesScreen = () => {
 
             {/* Status loud: the one deep-link into the review deck */}
             {attn > 0 && (
-              <TouchableOpacity activeOpacity={0.85} onPress={() => navigation.navigate('SyncInbox', { connectionId, platformName: name })} style={styles.needsRow}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('ImportQuestionQueue', {
+                  connectionId,
+                  platformName: platformType || name,
+                })}
+                style={styles.needsRow}
+              >
                 <View style={styles.needsIcon}><AlertTriangle size={20} color={AMBER} /></View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.needsTitle}>{attn} {attn === 1 ? 'item needs' : 'items need'} you</Text>
