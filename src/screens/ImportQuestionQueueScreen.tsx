@@ -61,6 +61,7 @@ import type {
   ResolveChoice,
   SyncItem,
 } from '../types/syncItem';
+import { bulkResolutionSummary } from '../lib/bulkResolution';
 
 const log = createLogger('ImportQuestionQueue');
 const SURFACE = '#F5F5F7';
@@ -449,11 +450,11 @@ export default function ImportQuestionQueueScreen() {
     try {
       const response = await resolveBulk(decisions, importId ?? undefined);
       recordDecisions(decisions, card.items, response.results);
-      const succeeded = response.results.filter(isSettled).length;
-      const failed = decisions.length - succeeded;
-      setQueueNotice(failed > 0
-        ? `${countLabel(succeeded, 'answer')} saved · ${countLabel(failed, 'item')} need a look`
-        : `${countLabel(succeeded, 'answer')} saved`);
+      const outcome = bulkResolutionSummary(response.results);
+      const failed = outcome.conflicts + outcome.errors;
+      setQueueNotice(
+        `${outcome.saved} saved · ${outcome.conflicts} conflicts · ${outcome.errors} errors`,
+      );
       if (await returnAfterTarget()) return;
       const otherCards = mainCards.filter((entry) => entry.id !== card.id);
       if (failed === 0 && otherCards.length === 0) await finishQueue();
@@ -512,11 +513,11 @@ export default function ImportQuestionQueueScreen() {
     try {
       const response = await resolveBulk(handoff.decisions, importId ?? undefined);
       recordDecisions(handoff.decisions, handoff.items, response.results);
-      const succeeded = response.results.filter(isSettled).length;
-      const failed = handoff.decisions.length - succeeded;
-      setQueueNotice(failed > 0
-        ? `${countLabel(succeeded, 'item')} finished · ${countLabel(failed, 'item')} need a look`
-        : `${countLabel(succeeded, 'item')} finished`);
+      const outcome = bulkResolutionSummary(response.results);
+      const failed = outcome.conflicts + outcome.errors;
+      setQueueNotice(
+        `${outcome.saved} saved · ${outcome.conflicts} conflicts · ${outcome.errors} errors`,
+      );
       const otherClasses = mainCards.filter((card) => card.reason !== handoff.reason);
       streakRef.current = null;
       setHandoff(null);

@@ -128,7 +128,12 @@ export interface BulkResolveItem {
   choice: ResolveChoice;
   canonicalId?: string;
   valueOverride?: ResolveValueOverride;
-  version: number;
+  /**
+   * The row's CAS token. Optional so callers can express "I do not know it"
+   * instead of fabricating a 0, which SyncItems.Version (NOT NULL DEFAULT 1)
+   * can never match. Items without one are dropped before send and reported.
+   */
+  version?: number;
 }
 
 export interface BulkResolveResult {

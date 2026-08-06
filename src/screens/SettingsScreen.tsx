@@ -1,7 +1,7 @@
 // Profile tab — identity header (avatar / name / org), live Connected Platforms
 // preview, then the settings grid. Every card goes somewhere REAL.
 
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Alert, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ErrorModal from '../components/ErrorModal';
 import { useNavigation } from '@react-navigation/native';
@@ -21,6 +21,8 @@ import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { normalizeDisplayName } from '../config/platforms';
 import { useImportStatus } from '../hooks/useImportStatus';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { findResumableCsvImports } from '../lib/resumableImports';
+import { PendingCsvImportRow } from '../components/import/PendingCsvImportRow';
 
 type Card = {
   key: string;
@@ -58,6 +60,10 @@ const SettingsScreen = () => {
   const displayName = user?.fullName || user?.firstName || 'Your account';
   const orgLine = currentOrg?.name || user?.primaryEmailAddress?.emailAddress || '';
   const platformPreview = (liveConnections || []).filter(isVisiblePlatformConnection).slice(0, 4);
+  const resumableCsvImports = useMemo(
+    () => findResumableCsvImports(importStatus),
+    [importStatus.connections, importStatus.recentImports],
+  );
   // Dev tools (dev builds only): the agent bundle + the raw auth token.
   const openDevTools = () => {
     Alert.alert('Developer', 'Tools for local development.', [
@@ -166,6 +172,18 @@ const SettingsScreen = () => {
             <ChevronRight size={16} color="#71717A" />
           </View>
         </TouchableOpacity>
+        {resumableCsvImports.map((entry) => (
+          <PendingCsvImportRow
+            key={entry.importId || entry.connectionId}
+            pendingItems={entry.pendingItems}
+            onPress={() => navigation.navigate('ImportQuestionQueue', {
+              connectionId: entry.connectionId,
+              importId: entry.importId,
+              platformName: 'csv',
+            })}
+            style={styles.resumeImport}
+          />
+        ))}
         <View style={styles.platformCard}>
           {platformPreview.length === 0 ? (
             <TouchableOpacity
@@ -238,6 +256,7 @@ const SettingsScreen = () => {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F6F7F4' },
+  resumeImport: { marginBottom: 10 },
 
   identityRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24 },
   avatar: { width: 56, height: 56, borderRadius: 28 },

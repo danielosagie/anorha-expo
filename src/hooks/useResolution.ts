@@ -10,6 +10,11 @@ import type {
   BulkResolveItem,
   BulkResolveResponse,
 } from '../types/syncItem';
+import {
+  chunkBulkResolveItems,
+  normalizeBulkResolveResults,
+  reconcileNeedsAttentionAfterBulk,
+} from '../lib/bulkResolution';
 
 const log = createLogger('useResolution');
 
@@ -137,47 +142,54 @@ export function useResolution(connectionId: string | null | undefined, importId?
     [connectionId, importId, refresh],
   );
 
-  // Apply up to 500 independent CAS decisions. Only confirmed rows are removed
-  // locally; conflicts and errors remain/reappear after the authoritative refresh.
+  // Apply independent CAS decisions in server-sized chunks. Only confirmed rows
+  // are removed locally; conflicts and errors stay visible with current versions.
   const resolveBulk = useCallback(
     async (items: BulkResolveItem[], bulkImportId?: string): Promise<BulkResolveResponse> => {
       if (!connectionId) return { results: [] };
-      if (items.length > 500) throw new Error('A bulk answer can include at most 500 items.');
       if (items.length === 0) return { results: [] };
 
       setResolving('bulk');
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 20000);
       try {
         const token = await ensureSupabaseJwt();
-        const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve-bulk`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ importId: bulkImportId ?? importId ?? undefined, items }),
-          signal: controller.signal,
-        });
-        if (!res.ok) throw new Error(`Bulk answer failed: ${res.status}`);
-        const payload = (await res.json()) as BulkResolveResponse;
-        const results = Array.isArray(payload?.results) ? payload.results : [];
-        const settled = new Set(
-          results
-            .filter((entry) => entry.status === 'ok' || entry.status === 'alreadyResolved')
-            .map((entry) => entry.platformId),
-        );
+        const results = [] as BulkResolveResponse['results'];
+        for (const chunk of chunkBulkResolveItems(items)) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 20000);
+          try {
+            const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve-bulk`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ importId: bulkImportId ?? importId ?? undefined, items: chunk }),
+              signal: controller.signal,
+            });
+            if (!res.ok) {
+              const message = `Bulk answer failed: ${res.status}`;
+              results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
+              continue;
+            }
+            const payload = (await res.json()) as BulkResolveResponse;
+            results.push(...normalizeBulkResolveResults(chunk, payload?.results));
+          } catch (chunkError: any) {
+            const message = chunkError?.name === 'AbortError'
+              ? 'Saving this chunk timed out.'
+              : (chunkError?.message ?? 'Could not save this chunk.');
+            results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
+          } finally {
+            clearTimeout(timer);
+          }
+        }
         setResult((previous) => previous
-          ? { ...previous, needsAttention: previous.needsAttention.filter((item) => !settled.has(item.platformId)) }
+          ? { ...previous, needsAttention: reconcileNeedsAttentionAfterBulk(previous.needsAttention, results) }
           : previous);
-        // Reconcile summary counts and return every conflicted/error row to the
-        // queue. One stale row must never hide the rest of the batch outcome.
+        // Reconcile summary counts after preserving every conflicted/error row.
         await refresh();
         return { results };
       } catch (err: any) {
         log.warn('bulk resolve failed', err?.name === 'AbortError' ? 'request timed out' : err?.message);
         await refresh();
-        if (err?.name === 'AbortError') throw new Error('Saving those answers timed out. They are back in the queue.');
         throw err;
       } finally {
-        clearTimeout(timer);
         setResolving(null);
       }
     },

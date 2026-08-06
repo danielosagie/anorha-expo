@@ -6,6 +6,7 @@ import type {
   ResolveValueOverride,
   SyncItem,
 } from '../../types/syncItem';
+import { buildLookAlikeGroupDecisions } from '../../lib/groupResolution';
 
 export type QuestionCardKind =
   | 'pair'
@@ -132,9 +133,11 @@ function decision(
     choice,
     canonicalId,
     valueOverride,
-    // A missing token is intentionally sent as zero. That safely conflicts
-    // instead of guessing at a newer row and is returned to the queue.
-    version: Number.isInteger(item.version) ? (item.version as number) : 0,
+    // SyncItems.Version starts at 1, so a fabricated 0 can NEVER match the
+    // server's CAS — every such item is a guaranteed conflict that reads to the
+    // seller as a silent no-op. Send undefined instead: the caller drops these
+    // and says so, rather than shipping an answer we know cannot save.
+    version: Number.isInteger(item.version) ? (item.version as number) : undefined,
     outcome: choice === 'link' ? 'linked' : choice === 'create' ? 'added' : 'skipped',
   };
 }
@@ -166,10 +169,7 @@ export function groupDecisions(card: QuestionCardModel, answer: CardAnswer): Que
   if (answer === 'unsure') return card.items.map((item) => decision(item, 'ignore'));
 
   if (card.kind === 'look_alike_group') {
-    return card.items.map((item) => decision(item, 'create', undefined, {
-      groupMode: answer === 'primary' ? 'combine' : 'separate',
-      groupId: item.groupId || card.id,
-    }));
+    return buildLookAlikeGroupDecisions(card.items, card.id, answer);
   }
 
   if (card.kind === 'duplicate_target') {

@@ -28,6 +28,8 @@ import ErrorModal from '../components/ErrorModal';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import PartnerBadge from '../components/PartnerBadge';
 import { buildPartnerInventoryOrigins, PartnerInventoryOrigin } from '../lib/partnerInventory';
+import { findResumableCsvImports } from '../lib/resumableImports';
+import { PendingCsvImportRow } from '../components/import/PendingCsvImportRow';
 
 const statusOf = (raw?: string, enabled = true): { label: string; color: string } => {
   const s = (raw || '').toLowerCase();
@@ -92,6 +94,10 @@ const ConnectionsScreen = () => {
     for (const b of importStatus.lanes.matches.byConnection) m[b.connectionId] = b.count;
     return m;
   }, [importStatus.lanes.matches.byConnection]);
+  const resumableCsvImports = useMemo(
+    () => findResumableCsvImports(importStatus),
+    [importStatus.connections, importStatus.recentImports],
+  );
   const [pools, setPools] = useState<Pool[]>([]);
   const [partners, setPartners] = useState<PartnerInventoryOrigin[]>([]);
   const [managing, setManaging] = useState(false);
@@ -290,6 +296,24 @@ const ConnectionsScreen = () => {
         showsVerticalScrollIndicator={false}
       >
         <PageHeader title="Connections" onBack={() => navigation.goBack()} />
+
+        {resumableCsvImports.length > 0 ? (
+          <>
+            <Text style={styles.section}>Unfinished imports</Text>
+            {resumableCsvImports.map((entry) => (
+              <PendingCsvImportRow
+                key={entry.importId || entry.connectionId}
+                pendingItems={entry.pendingItems}
+                onPress={() => navigation.navigate('ImportQuestionQueue', {
+                  connectionId: entry.connectionId,
+                  importId: entry.importId,
+                  platformName: 'csv',
+                })}
+                style={styles.resumeImport}
+              />
+            ))}
+          </>
+        ) : null}
 
         {/* Selling platforms — Manage flips rows into refresh/remove */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
@@ -613,6 +637,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F6F7F4' },
 
   section: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginLeft: 4 },
+  resumeImport: { marginBottom: 10 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 26, marginBottom: 10 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: '#ECEBE6' },
   loadingRow: { paddingVertical: 26, alignItems: 'center' },

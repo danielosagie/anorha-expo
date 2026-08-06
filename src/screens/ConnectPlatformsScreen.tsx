@@ -21,6 +21,9 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
+import { useImportStatus } from '../hooks/useImportStatus';
+import { findResumableCsvImports } from '../lib/resumableImports';
+import { PendingCsvImportRow } from '../components/import/PendingCsvImportRow';
 type Props = StackScreenProps<AppStackParamList, 'ConnectPlatforms'>;
 
 // One-line "what you get" per platform — plain, calm, verb-first.
@@ -49,6 +52,11 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
   const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const importStatus = useImportStatus();
+  const resumableCsvImports = useMemo(
+    () => findResumableCsvImports(importStatus),
+    [importStatus.connections, importStatus.recentImports],
+  );
 
   const [query, setQuery] = useState('');
   const [flowPlatform, setFlowPlatform] = useState<PlatformKey | null>(null);
@@ -184,6 +192,24 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         // press the button — not just dismiss the keyboard.
         keyboardShouldPersistTaps="handled"
       >
+        {resumableCsvImports.length > 0 ? (
+          <>
+            <Text style={styles.sectionLabel}>UNFINISHED</Text>
+            {resumableCsvImports.map((entry) => (
+              <PendingCsvImportRow
+                key={entry.importId || entry.connectionId}
+                pendingItems={entry.pendingItems}
+                onPress={() => navigation.navigate('ImportQuestionQueue', {
+                  connectionId: entry.connectionId,
+                  importId: entry.importId,
+                  platformName: 'csv',
+                })}
+                style={styles.resumeImport}
+              />
+            ))}
+          </>
+        ) : null}
+
         {available.length > 0 ? (
           <>
             <Text style={styles.sectionLabel}>AVAILABLE</Text>
@@ -285,6 +311,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginHorizontal: 20,
   },
+  resumeImport: { marginHorizontal: 16, marginBottom: 8 },
   card: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E5E7EB',
