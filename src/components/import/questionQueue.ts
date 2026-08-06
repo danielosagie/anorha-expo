@@ -273,9 +273,16 @@ export function buildHandoffOffer(
   streak: HandoffStreak | null,
   remainingCards: QuestionCardModel[],
 ): QuestionHandoffOffer | null {
+  // Keep the reason-class boundary explicit at the queue layer as well as in
+  // the generic streak helper. A handoff earned on one question class must
+  // never receive another class's cards, even when both classes share the same
+  // card kind, group stamp, or reusable answer.
+  const sameReasonCards = streak
+    ? remainingCards.filter((card) => card.reason === streak.reason)
+    : [];
   const selection = selectHandoffCards(
     streak,
-    remainingCards,
+    sameReasonCards,
     (card) => canHandoff(card, streak?.answer ?? 'unsure'),
   );
   if (!selection) return null;

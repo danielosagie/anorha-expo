@@ -79,6 +79,13 @@ export function bulkResolutionSummary(results: BulkResolveResult[]): BulkResolut
   }, { saved: 0, conflicts: 0, errors: 0 });
 }
 
+export function bulkResolutionNotice(summary: BulkResolutionSummary): string {
+  const needsLook = summary.conflicts + summary.errors;
+  return needsLook > 0
+    ? `${summary.saved} saved · ${needsLook} need a look`
+    : `${summary.saved} saved`;
+}
+
 export function reconcileNeedsAttentionAfterBulk(
   items: SyncItem[],
   results: BulkResolveResult[],

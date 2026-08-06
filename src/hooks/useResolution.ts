@@ -11,6 +11,7 @@ import type {
   BulkResolveResponse,
 } from '../types/syncItem';
 import {
+  bulkResolutionSummary,
   chunkBulkResolveItems,
   normalizeBulkResolveResults,
   reconcileNeedsAttentionAfterBulk,
@@ -145,9 +146,11 @@ export function useResolution(connectionId: string | null | undefined, importId?
   // Apply independent CAS decisions in server-sized chunks. Only confirmed rows
   // are removed locally; conflicts and errors stay visible with current versions.
   const resolveBulk = useCallback(
-    async (items: BulkResolveItem[], bulkImportId?: string): Promise<BulkResolveResponse> => {
-      if (!connectionId) return { results: [] };
-      if (items.length === 0) return { results: [] };
+    async (items: BulkResolveItem[], bulkImportId?: string): Promise<
+      BulkResolveResponse & { summary: ReturnType<typeof bulkResolutionSummary> }
+    > => {
+      if (!connectionId) return { results: [], summary: bulkResolutionSummary([]) };
+      if (items.length === 0) return { results: [], summary: bulkResolutionSummary([]) };
 
       setResolving('bulk');
       try {
@@ -182,9 +185,11 @@ export function useResolution(connectionId: string | null | undefined, importId?
         setResult((previous) => previous
           ? { ...previous, needsAttention: reconcileNeedsAttentionAfterBulk(previous.needsAttention, results) }
           : previous);
-        // Reconcile summary counts after preserving every conflicted/error row.
-        await refresh();
-        return { results };
+        // The per-item response is authoritative for this interaction: remove
+        // only rows the server actually settled and unblock the next card now.
+        // A full-resolution reconcile is intentionally deferred to queue finish,
+        // resume, or explicit refresh instead of charging every answer for it.
+        return { results, summary: bulkResolutionSummary(results) };
       } catch (err: any) {
         log.warn('bulk resolve failed', err?.name === 'AbortError' ? 'request timed out' : err?.message);
         await refresh();

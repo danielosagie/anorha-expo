@@ -65,7 +65,7 @@ import type {
   ResolveChoice,
   SyncItem,
 } from '../types/syncItem';
-import { bulkResolutionSummary } from '../lib/bulkResolution';
+import { bulkResolutionNotice } from '../lib/bulkResolution';
 
 const log = createLogger('ImportQuestionQueue');
 const SURFACE = '#F5F5F7';
@@ -452,11 +452,9 @@ export default function ImportQuestionQueueScreen() {
         ? decisionLabelForCard(card, answer)
         : undefined;
       recordDecisions(decisions, card.items, response.results, decisionLabel);
-      const outcome = bulkResolutionSummary(response.results);
+      const outcome = response.summary;
       const failed = outcome.conflicts + outcome.errors;
-      setQueueNotice(
-        `${outcome.saved} saved · ${outcome.conflicts} conflicts · ${outcome.errors} errors`,
-      );
+      setQueueNotice(bulkResolutionNotice(outcome));
       if (await returnAfterTarget()) return;
       const otherCards = mainCards.filter((entry) => entry.id !== card.id);
       if (failed === 0 && answer && offerHandoffAfter(card, answer, otherCards)) return;
@@ -517,11 +515,9 @@ export default function ImportQuestionQueueScreen() {
     try {
       const response = await resolveBulk(handoff.decisions, importId ?? undefined);
       recordDecisions(handoff.decisions, handoff.items, response.results, handoff.decisionLabel);
-      const outcome = bulkResolutionSummary(response.results);
+      const outcome = response.summary;
       const failed = outcome.conflicts + outcome.errors;
-      setQueueNotice(
-        `${outcome.saved} saved · ${outcome.conflicts} conflicts · ${outcome.errors} errors`,
-      );
+      setQueueNotice(bulkResolutionNotice(outcome));
       const otherClasses = mainCards.filter((card) => card.reason !== handoff.reason);
       streakRef.current = null;
       setHandoff(null);

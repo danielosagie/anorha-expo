@@ -7,6 +7,7 @@ import {
 } from '../src/lib/handoffStreak.ts';
 import {
   bulkResolutionSummary,
+  bulkResolutionNotice,
   chunkBulkResolveItems,
   reconcileNeedsAttentionAfterBulk,
   partitionSendableBulkItems,
@@ -70,6 +71,24 @@ test('a conflict stays in the queue with its refreshed version and is not saved'
     ['error', 4],
   ]);
   assert.deepEqual(bulkResolutionSummary(results), { saved: 1, conflicts: 1, errors: 1 });
+  assert.equal(
+    bulkResolutionNotice(bulkResolutionSummary(results)),
+    '1 saved · 2 need a look',
+  );
+});
+
+test('group count and save notice use the same per-item bulk results', () => {
+  const items = Array.from({ length: 19 }, (_, index) => syncItem(`group-${index}`, index + 1));
+  const results = items.map((item, index) => index < 14
+    ? { platformId: item.platformId, status: 'ok' as const, version: (item.version ?? 0) + 1 }
+    : { platformId: item.platformId, status: 'error' as const, message: 'commit failed' });
+  const summary = bulkResolutionSummary(results);
+  const remaining = reconcileNeedsAttentionAfterBulk(items, results);
+
+  assert.deepEqual(summary, { saved: 14, conflicts: 0, errors: 5 });
+  assert.equal(items.length - remaining.length, summary.saved);
+  assert.equal(remaining.length, 5);
+  assert.equal(bulkResolutionNotice(summary), '14 saved · 5 need a look');
 });
 
 test('already-resolved items are settled and removed from the queue', () => {
@@ -138,4 +157,56 @@ test('a mixed group answer resets the reason-plus-answer streak and does not off
 
   assert.equal(streak?.count, 1);
   assert.equal(selectHandoffCards(streak, cards.slice(3), () => true), null);
+});
+
+test('a look-alike streak never includes bundle or other reason classes in its handoff', () => {
+  const lookAlikeCards = ['a', 'b', 'c', 'd'].map((id) => ({
+    id: `look:${id}`,
+    reason: 'look_alike_group',
+    kind: 'look_alike_group',
+  }));
+  const bundleCard = {
+    id: 'bundle:set-1',
+    reason: 'bundle',
+    kind: 'bundle',
+  };
+  const conflictCard = {
+    id: 'field:conflict-1',
+    reason: 'field_conflict',
+    kind: 'pair',
+  };
+
+  let streak = null;
+  for (const card of lookAlikeCards.slice(0, 3)) {
+    streak = advanceAnswerStreak(streak, card, 'secondary', null, true);
+  }
+
+  const offer = selectHandoffCards(
+    streak,
+    [bundleCard, conflictCard, lookAlikeCards[3]],
+    () => true,
+  );
+  assert.ok(offer);
+  assert.equal(offer.reason, 'look_alike_group');
+  assert.deepEqual(offer.cards.map((card) => card.id), ['look:d']);
+  assert.ok(offer.cards.every((card) => card.reason === 'look_alike_group'));
+});
+
+test('bundle cards can earn their own bundle-only handoff', () => {
+  const cards = ['a', 'b', 'c', 'd'].map((id) => ({
+    id: `bundle:${id}`,
+    reason: 'bundle',
+    kind: 'bundle',
+  }));
+
+  let streak = null;
+  for (const card of cards.slice(0, 3)) {
+    streak = advanceAnswerStreak(streak, card, 'primary', null, true);
+  }
+
+  const offer = selectHandoffCards(streak, cards.slice(3), () => true);
+  assert.ok(offer);
+  assert.equal(offer.reason, 'bundle');
+  assert.equal(offer.answer, 'primary');
+  assert.deepEqual(offer.cards.map((card) => card.id), ['bundle:d']);
 });
