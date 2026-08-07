@@ -356,6 +356,40 @@ export function TextTabs<T extends string>({
   );
 }
 
+// ── QueueHeader — ONE structured row: back chevron · progress bar · "N left" ──
+// The deck's whole chrome. The count is a fixed trailing slot so the bar never
+// jitters as the number shrinks.
+export function QueueHeader({
+  onBack,
+  pct,
+  label,
+}: {
+  onBack: () => void;
+  pct: number;
+  label: string;
+}) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  return (
+    <View style={s.header}>
+      <TouchableOpacity
+        onPress={onBack}
+        hitSlop={HIT}
+        activeOpacity={0.6}
+        style={s.headerSide}
+        accessibilityLabel="Go back"
+      >
+        <MaterialCommunityIcons name="chevron-left" size={26} color={IC.ink} />
+      </TouchableOpacity>
+      <View style={s.queueTrackWrap}>
+        <View style={s.progressTrack}>
+          <View style={[s.progressFill, { width: `${clamped}%` }]} />
+        </View>
+      </View>
+      <Text style={s.queueCount} numberOfLines={1}>{label}</Text>
+    </View>
+  );
+}
+
 // ── ProgressLine — centered muted label over a hairline-thin accent bar ────────
 export function ProgressLine({ label, pct }: { label: string; pct: number }) {
   const clamped = Math.max(0, Math.min(100, pct));
@@ -430,6 +464,9 @@ const s = StyleSheet.create({
   tabUnderlineOn: { backgroundColor: IC.ink },
 
   // Progress line
+  queueTrackWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: 12 },
+  queueCount: { minWidth: 52, textAlign: 'right', paddingRight: 16, fontSize: 13, fontWeight: '600', color: IC.muted, fontVariant: ['tabular-nums'] },
+
   progress: { alignItems: 'center', gap: 8 },
   progressLabel: { fontSize: 14, color: IC.muted, textAlign: 'center' },
   progressTrack: { alignSelf: 'stretch', height: 3, borderRadius: 2, backgroundColor: IC.hairline, overflow: 'hidden' },

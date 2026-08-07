@@ -79,7 +79,9 @@ function SmallButton({
 function QuestionActions({
   primary,
   secondary,
-  tertiary = 'Not sure',
+  // One word for deferral everywhere. "Later" is truthful — the row lands in
+  // Needs a look; "Skip"/"Not sure" read as gone.
+  tertiary = 'Later',
   onPrimary,
   onSecondary,
   onTertiary,
@@ -148,8 +150,9 @@ export function PairQuestionCard({
     : item.attention === 'stale_link'
       ? 'Still the same thing?'
       : 'Same thing?';
-  const primary = fieldConflict ? `Keep ${values.incoming}` : 'Yes, same thing';
-  const secondary = fieldConflict ? `Take ${values.catalog}` : 'No, different';
+  // The verb rides on the button: the tap IS the action, never a bare yes.
+  const primary = fieldConflict ? `Keep ${values.incoming}` : 'Yes, link';
+  const secondary = fieldConflict ? `Take ${values.catalog}` : 'No, add as new';
 
   return (
     <View style={styles.questionWrap}>
@@ -240,8 +243,8 @@ export function WhichOneQuestionCard({
       </View>
 
       <QuestionActions
-        primary="It's this one"
-        secondary="It's new"
+        primary="Yes, this one"
+        secondary="None, add as new"
         onPrimary={() => onAnswer('primary')}
         onSecondary={() => onAnswer('secondary')}
         onTertiary={() => onAnswer('unsure')}
@@ -342,7 +345,7 @@ export function TitleQualityCard({
         <PillButton label="Write them for me" onPress={onGenerate} loading={busy} disabled={busy} />
         <View style={styles.actionRow}>
           <SmallButton label="I'll do it" onPress={onManual} disabled={busy} />
-          <SmallButton label="Not sure" onPress={onUnsure} disabled={busy} quiet />
+          <SmallButton label="Later" onPress={onUnsure} disabled={busy} quiet />
         </View>
       </View>
     </View>
@@ -418,7 +421,7 @@ export function TitleEntryCard({
       />
       <View style={styles.actions}>
         <PillButton label="Save title" onPress={onSave} disabled={!value.trim() || busy} loading={busy} />
-        <PillButton label="Not sure" variant="secondary" onPress={onUnsure} disabled={busy} />
+        <PillButton label="Later" variant="secondary" onPress={onUnsure} disabled={busy} />
       </View>
     </View>
   );

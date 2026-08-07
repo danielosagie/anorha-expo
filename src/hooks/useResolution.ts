@@ -253,5 +253,58 @@ export function useResolution(connectionId: string | null | undefined, importId?
     [connectionId, importId],
   );
 
-  return { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk };
+  // Undo: flip answered rows back into the queue. The server restores each
+  // row's original question class; a full refresh (not a local splice) is the
+  // authoritative way to bring the rows back with fresh versions.
+  const unresolveBulk = useCallback(
+    async (items: Array<{ platformId: string; version: number }>, bulkImportId?: string): Promise<
+      BulkResolveResponse & { summary: ReturnType<typeof bulkResolutionSummary> }
+    > => {
+      if (!connectionId || items.length === 0) {
+        return { results: [], summary: bulkResolutionSummary([]) };
+      }
+
+      setResolving('undo');
+      try {
+        const token = await ensureSupabaseJwt();
+        const results = [] as BulkResolveResponse['results'];
+        for (const chunk of chunkBulkResolveItems(items as BulkResolveItem[])) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 20000);
+          try {
+            const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/unresolve`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                importId: bulkImportId ?? importId ?? undefined,
+                items: chunk.map(({ platformId, version }) => ({ platformId, version })),
+              }),
+              signal: controller.signal,
+            });
+            if (!res.ok) {
+              const message = `Undo failed: ${res.status}`;
+              results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
+              continue;
+            }
+            const payload = (await res.json()) as BulkResolveResponse;
+            results.push(...normalizeBulkResolveResults(chunk, payload?.results));
+          } catch (chunkError: any) {
+            const message = chunkError?.name === 'AbortError'
+              ? 'Undoing timed out.'
+              : (chunkError?.message ?? 'Could not undo this batch.');
+            results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+        await refresh();
+        return { results, summary: bulkResolutionSummary(results) };
+      } finally {
+        setResolving(null);
+      }
+    },
+    [connectionId, importId, refresh],
+  );
+
+  return { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk, unresolveBulk };
 }

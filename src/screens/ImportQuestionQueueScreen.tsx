@@ -28,6 +28,7 @@ import {
   InboxHeader,
   PillButton,
   ProgressLine,
+  QueueHeader,
   SuccessCheck,
 } from '../components/importinbox/InboxKit';
 import {
@@ -138,12 +139,16 @@ export default function ImportQuestionQueueScreen() {
   const insets = useSafeAreaInsets();
   const { connectionId, platformName, importId } = route.params;
   const platform = platformLabel(platformName);
-  const { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk } = useResolution(connectionId, importId);
+  const { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk, unresolveBulk } = useResolution(connectionId, importId);
 
   const [stage, setStage] = useState<Stage>('loading');
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [queueNotice, setQueueNotice] = useState<string | null>(null);
+  // The last saved answer, as {platformId, version-after-save} rows — exactly
+  // what POST /unresolve needs to take it back. Cleared once undone or stale.
+  const [lastAnswer, setLastAnswer] = useState<Array<{ platformId: string; version: number }> | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [targetCardId, setTargetCardId] = useState<string | null>(null);
   const [queueStartCount, setQueueStartCount] = useState(0);
@@ -354,6 +359,7 @@ export default function ImportQuestionQueueScreen() {
       result?.needsAttention.length ?? mainCards.reduce((total, card) => total + card.items.length, 0),
     );
     setQueueNotice(null);
+    setLastAnswer(null);
     void AsyncStorage.setItem(activeKey(connectionId), '1');
     setStage('queue');
   }, [connectionId, finishQueue, mainCards, result?.needsAttention.length]);
@@ -375,7 +381,61 @@ export default function ImportQuestionQueueScreen() {
       valueOverride: itemDecision.valueOverride,
     });
     recordDecisions([itemDecision], [item]);
+    // The CAS save bumped Version by exactly one; that fresh token is what an
+    // undo must present.
+    if (Number.isInteger(item.version)) {
+      setLastAnswer([{ platformId: item.platformId, version: (item.version as number) + 1 }]);
+      setQueueNotice('Saved');
+    } else {
+      setLastAnswer(null);
+    }
   }, [importId, recordDecisions, resolve]);
+
+  const undoableFromResults = useCallback((results: BulkResolveResult[]) => {
+    const undoable = results
+      .filter((entry) => (entry.status === 'ok' || entry.status === 'alreadyResolved') && Number.isInteger(entry.version))
+      .map((entry) => ({ platformId: entry.platformId, version: entry.version as number }));
+    setLastAnswer(undoable.length > 0 ? undoable : null);
+  }, []);
+
+  const removeLedgerEntries = useCallback((platformIds: string[]) => {
+    const removed = new Set(platformIds);
+    setLedger((previous) => {
+      const next = previous.filter((entry) => !removed.has(entry.platformId));
+      void AsyncStorage.setItem(ledgerKey(connectionId), JSON.stringify(next)).catch((storageError) => {
+        log.warn('ledger persistence failed', storageError);
+      });
+      return next;
+    });
+  }, [connectionId]);
+
+  const undoLastAnswer = useCallback(async () => {
+    if (!lastAnswer || lastAnswer.length === 0 || undoBusy) return;
+    setUndoBusy(true);
+    setActionError(null);
+    try {
+      const response = await unresolveBulk(lastAnswer, importId ?? undefined);
+      const undone = response.results
+        .filter((entry) => entry.status === 'ok' || entry.status === 'alreadyResolved')
+        .map((entry) => entry.platformId);
+      if (undone.length > 0) removeLedgerEntries(undone);
+      const tooLate = response.results.length - undone.length;
+      setQueueNotice(
+        tooLate > 0
+          ? `${undone.length} back in the queue · ${tooLate} already imported`
+          : undone.length === 1
+            ? 'Back in the queue'
+            : `${undone.length} back in the queue`,
+      );
+      setLastAnswer(null);
+      streakRef.current = null;
+      setStage('queue');
+    } catch (undoError) {
+      setActionError(displayError(undoError, 'That answer could not be taken back.'));
+    } finally {
+      setUndoBusy(false);
+    }
+  }, [importId, lastAnswer, removeLedgerEntries, undoBusy, unresolveBulk]);
 
   const returnAfterTarget = useCallback(async () => {
     if (!returnToListRef.current) return false;
@@ -456,6 +516,7 @@ export default function ImportQuestionQueueScreen() {
         ? decisionLabelForCard(card, answer)
         : undefined;
       recordDecisions(decisions, card.items, response.results, decisionLabel);
+      undoableFromResults(response.results);
       const outcome = response.summary;
       const failed = outcome.conflicts + outcome.errors;
       setQueueNotice(bulkResolutionNotice(outcome));
@@ -468,7 +529,7 @@ export default function ImportQuestionQueueScreen() {
     } catch (bulkError) {
       setActionError(displayError(bulkError, 'Those answers did not save. They are back in the queue.'));
     }
-  }, [finishQueue, importId, mainCards, offerHandoffAfter, recordDecisions, resolveBulk, returnAfterTarget]);
+  }, [finishQueue, importId, mainCards, offerHandoffAfter, recordDecisions, resolveBulk, returnAfterTarget, undoableFromResults]);
 
   const answerGroup = useCallback((answer: CardAnswer) => {
     if (!currentCard) return;
@@ -487,6 +548,7 @@ export default function ImportQuestionQueueScreen() {
         title: titleById.get(item.platformId) || item.title,
       }));
       recordDecisions(decisions, titledItems, response.results, 'Title generated');
+      undoableFromResults(response.results);
       const failed = response.summary.conflicts + response.summary.errors;
       setQueueNotice(bulkResolutionNotice(response.summary));
       if (failed === 0 && mainCards.length === 1) await finishQueue();
@@ -494,7 +556,7 @@ export default function ImportQuestionQueueScreen() {
     } catch (generationError) {
       setActionError(displayError(generationError, 'Those titles were not generated. The rows are still in the queue.'));
     }
-  }, [currentCard, finishQueue, generateTitlesBulk, importId, mainCards.length, recordDecisions]);
+  }, [currentCard, finishQueue, generateTitlesBulk, importId, mainCards.length, recordDecisions, undoableFromResults]);
 
   const enterManualTitles = useCallback(() => {
     if (!currentCard || currentCard.kind !== 'title_quality') return;
@@ -535,6 +597,7 @@ export default function ImportQuestionQueueScreen() {
     try {
       const response = await resolveBulk(handoff.decisions, importId ?? undefined);
       recordDecisions(handoff.decisions, handoff.items, response.results, handoff.decisionLabel);
+      undoableFromResults(response.results);
       const outcome = response.summary;
       const failed = outcome.conflicts + outcome.errors;
       setQueueNotice(bulkResolutionNotice(outcome));
@@ -546,7 +609,7 @@ export default function ImportQuestionQueueScreen() {
     } catch (bulkError) {
       setHandoffError(displayError(bulkError, 'Those items are back in the queue.'));
     }
-  }, [finishQueue, handoff, importId, mainCards, recordDecisions, resolveBulk]);
+  }, [finishQueue, handoff, importId, mainCards, recordDecisions, resolveBulk, undoableFromResults]);
 
   const keepShowing = useCallback(() => {
     if (handoff) suppressedHandoffsRef.current.add(handoffKey(handoff.reason, handoff.answer));
@@ -747,16 +810,30 @@ export default function ImportQuestionQueueScreen() {
   if (stage === 'queue') {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-        <InboxHeader
+        <QueueHeader
           onBack={() => {
             void AsyncStorage.setItem(activeKey(connectionId), '1');
             navigation.goBack();
           }}
+          pct={progressPct}
+          label={`${remainingCount} left`}
         />
-        <View style={styles.progressWrap}>
-          <ProgressLine label={`${remainingCount} left`} pct={progressPct} />
-        </View>
-        {queueNotice ? <Text style={styles.queueNotice}>{queueNotice}</Text> : null}
+        {queueNotice ? (
+          <View style={styles.noticeRow}>
+            <Text style={styles.queueNotice}>{queueNotice}</Text>
+            {lastAnswer && lastAnswer.length > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Undo"
+                disabled={undoBusy}
+                onPress={() => void undoLastAnswer()}
+                style={({ pressed }) => [styles.undoButton, (pressed || undoBusy) ? styles.undoPressed : null]}
+              >
+                <Text style={styles.undoText}>{undoBusy ? 'Undoing' : 'Undo'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         {currentCard ? (
           <QuestionScroll>
             {detailsLoading && hydratedItems.length === 0 ? <CardLoading /> : null}
@@ -1098,7 +1175,11 @@ const styles = StyleSheet.create({
   questionFrontSub: { color: '#61713D', fontFamily: 'Inter_500Medium', fontSize: 14 },
 
   progressWrap: { paddingHorizontal: 20, paddingBottom: 6 },
-  queueNotice: { color: '#567615', fontFamily: 'Inter_600SemiBold', fontSize: 13, textAlign: 'center', paddingHorizontal: 20, paddingBottom: 4 },
+  noticeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 20, paddingBottom: 4 },
+  queueNotice: { color: '#567615', fontFamily: 'Inter_600SemiBold', fontSize: 13, textAlign: 'center' },
+  undoButton: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 999, backgroundColor: '#ECECEF' },
+  undoPressed: { opacity: 0.55 },
+  undoText: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 13 },
   inlineError: { color: '#B42318', fontFamily: 'Inter_500Medium', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 14 },
 
   receiptScreen: { alignItems: 'stretch' },
