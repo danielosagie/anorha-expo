@@ -32,6 +32,7 @@ import {
   SuccessCheck,
 } from '../components/importinbox/InboxKit';
 import {
+  bestGuessFooterLabel,
   buildQuestionCards,
   buildHandoffOffer,
   candidateForItem,
@@ -43,12 +44,18 @@ import {
   manualTitleDecision,
   pairDecision,
   retryCommitDecision,
+  selectBestGuessCards,
   whichOneDecision,
   type CardAnswer,
   type HandoffStreak,
   type QuestionCardModel,
   type QueueDecision,
 } from '../components/import/questionQueue';
+import {
+  BestGuessChecklist,
+  GuessHandoffCard,
+  type BestGuessRowModel,
+} from '../components/import/BestGuesses';
 import {
   CardLoading,
   CommitFailedCard,
@@ -78,7 +85,7 @@ const AMBER_TINT = 'rgba(186,117,23,0.08)';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportQuestionQueue'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportQuestionQueue'>;
-type Stage = 'loading' | 'explainer' | 'front' | 'queue' | 'handoff' | 'title_entry' | 'receipt' | 'list';
+type Stage = 'loading' | 'explainer' | 'front' | 'best_guesses' | 'guess_handoff' | 'queue' | 'handoff' | 'title_entry' | 'receipt' | 'list';
 type LedgerOutcome = 'linked' | 'added' | 'skipped';
 
 interface LedgerEntry {
@@ -154,6 +161,9 @@ export default function ImportQuestionQueueScreen() {
   const [queueStartCount, setQueueStartCount] = useState(0);
   const [handoff, setHandoff] = useState<HandoffState | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [uncheckedGuessIds, setUncheckedGuessIds] = useState<ReadonlySet<string>>(new Set());
+  const [guessSummary, setGuessSummary] = useState<{ confirmed: number; remaining: number } | null>(null);
+  const [guessCandidateDetails, setGuessCandidateDetails] = useState<Record<string, CanonicalRef>>({});
   const [manualItems, setManualItems] = useState<SyncItem[]>([]);
   const [manualIndex, setManualIndex] = useState(0);
   const [manualTitle, setManualTitle] = useState('');
@@ -167,6 +177,9 @@ export default function ImportQuestionQueueScreen() {
 
   const finishRef = useRef(false);
   const returnToListRef = useRef(false);
+  // Once the seller has confirmed (or declined) the best guesses in this
+  // session, re-entering from the front goes straight to the deck.
+  const guessesHandledRef = useRef(false);
   const streakRef = useRef<HandoffStreak | null>(null);
   const suppressedHandoffsRef = useRef<Set<string>>(new Set());
 
@@ -200,6 +213,10 @@ export default function ImportQuestionQueueScreen() {
     ...cards.filter((card) => card.kind !== 'commit_failed'),
     ...cards.filter((card) => card.kind === 'commit_failed'),
   ], [cards]);
+  // Best guesses are pre-checked ANSWERS, never retries: commit_failed now
+  // rides mainCards (batched last, above), so selectBestGuessCards must — and
+  // does — exclude it by kind rather than relying on it being pre-filtered.
+  const bestGuesses = useMemo(() => selectBestGuessCards(mainCards), [mainCards]);
   const targetedCard = targetCardId ? cards.find((card) => card.id === targetCardId) ?? null : null;
   const currentCard = targetedCard ?? mainCards[0] ?? null;
 
@@ -370,6 +387,67 @@ export default function ImportQuestionQueueScreen() {
     setStage('queue');
   }, [connectionId, finishQueue, mainCards, result?.needsAttention.length]);
 
+  // Front → best guesses when the server has any, otherwise straight to the
+  // deck exactly as before. Zero best guesses means this stage never exists.
+  const beginQuestions = useCallback(() => {
+    if (bestGuesses.length === 0 || guessesHandledRef.current) {
+      startQueue();
+      return;
+    }
+    setUncheckedGuessIds(new Set());
+    setActionError(null);
+    setStage('best_guesses');
+  }, [bestGuesses.length, startQueue]);
+
+  const toggleGuess = useCallback((cardId: string) => {
+    setUncheckedGuessIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      return next;
+    });
+  }, []);
+
+  // Batch-hydrate catalog titles for the "to <catalog title>" sub-lines. One
+  // request for the whole checklist; payload identities cover the rest.
+  useEffect(() => {
+    if (stage !== 'best_guesses') return;
+    let alive = true;
+    const candidateIds = Array.from(new Set(bestGuesses.flatMap(({ card }) =>
+      card.items.flatMap((item) => {
+        const candidate = candidateForItem(item);
+        return candidate ? [candidate.id] : [];
+      }),
+    )));
+    if (candidateIds.length === 0) return;
+    fetchImportCandidateDetails(candidateIds, platform).then((details) => {
+      if (alive) setGuessCandidateDetails(details);
+    }).catch((hydrateError) => {
+      log.warn('best-guess candidate hydration failed', hydrateError);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [bestGuesses, platform, stage]);
+
+  const guessRows = useMemo<BestGuessRowModel[]>(() => bestGuesses.map(({ card, action }) => {
+    const item = card.items[0];
+    const details = incomingItemDetailsFromPayload(item, platform);
+    const candidate = action === 'link' ? candidateForItem(item) : null;
+    const hydrated = candidate ? guessCandidateDetails[candidate.id] : null;
+    const catalogTitle = hydrated?.title ?? candidate?.title ?? candidate?.sku ?? null;
+    return {
+      id: card.id,
+      action,
+      title: details.title || item.title || 'Untitled item',
+      sub: action === 'link'
+        ? `to ${catalogTitle || 'your catalog item'}`
+        : card.items.length > 1 ? countLabel(card.items.length, 'item') : null,
+      imageUrl: details.imageUrl ?? item.imageUrl ?? null,
+      checked: !uncheckedGuessIds.has(card.id),
+    };
+  }), [bestGuesses, guessCandidateDetails, platform, uncheckedGuessIds]);
+
   useEffect(() => {
     if (stage !== 'queue' || !result || loading || currentCard || finishRef.current) return;
     if (targetCardId) {
@@ -403,6 +481,64 @@ export default function ImportQuestionQueueScreen() {
       .map((entry) => ({ platformId: entry.platformId, version: entry.version as number }));
     setLastAnswer(undoable.length > 0 ? undoable : null);
   }, []);
+
+  const confirmBestGuesses = useCallback(async () => {
+    const checked = bestGuesses.filter((guess) => !uncheckedGuessIds.has(guess.card.id));
+    if (checked.length === 0) return;
+    setActionError(null);
+    try {
+      const decisions = checked.flatMap((guess) => guess.decisions);
+      const response = await resolveBulk(decisions, importId ?? undefined);
+      for (const guess of checked) {
+        const memberIds = new Set(guess.decisions.map((entry) => entry.platformId));
+        recordDecisions(
+          guess.decisions,
+          guess.card.items,
+          response.results.filter((entry) => memberIds.has(entry.platformId)),
+          decisionLabelForCard(guess.card, 'primary'),
+        );
+      }
+      undoableFromResults(response.results);
+      setQueueNotice(bulkResolutionNotice(response.summary));
+      guessesHandledRef.current = true;
+      const settled = new Set(
+        response.results.filter(isSettled).map((entry) => entry.platformId),
+      );
+      const remainingCards = mainCards.filter((card) =>
+        card.items.some((item) => !settled.has(item.platformId)));
+      const failed = response.summary.conflicts + response.summary.errors;
+      if (remainingCards.length === 0 && failed === 0) {
+        await finishQueue();
+        return;
+      }
+      if (response.summary.saved === 0) {
+        // Nothing stuck (all conflicts or errors): the notice explains, the deck
+        // still holds every card. No point celebrating zero.
+        void AsyncStorage.setItem(activeKey(connectionId), '1');
+        setQueueStartCount(remainingCards.reduce((total, card) => total + card.items.length, 0));
+        setStage('queue');
+        return;
+      }
+      setGuessSummary({ confirmed: response.summary.saved, remaining: remainingCards.length });
+      setStage('guess_handoff');
+    } catch (bulkError) {
+      setActionError(displayError(bulkError, 'Those answers did not save. They are still here.'));
+    }
+  }, [bestGuesses, connectionId, finishQueue, importId, mainCards, recordDecisions, resolveBulk, uncheckedGuessIds, undoableFromResults]);
+
+  // "Show me" keeps the saved notice + Undo visible in the deck, so it must
+  // NOT go through startQueue (which clears both).
+  const showRemainingQuestions = useCallback(() => {
+    void AsyncStorage.setItem(activeKey(connectionId), '1');
+    setQueueStartCount(result?.needsAttention.length ?? 0);
+    setGuessSummary(null);
+    setStage('queue');
+  }, [connectionId, result?.needsAttention.length]);
+
+  const skipBestGuesses = useCallback(() => {
+    guessesHandledRef.current = true;
+    startQueue();
+  }, [startQueue]);
 
   const removeLedgerEntries = useCallback((platformIds: string[]) => {
     const removed = new Set(platformIds);
@@ -789,7 +925,7 @@ export default function ImportQuestionQueueScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`${countLabel(questionCount, 'question')}, covers ${countLabel(questionItemCount, 'item')}`}
-            onPress={startQueue}
+            onPress={beginQuestions}
             style={({ pressed }) => [styles.questionFrontCard, pressed ? styles.pressed : null]}
           >
             <View style={styles.questionFrontCopy}>
@@ -800,9 +936,57 @@ export default function ImportQuestionQueueScreen() {
           </Pressable>
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-          <PillButton label="Start" onPress={startQueue} />
+          <PillButton label="Start" onPress={beginQuestions} />
           <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />
         </View>
+      </View>
+    );
+  }
+
+  if (stage === 'best_guesses') {
+    const checkedRows = guessRows.filter((row) => row.checked);
+    const linkCount = checkedRows.filter((row) => row.action === 'link').length;
+    const footerLabel = bestGuessFooterLabel(linkCount, checkedRows.length - linkCount);
+    return (
+      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
+        <InboxHeader onBack={() => setStage('front')} />
+        <ScrollView contentContainerStyle={styles.guessScroll} showsVerticalScrollIndicator={false}>
+          <View style={styles.guessTitleBlock}>
+            <Text style={styles.screenTitle}>First, our best guesses</Text>
+            <Text style={styles.screenSubtitle}>
+              Step 1 of 2 · one tap says yes to everything checked
+            </Text>
+          </View>
+          <BestGuessChecklist rows={guessRows} onToggle={toggleGuess} disabled={busy} />
+          {actionError ? <Text style={styles.inlineError}>{actionError}</Text> : null}
+        </ScrollView>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+          {footerLabel ? <Text style={styles.footerCaption}>{footerLabel}</Text> : null}
+          <PillButton
+            label={`Confirm ${checkedRows.length}`}
+            onPress={() => void confirmBestGuesses()}
+            loading={busy}
+            disabled={busy || checkedRows.length === 0}
+          />
+          <PillButton label="Ask me instead" variant="secondary" onPress={skipBestGuesses} disabled={busy} />
+        </View>
+      </View>
+    );
+  }
+
+  if (stage === 'guess_handoff' && guessSummary) {
+    return (
+      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
+        <InboxHeader onBack={() => setStage('front')} />
+        <QuestionScroll>
+          <GuessHandoffCard
+            confirmed={guessSummary.confirmed}
+            remaining={guessSummary.remaining}
+            busy={busy}
+            onShow={showRemainingQuestions}
+            onLater={() => navigation.goBack()}
+          />
+        </QuestionScroll>
       </View>
     );
   }
@@ -1227,6 +1411,8 @@ const styles = StyleSheet.create({
   reassuranceText: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15, flex: 1 },
 
   frontScroll: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 0, paddingBottom: 30 },
+  guessScroll: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 28 },
+  guessTitleBlock: { gap: 6, marginBottom: 22 },
   countCard: { backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 16 },
   countRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   countLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },

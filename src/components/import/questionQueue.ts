@@ -251,6 +251,57 @@ export function decisionsForCard(card: QuestionCardModel, answer: CardAnswer): Q
   return [];
 }
 
+export type BestGuessAction = 'link' | 'add';
+
+export interface BestGuessCard {
+  card: QuestionCardModel;
+  action: BestGuessAction;
+  decisions: QueueDecision[];
+}
+
+// Kinds whose primary answer needs no extra human input. which_one needs a
+// candidate selection, bundle invents part identities, title_quality needs
+// text, commit_failed is a retry, so none of those can be pre-checked.
+const BEST_GUESS_KINDS: ReadonlySet<QuestionCardKind> = new Set([
+  'pair',
+  'look_alike_group',
+  'duplicate_target',
+]);
+
+/**
+ * The cards confident enough to pre-check on the "First, our best guesses"
+ * screen. A best guess sends EXACTLY what tapping the primary answer in the
+ * deck would send (same decisions, same versions), so a confirmed checklist
+ * row and an answered card are indistinguishable server-side. The screen
+ * groups rows by what the tap does, so a card whose primary decisions mix
+ * outcomes (some link, some add) cannot sit truthfully in either section and
+ * stays in the one-card deck instead.
+ */
+export function selectBestGuessCards(cards: QuestionCardModel[]): BestGuessCard[] {
+  const guesses: BestGuessCard[] = [];
+  for (const card of cards) {
+    if (!BEST_GUESS_KINDS.has(card.kind)) continue;
+    if (card.items[0]?.recommended !== 'primary') continue;
+    const decisions = decisionsForCard(card, 'primary');
+    if (decisions.length === 0 || decisions.length !== card.items.length) continue;
+    const action: BestGuessAction | null = decisions.every((entry) => entry.outcome === 'linked')
+      ? 'link'
+      : decisions.every((entry) => entry.outcome === 'added')
+        ? 'add'
+        : null;
+    if (!action) continue;
+    guesses.push({ card, action, decisions });
+  }
+  return guesses;
+}
+
+export function bestGuessFooterLabel(linkCount: number, addCount: number): string {
+  const parts: string[] = [];
+  if (linkCount > 0) parts.push(`${linkCount} link`);
+  if (addCount > 0) parts.push(`${addCount} add as new`);
+  return parts.join(' · ');
+}
+
 export function handoffKey(
   reason: QuestionCardModel['reason'],
   answer: Exclude<CardAnswer, 'unsure'>,
