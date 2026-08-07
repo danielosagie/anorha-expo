@@ -73,7 +73,6 @@ import type {
   ResolveChoice,
   SyncItem,
 } from '../types/syncItem';
-import { bulkResolutionNotice } from '../lib/bulkResolution';
 
 const log = createLogger('ImportQuestionQueue');
 const SURFACE = '#F5F5F7';
@@ -151,7 +150,6 @@ export default function ImportQuestionQueueScreen() {
   const [stage, setStage] = useState<Stage>('loading');
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [queueNotice, setQueueNotice] = useState<string | null>(null);
   // The last saved answer, as {platformId, version-after-save} rows — exactly
   // what POST /unresolve needs to take it back. Cleared once undone or stale.
   const [lastAnswer, setLastAnswer] = useState<Array<{ platformId: string; version: number }> | null>(null);
@@ -381,7 +379,6 @@ export default function ImportQuestionQueueScreen() {
     setQueueStartCount(
       result?.needsAttention.length ?? mainCards.reduce((total, card) => total + card.items.length, 0),
     );
-    setQueueNotice(null);
     setLastAnswer(null);
     void AsyncStorage.setItem(activeKey(connectionId), '1');
     setStage('queue');
@@ -469,7 +466,6 @@ export default function ImportQuestionQueueScreen() {
     // undo must present.
     if (Number.isInteger(item.version)) {
       setLastAnswer([{ platformId: item.platformId, version: (item.version as number) + 1 }]);
-      setQueueNotice('Saved');
     } else {
       setLastAnswer(null);
     }
@@ -499,7 +495,6 @@ export default function ImportQuestionQueueScreen() {
         );
       }
       undoableFromResults(response.results);
-      setQueueNotice(bulkResolutionNotice(response.summary));
       guessesHandledRef.current = true;
       const settled = new Set(
         response.results.filter(isSettled).map((entry) => entry.platformId),
@@ -562,13 +557,11 @@ export default function ImportQuestionQueueScreen() {
         .map((entry) => entry.platformId);
       if (undone.length > 0) removeLedgerEntries(undone);
       const tooLate = response.results.length - undone.length;
-      setQueueNotice(
-        tooLate > 0
-          ? `${undone.length} back in the queue · ${tooLate} already imported`
-          : undone.length === 1
-            ? 'Back in the queue'
-            : `${undone.length} back in the queue`,
-      );
+      // The cards visibly returning IS the confirmation; only a too-late
+      // outcome needs words.
+      if (tooLate > 0) {
+        setActionError(`${countLabel(tooLate, 'item')} already imported and cannot be taken back.`);
+      }
       setLastAnswer(null);
       streakRef.current = null;
       setStage('queue');
@@ -661,7 +654,6 @@ export default function ImportQuestionQueueScreen() {
       undoableFromResults(response.results);
       const outcome = response.summary;
       const failed = outcome.conflicts + outcome.errors;
-      setQueueNotice(bulkResolutionNotice(outcome));
       if (await returnAfterTarget()) return;
       const otherCards = mainCards.filter((entry) => entry.id !== card.id);
       if (failed === 0 && answer && offerHandoffAfter(card, answer, otherCards)) return;
@@ -692,7 +684,6 @@ export default function ImportQuestionQueueScreen() {
       recordDecisions(decisions, titledItems, response.results, 'Title generated');
       undoableFromResults(response.results);
       const failed = response.summary.conflicts + response.summary.errors;
-      setQueueNotice(bulkResolutionNotice(response.summary));
       if (failed === 0 && mainCards.length === 1) await finishQueue();
       else setStage('queue');
     } catch (generationError) {
@@ -742,7 +733,6 @@ export default function ImportQuestionQueueScreen() {
       undoableFromResults(response.results);
       const outcome = response.summary;
       const failed = outcome.conflicts + outcome.errors;
-      setQueueNotice(bulkResolutionNotice(outcome));
       const otherClasses = mainCards.filter((card) => card.reason !== handoff.reason);
       streakRef.current = null;
       setHandoff(null);
@@ -778,7 +768,6 @@ export default function ImportQuestionQueueScreen() {
       const response = await resolveBulk(decisions, importId ?? undefined);
       recordDecisions(decisions, card.items, response.results, 'Tried again');
       undoableFromResults(response.results);
-      setQueueNotice(bulkResolutionNotice(response.summary));
       if (await returnAfterTarget()) return;
       const failed = response.summary.conflicts + response.summary.errors;
       const otherCards = mainCards.filter((entry) => entry.id !== card.id);
@@ -921,22 +910,19 @@ export default function ImportQuestionQueueScreen() {
             <CountRow label="Linked to your catalog" count={summary?.autoLinked ?? 0} />
             <View style={styles.divider} />
             <CountRow label="Added as new" count={summary?.autoCreated ?? 0} />
+            {questionItemCount > 0 ? (
+              <>
+                <View style={styles.divider} />
+                <CountRow label="Still need some review" count={questionItemCount} tone="review" />
+              </>
+            ) : null}
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${countLabel(questionCount, 'question')}, covers ${countLabel(questionItemCount, 'item')}`}
-            onPress={beginQuestions}
-            style={({ pressed }) => [styles.questionFrontCard, pressed ? styles.pressed : null]}
-          >
-            <View style={styles.questionFrontCopy}>
-              <Text style={styles.questionFrontTitle}>{countLabel(questionCount, 'question')}</Text>
-              <Text style={styles.questionFrontSub}>covers the last {questionItemCount} items</Text>
-            </View>
-            <MaterialCommunityIcons name="chevron-right" size={24} color={IC.ink} />
-          </Pressable>
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-          <PillButton label="Start" onPress={beginQuestions} />
+          <PillButton
+            label={questionCount > 0 ? `${questionCount} more ${questionCount === 1 ? 'question' : 'questions'}` : 'Start'}
+            onPress={beginQuestions}
+          />
           <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />
         </View>
       </View>
@@ -1044,22 +1030,6 @@ export default function ImportQuestionQueueScreen() {
           pct={progressPct}
           label={`${remainingCount} left`}
         />
-        {queueNotice ? (
-          <View style={styles.noticeRow}>
-            <Text style={styles.queueNotice}>{queueNotice}</Text>
-            {lastAnswer && lastAnswer.length > 0 ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Undo"
-                disabled={undoBusy}
-                onPress={() => void undoLastAnswer()}
-                style={({ pressed }) => [styles.undoButton, (pressed || undoBusy) ? styles.undoPressed : null]}
-              >
-                <Text style={styles.undoText}>{undoBusy ? 'Undoing' : 'Undo'}</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
         {currentCard ? (
           <QuestionScroll>
             {detailsLoading && hydratedItems.length === 0 ? <CardLoading /> : null}
@@ -1068,8 +1038,11 @@ export default function ImportQuestionQueueScreen() {
                 item={hydratedItems[0]}
                 candidate={hydratedCandidateForFirst}
                 platformName={platform}
+                platformKey={route.params.platformName?.toLowerCase()}
                 busy={busy}
                 onAnswer={(answer) => void answerPair(answer)}
+                onUndo={() => void undoLastAnswer()}
+                undoDisabled={!lastAnswer?.length || undoBusy}
               />
             ) : null}
             {currentCard.kind === 'which_one' && hydratedItems[0] ? (
@@ -1077,10 +1050,13 @@ export default function ImportQuestionQueueScreen() {
                 item={hydratedItems[0]}
                 candidates={hydratedCandidates}
                 platformName={platform}
+                platformKey={route.params.platformName?.toLowerCase()}
                 selectedId={selectedCandidateId}
                 onSelect={setSelectedCandidateId}
                 busy={busy}
                 onAnswer={(answer) => void answerWhichOne(answer)}
+                onUndo={() => void undoLastAnswer()}
+                undoDisabled={!lastAnswer?.length || undoBusy}
               />
             ) : null}
             {(currentCard.kind === 'look_alike_group' || currentCard.kind === 'duplicate_target' || currentCard.kind === 'bundle') ? (
@@ -1088,6 +1064,8 @@ export default function ImportQuestionQueueScreen() {
                 card={{ ...currentCard, items: hydratedItems }}
                 busy={busy}
                 onAnswer={answerGroup}
+                onUndo={() => void undoLastAnswer()}
+                undoDisabled={!lastAnswer?.length || undoBusy}
               />
             ) : null}
             {currentCard.kind === 'title_quality' ? (
@@ -1097,6 +1075,8 @@ export default function ImportQuestionQueueScreen() {
                 onGenerate={generateTitles}
                 onManual={enterManualTitles}
                 onUnsure={() => answerGroup('unsure')}
+                onUndo={() => void undoLastAnswer()}
+                undoDisabled={!lastAnswer?.length || undoBusy}
               />
             ) : null}
             {currentCard.kind === 'commit_failed' && hydratedItems[0] ? (
@@ -1109,6 +1089,8 @@ export default function ImportQuestionQueueScreen() {
                   setTargetCardId(null);
                   setStage('list');
                 }}
+                onUndo={() => void undoLastAnswer()}
+                undoDisabled={!lastAnswer?.length || undoBusy}
               />
             ) : null}
             {currentCard.kind === 'fallback' && hydratedItems[0] ? (
@@ -1297,14 +1279,14 @@ export default function ImportQuestionQueueScreen() {
   );
 }
 
-function CountRow({ label, count }: { label: string; count: number }) {
+function CountRow({ label, count, tone = 'good' }: { label: string; count: number; tone?: 'good' | 'review' }) {
   return (
     <View style={styles.countRow}>
       <View style={styles.countLabelWrap}>
-        <View style={styles.greenDot} />
+        <View style={[styles.greenDot, tone === 'review' ? styles.amberDot : null]} />
         <Text style={styles.countLabel}>{label}</Text>
       </View>
-      <Text style={styles.countValue}>{count}</Text>
+      <Text style={[styles.countValue, tone === 'review' ? styles.amberValue : null]}>{count}</Text>
     </View>
   );
 }
@@ -1415,6 +1397,8 @@ const styles = StyleSheet.create({
   guessTitleBlock: { gap: 6, marginBottom: 22 },
   countCard: { backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 16 },
   countRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  amberDot: { backgroundColor: AMBER },
+  amberValue: { color: AMBER },
   countLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },
   greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: IC.accent },
   countLabel: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15 },
@@ -1426,11 +1410,6 @@ const styles = StyleSheet.create({
   questionFrontSub: { color: '#61713D', fontFamily: 'Inter_500Medium', fontSize: 14 },
 
   progressWrap: { paddingHorizontal: 20, paddingBottom: 6 },
-  noticeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 20, paddingBottom: 4 },
-  queueNotice: { color: '#567615', fontFamily: 'Inter_600SemiBold', fontSize: 13, textAlign: 'center' },
-  undoButton: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 999, backgroundColor: '#ECECEF' },
-  undoPressed: { opacity: 0.55 },
-  undoText: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 13 },
   inlineError: { color: '#B42318', fontFamily: 'Inter_500Medium', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 14 },
 
   receiptScreen: { alignItems: 'stretch' },

@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import PlatformLogo from '../PlatformLogo';
 import { IC, PillButton } from '../importinbox/InboxKit';
 import type { CanonicalRef, SyncItem } from '../../types/syncItem';
 import type { CardAnswer, QuestionCardModel } from './questionQueue';
@@ -76,39 +77,134 @@ function SmallButton({
   );
 }
 
+// The deck's control row, from the Paper V2A footer: [undo] [secondary] [primary]
+// on ONE line — undo lives here (not in a notice strip), so taking back the
+// last answer sits beside making the next one. "Later" rides quietly beneath.
+export function ControlRow({
+  primary,
+  secondary,
+  onPrimary,
+  onSecondary,
+  onUndo,
+  undoDisabled,
+  busy,
+  primaryDisabled,
+  later = 'Later',
+  onLater,
+}: {
+  primary: string;
+  secondary: string;
+  onPrimary: () => void;
+  onSecondary: () => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
+  busy?: boolean;
+  primaryDisabled?: boolean;
+  later?: string | null;
+  onLater?: () => void;
+}) {
+  return (
+    <View style={styles.actions}>
+      <View style={styles.controlRow}>
+        {onUndo ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Undo last answer"
+            disabled={undoDisabled || busy}
+            onPress={onUndo}
+            style={({ pressed }) => [
+              styles.undoCircle,
+              (undoDisabled || busy) ? styles.undoCircleDisabled : null,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            <MaterialCommunityIcons name="undo-variant" size={21} color={(undoDisabled || busy) ? '#C6C8CC' : '#6B7280'} />
+          </Pressable>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={secondary}
+          disabled={busy}
+          onPress={onSecondary}
+          style={({ pressed }) => [styles.controlSecondary, (pressed || busy) ? styles.pressed : null]}
+        >
+          <Text style={styles.controlSecondaryText} numberOfLines={1}>{secondary}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={primary}
+          disabled={primaryDisabled || busy}
+          onPress={onPrimary}
+          style={({ pressed }) => [
+            styles.controlPrimary,
+            (pressed || busy || primaryDisabled) ? styles.pressed : null,
+          ]}
+        >
+          {busy ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.controlPrimaryText} numberOfLines={1}>{primary}</Text>
+          )}
+        </Pressable>
+      </View>
+      {later && onLater ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={later}
+          disabled={busy}
+          onPress={onLater}
+          style={({ pressed }) => [styles.laterButton, pressed ? styles.pressed : null]}
+        >
+          <Text style={styles.laterText}>{later}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 function QuestionActions({
   primary,
   secondary,
-  // One word for deferral everywhere. "Later" is truthful — the row lands in
-  // Needs a look; "Skip"/"Not sure" read as gone.
-  tertiary = 'Later',
   onPrimary,
   onSecondary,
   onTertiary,
+  onUndo,
+  undoDisabled,
   busy,
   primaryDisabled,
 }: {
   primary: string;
   secondary: string;
-  tertiary?: string;
   onPrimary: () => void;
   onSecondary: () => void;
   onTertiary: () => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
   busy?: boolean;
   primaryDisabled?: boolean;
 }) {
   return (
-    <View style={styles.actions}>
-      <PillButton
-        label={primary}
-        onPress={onPrimary}
-        loading={busy}
-        disabled={primaryDisabled || busy}
-      />
-      <View style={styles.actionRow}>
-        <SmallButton label={secondary} onPress={onSecondary} disabled={busy} />
-        <SmallButton label={tertiary} onPress={onTertiary} disabled={busy} quiet />
-      </View>
+    <ControlRow
+      primary={primary}
+      secondary={secondary}
+      onPrimary={onPrimary}
+      onSecondary={onSecondary}
+      onUndo={onUndo}
+      undoDisabled={undoDisabled}
+      busy={busy}
+      primaryDisabled={primaryDisabled}
+      onLater={onTertiary}
+    />
+  );
+}
+
+// Source tag: platform icon + name in a small chip before the item's name,
+// same visual grammar as the inventory list's platform badges.
+export function SourceTag({ platformKey, label }: { platformKey: string; label: string }) {
+  return (
+    <View style={styles.sourceTag}>
+      <PlatformLogo type={platformKey} size={13} fallbackIcon="file-delimited-outline" />
+      <Text style={styles.sourceTagText} numberOfLines={1}>{label}</Text>
     </View>
   );
 }
@@ -134,14 +230,20 @@ export function PairQuestionCard({
   item,
   candidate,
   platformName,
+  platformKey,
   busy,
   onAnswer,
+  onUndo,
+  undoDisabled,
 }: {
   item: SyncItem;
   candidate: CanonicalRef | null;
   platformName: string;
+  platformKey?: string;
   busy?: boolean;
   onAnswer: (answer: CardAnswer) => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
 }) {
   const fieldConflict = item.attention === 'field_conflict';
   const values = conflictValues(item, candidate);
@@ -159,7 +261,7 @@ export function PairQuestionCard({
       <Text style={styles.questionTitle}>{question}</Text>
       <View style={styles.pairRow}>
         <View style={styles.productCard}>
-          <Text style={styles.eyebrow}>IN {platformName.toUpperCase()}</Text>
+          <SourceTag platformKey={platformKey || platformName.toLowerCase()} label={platformName} />
           <ProductImage uri={item.imageUrl} style={styles.pairImage} />
           <ItemCopy title={item.title} price={item.price} />
         </View>
@@ -175,6 +277,8 @@ export function PairQuestionCard({
         onPrimary={() => onAnswer('primary')}
         onSecondary={() => onAnswer('secondary')}
         onTertiary={() => onAnswer('unsure')}
+        onUndo={onUndo}
+        undoDisabled={undoDisabled}
         busy={busy}
       />
     </View>
@@ -185,28 +289,33 @@ export function WhichOneQuestionCard({
   item,
   candidates,
   platformName,
+  platformKey,
   selectedId,
   onSelect,
   busy,
   onAnswer,
+  onUndo,
+  undoDisabled,
 }: {
   item: SyncItem;
   candidates: CanonicalRef[];
   platformName: string;
+  platformKey?: string;
   selectedId: string | null;
   onSelect: (id: string) => void;
   busy?: boolean;
   onAnswer: (answer: CardAnswer) => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
 }) {
   return (
     <View style={styles.questionWrap}>
       <View style={styles.incomingCompact}>
         <ProductImage uri={item.imageUrl} style={styles.incomingImage} />
         <View style={styles.incomingCopy}>
+          <SourceTag platformKey={platformKey || platformName.toLowerCase()} label={platformName} />
           <Text style={styles.incomingTitle} numberOfLines={2}>{item.title || 'Untitled item'}</Text>
-          <Text style={styles.incomingMeta} numberOfLines={1}>
-            in {platformName}{money(item.price) ? ` · ${money(item.price)}` : ''}
-          </Text>
+          {money(item.price) ? <Text style={styles.incomingMeta} numberOfLines={1}>{money(item.price)}</Text> : null}
         </View>
       </View>
 
@@ -248,6 +357,8 @@ export function WhichOneQuestionCard({
         onPrimary={() => onAnswer('primary')}
         onSecondary={() => onAnswer('secondary')}
         onTertiary={() => onAnswer('unsure')}
+        onUndo={onUndo}
+        undoDisabled={undoDisabled}
         busy={busy}
         primaryDisabled={!selectedId}
       />
@@ -276,10 +387,14 @@ export function GroupQuestionCard({
   card,
   busy,
   onAnswer,
+  onUndo,
+  undoDisabled,
 }: {
   card: QuestionCardModel;
   busy?: boolean;
   onAnswer: (answer: CardAnswer) => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
 }) {
   const isLookAlike = card.kind === 'look_alike_group';
   const isDuplicate = card.kind === 'duplicate_target';
@@ -314,6 +429,8 @@ export function GroupQuestionCard({
         onPrimary={() => onAnswer('primary')}
         onSecondary={() => onAnswer('secondary')}
         onTertiary={() => onAnswer('unsure')}
+        onUndo={onUndo}
+        undoDisabled={undoDisabled}
         busy={busy}
       />
     </View>
@@ -326,12 +443,16 @@ export function TitleQualityCard({
   onGenerate,
   onManual,
   onUnsure,
+  onUndo,
+  undoDisabled,
 }: {
   items: SyncItem[];
   busy?: boolean;
   onGenerate: () => void;
   onManual: () => void;
   onUnsure: () => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
 }) {
   return (
     <View style={styles.questionWrap}>
@@ -341,13 +462,16 @@ export function TitleQualityCard({
           <ProductImage key={item.platformId} uri={item.imageUrl} style={styles.titleThumb} />
         ))}
       </View>
-      <View style={styles.actions}>
-        <PillButton label="Write them for me" onPress={onGenerate} loading={busy} disabled={busy} />
-        <View style={styles.actionRow}>
-          <SmallButton label="I'll do it" onPress={onManual} disabled={busy} />
-          <SmallButton label="Later" onPress={onUnsure} disabled={busy} quiet />
-        </View>
-      </View>
+      <ControlRow
+        primary="Write them for me"
+        secondary="I'll do it"
+        onPrimary={onGenerate}
+        onSecondary={onManual}
+        onUndo={onUndo}
+        undoDisabled={undoDisabled}
+        busy={busy}
+        onLater={onUnsure}
+      />
     </View>
   );
 }
@@ -357,11 +481,15 @@ export function CommitFailedCard({
   busy,
   onRetry,
   onLater,
+  onUndo,
+  undoDisabled,
 }: {
   items: SyncItem[];
   busy?: boolean;
   onRetry: () => void;
   onLater: () => void;
+  onUndo?: () => void;
+  undoDisabled?: boolean;
 }) {
   const first = items[0];
   const single = items.length === 1;
@@ -387,10 +515,16 @@ export function CommitFailedCard({
           {first?.reason ? <Text style={styles.reasonText}>{first.reason}</Text> : null}
         </>
       )}
-      <View style={styles.actions}>
-        <PillButton label="Try again" onPress={onRetry} loading={busy} disabled={busy} />
-        <PillButton label="Later" variant="secondary" onPress={onLater} disabled={busy} />
-      </View>
+      <ControlRow
+        primary="Try again"
+        secondary="Later"
+        onPrimary={onRetry}
+        onSecondary={onLater}
+        onUndo={onUndo}
+        undoDisabled={undoDisabled}
+        busy={busy}
+        later={null}
+      />
     </View>
   );
 }
@@ -430,10 +564,15 @@ export function TitleEntryCard({
         editable={!busy}
         style={styles.titleInput}
       />
-      <View style={styles.actions}>
-        <PillButton label="Save title" onPress={onSave} disabled={!value.trim() || busy} loading={busy} />
-        <PillButton label="Later" variant="secondary" onPress={onUnsure} disabled={busy} />
-      </View>
+      <ControlRow
+        primary="Save title"
+        secondary="Later"
+        onPrimary={onSave}
+        onSecondary={onUnsure}
+        busy={busy}
+        primaryDisabled={!value.trim()}
+        later={null}
+      />
     </View>
   );
 }
@@ -538,6 +677,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     minHeight: 25,
   },
+  sourceTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    marginBottom: 4,
+  },
+  sourceTagText: { color: '#5F6065', fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   image: { backgroundColor: '#EEEFF1', borderRadius: 13 },
   imageEmpty: { alignItems: 'center', justifyContent: 'center' },
   pairImage: { width: '100%', aspectRatio: 1 },
@@ -546,6 +697,44 @@ const styles = StyleSheet.create({
   itemPrice: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 13 },
   actions: { gap: 10, marginTop: 'auto' },
   actionRow: { flexDirection: 'row', gap: 10 },
+  // Paper V2A control row: undo circle · secondary pill · primary pill.
+  controlRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  undoCircle: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: CARD,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  undoCircleDisabled: { opacity: 0.5 },
+  controlSecondary: {
+    flex: 1,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: CARD,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  controlSecondaryText: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 16, lineHeight: 20 },
+  controlPrimary: {
+    flex: 1.3,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#93C822',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  controlPrimaryText: { color: '#FFFFFF', fontFamily: 'Inter_600SemiBold', fontSize: 16, lineHeight: 20 },
+  laterButton: { alignSelf: 'center', paddingVertical: 10, paddingHorizontal: 24 },
+  laterText: { color: '#5F6065', fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   smallButton: {
     flex: 1,
     minHeight: 52,
