@@ -26,7 +26,12 @@ export function advanceAnswerStreak<Reason>(
   thumbnail: string | null,
   eligible: boolean,
 ): HandoffStreak<Reason> | null {
-  if (answer === 'unsure' || !eligible) return null;
+  // Deferring one odd card says nothing about the seller's pattern on the
+  // class — a "Later" leaves the streak exactly as it was. Only a real answer
+  // that contradicts the streak (different answer, or one that cannot be
+  // reused) resets it.
+  if (answer === 'unsure') return previous;
+  if (!eligible) return null;
 
   return previous && previous.reason === card.reason && previous.answer === answer
     ? {
@@ -43,7 +48,13 @@ export function selectHandoffCards<Card extends HandoffCardIdentity<Reason>, Rea
   remainingCards: Card[],
   isEligible: (card: Card) => boolean,
 ): HandoffSelection<Card, Reason> | null {
-  if (!streak || streak.count !== 3) return null;
+  // Three consistent answers EARN the offer; more never un-earn it. Firing
+  // only at exactly three was a one-shot window — an interleaved card or an
+  // offer with nothing to absorb at that instant closed it forever, and run 6
+  // paid ~18 one-by-one answers for it. Repeat offers are governed upstream
+  // (an accepted offer clears the cards; "Keep showing me" suppresses the
+  // reason+answer key).
+  if (!streak || streak.count < 3) return null;
   const cards = remainingCards.filter(
     (card) => card.reason === streak.reason && isEligible(card),
   );

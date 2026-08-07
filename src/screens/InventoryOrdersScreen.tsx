@@ -605,6 +605,9 @@ const InventoryOrdersScreen = observer(() => {
     fetchPlatformData();
   }, [legendState?.userId]);
 
+  // A failed shelf load must never render as "No products found" — that reads
+  // as an empty catalog to a seller who just imported 500 items.
+  const [shelfLoadError, setShelfLoadError] = useState(false);
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
@@ -641,6 +644,35 @@ const InventoryOrdersScreen = observer(() => {
   useEffect(() => {
     void loadPartnerOrigins();
   }, [loadPartnerOrigins]);
+
+  // PostgREST `.in()` inlines every id into the request URL; at catalog scale
+  // (~1000 variants after a 500-row import) that is a multi-10KB GET the
+  // server rejects as 400 Bad Request — which used to read as an empty shelf.
+  // Chunk the id list so each request stays small, and keep whatever chunks
+  // succeed: partial data with a logged error beats silently showing nothing.
+  const IN_QUERY_CHUNK = 150;
+  const fetchByIdChunks = useCallback(async (
+    ids: string[],
+    // PromiseLike: the supabase query builder is a thenable, not a Promise.
+    runChunk: (chunk: string[]) => PromiseLike<{ data: any[] | null; error: any }>,
+    label: string,
+  ): Promise<any[]> => {
+    const rows: any[] = [];
+    let failedChunks = 0;
+    for (let start = 0; start < ids.length; start += IN_QUERY_CHUNK) {
+      const chunk = ids.slice(start, start + IN_QUERY_CHUNK);
+      const { data, error } = await runChunk(chunk);
+      if (error) {
+        failedChunks += 1;
+        continue;
+      }
+      rows.push(...(data || []));
+    }
+    if (failedChunks > 0) {
+      log.error(`[InventoryOrdersScreen] ${label}: ${failedChunks} chunk(s) failed — showing partial data`);
+    }
+    return rows;
+  }, []);
 
   const fetchAllProductVariants = useCallback(async (userId: string) => {
     const pageSize = 200;
@@ -689,57 +721,55 @@ const InventoryOrdersScreen = observer(() => {
                 variantIds.push(v.Id);
               });
               setDirectFetchVariants(variantMap);
+              setShelfLoadError(false);
 
               // Fetch CrossOrgProductLinks for shared inventory quantities
               if (variantIds.length > 0) {
-                const { data: linksData, error: linksError } = await supabase
-                  .from('CrossOrgProductLinks')
-                  .select('*')
-                  .in('TargetVariantId', variantIds)
-                  .eq('Status', 'active');
-
-                if (linksError) {
-                  log.warn('[InventoryScreen - Direct Fetch] Error fetching shared links:', linksError);
-                } else {
-                  const linkMap: Record<string, SharedProductLinkInfo> = {};
-                  (linksData || []).forEach((link: any) => {
-                    if (link.TargetVariantId) {
-                      linkMap[link.TargetVariantId] = {
-                        quantity: link.AvailableQuantity || 0,
-                        poolId: link.TargetPoolId || undefined,
-                        link,
-                      };
-                    }
-                  });
-                  setSharedLinkQuantities(linkMap);
-                }
+                const linksData = await fetchByIdChunks(
+                  variantIds,
+                  (chunk) => supabase
+                    .from('CrossOrgProductLinks')
+                    .select('*')
+                    .in('TargetVariantId', chunk)
+                    .eq('Status', 'active'),
+                  'shared links',
+                );
+                const linkMap: Record<string, SharedProductLinkInfo> = {};
+                linksData.forEach((link: any) => {
+                  if (link.TargetVariantId) {
+                    linkMap[link.TargetVariantId] = {
+                      quantity: link.AvailableQuantity || 0,
+                      poolId: link.TargetPoolId || undefined,
+                      link,
+                    };
+                  }
+                });
+                setSharedLinkQuantities(linkMap);
               }
 
               // Also fetch InventoryLevels for these variants
               if (variantIds.length > 0) {
-                const { data: levelsData, error: levelsError } = await supabase
-                  .from('InventoryLevels')
-                  // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-                  .in('ProductVariantId', variantIds);
-
-                if (levelsError) {
-                  log.error('[InventoryScreen - Direct Fetch] Error fetching inventory levels:', levelsError);
-                } else {
-                  log.debug('[InventoryScreen - Direct Fetch] Successfully fetched inventory levels:', levelsData?.length);
-                  if (levelsData && levelsData.length > 0) {
-                    const levelsMap: Record<string, InventoryLevel> = {};
-                    levelsData.forEach((l: any) => {
-                      levelsMap[l.Id] = l;
-                    });
-                    setDirectFetchLevels(levelsMap);
-                  }
-                }
+                const levelsData = await fetchByIdChunks(
+                  variantIds,
+                  (chunk) => supabase
+                    .from('InventoryLevels')
+                    // Production-verified schema: InventoryLevels stores quantity data, not variant price.
+                    .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
+                    .in('ProductVariantId', chunk),
+                  'inventory levels',
+                );
+                log.debug('[InventoryScreen - Direct Fetch] Fetched inventory levels:', levelsData.length);
+                const levelsMap: Record<string, InventoryLevel> = {};
+                levelsData.forEach((l: any) => {
+                  levelsMap[l.Id] = l;
+                });
+                setDirectFetchLevels(levelsMap);
               }
             }
           }
         } catch (e) {
           log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
+          setShelfLoadError(true);
         }
       }
     };
@@ -781,52 +811,54 @@ const InventoryOrdersScreen = observer(() => {
               variantIds.push(v.Id);
             });
             setDirectFetchVariants(variantMap);
+            setShelfLoadError(false);
 
             // Refresh CrossOrgProductLinks for shared inventory quantities
             if (variantIds.length > 0) {
-              const { data: linksData, error: linksError } = await supabase
-                .from('CrossOrgProductLinks')
-                .select('*')
-                .in('TargetVariantId', variantIds)
-                .eq('Status', 'active');
-
-              if (linksError) {
-                log.warn('[InventoryOrdersScreen] Error refreshing shared links:', linksError);
-              } else {
-                const linkMap: Record<string, SharedProductLinkInfo> = {};
-                (linksData || []).forEach((link: any) => {
-                  if (link.TargetVariantId) {
-                    linkMap[link.TargetVariantId] = {
-                      quantity: link.AvailableQuantity || 0,
-                      poolId: link.TargetPoolId || undefined,
-                      link,
-                    };
-                  }
-                });
-                setSharedLinkQuantities(linkMap);
-              }
+              const linksData = await fetchByIdChunks(
+                variantIds,
+                (chunk) => supabase
+                  .from('CrossOrgProductLinks')
+                  .select('*')
+                  .in('TargetVariantId', chunk)
+                  .eq('Status', 'active'),
+                'shared links (focus)',
+              );
+              const linkMap: Record<string, SharedProductLinkInfo> = {};
+              linksData.forEach((link: any) => {
+                if (link.TargetVariantId) {
+                  linkMap[link.TargetVariantId] = {
+                    quantity: link.AvailableQuantity || 0,
+                    poolId: link.TargetPoolId || undefined,
+                    link,
+                  };
+                }
+              });
+              setSharedLinkQuantities(linkMap);
             }
 
             // Also refresh inventory levels
             if (variantIds.length > 0) {
-              const { data: levelsData } = await supabase
-                .from('InventoryLevels')
-                // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-                .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-                .in('ProductVariantId', variantIds);
-
-              if (levelsData && levelsData.length > 0) {
-                const levelsMap: Record<string, InventoryLevel> = {};
-                levelsData.forEach((l: any) => {
-                  levelsMap[l.Id] = l;
-                });
-                setDirectFetchLevels(levelsMap);
-              }
+              const levelsData = await fetchByIdChunks(
+                variantIds,
+                (chunk) => supabase
+                  .from('InventoryLevels')
+                  // Production-verified schema: InventoryLevels stores quantity data, not variant price.
+                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
+                  .in('ProductVariantId', chunk),
+                'inventory levels (focus)',
+              );
+              const levelsMap: Record<string, InventoryLevel> = {};
+              levelsData.forEach((l: any) => {
+                levelsMap[l.Id] = l;
+              });
+              setDirectFetchLevels(levelsMap);
             }
             log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
           }
         } catch (e) {
           log.error('[InventoryOrdersScreen] Error during focus refresh:', e);
+          setShelfLoadError(true);
         }
       };
 
@@ -844,19 +876,18 @@ const InventoryOrdersScreen = observer(() => {
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
 
-  // Use Legend data if available, otherwise fall back to direct fetch
-  const legendVariantCount = Object.keys(legendProductVariants).length;
-  const directVariantCount = Object.keys(directFetchVariants).length;
-  const activeProductVariants = legendVariantCount >= directVariantCount
-    ? legendProductVariants
-    : directFetchVariants;
-
-  // Use Legend InventoryLevels if available, otherwise fall back to direct fetch
-  const legendLevelCount = Object.keys(legendInventoryLevels).length;
-  const directLevelCount = Object.keys(directFetchLevels).length;
-  const activeInventoryLevels = legendLevelCount >= directLevelCount
-    ? legendInventoryLevels
-    : directFetchLevels;
+  // Union of the Legend mirror and the direct fetch, direct winning per key.
+  // The old rule ("whichever map is bigger wins") was a landmine: right after
+  // a big import the stale-but-larger Legend mirror beat the fresh direct
+  // fetch, and none of the new items appeared until an app restart.
+  const activeProductVariants = useMemo(
+    () => ({ ...legendProductVariants, ...directFetchVariants }),
+    [legendProductVariants, directFetchVariants],
+  );
+  const activeInventoryLevels = useMemo(
+    () => ({ ...legendInventoryLevels, ...directFetchLevels }),
+    [legendInventoryLevels, directFetchLevels],
+  );
 
   const inventoryLevelsWithShared = useMemo(() => {
     const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
@@ -1876,6 +1907,10 @@ const InventoryOrdersScreen = observer(() => {
                         Loading platform connections...
                       </Text>
                     </View>
+                  ) : shelfLoadError ? (
+                    <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
+                      Your items could not load. Pull down to retry.
+                    </Text>
                   ) : (
                     <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>
                       No products found.

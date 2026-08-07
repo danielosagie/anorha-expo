@@ -210,3 +210,39 @@ test('bundle cards can earn their own bundle-only handoff', () => {
   assert.equal(offer.answer, 'primary');
   assert.deepEqual(offer.cards.map((card) => card.id), ['bundle:d']);
 });
+
+test('a Later mid-class keeps the streak, and three consistent answers still earn the offer', () => {
+  const cards = ['a', 'b', 'later', 'c', 'd'].map((id) => ({
+    id: `field:${id}`,
+    reason: 'field_conflict',
+    kind: 'pair',
+  }));
+
+  let streak = advanceAnswerStreak(null, cards[0], 'primary', null, true);
+  streak = advanceAnswerStreak(streak, cards[1], 'primary', null, true);
+  streak = advanceAnswerStreak(streak, cards[2], 'unsure', null, false);
+  streak = advanceAnswerStreak(streak, cards[3], 'primary', null, true);
+
+  const offer = selectHandoffCards(streak, cards.slice(4), () => true);
+  assert.ok(offer);
+  assert.equal(offer.reason, 'field_conflict');
+  assert.equal(offer.answer, 'primary');
+});
+
+test('the offer window stays open past three answers instead of firing exactly once', () => {
+  const cards = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({
+    id: `field:${id}`,
+    reason: 'field_conflict',
+    kind: 'pair',
+  }));
+
+  let streak = null;
+  for (const card of cards.slice(0, 5)) {
+    streak = advanceAnswerStreak(streak, card, 'primary', null, true);
+  }
+
+  assert.equal(streak?.count, 5);
+  const offer = selectHandoffCards(streak, cards.slice(5), () => true);
+  assert.ok(offer);
+  assert.deepEqual(offer.cards.map((card) => card.id), ['field:f']);
+});

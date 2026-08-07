@@ -945,6 +945,14 @@ export default function ImportQuestionQueueScreen() {
   const addedRows = ledger.filter((entry) => entry.outcome === 'added' && !needsIds.has(entry.platformId));
   const skippedRows = ledger.filter((entry) => entry.outcome === 'skipped' && !needsIds.has(entry.platformId));
   const ledgerById = new Map(ledger.map((entry) => [entry.platformId, entry]));
+  // Rows the machine settled without asking. The ledger only ever holds what
+  // the SELLER answered, so a section header must never claim the server's
+  // total ("See all 460" over 10 rows reads as a broken list). The automatic
+  // remainder gets its own count lane, exactly like the V2A receipt.
+  const autoHandledCount = Math.max(
+    0,
+    (summary?.total ?? 0) - (summary?.pushSide ?? 0) - ledger.length - needsRows.length,
+  );
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
@@ -953,7 +961,7 @@ export default function ImportQuestionQueueScreen() {
         onBack={() => setStage(hasUnresolved ? 'front' : 'receipt')}
         right={<Text style={styles.headerTotal}>{summary?.total ?? 0}</Text>}
       />
-      <ScrollView contentContainerStyle={styles.listScroll} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.listScrollView} contentContainerStyle={styles.listScroll} showsVerticalScrollIndicator={false}>
         {listError ? <Text style={styles.inlineError}>{listError}</Text> : null}
         <ListSection
           label="NEEDS A LOOK"
@@ -985,7 +993,7 @@ export default function ImportQuestionQueueScreen() {
         <ListSection
           label="LINKED"
           color={IC.accent}
-          count={summary?.autoLinked ?? linkedRows.length}
+          count={linkedRows.length}
           expanded={showAll.linked}
           onToggle={() => setShowAll((current) => ({ ...current, linked: !current.linked }))}
         >
@@ -1004,7 +1012,7 @@ export default function ImportQuestionQueueScreen() {
         <ListSection
           label="ADDED"
           color={IC.accent}
-          count={summary?.autoCreated ?? addedRows.length}
+          count={addedRows.length}
           expanded={showAll.added}
           onToggle={() => setShowAll((current) => ({ ...current, added: !current.added }))}
         >
@@ -1023,7 +1031,7 @@ export default function ImportQuestionQueueScreen() {
         <ListSection
           label="SKIPPED"
           color={GREY}
-          count={summary?.skipped ?? skippedRows.length}
+          count={skippedRows.length}
           expanded={showAll.skipped}
           onToggle={() => setShowAll((current) => ({ ...current, skipped: !current.skipped }))}
         >
@@ -1037,6 +1045,13 @@ export default function ImportQuestionQueueScreen() {
             />
           ))}
         </ListSection>
+
+        {autoHandledCount > 0 ? (
+          <View style={styles.autoHandledRow}>
+            <Text style={styles.autoHandledLabel}>Imported on their own</Text>
+            <Text style={styles.autoHandledCount}>{autoHandledCount}</Text>
+          </View>
+        ) : null}
 
         <PillButton
           label="Close"
@@ -1194,7 +1209,11 @@ const styles = StyleSheet.create({
   needsCardText: { color: AMBER, fontFamily: 'Inter_700Bold', fontSize: 15 },
 
   headerTotal: { color: IC.muted, fontFamily: 'Inter_700Bold', fontSize: 15, paddingRight: 2 },
+  listScrollView: { flex: 1 },
   listScroll: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 40 },
+  autoHandledRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, paddingVertical: 14 },
+  autoHandledLabel: { color: IC.muted, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  autoHandledCount: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 14, fontVariant: ['tabular-nums'] },
   listSection: { marginBottom: 24 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 9, paddingHorizontal: 3 },
   sectionDot: { width: 8, height: 8, borderRadius: 4 },
