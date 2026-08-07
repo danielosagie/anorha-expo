@@ -193,7 +193,13 @@ export default function ImportQuestionQueueScreen() {
   }, [connectionId, route.params.startAt]);
 
   const cards = useMemo(() => buildQuestionCards(result?.needsAttention ?? []), [result?.needsAttention]);
-  const mainCards = useMemo(() => cards.filter((card) => card.kind !== 'commit_failed'), [cards]);
+  // commit_failed rides the deck as ONE batch card, after the real questions.
+  // Excluding it entirely made an all-failed import read "0 questions" with
+  // 440 workable rows behind it (run 7 P1-2).
+  const mainCards = useMemo(() => [
+    ...cards.filter((card) => card.kind !== 'commit_failed'),
+    ...cards.filter((card) => card.kind === 'commit_failed'),
+  ], [cards]);
   const targetedCard = targetCardId ? cards.find((card) => card.id === targetCardId) ?? null : null;
   const currentCard = targetedCard ?? mainCards[0] ?? null;
 
@@ -621,16 +627,31 @@ export default function ImportQuestionQueueScreen() {
 
   const retryCommit = useCallback(async () => {
     const card = currentCard;
-    const item = card?.items[0];
-    if (!card || !item || card.kind !== 'commit_failed') return;
+    if (!card || card.items.length === 0 || card.kind !== 'commit_failed') return;
     setActionError(null);
     try {
-      await resolveOne(item, retryCommitDecision(item));
-      await returnAfterTarget();
+      // One tap retries the whole failed pile. The retry job's end-of-run
+      // drain also sweeps any stranded pending rows on this connection.
+      if (card.items.length === 1) {
+        await resolveOne(card.items[0], retryCommitDecision(card.items[0]));
+        if (await returnAfterTarget()) return;
+        if (mainCards.filter((entry) => entry.id !== card.id).length === 0) await finishQueue();
+        return;
+      }
+      const decisions = card.items.map((item) => retryCommitDecision(item));
+      const response = await resolveBulk(decisions, importId ?? undefined);
+      recordDecisions(decisions, card.items, response.results, 'Tried again');
+      undoableFromResults(response.results);
+      setQueueNotice(bulkResolutionNotice(response.summary));
+      if (await returnAfterTarget()) return;
+      const failed = response.summary.conflicts + response.summary.errors;
+      const otherCards = mainCards.filter((entry) => entry.id !== card.id);
+      if (failed === 0 && otherCards.length === 0) await finishQueue();
+      else setStage('queue');
     } catch (resolveError) {
-      setActionError(displayError(resolveError, 'That item still did not finish. Try again later.'));
+      setActionError(displayError(resolveError, 'Those items still did not finish. Try again later.'));
     }
-  }, [currentCard, resolveOne, returnAfterTarget]);
+  }, [currentCard, finishQueue, importId, mainCards, recordDecisions, resolveBulk, resolveOne, returnAfterTarget, undoableFromResults]);
 
   const openNeedsItem = useCallback((item: SyncItem) => {
     const card = cards.find((entry) => entry.items.some((member) => member.platformId === item.platformId));
@@ -662,6 +683,13 @@ export default function ImportQuestionQueueScreen() {
     }
   }, [importId, recordDecisions, refresh, resolve]);
 
+  // Stall guard for the "Finishing your import" wait: if the pending-commit
+  // count does not move across ~12s of polling, the worker is not coming
+  // (dead connection, stranded row) — show the receipt with an honest note
+  // instead of spinning forever with no exit (run 7 P1-2 trap).
+  const [commitStalled, setCommitStalled] = useState(false);
+  const stallRef = useRef<{ count: number; polls: number }>({ count: -1, polls: 0 });
+
   const summary = result?.summary;
   const questionItemCount = mainCards.reduce((total, card) => total + card.items.length, 0);
   const remainingCount = result?.needsAttention.length ?? questionItemCount;
@@ -672,10 +700,24 @@ export default function ImportQuestionQueueScreen() {
   const pendingCommitCount = summary?.pendingCommit ?? 0;
 
   useEffect(() => {
-    if (stage !== 'receipt' || pendingCommitCount === 0) return;
+    if (stage !== 'receipt' || pendingCommitCount === 0) {
+      stallRef.current = { count: -1, polls: 0 };
+      if (commitStalled) setCommitStalled(false);
+      return;
+    }
+    if (commitStalled) return; // deadline hit — stop paying for polls
+    if (stallRef.current.count === pendingCommitCount) {
+      stallRef.current.polls += 1;
+      if (stallRef.current.polls >= 8) {
+        setCommitStalled(true);
+        return;
+      }
+    } else {
+      stallRef.current = { count: pendingCommitCount, polls: 0 };
+    }
     const timer = setTimeout(() => void refresh(), 1500);
     return () => clearTimeout(timer);
-  }, [pendingCommitCount, refresh, stage]);
+  }, [commitStalled, pendingCommitCount, refresh, stage]);
 
   if ((stage === 'loading' || (loading && !result)) && !error) {
     return (
@@ -875,7 +917,7 @@ export default function ImportQuestionQueueScreen() {
             ) : null}
             {currentCard.kind === 'commit_failed' && hydratedItems[0] ? (
               <CommitFailedCard
-                item={hydratedItems[0]}
+                items={hydratedItems}
                 busy={busy}
                 onRetry={() => void retryCommit()}
                 onLater={() => {
@@ -887,7 +929,7 @@ export default function ImportQuestionQueueScreen() {
             ) : null}
             {currentCard.kind === 'fallback' && hydratedItems[0] ? (
               <CommitFailedCard
-                item={hydratedItems[0]}
+                items={[hydratedItems[0]]}
                 busy={busy}
                 onRetry={() => void resolveOne(hydratedItems[0], retryCommitDecision(hydratedItems[0]))}
                 onLater={() => void finishQueue()}
@@ -900,14 +942,17 @@ export default function ImportQuestionQueueScreen() {
     );
   }
 
-  if (stage === 'receipt' && pendingCommitCount > 0) {
+  if (stage === 'receipt' && pendingCommitCount > 0 && !commitStalled) {
     return (
-      <View style={[styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator color={IC.accent} />
-        <Text style={styles.doneTitle}>Finishing your import</Text>
-        <Text style={styles.screenSubtitle}>
-          {countLabel(pendingCommitCount, 'item')} still being added to your catalog.
-        </Text>
+      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
+        <InboxHeader onBack={() => navigation.goBack()} />
+        <View style={styles.center}>
+          <ActivityIndicator color={IC.accent} />
+          <Text style={styles.doneTitle}>Finishing your import</Text>
+          <Text style={styles.screenSubtitle}>
+            {countLabel(pendingCommitCount, 'item')} still being added to your catalog.
+          </Text>
+        </View>
       </View>
     );
   }
@@ -927,6 +972,11 @@ export default function ImportQuestionQueueScreen() {
             <View style={styles.divider} />
             <ReceiptRow label="Skipped" count={summary?.skipped ?? 0} />
           </View>
+          {commitStalled && pendingCommitCount > 0 ? (
+            <Text style={styles.screenSubtitle}>
+              {countLabel(pendingCommitCount, 'item')} will finish in the background.
+            </Text>
+          ) : null}
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
           <PillButton

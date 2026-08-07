@@ -353,29 +353,40 @@ export function TitleQualityCard({
 }
 
 export function CommitFailedCard({
-  item,
+  items,
   busy,
   onRetry,
   onLater,
 }: {
-  item: SyncItem;
+  items: SyncItem[];
   busy?: boolean;
   onRetry: () => void;
   onLater: () => void;
 }) {
+  const first = items[0];
+  const single = items.length === 1;
   return (
     <View style={styles.questionWrap}>
       <View style={styles.warningIcon}>
         <MaterialCommunityIcons name="alert-outline" size={26} color={AMBER} />
       </View>
-      <Text style={styles.questionTitle}>Try this item again?</Text>
-      <View style={styles.incomingCompact}>
-        <ProductImage uri={item.imageUrl} style={styles.incomingImage} />
-        <View style={styles.incomingCopy}>
-          <Text style={styles.incomingTitle} numberOfLines={2}>{item.title || 'Untitled item'}</Text>
-          <Text style={styles.failureReason}>{item.reason || 'It did not finish importing.'}</Text>
+      <Text style={styles.questionTitle}>
+        {single ? 'Try this item again?' : `Try these ${items.length} again?`}
+      </Text>
+      {single && first ? (
+        <View style={styles.incomingCompact}>
+          <ProductImage uri={first.imageUrl} style={styles.incomingImage} />
+          <View style={styles.incomingCopy}>
+            <Text style={styles.incomingTitle} numberOfLines={2}>{first.title || 'Untitled item'}</Text>
+            <Text style={styles.failureReason}>{first.reason || 'It did not finish importing.'}</Text>
+          </View>
         </View>
-      </View>
+      ) : (
+        <>
+          <MemberRows items={items} />
+          {first?.reason ? <Text style={styles.reasonText}>{first.reason}</Text> : null}
+        </>
+      )}
       <View style={styles.actions}>
         <PillButton label="Try again" onPress={onRetry} loading={busy} disabled={busy} />
         <PillButton label="Later" variant="secondary" onPress={onLater} disabled={busy} />

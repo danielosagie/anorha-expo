@@ -134,6 +134,20 @@ export function buildQuestionCards(items: SyncItem[]): QuestionCardModel[] {
       });
       continue;
     }
+    // Failed commits are ONE decision ("try them again?"), not N cards. A
+    // failed import can strand hundreds of these — run 7 found a connection
+    // that was 440 commit_failed rows showing "0 questions"; as a batch card
+    // the whole pile is one tap, and the retry job's drain also sweeps any
+    // stuck pending rows on the connection.
+    if (group.key === 'commit_failed') {
+      cards.push({
+        id: 'commit_failed:batch',
+        reason: group.key,
+        kind: 'commit_failed',
+        items: group.items,
+      });
+      continue;
+    }
     if (
       group.key === 'look_alike_group' ||
       group.key === 'duplicate_target' ||
