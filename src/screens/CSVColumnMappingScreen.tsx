@@ -334,7 +334,11 @@ export function CSVColumnMappingScreen() {
                     const probe = await probeRes.json();
                     const landed = Number(probe?.summary?.total ?? 0) > 0;
                     if (landed) {
-                        navigation.replace('ImportHub', { connectionId: newConnection.Id });
+                        navigation.replace('ImportQuestionQueue', {
+                            connectionId: newConnection.Id,
+                            platformName: 'csv',
+                            startAt: 'front',
+                        });
                         return;
                     }
 
@@ -352,10 +356,12 @@ export function CSVColumnMappingScreen() {
                 throw new Error(`Import normalize failed: ${normRes.status}`);
             }
 
-            // Land on the Import Hub (the "email inbox"): it shows this import's
-            // progress, then "N need you — Continue". `replace` so Back doesn't
-            // return to the now-consumed column-mapping screen.
-            navigation.replace('ImportHub', { connectionId: newConnection.Id });
+            // `replace` so Back doesn't return to the consumed mapping screen.
+            navigation.replace('ImportQuestionQueue', {
+                connectionId: newConnection.Id,
+                platformName: 'csv',
+                startAt: 'front',
+            });
         } catch (error) {
             log.error('[CSVColumnMapping] Error processing data:', error);
             showError('Import failed', 'Could not import the file. Try again.');

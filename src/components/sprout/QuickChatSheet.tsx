@@ -59,6 +59,7 @@ import {
   ChatSurfaceWash,
 } from '../../features/liquidationConversation/components/ChatChrome';
 import { CHAT_COLORS } from '../../design/chatGlass';
+import { getSproutTheme, sproutLightTheme } from '../../design/sproutTheme';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -72,7 +73,7 @@ const SHEET_BORDER = 1;
 // The chat surface paints a cream wash under its floating header, so a pure white grabber
 // strip above it reads as a stripe across the top of the sheet. Matching the wash's top
 // colour keeps the sheet one continuous surface.
-const SHEET_TOP_WASH = '#F8FCF0';
+const SHEET_TOP_WASH = sproutLightTheme.chat.surfaceElevated;
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
   month: 'short',
@@ -193,6 +194,8 @@ export type QuickChatSheetProps = {
   emptyHint?: string;
   /** Inventory uses a shorter peek so the live list and lifted selection pill stay visible. */
   peekHeightRatio?: number;
+  /** Explicit dark opt-in from Sprout home. Shared hosts default to light. */
+  dark?: boolean;
   contextAttachment?: {
     kind: ConversationContextAttachment['kind'];
     label: string;
@@ -273,6 +276,7 @@ export function QuickChatSheet({
   placeholder = 'Ask Sprout',
   emptyHint,
   peekHeightRatio = DEFAULT_PEEK_RATIO,
+  dark = false,
   contextAttachment,
   onResolveSelection,
   onApplySelection,
@@ -281,6 +285,7 @@ export function QuickChatSheet({
   onClose,
 }: QuickChatSheetProps) {
   const navigation = useNavigation<any>();
+  const theme = getSproutTheme(dark);
   const peekHeight = Math.round(SCREEN_H * Math.max(0.3, Math.min(0.65, peekHeightRatio)));
   const [recordingActive, setRecordingActive] = useState(false);
   const controller = useSproutConversationController(campaignId);
@@ -436,6 +441,7 @@ export function QuickChatSheet({
       onInventoryActionApplied={onInventoryActionApplied}
       focusRequestKey={focusRequestKey}
       compact={!grown}
+      dark={dark}
       onShowHistory={grow}
       onReturnToPeek={returnToPeek}
       onExpand={expand}
@@ -453,7 +459,12 @@ export function QuickChatSheet({
         <>
           <Animated.View
             pointerEvents="none"
-            style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]}
+            style={[
+              StyleSheet.absoluteFill,
+              styles.backdrop,
+              { backgroundColor: theme.chat.backdrop },
+              backdropStyle,
+            ]}
           />
           <Pressable
             style={StyleSheet.absoluteFill}
@@ -467,6 +478,7 @@ export function QuickChatSheet({
         style={[
           styles.dock,
           grown ? styles.sheet : styles.dockCompact,
+          grown ? { backgroundColor: theme.chat.surfaceElevated, borderColor: theme.chat.sheetBorder } : null,
           grown ? { height: peekHeight } : null,
           enterStyle,
         ]}
@@ -474,8 +486,8 @@ export function QuickChatSheet({
       >
         {grown ? (
           <GestureDetector gesture={pan}>
-            <View style={styles.grabberZone}>
-              <View style={styles.grabber} />
+            <View style={[styles.grabberZone, { backgroundColor: theme.chat.surfaceElevated }]}>
+              <View style={[styles.grabber, { backgroundColor: theme.chat.grabber }]} />
             </View>
           </GestureDetector>
         ) : null}
@@ -514,6 +526,7 @@ function QuickChatConversation({
   onInventoryActionApplied,
   focusRequestKey,
   compact = false,
+  dark = false,
   onShowHistory,
   onReturnToPeek,
   onExpand,
@@ -534,6 +547,7 @@ function QuickChatConversation({
   focusRequestKey?: number;
   /** Composer only — no transcript, no sheet chrome, nothing behind it. */
   compact?: boolean;
+  dark?: boolean;
   /** Compact only: unfold the past turns in place, without leaving the screen. */
   onShowHistory?: () => void;
   onReturnToPeek: () => void;
@@ -545,6 +559,7 @@ function QuickChatConversation({
 }) {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
+  const theme = getSproutTheme(dark);
   const full = standaloneFull;
   const visualFull = standaloneFull;
   const empty = !controller.isLoadingMessages && controller.activeMessages.length === 0;
@@ -773,40 +788,48 @@ function QuickChatConversation({
       ? controller.pendingPlan
       : null;
 
-  const closeAction = {
-    icon: <X size={21} color="#18181B" />,
-    onPress: onDismiss,
-    accessibilityLabel: 'Close chat',
-  };
+  // The floating chrome belongs to the docked composer only. Once the transcript is on
+  // screen the composer goes back to being the plain in-chat composer: full width, no
+  // satellite buttons. The sheet's own grabber and backdrop close it from there.
+  const docked = compact && !full;
 
-  // One row above the composer: history on the left, the icon-only open-up button dead
-  // centre. No title, no "Global chat" label — the surface is Sprout, saying so is noise.
-  const actionsRow = (
+  // One row above the docked composer: history on the left, the icon-only open-up button
+  // dead centre. No title, no "Global chat" label — the surface is Sprout, saying so is noise.
+  const actionsRow = docked ? (
     <View style={styles.dockActions} pointerEvents="box-none">
       <View style={styles.dockActionsSide} pointerEvents="box-none">
-        {compact && !full && onShowHistory ? (
+        {onShowHistory ? (
           <TouchableOpacity
-            style={styles.historyPill}
+            style={[
+              styles.historyPill,
+              dark && {
+                backgroundColor: theme.chat.surface,
+                borderWidth: 1,
+                borderColor: theme.chat.border,
+              },
+            ]}
             onPress={onShowHistory}
             activeOpacity={0.85}
             accessibilityRole="button"
             accessibilityLabel="Show chat history"
           >
-            <History size={15} color="#18181B" />
-            <Text style={styles.historyPillText}>Chat history</Text>
+            <History size={15} color={theme.chat.text} />
+            <Text style={[styles.historyPillText, { color: theme.chat.text }]}>Chat history</Text>
           </TouchableOpacity>
         ) : null}
       </View>
       <ChatCircleButton
-        icon={<Maximize2 size={17} color="#18181B" />}
+        icon={<Maximize2 size={17} color={theme.chat.text} />}
         onPress={onExpand}
         accessibilityLabel="Expand chat"
+        dark={dark}
       />
       <View style={styles.dockActionsSide} pointerEvents="box-none" />
     </View>
-  );
+  ) : null;
 
   // The composer pill, with close as its own circle beside it rather than a header button.
+  const decisionPending = !!pendingPlan || !!pendingQuestion;
   const bottomStack = (
     <View onLayout={event => setFooterHeight(event.nativeEvent.layout.height)}>
       {pendingPlan ? (
@@ -815,6 +838,7 @@ function QuickChatConversation({
             prompt={pendingPlan}
             onDecision={handleDecision}
             submitting={!!controller.submittingDecisionId}
+            dark={dark}
           />
         </View>
       ) : null}
@@ -824,11 +848,17 @@ function QuickChatConversation({
             prompt={pendingQuestion}
             submitting={controller.answeringQuestion}
             onSubmit={(answers, other) => controller.submitAnswer(pendingQuestion, answers, other)}
+            dark={dark}
           />
         </View>
       ) : null}
-      {visualFull ? null : actionsRow}
+      {decisionPending ? null : actionsRow}
+      {/* A pending card owns the turn: its buttons ARE the input. The composer and the
+          white wash it sits on both stand down, or the seller is looking at two things
+          that both look like the next step. */}
+      {decisionPending ? null : (
       <ChatComposerFooter
+        dark={dark}
         bottomPadding={(insets.bottom || 10) + 12}
         error={controller.error}
         onRetry={controller.onRefresh}
@@ -851,17 +881,26 @@ function QuickChatConversation({
               hideAttach={!!contextAttachment}
               focusRequestKey={effectiveFocusKey}
               onRecordingChange={handleRecordingChange}
+              dark={dark}
             />
           </View>
-          {visualFull ? null : <ChatCircleButton {...closeAction} />}
+          {docked ? (
+            <ChatCircleButton
+              icon={<X size={21} color={theme.chat.text} />}
+              onPress={onDismiss}
+              accessibilityLabel="Close chat"
+              dark={dark}
+            />
+          ) : null}
         </View>
       </ChatComposerFooter>
+      )}
     </View>
   );
 
   // Compact: the composer and nothing else. No wash, no header bar, no transcript, no
   // absolute fill — the screen underneath stays visible and tappable.
-  if (compact && !full) {
+  if (docked) {
     return (
       <Animated.View style={composerLiftStyle} pointerEvents="box-none">
         <ConvexLiveMessages
@@ -879,19 +918,21 @@ function QuickChatConversation({
         styles.conversationSurface,
         full ? styles.fullConversationSurface : styles.sheetConversationSurface,
         standaloneFull ? styles.standaloneConversationSurface : null,
+        { backgroundColor: theme.chat.background },
       ]}
     >
       <View style={styles.flex}>
-        <ChatSurfaceWash />
+        <ChatSurfaceWash dark={dark} />
         {/* Full screen keeps a header, for the status bar inset and the way back down.
             The peek sheet carries no header at all: its buttons live above the composer,
             where the seller's thumb already is. */}
         {visualFull ? (
           <ChatChromeHeader
+            dark={dark}
             topInset={insets.top}
             onLayout={event => setHeaderHeight(event.nativeEvent.layout.height)}
             centerAction={{
-              icon: <ChevronDown size={18} color="#18181B" />,
+              icon: <ChevronDown size={18} color={theme.chat.text} />,
               onPress: collapse,
               accessibilityLabel: 'Collapse chat',
             }}
@@ -905,6 +946,7 @@ function QuickChatConversation({
 
         <View style={[styles.flex, { paddingTop: visualFull ? headerHeight : 6 }]}>
           <ConversationList
+            dark={dark}
             messages={controller.activeMessages}
             loading={controller.isLoadingMessages}
             onDecision={handleDecision}
@@ -1050,7 +1092,7 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   backdrop: {
-    backgroundColor: '#17200D',
+    backgroundColor: sproutLightTheme.chat.backdrop,
   },
   dock: {
     position: 'absolute',
@@ -1084,7 +1126,7 @@ const styles = StyleSheet.create({
     gap: 7,
     paddingHorizontal: 14,
     borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: sproutLightTheme.chat.surface,
     shadowColor: '#000000',
     shadowOpacity: 0.1,
     shadowRadius: 10,
@@ -1093,7 +1135,7 @@ const styles = StyleSheet.create({
   },
   historyPillText: {
     fontSize: 15,
-    color: '#18181B',
+    color: sproutLightTheme.chat.text,
     fontFamily: 'Inter_600SemiBold',
   },
   composerRow: {
@@ -1108,7 +1150,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 26,
     overflow: 'hidden',
     borderWidth: SHEET_BORDER,
-    borderColor: '#E5E7EB',
+    borderColor: sproutLightTheme.chat.sheetBorder,
   },
   grabberZone: {
     height: GRABBER_H,
@@ -1120,11 +1162,11 @@ const styles = StyleSheet.create({
     width: 40,
     height: 5,
     borderRadius: 3,
-    backgroundColor: '#D9DDE3',
+    backgroundColor: sproutLightTheme.chat.grabber,
   },
   sheetHost: { flex: 1 },
   conversationSurface: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: sproutLightTheme.chat.background,
     overflow: 'hidden',
   },
   sheetConversationSurface: {
@@ -1135,7 +1177,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: sproutLightTheme.chat.background,
   },
   standaloneConversationSurface: {
     ...StyleSheet.absoluteFillObject,
@@ -1189,8 +1231,8 @@ const styles = StyleSheet.create({
     minHeight: 70,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E1E5D9',
-    backgroundColor: '#FFFFFF',
+    borderColor: sproutLightTheme.chat.border,
+    backgroundColor: sproutLightTheme.chat.surface,
     paddingHorizontal: 14,
     paddingVertical: 12,
     flexDirection: 'row',

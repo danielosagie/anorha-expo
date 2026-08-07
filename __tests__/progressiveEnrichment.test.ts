@@ -67,10 +67,10 @@ test('late enrichment never mixes server policy into locally edited shipping', (
   assert.equal(next.ebay.fulfillmentPolicyId, undefined);
 });
 
-test('pending and degraded enrichment expose non-blocking labels', () => {
+test('only pending enrichment exposes a non-blocking label', () => {
   assert.equal(enrichmentLabel('pending'), 'Draft ready · Finishing category & shipping…');
-  assert.equal(enrichmentLabel('partial'), 'Draft ready · Some defaults unavailable');
-  assert.equal(enrichmentLabel('failed'), 'Draft ready · Some defaults unavailable');
+  assert.equal(enrichmentLabel('partial'), null);
+  assert.equal(enrichmentLabel('failed'), null);
   assert.equal(enrichmentLabel('completed'), null);
   assert.equal(enrichmentLabel(undefined), null);
 });

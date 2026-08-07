@@ -12,6 +12,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { AlertCircle, CheckCircle2, X } from 'lucide-react-native';
 import { ProgressiveBlurView } from '../../../components/ProgressiveBlurView';
+import { getSproutTheme } from '../../../design/sproutTheme';
 
 type HeaderAction = {
   icon: React.ReactNode;
@@ -36,13 +37,27 @@ type ChatChromeHeaderProps = {
   onLayout?: (event: LayoutChangeEvent) => void;
   children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
+  dark?: boolean;
 };
 
 /** The shared icon-only affordance: white circle, no label, no glyph text. */
-export function ChatCircleButton({ icon, onPress, accessibilityLabel }: HeaderAction) {
+export function ChatCircleButton({
+  icon,
+  onPress,
+  accessibilityLabel,
+  dark = false,
+}: HeaderAction & { dark?: boolean }) {
+  const theme = getSproutTheme(dark);
   return (
     <TouchableOpacity
-      style={styles.circleButton}
+      style={[
+        styles.circleButton,
+        dark && {
+          backgroundColor: theme.chat.surface,
+          borderWidth: 1,
+          borderColor: theme.chat.border,
+        },
+      ]}
       onPress={onPress}
       activeOpacity={0.85}
       accessibilityRole="button"
@@ -53,11 +68,12 @@ export function ChatCircleButton({ icon, onPress, accessibilityLabel }: HeaderAc
   );
 }
 
-export function ChatSurfaceWash() {
+export function ChatSurfaceWash({ dark = false }: { dark?: boolean }) {
+  const theme = getSproutTheme(dark);
   return (
     <LinearGradient
       pointerEvents="none"
-      colors={['rgba(147,200,34,0.14)', 'rgba(147,200,34,0.055)', 'rgba(255,255,255,0)']}
+      colors={theme.chat.wash}
       locations={[0, 0.5, 1]}
       style={styles.pageWash}
     />
@@ -75,7 +91,9 @@ export function ChatChromeHeader({
   onLayout,
   children,
   style,
+  dark = false,
 }: ChatChromeHeaderProps) {
+  const theme = getSproutTheme(dark);
   return (
     <View
       style={[
@@ -89,15 +107,11 @@ export function ChatChromeHeader({
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         <ProgressiveBlurView
           intensity={Platform.OS === 'ios' ? 50 : 28}
-          tint="light"
+          tint={dark ? 'dark' : 'light'}
           direction="down"
         />
         <LinearGradient
-          colors={[
-            'rgba(248,252,240,0.98)',
-            'rgba(252,253,249,0.86)',
-            'rgba(255,255,255,0)',
-          ]}
+          colors={theme.chat.headerFade}
           locations={[0, 0.55, 1]}
           style={StyleSheet.absoluteFill}
         />
@@ -120,7 +134,7 @@ export function ChatChromeHeader({
         </View>
 
         {centerAction ? (
-          <ChatCircleButton {...centerAction} />
+          <ChatCircleButton {...centerAction} dark={dark} />
         ) : title ? (
           <View style={styles.titlePill}>
             <Text style={styles.pillTitle} numberOfLines={1}>{title}</Text>
@@ -133,7 +147,7 @@ export function ChatChromeHeader({
         )}
 
         <View style={[styles.sideSlot, styles.rightSlot]}>
-          {rightAction ? <ChatCircleButton {...rightAction} /> : null}
+          {rightAction ? <ChatCircleButton {...rightAction} dark={dark} /> : null}
         </View>
       </View>
 
@@ -149,13 +163,10 @@ type ChatComposerFooterProps = {
   onRetry?: () => void;
   notice?: string | null;
   onDismissNotice?: () => void;
-  /** The surface behind is dark (night home), so the wash fades to black, not white. */
+  /** Explicit dark opt-in from Sprout home. */
   dark?: boolean;
   style?: StyleProp<ViewStyle>;
 };
-
-const FOOTER_FADE_LIGHT = ['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)', '#FFFFFF'] as const;
-const FOOTER_FADE_DARK = ['rgba(16,20,12,0)', 'rgba(16,20,12,0.85)', '#10140C'] as const;
 
 export function ChatComposerFooter({
   children,
@@ -167,6 +178,7 @@ export function ChatComposerFooter({
   dark = false,
   style,
 }: ChatComposerFooterProps) {
+  const theme = getSproutTheme(dark);
   return (
     <View style={[styles.footer, { paddingBottom: bottomPadding }, style]}>
       <View pointerEvents="none" style={styles.footerBlur}>
@@ -176,19 +188,22 @@ export function ChatComposerFooter({
           direction="up"
         />
         <LinearGradient
-          colors={dark ? FOOTER_FADE_DARK : FOOTER_FADE_LIGHT}
+          colors={theme.chat.footerFade}
           locations={[0, 0.55, 1]}
           style={StyleSheet.absoluteFill}
         />
       </View>
 
       {error ? (
-        <View style={styles.errorBanner}>
+        <View style={[
+          styles.errorBanner,
+          { backgroundColor: theme.colors.errorBackground, borderColor: theme.colors.errorBorder },
+        ]}>
           <AlertCircle size={14} color="#EF4444" />
-          <Text style={styles.errorText}>{error}</Text>
+          <Text style={[styles.errorText, { color: theme.colors.errorText }]}>{error}</Text>
           {onRetry ? (
             <TouchableOpacity onPress={onRetry}>
-              <Text style={styles.errorRetry}>Retry</Text>
+              <Text style={[styles.errorRetry, { color: theme.colors.errorText }]}>Retry</Text>
             </TouchableOpacity>
           ) : null}
         </View>

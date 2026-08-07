@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,6 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useColorScheme,
   View,
 } from 'react-native';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
@@ -50,13 +51,19 @@ import {
 import { MessageActions, type NarrationState } from '../features/liquidationConversation/components/MessageActions';
 import { useMessageNarration } from '../features/liquidationConversation/useMessageNarration';
 import { NarrationPlayerHost } from '../context/NarrationContext';
+import { BRAND_PRIMARY } from '../design/tokens';
+import {
+  sproutDarkTheme,
+  sproutLightTheme,
+  type SproutTheme,
+} from '../design/sproutTheme';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
   process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ||
   'mobile';
 
-const BRAND = '#93C822';
+const BRAND = BRAND_PRIMARY;
 const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
 
 // 375-390pt screens leave 339-354pt after the hero's 18pt side padding.
@@ -190,50 +197,6 @@ const CHIP_STYLE: Record<BriefingChip, { bg: string; fg: string; text: string }>
   LISTED: { bg: '#E6F0FB', fg: '#2563A8', text: 'LISTED' },
 };
 
-// ── Adaptive home theme: green by day, dark by night (anorha Figma mockup) ─
-// Layout is a hero block (rounded-24 bottom) over a contrasting body in both
-// modes: green hero / light body by day, #0F1603 hero / #1C1E15 body at night.
-type Palette = {
-  bgFrom: string; bgTo: string;
-  heroTop: string; bodyBg: string;
-  strong: string; dim: string; faint: string;
-  pillBg: string; pillBorder: string; newBg: string;
-  cardBorder: string;
-  chart: string; divider: string;
-  chipIdleBg: string; chipIdleText: string; chipActiveBg: string; chipActiveText: string;
-  chipBorder: string;
-  rangeIdleText: string; rangeActiveBg: string; rangeActiveText: string;
-  blur: 'light' | 'dark';
-};
-
-const DAY_THEME: Palette = {
-  bgFrom: '#9AC53C', bgTo: '#6F9C26',
-  heroTop: '#9AC53C', bodyBg: '#F6F7F4',
-  strong: '#FFFFFF', dim: 'rgba(255,255,255,0.6)', faint: 'rgba(255,255,255,0.78)',
-  pillBg: 'rgba(255,255,255,0.18)', pillBorder: 'rgba(255,255,255,0.45)', newBg: 'rgba(20,30,8,0.30)',
-  cardBorder: 'rgba(255,255,255,0.28)',
-  chart: 'rgba(255,255,255,0.95)', divider: 'rgba(255,255,255,0.34)',
-  chipIdleBg: '#E4E4E7', chipIdleText: '#71717A',
-  // Active = the darker slate chip from the mockup (NOT white — white washes out
-  // against the light body). White text on slate, matching the top filter tabs.
-  chipActiveBg: '#71717A', chipActiveText: '#FFFFFF', chipBorder: 'transparent',
-  rangeIdleText: 'rgba(255,255,255,0.78)', rangeActiveBg: '#FFFFFF', rangeActiveText: '#43631A',
-  blur: 'light',
-};
-
-const NIGHT_THEME: Palette = {
-  bgFrom: '#0F1603', bgTo: '#0F1603',
-  heroTop: '#0F1603', bodyBg: '#1C1E15',
-  strong: '#FFFFFF', dim: 'rgba(255,255,255,0.4)', faint: 'rgba(255,255,255,0.8)',
-  pillBg: 'rgba(244,244,245,0.2)', pillBorder: 'rgba(255,255,255,0.35)', newBg: 'rgba(255,255,255,0.2)',
-  cardBorder: 'rgba(255,255,255,0.22)',
-  chart: 'rgba(255,255,255,0.92)', divider: 'rgba(255,255,255,0.9)',
-  chipIdleBg: 'rgba(255,255,255,0.14)', chipIdleText: '#CECECE',
-  chipActiveBg: '#71717A', chipActiveText: '#FFFFFF', chipBorder: 'transparent',
-  rangeIdleText: 'rgba(244,244,238,0.6)', rangeActiveBg: '#F4F4EE', rangeActiveText: '#1F2218',
-  blur: 'dark',
-};
-
 // ── Demo mode ──────────────────────────────────────────────────────────────
 // Flip to false for production. When true the home renders a FULL, ACTIVE state
 // (mock campaigns + a Sprout message) so the design can be reviewed without real
@@ -280,7 +243,7 @@ const ReportPreviewCard = ({
   subtitle?: string;
   chip: string;
   onPress: () => void;
-  // Themed so the card + its chip keep a visible outline in night mode (the
+  // Themed so the card + its chip keep a visible outline in dark mode (the
   // hardcoded black border vanished on the dark hero).
   borderColor?: string;
   subdued?: boolean;
@@ -384,6 +347,9 @@ const SproutHomeScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  const THEME = isDark ? sproutDarkTheme : sproutLightTheme;
   const { getToken } = useAuth();
   const { user } = useUser();
   const {
@@ -392,6 +358,13 @@ const SproutHomeScreen: React.FC = () => {
     loadedMessageId,
     loadingMessageId,
   } = useMessageNarration();
+
+  // The tab bar and quick-chat host are navigator siblings, so publish this
+  // screen-scoped appearance as an explicit option instead of letting either
+  // shared component read device appearance on its own.
+  useLayoutEffect(() => {
+    navigation.setOptions({ sproutDark: isDark });
+  }, [isDark, navigation]);
 
   // Name shown in the greeting. Fall through Clerk first/full name → username →
   // the email handle before the generic 'there', so accounts that never set a
@@ -960,7 +933,6 @@ const SproutHomeScreen: React.FC = () => {
   }, [adapter, controller, navigation]);
 
   const chartWidth = Dimensions.get('window').width;
-  const THEME = isNight ? NIGHT_THEME : DAY_THEME;
 
   // Sprout's proactive message (morning/evening recap or midday check-in).
   const sproutMsg = useMemo(() => sproutMessageForHour(new Date().getHours(), firstName), [firstName]);
@@ -1198,30 +1170,33 @@ const SproutHomeScreen: React.FC = () => {
   }, [openInsightReport, openReportDocument, handoffTarget?.campaignId, controller.campaigns, navigation, tap]);
 
   return (
-    <View style={[styles.screen, { backgroundColor: THEME.bodyBg }]}>
-      <FocusAwareStatusBar barStyle="light-content" />
+    <View style={[styles.screen, { backgroundColor: THEME.colors.background }]}>
+      <FocusAwareStatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={THEME.hero.background}
+      />
 
       {/* ── Static header: edge-to-edge, pinned at top, rounded bottom ── */}
-      <View style={[styles.header, { backgroundColor: THEME.heroTop, paddingTop: insets.top + 2 }]}>
-        {!isNight && (
-          <LinearGradient colors={[THEME.bgTo, THEME.bgTo]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+      <View style={[styles.header, { backgroundColor: THEME.hero.background, paddingTop: insets.top + 2 }]}>
+        {!isDark && (
+          <LinearGradient colors={[THEME.hero.gradientEnd, THEME.hero.gradientEnd]} style={StyleSheet.absoluteFill} pointerEvents="none" />
         )}
         {/* Top bar: greeting + New on ONE line (the date-range pill was removed —
             it didn't do anything in this state). Content sits higher as a result. */}
         <View style={styles.topBarRow}>
           <View style={[styles.greetingRow, { flex: 1, marginBottom: 0, marginRight: 12 }]}>
-            <Text style={[styles.greeting, { color: THEME.strong }]} numberOfLines={1}>
+            <Text style={[styles.greeting, { color: THEME.hero.text }]} numberOfLines={1}>
               {greeting}, {firstName}
             </Text>
             <AnorhaFace size={20} />
           </View>
           <TouchableOpacity
-            style={[styles.newBtn, { backgroundColor: THEME.newBg, borderColor: THEME.pillBorder }]}
+            style={[styles.newBtn, { backgroundColor: THEME.hero.newBackground, borderColor: THEME.hero.pillBorder }]}
             onPress={openCreate}
             activeOpacity={0.85}
           >
-            <Icon name="plus" size={15} color="#FFFFFF" />
-            <Text style={[styles.newBtnText, { color: THEME.strong }]}>New</Text>
+            <Icon name="plus" size={15} color={THEME.hero.text} />
+            <Text style={[styles.newBtnText, { color: THEME.hero.text }]}>New</Text>
           </TouchableOpacity>
         </View>
         <View style={styles.hero}>
@@ -1230,17 +1205,17 @@ const SproutHomeScreen: React.FC = () => {
             // event → status rows, then ONE strong action: the full report.
             <View style={styles.sproutMsg}>
               <View style={styles.leadRow}>
-                <Text style={[styles.sproutLead, { color: THEME.strong }]}>{recapLead}</Text>
-                <Icon name="bell-badge-outline" size={22} color={THEME.strong} />
+                <Text style={[styles.sproutLead, { color: THEME.hero.text }]}>{recapLead}</Text>
+                <Icon name="bell-badge-outline" size={22} color={THEME.hero.text} />
               </View>
               {ledgerRows.length > 0 ? (
                 <View style={styles.ledger}>
                   {ledgerRows.map((row) => (
                     <View key={row.id} style={styles.ledgerRow}>
-                      <Text style={[styles.ledgerLabel, { color: THEME.strong }]} numberOfLines={1}>
+                      <Text style={[styles.ledgerLabel, { color: THEME.hero.text }]} numberOfLines={1}>
                         {row.label}
                       </Text>
-                      <Text style={[styles.ledgerStatus, { color: THEME.strong }]}>{row.status}</Text>
+                      <Text style={[styles.ledgerStatus, { color: THEME.hero.text }]}>{row.status}</Text>
                     </View>
                   ))}
                 </View>
@@ -1253,7 +1228,7 @@ const SproutHomeScreen: React.FC = () => {
                   speed={42}
                   numberOfLines={3}
                   ellipsizeMode="tail"
-                  style={[styles.briefingProse, { color: THEME.strong }]}
+                  style={[styles.briefingProse, { color: THEME.hero.text }]}
                 />
               ) : null}
               {(DEMO || controller.campaigns.length > 0) && !insight && (
@@ -1262,11 +1237,11 @@ const SproutHomeScreen: React.FC = () => {
                   subtitle="Changes and next steps."
                   chip="Report"
                   onPress={openReport}
-                  borderColor={THEME.cardBorder}
+                  borderColor={THEME.hero.cardBorder}
                 />
               )}
               {!DEMO && nextReportHours != null && (
-                <Text style={[styles.nextReport, { color: THEME.faint }]}>
+                <Text style={[styles.nextReport, { color: THEME.hero.textSecondary }]}>
                   Next report in {nextReportHours}h
                 </Text>
               )}
@@ -1275,13 +1250,13 @@ const SproutHomeScreen: React.FC = () => {
             <>
               {showQuietInsight ? (
                 <Text
-                  style={[styles.quietInsightLine, { color: THEME.faint }]}
+                  style={[styles.quietInsightLine, { color: THEME.hero.textSecondary }]}
                   numberOfLines={1}
                 >
                   All quiet.{quietSince ? ` ${quietSince}` : ''}
                 </Text>
               ) : controller.loading ? (
-                <Text style={[styles.briefingHeadline, { color: THEME.faint }]}>Catching you up…</Text>
+                <Text style={[styles.briefingHeadline, { color: THEME.hero.textSecondary }]}>Catching you up…</Text>
               ) : seenLoaded && heroMessage ? (
                 <StreamingText
                   text={heroMessage.text}
@@ -1290,12 +1265,12 @@ const SproutHomeScreen: React.FC = () => {
                   speed={42}
                   numberOfLines={3}
                   ellipsizeMode="tail"
-                  style={[styles.briefingProse, { color: THEME.strong }]}
+                  style={[styles.briefingProse, { color: THEME.hero.text }]}
                 />
               ) : null}
               {showActiveInsight && insightSupportLine ? (
                 <Text
-                  style={[styles.briefingSupport, { color: THEME.faint }]}
+                  style={[styles.briefingSupport, { color: THEME.hero.textSecondary }]}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                 >
@@ -1306,7 +1281,7 @@ const SproutHomeScreen: React.FC = () => {
               !showQuietInsight &&
               !controller.loading &&
               lastActivityLine ? (
-                <Text style={[styles.nextReport, { color: THEME.faint }]}>{lastActivityLine}</Text>
+                <Text style={[styles.nextReport, { color: THEME.hero.textSecondary }]}>{lastActivityLine}</Text>
               ) : null}
             </>
           )}
@@ -1318,7 +1293,7 @@ const SproutHomeScreen: React.FC = () => {
               <ReportPreviewCard
                 title="Last note"
                 chip="Report"
-                borderColor={THEME.cardBorder}
+                borderColor={THEME.hero.cardBorder}
                 subdued
                 onPress={() => {
                   tap();
@@ -1330,7 +1305,7 @@ const SproutHomeScreen: React.FC = () => {
             <ReportPreviewCard
               title={insightReportTitle}
               chip="Report"
-              borderColor={THEME.cardBorder}
+              borderColor={THEME.hero.cardBorder}
               onPress={() => {
                 tap();
                 void openInsightReport();
@@ -1344,9 +1319,9 @@ const SproutHomeScreen: React.FC = () => {
             <FollowUpPrompts
               suggestions={insightFollowUps}
               onPress={openCampaignPrompt}
-              textColor={THEME.strong}
-              borderColor={THEME.cardBorder}
-              iconColor={THEME.faint}
+              textColor={THEME.hero.text}
+              borderColor={THEME.hero.cardBorder}
+              iconColor={THEME.hero.textSecondary}
             />
           ) : null}
           {heroAction || insightNextCheckLine ? (
@@ -1360,17 +1335,17 @@ const SproutHomeScreen: React.FC = () => {
                   onToggleNarration={(messageId, text) => {
                     void toggleNarration({ messageId, text });
                   }}
-                  tintColor={THEME.dim}
-                  upActiveColor={THEME.strong}
-                  downActiveColor={THEME.strong}
-                  narrationActiveColor={THEME.strong}
+                  tintColor={THEME.hero.textMuted}
+                  upActiveColor={THEME.hero.text}
+                  downActiveColor={THEME.hero.text}
+                  narrationActiveColor={THEME.hero.text}
                   activeBackgroundColor="rgba(255,255,255,0.14)"
                   style={styles.insightActions}
                 />
               ) : null}
               {insightNextCheckLine ? (
                 <Text
-                  style={[styles.insightCountdownText, { color: THEME.dim }]}
+                  style={[styles.insightCountdownText, { color: THEME.hero.textMuted }]}
                   accessibilityLabel={insightNextCheckLine}
                   numberOfLines={1}
                   ellipsizeMode="tail"
@@ -1384,7 +1359,7 @@ const SproutHomeScreen: React.FC = () => {
           {/* Divider + today's numbers only when there's something below the fold —
               a brand-new seller with 0 sales sees the greeting + recap, nothing dead. */}
           {(heroSold > 0 || heroRevenue > 0 || displayEvents.length > 0 || chartSeries.length >= 2) && (
-            <View style={[styles.dashedDivider, { borderColor: THEME.divider }]} />
+            <View style={[styles.dashedDivider, { borderColor: THEME.hero.divider }]} />
           )}
 
           {/* Timestamped events ("Offer 1 · 9:31 PM") */}
@@ -1392,8 +1367,8 @@ const SproutHomeScreen: React.FC = () => {
             <View style={styles.eventRows}>
               {displayEvents.map((e) => (
                 <View key={e.id} style={styles.eventRow}>
-                  <Text style={[styles.eventLabel, { color: THEME.faint }]}>{e.label}</Text>
-                  <Text style={[styles.eventTime, { color: THEME.strong }]}>{e.time}</Text>
+                  <Text style={[styles.eventLabel, { color: THEME.hero.textSecondary }]}>{e.label}</Text>
+                  <Text style={[styles.eventTime, { color: THEME.hero.text }]}>{e.time}</Text>
                 </View>
               ))}
             </View>
@@ -1402,10 +1377,10 @@ const SproutHomeScreen: React.FC = () => {
           {/* Hero stats — only once there's an actual sale/revenue to show */}
           {(heroSold > 0 || heroRevenue > 0) && (
             <View style={styles.statsRow}>
-              <Text style={[styles.salesToday, { color: THEME.strong }]}>
+              <Text style={[styles.salesToday, { color: THEME.hero.text }]}>
                 {heroSold} {heroSold === 1 ? 'sale' : 'sales'} today
               </Text>
-              <Text style={[styles.salesDelta, { color: THEME.strong }]}>+{currency(heroRevenue)}</Text>
+              <Text style={[styles.salesDelta, { color: THEME.hero.text }]}>+{currency(heroRevenue)}</Text>
             </View>
           )}
 
@@ -1425,18 +1400,18 @@ const SproutHomeScreen: React.FC = () => {
               withShadow={false}
               bezier
               chartConfig={{
-                backgroundGradientFrom: THEME.bgTo,
+                backgroundGradientFrom: THEME.hero.gradientEnd,
                 backgroundGradientFromOpacity: 0,
-                backgroundGradientTo: THEME.bgTo,
+                backgroundGradientTo: THEME.hero.gradientEnd,
                 backgroundGradientToOpacity: 0,
-                color: () => THEME.chart,
+                color: () => THEME.hero.chart,
                 strokeWidth: 3,
                 decimalPlaces: 0,
                 propsForBackgroundLines: { strokeWidth: 0 },
               }}
               style={styles.chart}
             />
-            <View style={[styles.chartBaseline, { borderColor: THEME.divider }]} />
+            <View style={[styles.chartBaseline, { borderColor: THEME.hero.divider }]} />
           </View>
 
           {/* Range chips */}
@@ -1446,14 +1421,14 @@ const SproutHomeScreen: React.FC = () => {
               return (
                 <TouchableOpacity
                   key={r}
-                  style={[styles.rangeChip, { backgroundColor: active ? THEME.rangeActiveBg : 'transparent' }]}
+                  style={[styles.rangeChip, { backgroundColor: active ? THEME.hero.rangeActiveBackground : 'transparent' }]}
                   onPress={() => {
                     tap();
                     setActiveRange(r);
                   }}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.rangeChipText, { color: active ? THEME.rangeActiveText : THEME.rangeIdleText }]}>{r}</Text>
+                  <Text style={[styles.rangeChipText, { color: active ? THEME.hero.rangeActiveText : THEME.hero.rangeText }]}>{r}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -1493,8 +1468,8 @@ const SproutHomeScreen: React.FC = () => {
                       style={[
                         styles.filterChip,
                         {
-                          backgroundColor: active ? THEME.chipActiveBg : THEME.chipIdleBg,
-                          borderColor: active ? THEME.chipBorder : 'transparent',
+                          backgroundColor: active ? THEME.controls.activeBackground : THEME.controls.idleBackground,
+                          borderColor: active ? THEME.controls.activeBorder : 'transparent',
                         },
                       ]}
                       onPress={() => {
@@ -1503,13 +1478,13 @@ const SproutHomeScreen: React.FC = () => {
                       }}
                       activeOpacity={0.8}
                     >
-                      <Text style={[styles.filterChipText, { color: active ? THEME.chipActiveText : THEME.chipIdleText }]}>{f}</Text>
+                      <Text style={[styles.filterChipText, { color: active ? THEME.controls.activeText : THEME.controls.idleText }]}>{f}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
               <TouchableOpacity
-                style={[styles.searchBtn, { backgroundColor: searchOpen ? THEME.chipActiveBg : THEME.chipIdleBg }]}
+                style={[styles.searchBtn, { backgroundColor: searchOpen ? THEME.controls.activeBackground : THEME.controls.idleBackground }]}
                 onPress={() => {
                   tap();
                   setSearchOpen(open => {
@@ -1523,19 +1498,19 @@ const SproutHomeScreen: React.FC = () => {
                 <Icon
                   name={searchOpen ? 'close' : 'magnify'}
                   size={17}
-                  color={searchOpen ? THEME.chipActiveText : THEME.chipIdleText}
+                  color={searchOpen ? THEME.controls.activeText : THEME.controls.idleText}
                 />
               </TouchableOpacity>
             </View>
             {searchOpen ? (
-              <View style={[styles.searchRow, { backgroundColor: THEME.chipIdleBg }]}>
-                <Icon name="magnify" size={16} color={THEME.chipIdleText} />
+              <View style={[styles.searchRow, { backgroundColor: THEME.controls.idleBackground }]}>
+                <Icon name="magnify" size={16} color={THEME.controls.idleText} />
                 <TextInput
                   value={campaignQuery}
                   onChangeText={setCampaignQuery}
                   placeholder="Search clearouts"
-                  placeholderTextColor={THEME.chipIdleText}
-                  style={[styles.searchInput, { color: isNight ? '#F4F4EE' : '#18181B' }]}
+                  placeholderTextColor={THEME.controls.idleText}
+                  style={[styles.searchInput, { color: THEME.colors.text }]}
                   autoFocus
                   autoCorrect={false}
                   returnKeyType="search"
@@ -1545,7 +1520,7 @@ const SproutHomeScreen: React.FC = () => {
                     onPress={() => setCampaignQuery('')}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Icon name="close-circle" size={16} color={THEME.chipIdleText} />
+                    <Icon name="close-circle" size={16} color={THEME.controls.idleText} />
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -1554,13 +1529,16 @@ const SproutHomeScreen: React.FC = () => {
           ) : null}
 
           {controller.error ? (
-            <View style={styles.errorBanner}>
-              <Icon name="alert-circle-outline" size={15} color="#B91C1C" />
-              <Text style={styles.errorText} numberOfLines={2}>
+            <View style={[
+              styles.errorBanner,
+              { backgroundColor: THEME.colors.errorBackground, borderColor: THEME.colors.errorBorder },
+            ]}>
+              <Icon name="alert-circle-outline" size={15} color={THEME.colors.errorText} />
+              <Text style={[styles.errorText, { color: THEME.colors.errorText }]} numberOfLines={2}>
                 {controller.error}
               </Text>
               <TouchableOpacity onPress={controller.onRefresh}>
-                <Text style={styles.errorRetry}>Retry</Text>
+                <Text style={[styles.errorRetry, { color: THEME.colors.errorText }]}>Retry</Text>
               </TouchableOpacity>
             </View>
           ) : null}
@@ -1568,7 +1546,7 @@ const SproutHomeScreen: React.FC = () => {
           {controller.loading && controller.campaigns.length === 0 ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator color={BRAND} />
-              <Text style={[styles.loadingText, isNight && { color: 'rgba(244,244,238,0.6)' }]}>Loading your clearouts…</Text>
+              <Text style={[styles.loadingText, { color: THEME.colors.textSecondary }]}>Loading your clearouts…</Text>
             </View>
           ) : filteredCampaigns.length === 0 ? (
             setupUnknown ? (
@@ -1581,11 +1559,14 @@ const SproutHomeScreen: React.FC = () => {
               // First-run onboarding checklist — ONLY for a genuinely new seller
               // (no platform connected or no items yet). An established seller who
               // just hasn't started a clearout skips straight to the CTA below.
-              <View style={[styles.emptyCard, isNight && styles.emptyCardNight, { alignItems: 'stretch' }]}>
-                <Text style={[styles.emptyTitle, isNight && { color: '#F4F4EE' }, { textAlign: 'left' }]}>
+              <View style={[
+                styles.emptyCard,
+                { backgroundColor: THEME.colors.card, borderColor: THEME.colors.border, alignItems: 'stretch' },
+              ]}>
+                <Text style={[styles.emptyTitle, { color: THEME.colors.text, textAlign: 'left' }]}>
                   Get set up
                 </Text>
-                <Text style={[styles.emptyBody, isNight && { color: 'rgba(244,244,238,0.6)' }, { textAlign: 'left', marginBottom: 12 }]}>
+                <Text style={[styles.emptyBody, { color: THEME.colors.textSecondary, textAlign: 'left', marginBottom: 12 }]}>
                   Three steps and Sprout takes it from there.
                 </Text>
                 {(() => {
@@ -1633,8 +1614,8 @@ const SproutHomeScreen: React.FC = () => {
                           sub={step.sub}
                           state={state}
                           onPress={step.onPress}
-                          night={isNight}
-                          whiteActive
+                          night={isDark}
+                          whiteActive={!isDark}
                         />
                       </Animated.View>
                     );
@@ -1642,15 +1623,18 @@ const SproutHomeScreen: React.FC = () => {
                 })()}
               </View>
             ) : (
-              <View style={[styles.emptyCard, isNight && styles.emptyCardNight]}>
-                <View style={[styles.emptyIconWrap, isNight && { backgroundColor: 'rgba(147,200,34,0.16)' }]}>
+              <View style={[
+                styles.emptyCard,
+                { backgroundColor: THEME.colors.card, borderColor: THEME.colors.border },
+              ]}>
+                <View style={[styles.emptyIconWrap, isDark && { backgroundColor: 'rgba(147,200,34,0.16)' }]}>
                   <AnorhaFace size={26} />
                 </View>
-                <Text style={[styles.emptyTitle, isNight && { color: '#F4F4EE' }]}>
+                <Text style={[styles.emptyTitle, { color: THEME.colors.text }]}>
                   {activeFilter === 'All' ? 'Ready to clear out?' : `No ${activeFilter.toLowerCase()} clearouts`}
                 </Text>
                 <TouchableOpacity style={styles.emptyCta} onPress={openCreate} activeOpacity={0.9}>
-                  <Text style={styles.emptyCtaText}>Start a clearout</Text>
+                  <Text style={[styles.emptyCtaText, { color: THEME.colors.onPrimary }]}>Start a clearout</Text>
                 </TouchableOpacity>
               </View>
             )
@@ -1660,7 +1644,7 @@ const SproutHomeScreen: React.FC = () => {
                 <CampaignCard
                   key={c.id}
                   campaign={c}
-                  isNight={isNight}
+                  theme={THEME}
                   onPress={() => onCardPress(c)}
                   onLongPress={() => beginSelect(c.id)}
                   selectMode={selectMode}
@@ -1669,15 +1653,15 @@ const SproutHomeScreen: React.FC = () => {
               ))}
               {runningCampaigns.length > 0 && completedCampaigns.length > 0 && (
                 <View style={styles.completedHeader}>
-                  <Text style={styles.completedLabel}>COMPLETED</Text>
-                  <View style={[styles.completedDivider, isNight && { opacity: 0.35 }]} />
+                  <Text style={[styles.completedLabel, { color: THEME.colors.textSecondary }]}>COMPLETED</Text>
+                  <View style={[styles.completedDivider, { backgroundColor: THEME.colors.border }]} />
                 </View>
               )}
               {completedCampaigns.map(c => (
                 <CampaignCard
                   key={c.id}
                   campaign={c}
-                  isNight={isNight}
+                  theme={THEME}
                   onPress={() => onCardPress(c)}
                   onLongPress={() => beginSelect(c.id)}
                   selectMode={selectMode}
@@ -1699,6 +1683,7 @@ const SproutHomeScreen: React.FC = () => {
       <NewClearoutSheet
         visible={createOpen}
         creating={creating}
+        dark={isDark}
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreate}
       />
@@ -1727,35 +1712,51 @@ const SproutHomeScreen: React.FC = () => {
       {/* Selection action pill — floats in the navigator's spot on long-press
           (the tab bar hides while selecting). Bulk pause / delete. */}
       {selectMode ? (
-        <View style={[styles.selectBar, isNight && styles.selectBarNight, { bottom: Math.max(18, insets.bottom) }]}>
+        <View style={[
+          styles.selectBar,
+          { backgroundColor: THEME.colors.card, borderColor: THEME.colors.border, bottom: Math.max(18, insets.bottom) },
+        ]}>
           <TouchableOpacity
-            style={[styles.selectCancel, isNight && styles.selectCancelNight]}
+            style={[styles.selectCancel, { backgroundColor: THEME.controls.idleBackground }]}
             onPress={exitSelect}
             activeOpacity={0.7}
           >
-            <Icon name="close" size={18} color={isNight ? '#E4E4E7' : '#52525B'} />
+            <Icon name="close" size={18} color={THEME.colors.textSecondary} />
           </TouchableOpacity>
-          <Text style={[styles.selectCount, isNight && styles.selectCountNight]}>
+          <Text style={[styles.selectCount, { color: THEME.colors.text }]}>
             {selectedIds.size} selected
           </Text>
           <View style={styles.selectActions}>
             <TouchableOpacity
-              style={[styles.selectAction, isNight && styles.selectActionNight, selectedIds.size === 0 && styles.selectActionDisabled]}
+              style={[
+                styles.selectAction,
+                { backgroundColor: THEME.controls.idleBackground },
+                selectedIds.size === 0 && styles.selectActionDisabled,
+              ]}
               onPress={pauseSelected}
               disabled={selectedIds.size === 0}
               activeOpacity={0.8}
             >
-              <Icon name="pause" size={16} color={isNight ? '#E4E4E7' : '#3F3F46'} />
-              <Text style={[styles.selectActionText, isNight && styles.selectActionTextNight]}>Pause</Text>
+              <Icon name="pause" size={16} color={THEME.colors.textSecondary} />
+              <Text style={[styles.selectActionText, { color: THEME.colors.text }]}>Pause</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.selectAction, styles.selectActionDone, selectedIds.size === 0 && styles.selectActionDisabled]}
+              style={[
+                styles.selectAction,
+                styles.selectActionDone,
+                isDark && { backgroundColor: THEME.colors.primary },
+                selectedIds.size === 0 && styles.selectActionDisabled,
+              ]}
               onPress={closeSelected}
               disabled={selectedIds.size === 0}
               activeOpacity={0.8}
             >
-              <Icon name="check" size={16} color="#3B6300" />
-              <Text style={[styles.selectActionText, styles.selectActionDoneText]}>Close clearout</Text>
+              <Icon name="check" size={16} color={isDark ? THEME.colors.onPrimary : '#3B6300'} />
+              <Text style={[
+                styles.selectActionText,
+                styles.selectActionDoneText,
+                isDark && { color: THEME.colors.onPrimary },
+              ]}>Close clearout</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1772,8 +1773,9 @@ const CampaignCard: React.FC<{
   onLongPress?: () => void;
   selectMode?: boolean;
   selected?: boolean;
-  isNight?: boolean;
-}> = React.memo(({ campaign, onPress, onLongPress, selectMode, selected, isNight }) => {
+  theme: SproutTheme;
+}> = React.memo(({ campaign, onPress, onLongPress, selectMode, selected, theme }) => {
+  const isDark = theme.mode === 'dark';
   const sold = campaign.stats?.soldCount || 0;
   const total = campaign.stats?.totalCount || 0;
   const negotiating = campaign.stats?.negotiating || 0;
@@ -1814,41 +1816,36 @@ const CampaignCard: React.FC<{
 
   const statusPill =
     campaign.status === 'paused'
-      ? isNight
-        ? { text: 'Paused', bg: 'rgba(162,97,26,0.22)', fg: '#E8B380' }
-        : { text: 'Paused', bg: '#FBEAD2', fg: '#A2611A' }
+      ? { text: 'Paused', bg: theme.campaign.pausedBackground, fg: theme.campaign.pausedText }
       : campaign.status === 'waiting_user'
-        ? isNight
-          ? { text: 'Needs you', bg: 'rgba(31,95,168,0.28)', fg: '#9CC4F0' }
-          : { text: 'Needs you', bg: '#DCEBFB', fg: '#1F5FA8' }
-        : isNight
-          ? { text: nextCheckLabel || 'Running', bg: 'rgba(147,200,34,0.18)', fg: '#C9E588' }
-          : { text: nextCheckLabel || 'Running', bg: '#EAF7CF', fg: '#4E6B12' };
+        ? { text: 'Needs you', bg: theme.campaign.waitingBackground, fg: theme.campaign.waitingText }
+        : { text: nextCheckLabel || 'Running', bg: theme.campaign.runningBackground, fg: theme.campaign.runningText };
 
   // First campaign item's image (backend list enrichment); green leaf fallback.
   const thumbUrl = campaign.imageUrl;
 
-  const titleColor = isCompleted ? '#09090B' : isNight ? '#FFFFFF' : '#000000';
-  const subColor = isCompleted ? '#666666' : isNight ? '#71717A' : '#666666';
+  const titleColor = isDark ? theme.colors.text : isCompleted ? '#09090B' : '#000000';
+  const subColor = theme.colors.textSecondary;
   // Days badge: the neutral filter-tab chip (slate text on light grey), not a
   // loud green pill — the day counter is metadata, not a status.
-  const daysBadgeBg = '#E4E4E7';
-  // Pending pill: amber by day, muted olive at night (matches mockup variants).
-  const pendingBg = isNight ? '#494B44' : '#A56300';
+  const daysBadgeBg = theme.controls.idleBackground;
+  // Pending pill: amber in light mode, muted olive in dark mode.
+  const pendingBg = theme.campaign.pendingBackground;
   // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
   // surface; the ticks are a separate gray strip to its right (no track behind).
   // At 0% the pill reads gray (nothing raised yet) rather than a misleading green.
   const goalBorder = goalPct === 0 ? '#666' : isCompleted ? '#6BA03A' : '#3A5A24';
   const goalFillBg = goalPct === 0 ? '#999' : isCompleted ? '#95BF46' : '#7BB304';
-  const tickColor = isCompleted ? '#D9D9D9' : isNight ? '#585858' : '#D4D4D4';
+  const tickColor = theme.campaign.tick;
 
   return (
     <TouchableOpacity
       style={[
         styles.card,
-        isCompleted ? styles.cardCompleted : isNight ? styles.cardNight : styles.cardDay,
-        isCompleted && { opacity: 0.55 },
-        selected && (isNight ? styles.cardSelectedNight : styles.cardSelected),
+        { backgroundColor: theme.colors.card, borderColor: theme.colors.border },
+        isCompleted && !isDark ? styles.cardCompleted : null,
+        isCompleted && { opacity: 0.62 },
+        selected && { borderWidth: 2, borderColor: theme.campaign.selectedBorder },
       ]}
       onPress={onPress}
       onLongPress={onLongPress}
@@ -1856,12 +1853,19 @@ const CampaignCard: React.FC<{
       activeOpacity={0.92}
     >
       {selectMode ? (
-        <View style={[styles.selectDot, selected && (isNight ? styles.selectDotOnNight : styles.selectDotOn)]}>
-          {selected ? <Icon name="check" size={14} color={isNight ? '#17200D' : '#FFFFFF'} /> : null}
+        <View style={[
+          styles.selectDot,
+          { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+          selected && { backgroundColor: theme.campaign.selectedFill, borderColor: theme.campaign.selectedBorder },
+        ]}>
+          {selected ? <Icon name="check" size={14} color={theme.campaign.selectedInk} /> : null}
         </View>
       ) : null}
       <View style={styles.cardHeader}>
-        <View style={[styles.cardThumb, isNight && !isCompleted && styles.cardThumbNight]}>
+        <View style={[
+          styles.cardThumb,
+          !isCompleted && { backgroundColor: theme.campaign.thumbnailBackground },
+        ]}>
           {thumbUrl ? (
             <Image source={{ uri: thumbUrl }} style={styles.cardThumbImage} />
           ) : (
@@ -1875,11 +1879,11 @@ const CampaignCard: React.FC<{
           <View style={styles.cardMetaRow}>
             {isCompleted ? (
               <View style={[styles.daysBadge, { backgroundColor: daysBadgeBg }]}>
-                <Text style={styles.daysBadgeText}>Completed</Text>
+                <Text style={[styles.daysBadgeText, { color: theme.controls.idleText }]}>Completed</Text>
               </View>
             ) : daysLeft !== null ? (
               <View style={[styles.daysBadge, { backgroundColor: daysBadgeBg }]}>
-                <Text style={styles.daysBadgeText}>{daysLeft}d Left</Text>
+                <Text style={[styles.daysBadgeText, { color: theme.controls.idleText }]}>{daysLeft}d Left</Text>
               </View>
             ) : null}
             <Text style={[styles.cardSubMeta, { color: subColor }]}>
@@ -1888,8 +1892,8 @@ const CampaignCard: React.FC<{
           </View>
         </View>
         {isCompleted ? (
-          <Text style={styles.percentText}>
-            {percent}%<Text style={styles.percentDim}>/100%</Text>
+          <Text style={[styles.percentText, { color: theme.colors.text }]}>
+            {percent}%<Text style={[styles.percentDim, { color: theme.colors.textSecondary }]}>/100%</Text>
           </Text>
         ) : negotiating > 0 ? (
           <View style={[styles.pendingBadge, { backgroundColor: pendingBg }]}>
@@ -1910,7 +1914,7 @@ const CampaignCard: React.FC<{
           shrinking as the pill grows. */}
       <View style={styles.goalRow}>
         <View style={[styles.goalFill, { width: `${goalPct}%`, backgroundColor: goalFillBg, borderColor: goalBorder }]}>
-          <Text style={styles.goalLabel} numberOfLines={1}>
+          <Text style={[styles.goalLabel, { color: theme.colors.onPrimary }]} numberOfLines={1}>
             {hasDollars ? currency(campaign.raised!) : `${goalPct}%`}
           </Text>
         </View>
@@ -1928,16 +1932,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F6F7F4' },
 
   // ── Long-press selection ──────────────────────────────
-  cardSelected: {
-    borderWidth: 2,
-    borderColor: BRAND,
-  },
-  // Brand green all but vanishes against the night home. White is the only ring that
-  // reads as "picked" on that surface.
-  cardSelectedNight: {
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
   selectDot: {
     position: 'absolute',
     top: 10,
@@ -1951,14 +1945,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
-  },
-  selectDotOn: {
-    borderColor: BRAND,
-    backgroundColor: BRAND,
-  },
-  selectDotOnNight: {
-    borderColor: '#FFFFFF',
-    backgroundColor: '#FFFFFF',
   },
   // Floats in the navigator's spot (rounded on all sides, detached from the
   // edges) — not a full-width bottom sheet. `bottom` is set inline to match the
@@ -1982,10 +1968,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 24,
   },
-  selectBarNight: {
-    backgroundColor: 'rgba(28, 30, 24, 0.94)',
-    borderColor: 'rgba(255, 255, 255, 0.10)',
-  },
   selectCancel: {
     width: 36,
     height: 36,
@@ -1994,17 +1976,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#F1F1EE',
   },
-  selectCancelNight: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-  },
   selectCount: {
     flex: 1,
     fontSize: 14,
     color: '#18181B',
     fontFamily: 'Inter_600SemiBold',
-  },
-  selectCountNight: {
-    color: '#F4F4EE',
   },
   selectActions: {
     flexDirection: 'row',
@@ -2020,16 +1996,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#F1F1EE',
   },
-  selectActionNight: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-  },
   selectActionText: {
     fontSize: 13,
     color: '#3F3F46',
     fontFamily: 'Inter_600SemiBold',
-  },
-  selectActionTextNight: {
-    color: '#E4E4E7',
   },
   selectActionDone: {
     backgroundColor: 'rgba(147,200,34,0.18)',
@@ -2279,10 +2249,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EEEFEA',
   },
-  emptyCardNight: {
-    backgroundColor: '#22271C',
-    borderColor: '#333333',
-  },
   emptyIconWrap: {
     width: 56,
     height: 56,
@@ -2308,8 +2274,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  cardDay: { backgroundColor: '#FFFFFF', borderColor: '#E4E4E7' },
-  cardNight: { backgroundColor: '#22271C', borderColor: '#333333', shadowOpacity: 0.18 },
   cardCompleted: { backgroundColor: '#FBFBFB', borderColor: '#E4E4E7' },
   cardHeader: {
     flexDirection: 'row',
@@ -2329,7 +2293,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  cardThumbNight: { backgroundColor: 'rgba(153,153,153,0.35)' },
   cardThumbImage: { width: 42, height: 42, borderRadius: 4 },
   cardHeaderText: { flex: 1 },
   cardTitle: { color: '#18181B', fontFamily: FONT.medium, fontSize: 16, lineHeight: 20, marginBottom: 5 },

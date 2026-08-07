@@ -295,6 +295,13 @@ export const CenterOverlay: React.FC<{
                   collapsable={false}
                   onLayout={captureSearchSnapshot}
                   style={[styles.matchCardLoadingContent, loadingContentStyle]}
+                  // This layer stays MOUNTED at opacity 0 after the card settles so
+                  // Reanimated can interpolate between the measured loading and result
+                  // frames. Hide it from accessibility once it is not the live phase, or
+                  // a settled card still reads "Searching for your item..." to VoiceOver
+                  // and to anything reading the tree (QA 2026-08-02 read it as stuck).
+                  accessibilityElementsHidden={showFoundCard}
+                  importantForAccessibility={showFoundCard ? 'no-hide-descendants' : 'auto'}
                 >
                   <UnicodeSpinner spinner={spinners.helix} color="#0F172A" size={16} />
                   <Text style={styles.matchCardLoadingText}>Searching for your item...</Text>

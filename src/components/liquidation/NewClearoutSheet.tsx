@@ -29,6 +29,7 @@ import {
   formatSellByDate,
   startOfLocalDay,
 } from '../../features/liquidationConversation/campaignTiming';
+import { getSproutTheme } from '../../design/sproutTheme';
 
 const BRAND = '#93C822';
 const FONT = {
@@ -54,6 +55,7 @@ type Props = {
   creating: boolean;
   onClose: () => void;
   onSubmit: (input: NewClearoutInput) => void;
+  dark?: boolean;
 };
 
 type InventoryRow = {
@@ -115,7 +117,8 @@ const STEPS = ['name', 'inventory', 'goal', 'deadline', 'pricing'] as const;
  * clearout first, and the goal step opens pre-filled with a target derived from
  * those items' listed value, which they can still adjust.
  */
-export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, onSubmit }) => {
+export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, onSubmit, dark = false }) => {
+  const theme = getSproutTheme(dark);
   const insets = useSafeAreaInsets();
   const legendState: any = useLegendState();
   const today = startOfLocalDay(new Date());
@@ -401,17 +404,22 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
       <View style={styles.backdrop}>
         <TouchableOpacity style={styles.backdropTouch} activeOpacity={1} onPress={onClose} />
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
-            <View style={styles.handle} />
+          <View style={[styles.sheet, { backgroundColor: theme.colors.surface, paddingBottom: insets.bottom + 16 }]}>
+            <View style={[styles.handle, { backgroundColor: theme.chat.grabber }]} />
 
             {/* Back + progress dots */}
             <View style={styles.topRow}>
               <TouchableOpacity onPress={back} style={styles.backBtn} activeOpacity={0.7}>
-                <Icon name={step === 0 ? 'close' : 'chevron-left'} size={22} color="#3F3F46" />
+                <Icon name={step === 0 ? 'close' : 'chevron-left'} size={22} color={theme.colors.text} />
               </TouchableOpacity>
               <View style={styles.dots}>
                 {STEPS.map((_, i) => (
-                  <View key={i} style={[styles.dot, i === step && styles.dotActive, i < step && styles.dotDone]} />
+                  <View key={i} style={[
+                    styles.dot,
+                    { backgroundColor: theme.colors.border },
+                    i === step && styles.dotActive,
+                    i < step && styles.dotDone,
+                  ]} />
                 ))}
               </View>
               <View style={styles.backBtn} />
@@ -421,15 +429,15 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
             <Animated.View key={step} entering={FadeIn.duration(160)} style={styles.stepBody}>
               {STEPS[step] === 'name' && (
                 <>
-                  <Text style={styles.question}>Name this clearout</Text>
-                  <Text style={styles.hint}>So you can spot it on your home screen. Optional.</Text>
-                  <View style={styles.inputRow}>
+                  <Text style={[styles.question, { color: theme.colors.text }]}>Name this clearout</Text>
+                  <Text style={[styles.hint, { color: theme.colors.textSecondary }]}>So you can spot it on your home screen. Optional.</Text>
+                  <View style={[styles.inputRow, { borderColor: theme.colors.border, backgroundColor: theme.colors.card }]}>
                     <TextInput
-                      style={styles.input}
+                      style={[styles.input, { color: theme.colors.text }]}
                       value={name}
                       onChangeText={setName}
                       placeholder="e.g. Tech liquidation"
-                      placeholderTextColor="#9CA3AF"
+                      placeholderTextColor={theme.colors.textMuted}
                       autoFocus
                       returnKeyType="next"
                       onSubmitEditing={next}
@@ -441,28 +449,28 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
 
               {STEPS[step] === 'inventory' && (
                 <>
-                  <Text style={styles.question}>What are we clearing out?</Text>
-                  <Text style={styles.hint}>
+                  <Text style={[styles.question, { color: theme.colors.text }]}>What are we clearing out?</Text>
+                  <Text style={[styles.hint, { color: theme.colors.textSecondary }]}>
                     Pick the items for this clearout. Your goal is built from what you choose.
                   </Text>
-                  <View style={styles.searchRow}>
-                    <Icon name="magnify" size={18} color="#9CA3AF" />
+                  <View style={[styles.searchRow, { backgroundColor: theme.chat.surfaceMuted }]}>
+                    <Icon name="magnify" size={18} color={theme.colors.textMuted} />
                     <TextInput
-                      style={styles.searchInput}
+                      style={[styles.searchInput, { color: theme.colors.text }]}
                       value={query}
                       onChangeText={setQuery}
                       placeholder="Search inventory"
-                      placeholderTextColor="#9CA3AF"
+                      placeholderTextColor={theme.colors.textMuted}
                     />
                     <TouchableOpacity onPress={toggleAllVisible} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Text style={styles.selectAll}>{allVisibleSelected ? 'Clear' : 'All'}</Text>
+                      <Text style={[styles.selectAll, dark && { color: theme.colors.primary }]}>{allVisibleSelected ? 'Clear' : 'All'}</Text>
                     </TouchableOpacity>
                   </View>
 
                   {loadingRows ? (
                     <View style={styles.pickerLoading}>
                       <ActivityIndicator color={BRAND} />
-                      <Text style={styles.pickerLoadingText}>Loading your inventory…</Text>
+                      <Text style={[styles.pickerLoadingText, { color: theme.colors.textSecondary }]}>Loading your inventory…</Text>
                     </View>
                   ) : (
                     <FlatList
@@ -471,7 +479,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                       style={styles.pickerList}
                       keyboardShouldPersistTaps="handled"
                       ListEmptyComponent={
-                        <Text style={styles.pickerEmpty}>
+                        <Text style={[styles.pickerEmpty, { color: theme.colors.textMuted }]}>
                           {rows.length === 0 ? 'No inventory yet. Add products first.' : 'No items match.'}
                         </Text>
                       }
@@ -479,10 +487,10 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                         const sel = selected.has(item.Id);
                         return (
                           <TouchableOpacity style={styles.pickRow} onPress={() => toggleRow(item.Id)} activeOpacity={0.7}>
-                            <View style={[styles.cb, sel && styles.cbOn]}>
-                              {sel ? <Icon name="check" size={13} color="#FFFFFF" /> : null}
+                            <View style={[styles.cb, { borderColor: theme.colors.border }, sel && styles.cbOn]}>
+                              {sel ? <Icon name="check" size={13} color={theme.colors.onPrimary} /> : null}
                             </View>
-                            <View style={styles.pickThumb}>
+                            <View style={[styles.pickThumb, { backgroundColor: theme.chat.surfaceMuted, borderColor: theme.colors.border }]}>
                               {item.PrimaryImageUrl ? (
                                 <Image source={{ uri: item.PrimaryImageUrl }} style={styles.pickThumbImg} resizeMode="cover" />
                               ) : (
@@ -490,8 +498,8 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                               )}
                             </View>
                             <View style={{ flex: 1 }}>
-                              <Text style={styles.pickTitle} numberOfLines={1}>{item.Title || 'Untitled'}</Text>
-                              <Text style={styles.pickSub} numberOfLines={1}>
+                              <Text style={[styles.pickTitle, { color: theme.colors.text }]} numberOfLines={1}>{item.Title || 'Untitled'}</Text>
+                              <Text style={[styles.pickSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>
                                 {money(Number(item.Price || 0))}{item.Sku ? `  ·  ${item.Sku}` : ''}
                               </Text>
                             </View>
@@ -501,7 +509,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                     />
                   )}
 
-                  <Text style={styles.selSummary}>
+                  <Text style={[styles.selSummary, dark && { color: theme.colors.primary }]}>
                     {selected.size > 0
                       ? `${selected.size} selected · ${money(selectedValue)} estimated`
                       : 'Nothing selected yet'}
@@ -511,21 +519,21 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
 
               {STEPS[step] === 'goal' && (
                 <>
-                  <Text style={styles.question}>Set revenue goal</Text>
-                  <Text style={styles.hint}>
+                  <Text style={[styles.question, { color: theme.colors.text }]}>Set revenue goal</Text>
+                  <Text style={[styles.hint, { color: theme.colors.textSecondary }]}>
                     {suggestedGoal > 0
                       ? `Based on ${selected.size} item${selected.size === 1 ? '' : 's'} at about ${money(selectedValue)}. It updates as research lands.`
                       : 'The total you want Sprout to bring in.'}
                   </Text>
-                  <View style={styles.inputRow}>
-                    <Text style={styles.prefix}>$</Text>
+                  <View style={[styles.inputRow, { borderColor: theme.colors.border, backgroundColor: theme.colors.card }]}>
+                    <Text style={[styles.prefix, { color: theme.colors.textSecondary }]}>$</Text>
                     <TextInput
-                      style={styles.input}
+                      style={[styles.input, { color: theme.colors.text }]}
                       value={target}
                       onChangeText={t => { setGoalEdited(true); setTarget(t); }}
                       keyboardType="number-pad"
                       placeholder={suggestedGoal > 0 ? String(suggestedGoal) : '750'}
-                      placeholderTextColor="#9CA3AF"
+                      placeholderTextColor={theme.colors.textMuted}
                       autoFocus
                     />
                     {suggestedGoal > 0 && targetNum !== suggestedGoal ? (
@@ -533,7 +541,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                         onPress={() => { tap(); setGoalEdited(false); setTarget(String(suggestedGoal)); }}
                         style={styles.resetChip}
                       >
-                        <Text style={styles.resetChipText}>Use {money(suggestedGoal)}</Text>
+                        <Text style={[styles.resetChipText, dark && { color: theme.colors.primary }]}>Use {money(suggestedGoal)}</Text>
                       </TouchableOpacity>
                     ) : null}
                   </View>
@@ -542,20 +550,20 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
 
               {STEPS[step] === 'deadline' && (
                 <>
-                  <Text style={styles.question}>Sell everything by</Text>
-                  <Text style={styles.hint}>{formatSellByDate(deadline)}</Text>
+                  <Text style={[styles.question, { color: theme.colors.text }]}>Sell everything by</Text>
+                  <Text style={[styles.hint, { color: theme.colors.textSecondary }]}>{formatSellByDate(deadline)}</Text>
                   <View style={styles.durationPill}>
-                    <Icon name="calendar-clock" size={17} color="#5D7E16" />
-                    <Text style={styles.durationText}>{durationLabel}</Text>
+                    <Icon name="calendar-clock" size={17} color={dark ? theme.colors.primary : '#5D7E16'} />
+                    <Text style={[styles.durationText, dark && { color: theme.colors.primary }]}>{durationLabel}</Text>
                   </View>
-                  <ClearoutCalendar selectedDate={deadline} onSelect={setDeadline} minDate={today} />
+                  <ClearoutCalendar selectedDate={deadline} onSelect={setDeadline} minDate={today} dark={dark} />
                 </>
               )}
 
               {STEPS[step] === 'pricing' && (
                 <>
-                  <Text style={styles.question}>Choose launch prices</Text>
-                  <Text style={styles.hint}>
+                  <Text style={[styles.question, { color: theme.colors.text }]}>Choose launch prices</Text>
+                  <Text style={[styles.hint, { color: theme.colors.textSecondary }]}>
                     {pricingLoadingCount > 0
                       ? `${pricingReadyCount} of ${selectedRows.length} ready. Results appear as research finishes.`
                       : pricingReadyCount > 0
@@ -572,9 +580,9 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                       const choices = research.status === 'ready' ? pricingChoices(research.result) : [];
                       const chosenPrice = launchPrices[item.Id];
                       return (
-                        <View style={styles.pricingCard}>
+                        <View style={[styles.pricingCard, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
                           <View style={styles.pricingItemRow}>
-                            <View style={styles.pricingThumb}>
+                            <View style={[styles.pricingThumb, { backgroundColor: theme.chat.surfaceMuted }]}>
                               {item.PrimaryImageUrl ? (
                                 <Image source={{ uri: item.PrimaryImageUrl }} style={styles.pickThumbImg} resizeMode="cover" />
                               ) : (
@@ -582,32 +590,32 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                               )}
                             </View>
                             <View style={styles.pricingItemCopy}>
-                              <Text style={styles.pricingTitle} numberOfLines={1}>{item.Title || 'Untitled'}</Text>
-                              <Text style={styles.pricingCurrent}>Current {money(Number(item.Price || 0))}</Text>
+                              <Text style={[styles.pricingTitle, { color: theme.colors.text }]} numberOfLines={1}>{item.Title || 'Untitled'}</Text>
+                              <Text style={[styles.pricingCurrent, { color: theme.colors.textSecondary }]}>Current {money(Number(item.Price || 0))}</Text>
                             </View>
                           </View>
 
                           {research.status === 'loading' ? (
-                            <View style={styles.pricingState}>
+                            <View style={[styles.pricingState, { backgroundColor: theme.chat.surfaceMuted }]}>
                               <ActivityIndicator size="small" color={BRAND} />
-                              <Text style={styles.pricingStateText}>Finding comps</Text>
+                              <Text style={[styles.pricingStateText, { color: theme.colors.textSecondary }]}>Finding comps</Text>
                             </View>
                           ) : research.status === 'error' ? (
-                            <View style={styles.pricingState}>
-                              <Text style={styles.pricingStateText}>Research unavailable</Text>
+                            <View style={[styles.pricingState, { backgroundColor: theme.chat.surfaceMuted }]}>
+                              <Text style={[styles.pricingStateText, { color: theme.colors.textSecondary }]}>Research unavailable</Text>
                               <Pressable onPress={() => enqueuePricingResearch(item, true)} hitSlop={8}>
-                                <Text style={styles.retryText}>Retry</Text>
+                                <Text style={[styles.retryText, dark && { color: theme.colors.primary }]}>Retry</Text>
                               </Pressable>
                             </View>
                           ) : research.status === 'empty' ? (
-                            <View style={styles.pricingState}>
+                            <View style={[styles.pricingState, { backgroundColor: theme.chat.surfaceMuted }]}>
                               <Icon name="tag-search-outline" size={18} color="#A1A1AA" />
-                              <Text style={styles.pricingStateText}>No recent comps</Text>
+                              <Text style={[styles.pricingStateText, { color: theme.colors.textSecondary }]}>No recent comps</Text>
                             </View>
                           ) : (
                             <>
                               {typeof research.result.low === 'number' && typeof research.result.high === 'number' ? (
-                                <Text style={styles.marketRange}>
+                                <Text style={[styles.marketRange, { color: theme.colors.textSecondary }]}>
                                   Market {money(research.result.low)} to {money(research.result.high)}
                                 </Text>
                               ) : null}
@@ -617,14 +625,28 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                                   return (
                                     <Pressable
                                       key={choice.key}
-                                      style={[styles.priceChoice, active && styles.priceChoiceActive]}
+                                      style={[
+                                        styles.priceChoice,
+                                        { backgroundColor: theme.chat.surfaceMuted, borderColor: theme.colors.border },
+                                        active && styles.priceChoiceActive,
+                                      ]}
                                       onPress={() => {
                                         tap();
                                         setLaunchPrices(previous => ({ ...previous, [item.Id]: choice.price }));
                                       }}
                                     >
-                                      <Text style={[styles.priceChoiceLabel, active && styles.priceChoiceLabelActive]}>{choice.label}</Text>
-                                      <Text style={[styles.priceChoiceValue, active && styles.priceChoiceValueActive]}>{money(choice.price)}</Text>
+                                      <Text style={[
+                                        styles.priceChoiceLabel,
+                                        { color: theme.colors.textSecondary },
+                                        active && styles.priceChoiceLabelActive,
+                                        active && dark && { color: theme.colors.primary },
+                                      ]}>{choice.label}</Text>
+                                      <Text style={[
+                                        styles.priceChoiceValue,
+                                        { color: theme.colors.text },
+                                        active && styles.priceChoiceValueActive,
+                                        active && dark && { color: theme.colors.primary },
+                                      ]}>{money(choice.price)}</Text>
                                     </Pressable>
                                   );
                                 })}
@@ -647,9 +669,9 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
               activeOpacity={0.9}
             >
               {creating && isLast ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
+                <ActivityIndicator color={theme.colors.onPrimary} size="small" />
               ) : (
-                <Text style={styles.ctaText}>{isLast ? 'Start clearout' : 'Next'}</Text>
+                <Text style={[styles.ctaText, { color: theme.colors.onPrimary }]}>{isLast ? 'Start clearout' : 'Next'}</Text>
               )}
             </TouchableOpacity>
           </View>

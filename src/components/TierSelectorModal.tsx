@@ -75,6 +75,7 @@ const TIERS: Tier[] = [
 interface TierSelectorModalProps {
     visible: boolean;
     onClose: () => void;
+    onDismiss?: () => void;
     onSuccess?: () => void;
     usageInfo?: {
         usageCount: number;
@@ -101,6 +102,7 @@ const TABULAR_FEATURES = [
 const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     visible,
     onClose,
+    onDismiss,
     onSuccess,
     usageInfo,
     usagePercent,
@@ -116,6 +118,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     // dismissed; onDismiss is the deterministic signal (a fixed delay loses
     // under CPU load and the browser silently never appears).
     const handleModalDismiss = async () => {
+        onDismiss?.();
         const url = pendingCheckoutUrlRef.current;
         pendingCheckoutUrlRef.current = null;
         if (!url) return;

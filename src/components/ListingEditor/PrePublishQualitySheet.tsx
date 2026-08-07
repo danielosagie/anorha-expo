@@ -14,20 +14,12 @@ export interface PrePublishQualitySheetProps {
   onPublishAnyway: () => void;
 }
 
-/**
- * PrePublishQualitySheet — the calm "Before you publish" advisory gate.
- *
- * Shown only when the listing is weak. It's encouraging, not alarming: weak
- * signals float to the top with a soft amber hint, strong ones sit below with a
- * green check. "Publish anyway" always proceeds; "Improve these first" just
- * closes the sheet so the seller can fix things. Never a hard block.
- */
-export default function PrePublishQualitySheet({
-  visible,
-  rows,
-  onClose,
-  onPublishAnyway,
-}: PrePublishQualitySheetProps) {
+export interface PrePublishQualityBodyProps {
+  rows: QualityRow[];
+  lede?: string;
+}
+
+export function PrePublishQualityBody({ rows, lede }: PrePublishQualityBodyProps) {
   // Weak-first: !ok before ok, otherwise keep the source order.
   const sortedRows = useMemo(
     () => [...rows].sort((a, b) => Number(a.ok) - Number(b.ok)),
@@ -35,26 +27,9 @@ export default function PrePublishQualitySheet({
   );
 
   return (
-    <FieldSheet
-      visible={visible}
-      title="Before you publish"
-      onClose={onClose}
-      onSave={onPublishAnyway}
-      saveLabel="Publish anyway"
-      minHeightPct={52}
-      footerExtra={
-        <TouchableOpacity
-          onPress={onClose}
-          activeOpacity={0.85}
-          style={styles.improveBtn}
-        >
-          <Text style={styles.improveLabel}>Improve these first</Text>
-        </TouchableOpacity>
-      }
-    >
+    <>
       <Text style={styles.lede}>
-        You're set up well in most spots — a couple of quick wins could help it
-        sell faster.
+        {lede || "You're set up well in most spots. A couple of quick wins could help it sell faster."}
       </Text>
 
       <View style={styles.rows}>
@@ -78,6 +53,43 @@ export default function PrePublishQualitySheet({
           </View>
         ))}
       </View>
+    </>
+  );
+}
+
+/**
+ * PrePublishQualitySheet — the calm "Before you publish" advisory gate.
+ *
+ * Shown only when the listing is weak. It's encouraging, not alarming: weak
+ * signals float to the top with a soft amber hint, strong ones sit below with a
+ * green check. "Publish anyway" always proceeds; "Improve these first" just
+ * closes the sheet so the seller can fix things. Never a hard block.
+ */
+export default function PrePublishQualitySheet({
+  visible,
+  rows,
+  onClose,
+  onPublishAnyway,
+}: PrePublishQualitySheetProps) {
+  return (
+    <FieldSheet
+      visible={visible}
+      title="Before you publish"
+      onClose={onClose}
+      onSave={onPublishAnyway}
+      saveLabel="Publish anyway"
+      minHeightPct={52}
+      footerExtra={
+        <TouchableOpacity
+          onPress={onClose}
+          activeOpacity={0.85}
+          style={styles.improveBtn}
+        >
+          <Text style={styles.improveLabel}>Improve these first</Text>
+        </TouchableOpacity>
+      }
+    >
+      <PrePublishQualityBody rows={rows} />
     </FieldSheet>
   );
 }

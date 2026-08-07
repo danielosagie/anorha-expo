@@ -25,12 +25,14 @@ import {
   type FollowUpSuggestion,
 } from '../../../components/chat/FollowUpPrompts';
 import { MessageActions, type NarrationState } from './MessageActions';
+import { getSproutTheme } from '../../../design/sproutTheme';
 
 // A tappable cart card the agent drops in after turning photos into draft listings.
 // Tapping it opens the AddProduct cart hydrated from the quick-scan session.
-const ChatJobCard = ({ card, onOpen }: { card: ChatJobCardMeta; onOpen?: (sessionId: string) => void }) => (
-  <TouchableOpacity
-    style={styles.jobCard}
+const ChatJobCard = ({ card, onOpen, dark = false }: { card: ChatJobCardMeta; onOpen?: (sessionId: string) => void; dark?: boolean }) => {
+  const theme = getSproutTheme(dark);
+  return <TouchableOpacity
+    style={[styles.jobCard, dark && { backgroundColor: theme.chat.surfaceElevated, borderColor: theme.chat.border }]}
     activeOpacity={0.85}
     disabled={!onOpen}
     onPress={() => card.sessionId && onOpen?.(card.sessionId)}
@@ -39,20 +41,20 @@ const ChatJobCard = ({ card, onOpen }: { card: ChatJobCardMeta; onOpen?: (sessio
       <Image source={{ uri: card.coverImageUrl }} style={styles.jobCardImage} />
     ) : (
       <View style={[styles.jobCardImage, styles.jobCardImageFallback]}>
-        <Icon name="image-multiple-outline" size={20} color="#5D7E16" />
+        <Icon name="image-multiple-outline" size={20} color={dark ? theme.colors.primary : '#5D7E16'} />
       </View>
     )}
     <View style={styles.jobCardBody}>
-      <Text style={styles.jobCardTitle} numberOfLines={1}>
+      <Text style={[styles.jobCardTitle, dark && { color: theme.chat.text }]} numberOfLines={1}>
         {card.title || (card.itemCount === 1 ? 'New item' : `${card.itemCount} items`)}
       </Text>
-      <Text style={styles.jobCardSub} numberOfLines={1}>
+      <Text style={[styles.jobCardSub, { color: dark ? theme.colors.primary : '#5D7E16' }]} numberOfLines={1}>
         {card.itemCount} item{card.itemCount === 1 ? '' : 's'} · tap to review and publish
       </Text>
     </View>
-    <Icon name="chevron-right" size={22} color="#9CA3AF" />
+    <Icon name="chevron-right" size={22} color={theme.chat.textMuted} />
   </TouchableOpacity>
-);
+};
 
 // Photos the seller attached to a message (or the agent posted), shown as
 // thumbnails in the bubble so the chat history actually shows what was sent.
@@ -79,9 +81,9 @@ const AttachedImages = ({ urls }: { urls: string[] }) => {
 const TABLE_COLUMN_WIDTHS = [156, 90, 112, 220];
 const tableColumnWidth = (index?: number) => TABLE_COLUMN_WIDTHS[index ?? 0] ?? 148;
 
-const markdownRules = {
+const markdownRules = (fadeColor: string) => ({
   table: (node: any, children: React.ReactNode) => (
-    <HorizontalFadeScroll key={node.key} fadeColor="#FFFFFF" style={styles.mdTableScroll}>
+    <HorizontalFadeScroll key={node.key} fadeColor={fadeColor} style={styles.mdTableScroll}>
       <View style={styles.mdTable}>{children}</View>
     </HorizontalFadeScroll>
   ),
@@ -105,7 +107,7 @@ const markdownRules = {
       {children}
     </Text>
   ),
-};
+});
 
 // Rendering partial markdown on every stream delta is normally safe, but a
 // half-written table/fence can occasionally throw inside the markdown renderer.
@@ -113,7 +115,7 @@ const markdownRules = {
 // the chat "crashing"). Catch it, fall back to plain text, and retry once more
 // tokens arrive.
 class MarkdownBoundary extends React.Component<
-  { content: string; children: React.ReactNode },
+  { content: string; children: React.ReactNode; textStyle?: any },
   { hasError: boolean }
 > {
   state = { hasError: false };
@@ -127,7 +129,7 @@ class MarkdownBoundary extends React.Component<
   }
   render() {
     if (this.state.hasError) {
-      return <Text style={styles.messageText}>{this.props.content}</Text>;
+      return <Text style={[styles.messageText, this.props.textStyle]}>{this.props.content}</Text>;
     }
     return this.props.children as React.ReactElement;
   }
@@ -170,16 +172,17 @@ const buildBlocks = (raw: string, activities: ActivityPayload[]): AssistantBlock
 };
 
 // One markdown text segment of an assistant reply (em-dashes stripped at render).
-const TextBlock = ({ text, streaming, animationKey }: { text: string; streaming: boolean; animationKey: string }) => {
+const TextBlock = ({ text, streaming, animationKey, dark = false }: { text: string; streaming: boolean; animationKey: string; dark?: boolean }) => {
+  const theme = getSproutTheme(dark);
   const md = sanitizeDisplayText(text);
   if (!md.trim()) return null;
   if (streaming) {
     return (
       <DiaTextReveal
         text={md}
-        style={styles.messageText}
-        revealFrom="#FFFFFF"
-        revealTo="#111827"
+        style={[styles.messageText, dark && { color: theme.chat.text }]}
+        revealFrom={dark ? theme.chat.surface : '#FFFFFF'}
+        revealTo={dark ? theme.chat.text : '#111827'}
         duration={900}
         delay={0}
         animationKey={animationKey}
@@ -187,8 +190,21 @@ const TextBlock = ({ text, streaming, animationKey }: { text: string; streaming:
     );
   }
   return (
-    <MarkdownBoundary content={md}>
-      <Markdown style={styles.markdown} rules={markdownRules}>{md}</Markdown>
+    <MarkdownBoundary content={md} textStyle={dark ? { color: theme.chat.text } : undefined}>
+      <Markdown
+        style={dark ? {
+          ...styles.markdown,
+          body: { ...styles.markdown.body, color: theme.chat.text },
+          code_inline: { ...styles.markdown.code_inline, backgroundColor: theme.chat.surfaceMuted, color: theme.chat.text },
+          blockquote: { ...styles.markdown.blockquote, borderLeftColor: theme.chat.border, color: theme.chat.textSecondary },
+          thead: { ...styles.markdown.thead, backgroundColor: theme.chat.surfaceMuted },
+          th: { ...styles.markdown.th, borderRightColor: theme.chat.border, borderBottomColor: theme.chat.border },
+          td: { ...styles.markdown.td, borderRightColor: theme.chat.border, borderBottomColor: theme.chat.border },
+          th_text: { ...styles.markdown.th_text, color: theme.chat.text },
+          td_text: { ...styles.markdown.td_text, color: theme.chat.text },
+        } : styles.markdown}
+        rules={markdownRules(theme.chat.background)}
+      >{md}</Markdown>
     </MarkdownBoundary>
   );
 };
@@ -203,6 +219,7 @@ const AssistantBody = ({
   planItems,
   onResolveSelection,
   onApplySelection,
+  dark = false,
 }: {
   raw: string;
   activities: ActivityPayload[];
@@ -212,6 +229,7 @@ const AssistantBody = ({
   planItems?: CampaignItem[];
   onResolveSelection?: (proposal: InventorySelectionProposal) => string[];
   onApplySelection?: (proposal: InventorySelectionProposal) => void;
+  dark?: boolean;
 }) => {
   const blocks = useMemo(() => buildBlocks(raw, activities), [raw, activities]);
   return (
@@ -229,7 +247,7 @@ const AssistantBody = ({
             onApplySelection={onApplySelection}
           />
         ) : (
-          <TextBlock key={b.key} text={b.text} streaming={isStreaming} animationKey={b.key} />
+          <TextBlock key={b.key} text={b.text} streaming={isStreaming} animationKey={b.key} dark={dark} />
         ),
       )}
     </>
@@ -258,6 +276,7 @@ type Props = {
   onFollowUp?: (prompt: string) => void;
   narrationState?: NarrationState;
   onToggleNarration?: (messageId: string, text: string, title?: string) => void;
+  dark?: boolean;
 };
 
 const normalizeFollowUps = (message: ConversationMessage, activities: ActivityPayload[]): FollowUpSuggestion[] => {
@@ -335,7 +354,9 @@ const StreamingMessageBubbleBase = ({
   onFollowUp,
   narrationState = 'idle',
   onToggleNarration,
+  dark = false,
 }: Props) => {
+  const theme = getSproutTheme(dark);
   const isUser = message.role === 'user';
   const isStreaming = message.deliveryState === 'streaming';
   const isFailed = message.deliveryState === 'failed';
@@ -384,19 +405,23 @@ const StreamingMessageBubbleBase = ({
   if (isDigest) {
     return (
       <Animated.View style={[styles.row, styles.rowLeft, revealRowStyle]}>
-        <View style={[styles.card, styles.assistantCard, { backgroundColor: '#F4F9E8', borderColor: '#E4EFC9', borderWidth: 0.5 }]}>
+        <View style={[
+          styles.card,
+          styles.assistantCard,
+          { backgroundColor: dark ? theme.chat.surfaceElevated : '#F4F9E8', borderColor: dark ? theme.chat.border : '#E4EFC9', borderWidth: 0.5 },
+        ]}>
           <TouchableOpacity
             style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
             activeOpacity={0.7}
             onPress={() => setDigestOpen(o => !o)}
           >
             <AnorhaFace size={15} />
-            <Text style={{ flex: 1, fontSize: 13, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' }}>Sprout check-in</Text>
-            <Icon name={digestOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#7A9B3C" />
+            <Text style={{ flex: 1, fontSize: 13, color: dark ? theme.colors.primary : '#3B6D11', fontFamily: 'Inter_600SemiBold' }}>Sprout check-in</Text>
+            <Icon name={digestOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark ? theme.colors.primary : '#7A9B3C'} />
           </TouchableOpacity>
           <Text
             numberOfLines={digestOpen ? undefined : 1}
-            style={{ marginTop: digestOpen ? 8 : 4, fontSize: digestOpen ? 14 : 13, color: digestOpen ? '#3B5314' : '#5F7A2E', fontFamily: 'Inter_400Regular', lineHeight: 20 }}
+            style={{ marginTop: digestOpen ? 8 : 4, fontSize: digestOpen ? 14 : 13, color: dark ? theme.chat.text : digestOpen ? '#3B5314' : '#5F7A2E', fontFamily: 'Inter_400Regular', lineHeight: 20 }}
           >
             {content}
           </Text>
@@ -407,12 +432,17 @@ const StreamingMessageBubbleBase = ({
 
   return (
     <Animated.View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft, revealRowStyle]}>
-      <Animated.Text style={[styles.revealTime, revealTimeStyle]} numberOfLines={1}>{message.time}</Animated.Text>
-      <View style={[styles.card, message.kind === 'action' ? styles.actionCard : isUser ? styles.userCard : styles.assistantCard]}>
+      <Animated.Text style={[styles.revealTime, { color: theme.chat.textMuted }, revealTimeStyle]} numberOfLines={1}>{message.time}</Animated.Text>
+      <View style={[
+        styles.card,
+        message.kind === 'action' ? styles.actionCard : isUser ? styles.userCard : styles.assistantCard,
+        dark && message.kind === 'action' && { backgroundColor: theme.chat.surfaceElevated, borderColor: theme.chat.border },
+        dark && isUser && { backgroundColor: theme.chat.surfaceMuted },
+      ]}>
         {message.kind === 'action' ? (
           <View style={styles.actionMetaRow}>
-            <Icon name="flash-outline" size={13} color="#5D7E16" />
-            <Text style={styles.actionMetaText}>
+            <Icon name="flash-outline" size={13} color={dark ? theme.colors.primary : '#5D7E16'} />
+            <Text style={[styles.actionMetaText, dark && { color: theme.colors.primary }]}>
               {message.actionMeta?.actionType?.replace(/_/g, ' ') || 'Action'}
             </Text>
           </View>
@@ -423,7 +453,7 @@ const StreamingMessageBubbleBase = ({
         {imageUrls.length ? <AttachedImages urls={imageUrls} /> : null}
 
         {isUser ? (
-          content ? <Text selectable style={[styles.messageText, styles.userMessageText]}>{content}</Text> : null
+          content ? <Text selectable style={[styles.messageText, styles.userMessageText, { color: theme.chat.text }]}>{content}</Text> : null
         ) : (
           // The reply body: text and its activity cards (live pill, tool receipt,
           // price/status diffs, and the report card) INTERLEAVED in reply order —
@@ -439,6 +469,7 @@ const StreamingMessageBubbleBase = ({
             planItems={planItems}
             onResolveSelection={onResolveSelection}
             onApplySelection={onApplySelection}
+            dark={dark}
           />
         )}
 
@@ -446,7 +477,7 @@ const StreamingMessageBubbleBase = ({
             reads the value check first, then taps to review the draft listing). */}
         {jobCard?.sessionId ? (
           <View style={styles.jobCardWrap}>
-            <ChatJobCard card={jobCard} onOpen={onOpenCart} />
+            <ChatJobCard card={jobCard} onOpen={onOpenCart} dark={dark} />
           </View>
         ) : null}
 
@@ -469,39 +500,39 @@ const StreamingMessageBubbleBase = ({
         ) : null}
 
         {message.actionMeta?.summary ? (
-          <Text style={styles.summaryText}>{message.actionMeta.summary}</Text>
+          <Text style={[styles.summaryText, dark && { color: theme.chat.textSecondary }]}>{message.actionMeta.summary}</Text>
         ) : null}
 
         {/* Only surface status on actions or failures. The old code printed
             "Streaming"/"Sending" under every bubble, which read as noise. */}
         {statusLabel && (message.kind === 'action' || isFailed) ? (
-          <Text style={styles.statusText}>{statusLabel}</Text>
+          <Text style={[styles.statusText, dark && { color: theme.chat.textMuted }]}>{statusLabel}</Text>
         ) : null}
 
         {!isUser && message.decisionPrompt ? (
-          <View style={styles.decisionCard}>
-            <Text style={styles.decisionTitle}>{message.decisionPrompt.title}</Text>
+          <View style={[styles.decisionCard, { borderTopColor: theme.chat.border }]}>
+            <Text style={[styles.decisionTitle, dark && { color: theme.chat.text }]}>{message.decisionPrompt.title}</Text>
             {message.decisionPrompt.description ? (
-              <Text style={styles.decisionBody}>{message.decisionPrompt.description}</Text>
+              <Text style={[styles.decisionBody, dark && { color: theme.chat.textSecondary }]}>{message.decisionPrompt.description}</Text>
             ) : null}
             <View style={styles.decisionActions}>
               <TouchableOpacity
                 style={[styles.decisionButton, styles.decisionPrimary]}
                 onPress={() => onDecision(message.decisionPrompt!, 'approve')}
               >
-                <Text style={styles.decisionPrimaryText}>{message.decisionPrompt.approveLabel || 'Approve'}</Text>
+                <Text style={[styles.decisionPrimaryText, dark && { color: theme.colors.primary }]}>{message.decisionPrompt.approveLabel || 'Approve'}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.decisionButton}
+                style={[styles.decisionButton, dark && { backgroundColor: theme.chat.surfaceMuted, borderColor: theme.chat.border }]}
                 onPress={() => onDecision(message.decisionPrompt!, 'revise')}
               >
-                <Text style={styles.decisionSecondaryText}>{message.decisionPrompt.reviseLabel || 'Revise'}</Text>
+                <Text style={[styles.decisionSecondaryText, dark && { color: theme.chat.text }]}>{message.decisionPrompt.reviseLabel || 'Revise'}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.decisionButton}
+                style={[styles.decisionButton, dark && { backgroundColor: theme.chat.surfaceMuted, borderColor: theme.chat.border }]}
                 onPress={() => onDecision(message.decisionPrompt!, 'follow_up')}
               >
-                <Text style={styles.decisionSecondaryText}>{message.decisionPrompt.followUpLabel || 'Follow-up'}</Text>
+                <Text style={[styles.decisionSecondaryText, dark && { color: theme.chat.text }]}>{message.decisionPrompt.followUpLabel || 'Follow-up'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -522,12 +553,22 @@ const StreamingMessageBubbleBase = ({
             onFeedback={onFeedback}
             narrationState={narrationState}
             onToggleNarration={onToggleNarration}
+            tintColor={dark ? theme.chat.textMuted : undefined}
+            upActiveColor={dark ? theme.colors.primary : undefined}
+            downActiveColor={dark ? theme.colors.primary : undefined}
+            narrationActiveColor={dark ? theme.colors.primary : undefined}
           />
         ) : null}
         {!isUser && !isClientAuthored && !isStreaming && !isFailed && renderMarkdown && showFollowUps && onFollowUp ? (
-          <FollowUpPrompts suggestions={followUps} onPress={onFollowUp} />
+          <FollowUpPrompts
+            suggestions={followUps}
+            onPress={onFollowUp}
+            textColor={dark ? theme.chat.text : undefined}
+            borderColor={dark ? theme.chat.border : undefined}
+            iconColor={dark ? theme.chat.textMuted : undefined}
+          />
         ) : null}
-        {!isUser && !isClientAuthored && !isStreaming && !isFailed && renderMarkdown && showDisclaimer ? <SproutDisclaimer /> : null}
+        {!isUser && !isClientAuthored && !isStreaming && !isFailed && renderMarkdown && showDisclaimer ? <SproutDisclaimer dark={dark} /> : null}
       </View>
     </Animated.View>
   );
@@ -566,6 +607,7 @@ export const StreamingMessageBubble = React.memo(StreamingMessageBubbleBase, (pr
     && prev.showFollowUps === next.showFollowUps
     && prev.onFollowUp === next.onFollowUp
     && prev.narrationState === next.narrationState
+    && prev.dark === next.dark
   );
 });
 

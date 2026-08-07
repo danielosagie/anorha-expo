@@ -45,8 +45,7 @@ import PoolDetailScreen from '../screens/PoolDetailScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import AccountSyncIssueScreen from '../screens/AccountSyncIssueScreen';
 // NOTE: PhoneAuthScreen was removed — phone verification now goes through VerifyCodeScreen.
-import SyncInboxScreen from '../screens/SyncInboxScreen';
-import ImportHubScreen from '../screens/ImportHubScreen';
+import ImportQuestionQueueScreen from '../screens/ImportQuestionQueueScreen';
 import SyncRulesScreen from '../screens/SyncRulesScreen';
 // LoadingScreen + MatchSelectionScreen were deprecated and deleted. The LoadingScreen
 // param SHAPE is retained in AppStackParamList below because it's the canonical
@@ -148,8 +147,12 @@ export type AppStackParamList = {
   };
   ProductDetail: { productId: string; initialMode?: 'overview' | 'edit' };
   PastScans: undefined;
-  SyncInbox: { connectionId: string; platformName: string };
-  ImportHub: { completedLane?: 'matches' | 'required' | 'polish'; connectionId?: string } | undefined;
+  ImportQuestionQueue: {
+    connectionId: string;
+    platformName: string;
+    importId?: string;
+    startAt?: 'front' | 'list';
+  };
   SyncRules: { connectionId: string; platformName?: string };
   Profile: { refresh?: number };
   Connections: undefined;
@@ -429,7 +432,7 @@ const AuthStack = ({ showOnboarding }: { showOnboarding: boolean }) => (
 // Apply the left-swipe-back ring to every app-stack screen by default. Cache by component
 // so each screen wraps exactly once (stable identity → no remount on AppStack re-render).
 const sbCache = new Map<React.ComponentType<any>, React.ComponentType<any>>();
-const sb = (C: React.ComponentType<any>, opts?: { surface?: string; mode?: 'slide' | 'pin'; size?: number; pinTop?: number; pinLeft?: number; accent?: string; armed?: string; onBack?: (navigation: any) => void }) => {
+const sb = (C: React.ComponentType<any>, opts?: { surface?: string; mode?: 'slide' | 'pin'; size?: number; pinTop?: number; pinLeft?: number; accent?: string; armed?: string; edgeTop?: number; onBack?: (navigation: any) => void }) => {
   let w = sbCache.get(C);
   if (!w) { w = withSwipeBack(C, opts); sbCache.set(C, w); }
   return w;
@@ -465,8 +468,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
     <AppStackNav.Screen name="TabNavigator" component={TabNavigator} />
     <AppStackNav.Screen name="ProductDetail" getComponent={() => sb(require('../screens/ProductDetail').default)} />
     <AppStackNav.Screen name="PastScans" getComponent={() => sb(require('../screens/PastScansScreen').default)} />
-    <AppStackNav.Screen name="SyncInbox" component={sb(SyncInboxScreen)} options={{ headerShown: false }} />
-    <AppStackNav.Screen name="ImportHub" component={sb(ImportHubScreen)} options={{ headerShown: false }} />
+    <AppStackNav.Screen name="ImportQuestionQueue" component={ImportQuestionQueueScreen} options={{ headerShown: false }} />
     <AppStackNav.Screen name="SyncRules" component={sb(SyncRulesScreen)} />
     <AppStackNav.Screen name="Connections" getComponent={() => sb(require('../screens/ConnectionsScreen').default)} options={{ headerShown: false }} />
     <AppStackNav.Screen name="ConnectPlatforms" getComponent={() => sb(require('../screens/ConnectPlatformsScreen').default)} options={{ headerShown: false }} />
@@ -501,7 +503,7 @@ const AppStack = ({ initialScreenName }: { initialScreenName: 'CreateAccountScre
         cardStyleInterpolator: CardStyleInterpolators.forFadeFromBottomAndroid,
       }}
     />
-    <AppStackNav.Screen name="PublishConfirmation" component={sb(PublishConfirmationScreen)} />
+    <AppStackNav.Screen name="PublishConfirmation" component={sb(PublishConfirmationScreen, { edgeTop: 120 })} />
     <AppStackNav.Screen name="PartnerAccept" component={sb(PartnerAcceptScreen)} />
     <AppStackNav.Screen name="PartnershipDetail" component={sb(PartnershipDetailScreen)} />
     <AppStackNav.Screen name="BackfillOptimizer" getComponent={() => sb(require('../screens/BackfillOptimizerScreen').BackfillOptimizerScreen)} />

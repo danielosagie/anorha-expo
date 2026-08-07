@@ -1,5 +1,5 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { NavigationContainer, NavigationContainerRef, CommonActions } from '@react-navigation/native';
+import { NavigationContainer, NavigationContainerRef, CommonActions, DefaultTheme } from '@react-navigation/native';
 import { AppState, AppStateStatus, StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ThemeProvider } from './src/context/ThemeContext';
@@ -48,17 +48,16 @@ import {
 // Crash visibility. Empty/missing DSN no-ops cleanly so dev builds are
 // unaffected. Must run at module load, before the app renders.
 const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
-if (SENTRY_DSN) {
-  try {
-    Sentry.init({
-      dsn: SENTRY_DSN,
-      enableNative: true,
-      environment: process.env.EXPO_PUBLIC_ENV || 'development',
-      tracesSampleRate: 0.1,
-    });
-  } catch (e) {
-    console.warn('[Sentry] init failed:', e);
-  }
+try {
+  Sentry.init({
+    dsn: SENTRY_DSN,
+    enabled: Boolean(SENTRY_DSN),
+    enableNative: true,
+    environment: process.env.EXPO_PUBLIC_ENV || 'development',
+    tracesSampleRate: 0.1,
+  });
+} catch (e) {
+  console.warn('[Sentry] init failed:', e);
 }
 
 // Complete any in-app browser auth session (e.g. OAuth redirect from Google Sign-In)
@@ -68,6 +67,16 @@ WebBrowser.maybeCompleteAuthSession();
 initFlowLogger().catch(() => { });
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const APP_LIGHT_BACKGROUND = '#FFFFFF';
+const APP_NAVIGATION_THEME = {
+  ...DefaultTheme,
+  dark: false,
+  colors: {
+    ...DefaultTheme.colors,
+    background: APP_LIGHT_BACKGROUND,
+    card: APP_LIGHT_BACKGROUND,
+  },
+};
 
 const App: React.FC = () => {
   // One-time cleanup of any existing cache conflicts
@@ -684,7 +693,7 @@ const App: React.FC = () => {
 
     if (!isLoaded) {
       return (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: APP_LIGHT_BACKGROUND }}>
           <ActivityIndicator />
         </View>
       );
@@ -694,6 +703,7 @@ const App: React.FC = () => {
       <PlatformConnectionsProvider>
         <PlatformPickerOverlayProvider>
           <NavigationContainer
+            theme={APP_NAVIGATION_THEME}
             // NOTE: intentionally NOT keyed on isSignedIn. Keying here remounted the entire
             // container on every auth toggle, destroying nav state and dropping in-flight deep
             // links. The signed-in/out trees below swap on their own; the container persists.
@@ -736,13 +746,13 @@ const App: React.FC = () => {
   };
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: APP_LIGHT_BACKGROUND }}>
         <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
           {/* Convex (Clerk-authed) wraps the app so the chat can subscribe to live
               messages via useQuery. Inside ClerkProvider so it can read the session. */}
           <ConvexProvider>
             <PostHogProvider>
-              <SafeAreaProvider>
+              <SafeAreaProvider style={{ flex: 1, backgroundColor: APP_LIGHT_BACKGROUND }}>
                 <SystemNotificationProvider>
                   <NarrationProvider>
                     {/* Backstop boundary around the WHOLE provider stack (PlatformConnections,

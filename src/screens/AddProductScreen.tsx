@@ -277,15 +277,65 @@ import { MaterialIcons } from '@expo/vector-icons';
 
 const MAX_DOCUMENT_PHOTOS = 12;
 const DOCUMENT_IMAGE_MAX_DIMENSION = 1600;
+const MAX_PHOTOS_PER_ITEM = 12;
+const MAX_RETAINED_SESSION_PHOTOS = 24;
+const MAX_DOCUMENT_BASE64_CHARACTERS_PER_IMAGE = 5_000_000;
+const MAX_DOCUMENT_BASE64_CHARACTERS_TOTAL = 36_000_000;
+const IMAGE_TRANSFORM_CONCURRENCY = 2;
+
+const imageTransformQueue: Array<() => Promise<void>> = [];
+let activeImageTransforms = 0;
+
+function pumpImageTransformQueue(): void {
+  while (activeImageTransforms < IMAGE_TRANSFORM_CONCURRENCY && imageTransformQueue.length > 0) {
+    const job = imageTransformQueue.shift();
+    if (!job) return;
+    activeImageTransforms += 1;
+    void job().finally(() => {
+      activeImageTransforms -= 1;
+      pumpImageTransformQueue();
+    });
+  }
+}
+
+function runImageTransform<T>(operation: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    imageTransformQueue.push(async () => {
+      try {
+        resolve(await operation());
+      } catch (error) {
+        reject(error);
+      }
+    });
+    pumpImageTransformQueue();
+  });
+}
+
+class DocumentPhotoMemoryError extends Error {}
+
+const mergeRetainedPhotos = (
+  current: CapturedPhoto[],
+  incoming: CapturedPhoto[],
+): CapturedPhoto[] => {
+  const byUri = new Map<string, CapturedPhoto>();
+  [...current, ...incoming].forEach((photo) => {
+    if (photo?.uri) byUri.set(photo.uri, photo);
+  });
+  return Array.from(byUri.values()).slice(-MAX_RETAINED_SESSION_PHOTOS);
+};
 
 const encodeDocumentPhotosSequentially = async (
   photos: CapturedPhoto[],
   filenamePrefix: 'page' | 'receipt',
 ): Promise<Array<{ base64: string; filename: string }>> => {
   const images: Array<{ base64: string; filename: string }> = [];
+  const uniquePhotos = Array.from(new Map(
+    photos.map((photo) => [photo.uri, photo]),
+  ).values()).slice(0, MAX_DOCUMENT_PHOTOS);
+  let retainedCharacters = 0;
 
-  for (let index = 0; index < photos.length; index += 1) {
-    const photo = photos[index];
+  for (let index = 0; index < uniquePhotos.length; index += 1) {
+    const photo = uniquePhotos[index];
     try {
       const width = photo.width || 0;
       const height = photo.height || 0;
@@ -294,16 +344,24 @@ const encodeDocumentPhotosSequentially = async (
           ? { width: DOCUMENT_IMAGE_MAX_DIMENSION }
           : { height: DOCUMENT_IMAGE_MAX_DIMENSION } }]
         : [];
-      const resized = await ImageManipulator.manipulateAsync(
+      const resized = await runImageTransform(() => ImageManipulator.manipulateAsync(
         photo.uri,
         resizeAction,
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
-      );
+      ));
       const base64 = await FileSystem.readAsStringAsync(resized.uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
+      if (base64.length > MAX_DOCUMENT_BASE64_CHARACTERS_PER_IMAGE) {
+        throw new DocumentPhotoMemoryError(`Document page ${index + 1} is too large after compression.`);
+      }
+      retainedCharacters += base64.length;
+      if (retainedCharacters > MAX_DOCUMENT_BASE64_CHARACTERS_TOTAL) {
+        throw new DocumentPhotoMemoryError('The selected document pages use too much memory. Choose fewer pages.');
+      }
       images.push({ base64, filename: `${filenamePrefix}_${index + 1}.jpg` });
     } catch (error) {
+      if (error instanceof DocumentPhotoMemoryError) throw error;
       log.error(`[${filenamePrefix.toUpperCase()}] Failed to encode photo:`, error);
     }
   }
@@ -358,12 +416,47 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('AddProductScreen');
 
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const windowDimensions = Dimensions.get('window');
+const screenDimensions = Dimensions.get('screen');
+const SCREEN_WIDTH = Number.isFinite(windowDimensions.width) && windowDimensions.width > 0
+  ? windowDimensions.width
+  : Number.isFinite(screenDimensions.width) && screenDimensions.width > 0
+    ? screenDimensions.width
+    : 390;
+const SCREEN_HEIGHT = Number.isFinite(windowDimensions.height) && windowDimensions.height > 0
+  ? windowDimensions.height
+  : Number.isFinite(screenDimensions.height) && screenDimensions.height > 0
+    ? screenDimensions.height
+    : 800;
 const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
 const MAX_BATCH_ITEMS = 100;
 const QUICK_SCAN_QUEUE_LIMIT = 100;
 const SCAN_POOL_LIMIT = 8;
+// Absolute ceiling for one scan run: preflight + upload + stream. Receipt: a healthy
+// scan completes in ~9s backend-side; the SSE client's own ceiling is 180s. Sized past
+// both so only a genuinely wedged run (hung pre-stream await, lost terminal event)
+// ever touches it — good scans never feel it exists.
+const QUICK_SCAN_RUN_DEADLINE_MS = 90_000;
+const SHELF_SCAN_STREAM_TIMEOUT_MS = 120_000;
+// A billing-gated scan is resumable for this long. The legit flow (gate → add credits →
+// come back) is minutes; anything older is a stale token whose silent replay re-spends
+// credits and drops a settled item back into "Searching…".
+const PENDING_QUICK_SCAN_MAX_AGE_MS = 15 * 60_000;
 const QUICK_MATCH_AUTO_SELECT_CONFIDENCE = 0.72;
+
+type AddProductNativeModalKey =
+  | 'designPreview'
+  | 'cart'
+  | 'photos'
+  | 'barcodeEntry'
+  | 'barcodeResult'
+  | 'manifest'
+  | 'receipt'
+  | 'tierSelector'
+  | 'billingGate'
+  | 'photoCapture'
+  | 'inventoryDedup'
+  | 'listingStatus';
 
 // Shop-style capture chrome: the photo strip rides the top black bar and the camera
 // is a cropped, rounded viewfinder between it and the bottom controls.
@@ -529,7 +622,7 @@ const DS_MATCH: MatchResponse = {
   confidence: 'high',
   totalMatches: 3,
   rankedCandidates: [
-    { id: 'm1', title: 'Organic Coconut Oil — 32oz', description: 'Cold-pressed, unrefined', price: 24.99, imageUrl: 'https://picsum.photos/seed/m1/240', productUrl: '', sourceUrl: 'https://amazon.com', isLocalMatch: false } as any,
+    { id: 'm1', title: 'Organic Coconut Oil, 32oz', description: 'Cold-pressed, unrefined', price: 24.99, imageUrl: 'https://picsum.photos/seed/m1/240', productUrl: '', sourceUrl: 'https://amazon.com', isLocalMatch: false } as any,
     { id: 'm2', title: 'Virgin Coconut Oil Jar', description: 'Organic, 32oz', price: 21.5, imageUrl: 'https://picsum.photos/seed/m2/240', productUrl: '', sourceUrl: 'https://walmart.com', isLocalMatch: false } as any,
     { id: 'm3', title: 'Cold Pressed Coconut Oil', description: 'Fair trade', price: 27.0, imageUrl: 'https://picsum.photos/seed/m3/240', productUrl: '', sourceUrl: 'https://ebay.com', isLocalMatch: true } as any,
   ],
@@ -812,6 +905,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // attaches it (re-running the full match), then returns to wherever the user was. Its own
   // CameraView so it never fights the paused persistent camera / Fabric unmount asserts.
   const [photoCaptureTargetId, setPhotoCaptureTargetId] = useState<string | null>(null);
+  const photoCaptureDismissActionRef = useRef<(() => void) | null>(null);
+  const photosDismissActionRef = useRef<(() => void) | null>(null);
   const captureOverlayRef = useRef<CameraView>(null);
   const [overlayFacing, setOverlayFacing] = useState<CameraType>('back');
   const [overlayFlash, setOverlayFlash] = useState<FlashMode>('off');
@@ -864,6 +959,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         : initialShelfProgressState()
   );
   const shelfScanStreamRef = useRef<ReturnType<typeof openQuickScanStream> | null>(null);
+  const shelfPreStreamGenerationRef = useRef(0);
   const lastShelfScanPhotoRef = useRef<CapturedPhoto | null>(null);
   const shelfScanSourceSizeRef = useRef<ShelfSourceSize | null>(null);
 
@@ -918,8 +1014,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
         const session = await res.json();
         const rawItems = session.ScannedItems ?? session.scannedItems ?? [];
-        const persistedPending = pendingBillingActionRef.current || await loadPendingBillingAction();
-        if (persistedPending) pendingBillingActionRef.current = persistedPending;
+        const persistedPending = pendingBillingConsumedRef.current
+          ? pendingBillingActionRef.current
+          : (pendingBillingActionRef.current || await loadPendingBillingAction());
+        // Never resurrect an action already consumed this session (the hydrate races
+        // the resume; whoever loses must not write the stale copy back).
+        if (persistedPending && !pendingBillingConsumedRef.current) pendingBillingActionRef.current = persistedPending;
         // A gate-stopped scan can predate the image upload, so the backend draft
         // correctly omits its device-local URI. Reattach the locally persisted
         // pending photo when its globally unique item id belongs to this cart.
@@ -1146,6 +1246,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     processedItemIds: params?.processedItemIds || [],
   }));
 
+  // Keep the legacy session mirror small and consistent with the cart. This mirror is
+  // still used by a few migration paths, but it must not retain deleted or duplicate photos.
+  useEffect(() => {
+    const cartPhotos = bulkItems.flatMap((item) => item.photos);
+    setCapturedPhotos((previous) => {
+      const activeShelfPhoto = shelfPhotoUri
+        ? previous.find((photo) => photo.uri === shelfPhotoUri)
+        : undefined;
+      return mergeRetainedPhotos([], activeShelfPhoto ? [...cartPhotos, activeShelfPhoto] : cartPhotos);
+    });
+  }, [bulkItems, shelfPhotoUri]);
+
   // cart$ updates synchronously, while the hook snapshot reaches callback closures on the
   // next render. Mirror every local active-item write immediately so a New → Upload/Capture
   // sequence cannot resolve its target from the previous render's active id.
@@ -1302,13 +1414,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // complete while the app was suspended; a terminal status always wins.
         const expired = !!job.startedAt && Date.now() - job.startedAt > GEN_GIVE_UP_MS;
         const giveUp = () => {
-          const msg = 'Generation is taking too long — retry';
+          const msg = 'Generation is taking too long. Retry.';
           const readyIds = job.itemIds.filter((id) => selectItem(id)?.generateResult?.draftReady);
           const failedIds = job.itemIds.filter((id) => !readyIds.includes(id));
           failedIds.forEach((id) => transitionItem(id, 'error', { error: msg }));
           setItemLoadingStates((prev) => {
             const n = { ...prev };
-            readyIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Draft ready · Some defaults unavailable' }; });
+            readyIds.forEach((id) => { delete n[id]; });
             failedIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Timed out', error: msg }; });
             return n;
           });
@@ -1388,7 +1500,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             const failedIds = job.itemIds.filter((id) => !readyIds.includes(id));
             setItemLoadingStates((prev) => {
               const n = { ...prev };
-              readyIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Draft ready · Some defaults unavailable' }; });
+              readyIds.forEach((id) => { delete n[id]; });
               failedIds.forEach((id) => { n[id] = { isLoading: false, stage: 'Failed', error: snap?.error || 'Generation failed' }; });
               return n;
             });
@@ -1421,13 +1533,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               giveUp();
             } else {
               const draftIds = new Set(draftPairs.map(({ itemId }) => itemId));
+              const draftResultById = new Map(draftPairs.map(({ itemId, result }) => [itemId, result]));
               const stage = snap?.currentStage || 'Generating…';
               setItemLoadingStates((prev) => {
                 const n = { ...prev };
                 job.itemIds.forEach((id) => {
-                  n[id] = draftIds.has(id)
-                    ? { isLoading: false, stage: enrichmentLabel(selectItem(id)?.generateResult?.enrichment?.status) || 'Draft ready · Finishing category & shipping…' }
-                    : { isLoading: true, stage };
+                  if (!draftIds.has(id)) {
+                    n[id] = { isLoading: true, stage };
+                    return;
+                  }
+                  const enrichmentStatus = draftResultById.get(id)?.enrichment?.status
+                    ?? selectItem(id)?.generateResult?.enrichment?.status
+                    ?? 'pending';
+                  const enrichmentStage = enrichmentLabel(enrichmentStatus);
+                  if (enrichmentStage) n[id] = { isLoading: false, stage: enrichmentStage };
+                  else delete n[id];
                 });
                 return n;
               });
@@ -1474,6 +1594,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (!launch) return;
     (navigation as any).navigate('GenerateDetailsScreen', launch);
   }, [navigation]);
+
+  const reviewGeneratedItem = useCallback((itemId: string) => {
+    runAfterCartDismissalRef.current(() => openItemDetails(itemId));
+  }, [openItemDetails]);
 
   // Route an item tap: ALWAYS the item overview/pricing page first. Generated items
   // continue to the listing editor from the preview's CTA — a card tap must never
@@ -1702,11 +1826,41 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Same late-binding pattern for OPENING: handleCapture (declared earlier) opens
   // the cart when the free tier is exhausted — the cart is the upgrade surface.
   const openBulkItemsSheetRef = useRef<() => void>(() => {});
+  const runAfterCartDismissalRef = useRef<(action: () => void) => void>((action) => action());
   // Pending deferred cart-present (the dismiss-then-present staggers). MUST be cleared
   // on blur: the tab keeps this screen mounted, so a stray reopen after navigating away
   // presents the transparent cart Modal over the other tab and eats every touch.
   const cartReopenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isFocusedRef = useRef(true);
+  const delayedScanTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const delayedScanGenerationRef = useRef(0);
+
+  const cancelDelayedScans = useCallback(() => {
+    delayedScanGenerationRef.current += 1;
+    delayedScanTimersRef.current.forEach((timer) => clearTimeout(timer));
+    delayedScanTimersRef.current.clear();
+  }, []);
+
+  const scheduleDelayedScan = useCallback((
+    itemId: string,
+    action: () => void,
+    delayMs = 500,
+  ) => {
+    const generation = delayedScanGenerationRef.current;
+    const timer = setTimeout(() => {
+      delayedScanTimersRef.current.delete(timer);
+      if (
+        generation !== delayedScanGenerationRef.current ||
+        !isFocusedRef.current ||
+        AppState.currentState !== 'active' ||
+        !bulkItemsRef.current.some((item) => item.id === itemId)
+      ) {
+        return;
+      }
+      action();
+    }, delayMs);
+    delayedScanTimersRef.current.add(timer);
+  }, []);
 
   const updateUnseenQuickScanResults = useCallback((updater: (current: Set<string>) => Set<string>) => {
     const next = updater(unseenQuickScanResultIdsRef.current);
@@ -1789,6 +1943,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, []);
 
   const closeShelfScanStream = useCallback(() => {
+    shelfPreStreamGenerationRef.current += 1;
     shelfScanStreamRef.current?.close();
     shelfScanStreamRef.current = null;
   }, []);
@@ -2120,6 +2275,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const paywallActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingBillingActionRef = useRef<PendingBillingAction | null>(null);
   const isResumingPendingBillingRef = useRef(false);
+  // Once a pending action is consumed (resumed or discarded) this session, the async
+  // mount-time hydrate below must not write the stale copy back into the ref — that
+  // race is what let an already-run scan silently replay on the next focus.
+  const pendingBillingConsumedRef = useRef(false);
+  // True while a finger is dragging the cart sheet (see the wedged-Modal tripwire).
+  const cartSheetDraggingRef = useRef(false);
 
   // Experimental Text Search
 
@@ -2295,6 +2456,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   useEffect(() => {
     loadPendingBillingAction().then((pending) => {
+      if (pendingBillingConsumedRef.current || pendingBillingActionRef.current) return;
       pendingBillingActionRef.current = pending;
     }).catch((error) => {
       log.warn('[AddProduct] Failed to hydrate pending billing action:', error);
@@ -2385,11 +2547,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     };
 
     pendingBillingActionRef.current = pendingAction;
+    pendingBillingConsumedRef.current = false;
     await savePendingBillingAction(pendingAction);
   }, []);
 
-  const clearPendingQuickScan = useCallback(async () => {
+  // itemId scopes the clear: with up to SCAN_POOL_LIMIT scans in flight there is only
+  // ONE persisted pending action, so an unscoped clear by scan B silently deletes the
+  // gate-interrupted resume scan A just saved. Omit itemId only for a global discard.
+  const clearPendingQuickScan = useCallback(async (itemId?: string) => {
+    const stored = pendingBillingActionRef.current;
+    if (itemId && stored && stored.itemId !== itemId) return;
     pendingBillingActionRef.current = null;
+    pendingBillingConsumedRef.current = true;
     await clearPendingBillingAction();
   }, []);
 
@@ -2552,7 +2721,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (instruction === 'matches_found' || instruction === 'matched') return 'Matched';
       if (instruction === 'needs_review') return 'Add a detail';
       if (instruction === 'inventory_dedup') return 'Already in inventory';
-      if (instruction === 'no_matches') return 'Needs review';
+      if (instruction === 'no_matches') return 'Add a detail';
       if (
         instruction === 'processing' ||
         instruction === 'analyzing' ||
@@ -2578,7 +2747,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       case 'focus': return 'Tap to focus';
       case 'processing': return 'Recognizing';
       case 'matches_found': return 'Matched';
-      case 'no_matches': return 'Needs review';
+      case 'no_matches': return 'Add a detail';
       case 'barcode_scanned': return scannedBarcode || 'Barcode scanned';
       default: return 'Take photos to get started';
     }
@@ -2631,6 +2800,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
     }
+    const captureTargetId = activeItemIdRef.current;
+    const captureTarget = captureTargetId
+      ? bulkItemsRef.current.find((item) => item.id === captureTargetId)
+      : null;
+    if (cameraMode === 'camera' && captureTarget && captureTarget.photos.length >= MAX_PHOTOS_PER_ITEM) {
+      Alert.alert('Photo limit', `${MAX_PHOTOS_PER_ITEM} photos per item`);
+      return;
+    }
 
     try {
       setIsCapturing(true);
@@ -2679,10 +2856,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           isCover: capturedPhotos.length === 0, // First photo is cover by default
         };
 
-        setCapturedPhotos(prev => {
-          const updated = [...prev, newPhoto];
-          return updated;
-        });
+        setCapturedPhotos((prev) => mergeRetainedPhotos(prev, [newPhoto]));
 
         const liveItems = bulkItemsRef.current;
         const liveActiveId = activeItemIdRef.current;
@@ -2704,7 +2878,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 ? { ...item, isActive: true, photos: [...item.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] }
                 : { ...item, isActive: false }
             )));
-            if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, targetId, quickScanOptions), 500);
+            if (wasEmpty) {
+              scheduleDelayedScan(targetId, () => performQuickScan(newPhoto, targetId, quickScanOptions));
+            }
           } else if (liveItems.length === 0) {
             // Very first photo ever - create first item
             log.debug('[ITEM CREATION] Creating FIRST ITEM (no items exist yet)');
@@ -2721,10 +2897,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             log.debug('[ITEM CREATION] Triggering quick scan (first photo of first item)');
 
             log.debug('[FIRST ITEM] Created first item with ID:', firstItem.id);
-            setTimeout(() => {
+            scheduleDelayedScan(firstItem.id, () => {
               log.debug('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
               performQuickScan(newPhoto, firstItem.id, quickScanOptions);
-            }, 500);
+            });
 
           } else if (!canAddAnotherItem(liveItems.length)) {
             const fallback = liveItems[0];
@@ -2737,7 +2913,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   ? { ...item, isActive: true, photos: [...item.photos, wasEmpty ? { ...newPhoto, isCover: true } : newPhoto] }
                   : { ...item, isActive: false }
               )));
-              if (wasEmpty) setTimeout(() => performQuickScan(newPhoto, fallbackId, quickScanOptions), 500);
+              if (wasEmpty) {
+                scheduleDelayedScan(fallbackId, () => performQuickScan(newPhoto, fallbackId, quickScanOptions));
+              }
             }
           } else {
             const newId = `item-${Date.now()}`;
@@ -2746,7 +2924,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               ...prev.map(item => ({ ...item, isActive: false })),
               { id: newId, photos: [{ ...newPhoto, isCover: true }], title: undefined, isActive: true },
             ]);
-            setTimeout(() => performQuickScan(newPhoto, newId, quickScanOptions), 500);
+            scheduleDelayedScan(newId, () => performQuickScan(newPhoto, newId, quickScanOptions));
           }
 
           setCurrentInstruction('ready');
@@ -2762,7 +2940,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess]);
+  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess, scheduleDelayedScan]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -3130,7 +3308,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         transitionItem(
           itemId,
           shouldAutoConfirmTopMatch ? 'matched' : 'needs_context',
-          shouldAutoConfirmTopMatch ? undefined : { needsContextReason: rankedCandidates.length > 0 ? 'Needs review' : 'No matches found' },
+          shouldAutoConfirmTopMatch ? undefined : { needsContextReason: 'Add a detail' },
         );
 
         if (rankedCandidates.length > 0) {
@@ -3346,7 +3524,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // boxes are fractions of an EXIF-BAKED image. Bake the same orientation locally (no
     // resize needed — fractions are scale-free) and swap it in before boxes arrive, so the
     // crops read from the pixel space the model actually saw.
-    void ImageManipulator.manipulateAsync(photo.uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG })
+    void runImageTransform(() => ImageManipulator.manipulateAsync(
+      photo.uri,
+      [],
+      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+    ))
       .then((baked) => {
         if (activeShelfFolderIdRef.current !== folderId) return;
         shelfScanSourceSizeRef.current = { width: baked.width, height: baked.height };
@@ -3368,11 +3550,53 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     photo: CapturedPhoto,
     options?: { preserveAdaptivePresentation?: boolean; skipPreflight?: boolean },
   ) => {
-    if (!options?.skipPreflight && !(await requestQuickScanAccess())) return;
+    closeShelfScanStream();
+    const preStreamGeneration = shelfPreStreamGenerationRef.current + 1;
+    shelfPreStreamGenerationRef.current = preStreamGeneration;
+    const isCurrentPreStream = () => (
+      shelfPreStreamGenerationRef.current === preStreamGeneration
+      && isFocusedRef.current
+      && AppState.currentState === 'active'
+    );
+
+    if (!options?.skipPreflight) {
+      const canScan = await requestQuickScanAccess();
+      if (!isCurrentPreStream() || !canScan) return;
+    }
+
+    // Same wedge as the single scan: the shelf spinner goes up BEFORE image
+    // manipulation, base64 conversion, and the JWT await, none of which have a
+    // timeout. Without this the shelf card can spin forever with no way out.
+    let shelfPreStreamTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      shelfPreStreamTimer = null;
+      if (!isCurrentPreStream()) return;
+      shelfPreStreamGenerationRef.current += 1;
+      log.warn('[SHELF MODE] Pre-stream deadline hit; surfacing retry.');
+      discardAbandonedFolder();
+      closeShelfScanStream();
+      stopShelfScan('error', {
+        phase: 'finishing',
+        progress: 1,
+        message: 'Scan timed out. Try again.',
+        reasonCode: 'client_timeout',
+      });
+    }, QUICK_SCAN_RUN_DEADLINE_MS);
+    const clearShelfPreStreamTimer = () => {
+      if (shelfPreStreamTimer) {
+        clearTimeout(shelfPreStreamTimer);
+        shelfPreStreamTimer = null;
+      }
+    };
+
+    let preStreamFolderId: string | null = null;
+    const discardAbandonedFolder = () => {
+      if (!preStreamFolderId || activeShelfFolderIdRef.current !== preStreamFolderId) return;
+      activeShelfFolderIdRef.current = null;
+      removeEntry(preStreamFolderId);
+    };
 
     try {
       setIsAdaptiveShelfScan(Boolean(options?.preserveAdaptivePresentation));
-      closeShelfScanStream();
       lastShelfScanPhotoRef.current = photo;
       shelfScanSourceSizeRef.current = { width: photo.width, height: photo.height };
       shelfPhotoUriForDraftRef.current = photo.uri;
@@ -3396,14 +3620,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         label: 'Shelf',
         items: [],
       });
+      preStreamFolderId = folderId;
       activeShelfFolderIdRef.current = folderId;
 
       // Compress image before converting to base64
-      const compressedImage = await ImageManipulator.manipulateAsync(
+      const compressedImage = await runImageTransform(() => ImageManipulator.manipulateAsync(
         photo.uri,
         [{ resize: { width: 1200 } }], // Resize to max 1200px width
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG } // Compress aggressively to reduce payload
-      );
+      ));
+      if (!isCurrentPreStream()) {
+        discardAbandonedFolder();
+        return;
+      }
       shelfScanSourceSizeRef.current = { width: compressedImage.width, height: compressedImage.height };
       // THIS image — resized, EXIF orientation baked — is what the backend analyzes, so its
       // pixels are the space the returned boxes live in. Cropping the original camera file
@@ -3415,7 +3644,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       // Convert compressed image to base64
       const response = await fetch(compressedImage.uri);
+      if (!isCurrentPreStream()) {
+        discardAbandonedFolder();
+        return;
+      }
       const blob = await response.blob();
+      if (!isCurrentPreStream()) {
+        discardAbandonedFolder();
+        return;
+      }
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => {
@@ -3425,13 +3662,24 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
+      if (!isCurrentPreStream()) {
+        discardAbandonedFolder();
+        return;
+      }
 
       const token = await ensureSupabaseJwt();
+      if (!isCurrentPreStream()) {
+        discardAbandonedFolder();
+        return;
+      }
+      if (!token) throw new Error('Sign in required to scan.');
       const rawApiBase = API_BASE_URL;
       const API_BASE = rawApiBase;
 
       log.debug(`[SHELF MODE] Starting SSE stream with ${base64.length} bytes`);
       const sseUrl = `${API_BASE}/api/products/orchestrate/quick-scan-stream`;
+      // The stream owns the deadline from here (it has its own absolute ceiling).
+      clearShelfPreStreamTimer();
       shelfScanStreamRef.current = openQuickScanStream({
         url: sseUrl,
         token: token!,
@@ -3439,6 +3687,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           images: [{ base64 }],
           mode: 'vlm-multi',
         },
+        // Multi-item shelf streams legitimately run long (extraction + per-item
+        // searches). Ceiling sized past any good shelf scan; the backend's own
+        // TIMEOUT event is the primary bound — this only catches a lost terminal.
+        hardTimeoutMs: SHELF_SCAN_STREAM_TIMEOUT_MS,
         onStallChange: (stalled) => {
           setShelfProgress((prev) => ({ ...prev, stalled }));
         },
@@ -3458,6 +3710,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       });
 
     } catch (error: any) {
+      if (!isCurrentPreStream()) {
+        discardAbandonedFolder();
+        return;
+      }
       log.error(`[SHELF MODE] Error:`, error);
       stopShelfScan('error', {
         phase: 'finishing',
@@ -3465,8 +3721,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         message: error?.message || 'Failed to extract items from the image.',
         reasonCode: 'client_preflight_failed',
       });
+    } finally {
+      clearShelfPreStreamTimer();
     }
-  }, [closeShelfScanStream, consumeShelfStreamEvent, createShelfFolder, requestQuickScanAccess, resetShelfScanResults, sheetTranslateY]);
+  }, [closeShelfScanStream, consumeShelfStreamEvent, createShelfFolder, requestQuickScanAccess, resetShelfScanResults, sheetTranslateY, stopShelfScan]);
 
   const runQuickScanTextSearch = useCallback(async (itemId: string, newQuery: string) => {
     try {
@@ -3542,9 +3800,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 matchRows: matches.map((match: any) => ({ ...withResolvedImageUrl(match), queryKey: newQuery })),
               },
             }));
-            transitionItem(itemId, 'needs_context', {
-              needsContextReason: rankedCandidates.length > 0 ? 'Needs review' : 'No matches found',
-            });
+            transitionItem(itemId, 'needs_context', { needsContextReason: 'Add a detail' });
             if (activeItemIdRef.current === itemId) {
               setCurrentInstruction(rankedCandidates.length > 0 ? 'matches_found' : 'no_matches');
             }
@@ -3565,7 +3821,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               return next;
             });
           } else if (parsed.type === 'NO_ITEMS') {
-            transitionItem(itemId, 'needs_context', { needsContextReason: 'No matches found' });
+            transitionItem(itemId, 'needs_context', { needsContextReason: 'Add a detail' });
             if (activeItemIdRef.current === itemId) setCurrentInstruction('no_matches');
             setItemLoadingStates((prev) => {
               const next = { ...prev };
@@ -3714,14 +3970,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const jwt = await ensureSupabaseJwt();
         const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
 
-        const response = await fetch(`${API_URL}/products/manifests/parse`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${jwt}`,
-          },
-          body: JSON.stringify({ images: validImages }),
-        });
+        let requestBody = JSON.stringify({ images: validImages });
+        validImages.length = 0;
+        let response: Response;
+        try {
+          response = await fetch(`${API_URL}/products/manifests/parse`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${jwt}`,
+            },
+            body: requestBody,
+          });
+        } finally {
+          requestBody = '';
+        }
 
         if (!response.ok) {
           throw new Error(`API error: ${response.status}`);
@@ -3774,14 +4037,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const jwt = await ensureSupabaseJwt();
         const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
 
-        const response = await fetch(`${API_URL}/products/receipts/parse`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${jwt}`,
-          },
-          body: JSON.stringify({ images: validImages }),
-        });
+        let requestBody = JSON.stringify({ images: validImages });
+        validImages.length = 0;
+        let response: Response;
+        try {
+          response = await fetch(`${API_URL}/products/receipts/parse`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${jwt}`,
+            },
+            body: requestBody,
+          });
+        } finally {
+          requestBody = '';
+        }
 
         if (!response.ok) {
           throw new Error(`API error: ${response.status}`);
@@ -3830,6 +4100,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
 
     const isDocumentImport = cameraMode === 'manifest' || cameraMode === 'receipt';
+    const pickerTargetItemId = targetItemId ?? activeItemIdRef.current;
+    const pickerTargetItem = pickerTargetItemId
+      ? bulkItemsRef.current.find((item) => item.id === pickerTargetItemId)
+      : null;
     const existingDocumentPhotos = isDocumentImport
       ? bulkItems.reduce((count, item) => count + item.photos.length, 0)
       : 0;
@@ -3838,17 +4112,32 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       Alert.alert('Photo limit', '12 photo max');
       return;
     }
+    const remainingItemSlots = Math.max(0, MAX_PHOTOS_PER_ITEM - (pickerTargetItem?.photos.length ?? 0));
+    if (!isDocumentImport && pickerTargetItem && remainingItemSlots === 0) {
+      Alert.alert('Photo limit', `${MAX_PHOTOS_PER_ITEM} photos per item`);
+      return;
+    }
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false,
       allowsMultipleSelection: true,
-      selectionLimit: isDocumentImport ? remainingDocumentSlots : 0,
+      selectionLimit: isDocumentImport ? remainingDocumentSlots : remainingItemSlots || MAX_PHOTOS_PER_ITEM,
       quality: 0.8,
     });
 
     if (!result.canceled && result.assets?.length) {
-      const assets = result.assets;
+      const existingTargetUris = new Set((pickerTargetItem?.photos || []).map((photo) => photo.uri));
+      const uniqueAssets = Array.from(new Map(result.assets.map((asset) => [asset.uri, asset])).values())
+        .filter((asset) => !existingTargetUris.has(asset.uri));
+      const assets = uniqueAssets.slice(
+        0,
+        isDocumentImport ? remainingDocumentSlots : remainingItemSlots || MAX_PHOTOS_PER_ITEM,
+      );
+      if (assets.length === 0) {
+        showNotificationMessage('Those photos are already attached to this item.', 1800);
+        return;
+      }
       if (isDocumentImport && assets.length > remainingDocumentSlots) {
         Alert.alert('Photo limit', '12 photo max');
         return;
@@ -3874,7 +4163,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Resolve the destination exactly once from live state after the picker returns. The
       // same id is used for both the photo mutation and performQuickScan below.
       const liveItems = bulkItemsRef.current;
-      const effectiveItemId = targetItemId ?? activeItemIdRef.current;
+      const effectiveItemId = pickerTargetItemId;
       const effectiveItem = effectiveItemId
         ? (liveItems.find((item) => item.id === effectiveItemId) ?? selectItem(effectiveItemId))
         : null;
@@ -3884,7 +4173,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (cameraMode === 'shelf' && newPhotos.length > 0 && liveItems.length === 0 && !effectiveItem) {
         log.debug('[IMAGE UPLOAD] Shelf mode - routing to handleShelfModeScan');
         const shelfPhoto = newPhotos[0];
-        setCapturedPhotos(prev => [...prev, shelfPhoto]);
+        setCapturedPhotos((prev) => mergeRetainedPhotos(prev, [shelfPhoto]));
         setShelfPhotoUri(shelfPhoto.uri);
         handleShelfModeScan(shelfPhoto, { skipPreflight: true });
         return;
@@ -3894,20 +4183,25 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const wasEmpty = (effectiveItem.photos?.length ?? 0) === 0;
         setBulkItems(prev => prev.map(item => {
           if (item.id !== effectiveItemId) return item;
-          const added = newPhotos.map((p, i) => ({ ...p, isCover: wasEmpty && i === 0 }));
+          const existingUris = new Set(item.photos.map((photo) => photo.uri));
+          const remaining = Math.max(0, MAX_PHOTOS_PER_ITEM - item.photos.length);
+          const added = newPhotos
+            .filter((photo) => !existingUris.has(photo.uri))
+            .slice(0, remaining)
+            .map((photo, index) => ({ ...photo, isCover: wasEmpty && index === 0 }));
           return { ...item, photos: [...item.photos, ...added] };
         }));
-        setCapturedPhotos(prev => [...prev, ...newPhotos]);
+        setCapturedPhotos((prev) => mergeRetainedPhotos(prev, newPhotos));
         // Re-research with the new photo when this is an EXPLICIT correction (targetItemId is
         // passed by the wrong-item / add-details / overlay flows) OR the item had no photo yet.
         // Plain multi-photo gallery imports to an already-matched item don't each fire a full
         // (~15s, billable) re-match — that was a cost regression from dropping the old gate.
         if (newPhotos[0] && (!!targetItemId || wasEmpty)) {
-          setTimeout(() => performQuickScan(
+          scheduleDelayedScan(effectiveItemId, () => performQuickScan(
             newPhotos[0],
             effectiveItemId,
             targetItemId ? { skipPreflight: true } : uploadScanOptions,
-          ), 500);
+          ));
         }
       } else if (liveItems.length === 0) {
         const firstItem = {
@@ -3918,9 +4212,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         };
         setBulkItems([firstItem]);
         setActiveItemId(firstItem.id);
-        setCapturedPhotos(prev => [...prev, ...newPhotos]);
+        setCapturedPhotos((prev) => mergeRetainedPhotos(prev, newPhotos));
         if (newPhotos[0]) {
-          setTimeout(() => performQuickScan(newPhotos[0], firstItem.id, uploadScanOptions), 500);
+          scheduleDelayedScan(
+            firstItem.id,
+            () => performQuickScan(newPhotos[0], firstItem.id, uploadScanOptions),
+          );
         }
       } else {
         if (!canAddAnotherItem(liveItems.length)) {
@@ -3934,13 +4231,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         };
         setBulkItems(prev => [...prev.map(item => ({ ...item, isActive: false })), newItem]);
         setActiveItemId(newItem.id);
-        setCapturedPhotos(prev => [...prev, ...newPhotos]);
+        setCapturedPhotos((prev) => mergeRetainedPhotos(prev, newPhotos));
         if (newPhotos[0]) {
-          setTimeout(() => performQuickScan(newPhotos[0], newItem.id, uploadScanOptions), 500);
+          scheduleDelayedScan(
+            newItem.id,
+            () => performQuickScan(newPhotos[0], newItem.id, uploadScanOptions),
+          );
         }
       }
     }
-  }, [cameraMode, canAddAnotherItem, handleShelfModeScan, requestQuickScanAccess, setActiveItemId, setBulkItems]);
+  }, [cameraMode, canAddAnotherItem, handleShelfModeScan, requestQuickScanAccess, scheduleDelayedScan, setActiveItemId, setBulkItems]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -4017,11 +4317,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Compress before upload — this image is BOTH the scan input and the listing cover. 1440px @
       // 0.8 (~halves the 1920@0.9 payload) uploads ~2x faster, stays a clean cover, and is plenty
       // of detail for the VLM + Lens. Upload is on the scan's critical path, so the smaller the faster.
-      const compressed = await ImageManipulator.manipulateAsync(
+      const compressed = await runImageTransform(() => ImageManipulator.manipulateAsync(
         localUri,
         [{ resize: { width: 1440 } }], // only downscale if wider than 1440px
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
-      );
+      ));
 
       // React Native fetch() does not support file:// URIs on Android - use expo-file-system
       let byteArray: Uint8Array;
@@ -4115,6 +4415,29 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       startedAt: Date.now(),
     };
     quickScanActiveStreamsRef.current.set(itemId, activeHandle);
+    // Whole-run deadline. The SSE client bounds the STREAM, but the awaits before it
+    // (JWT bridge, supabase.auth.getUser, image manipulate/upload) have no timeout, so a
+    // hang there left the "Searching…" spinner up forever (QA 2026-08-02 pilot-02). On
+    // expiry: drop the pool slot, surface retry, and let the queue keep moving. The
+    // orphaned run sees isRunCancelled() and bails without touching state. Disarmed
+    // only while the billing gate sheet waits on the seller — reading is not hanging.
+    let runDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    const disarmRunDeadline = () => {
+      if (runDeadlineTimer) {
+        clearTimeout(runDeadlineTimer);
+        runDeadlineTimer = null;
+      }
+    };
+    const armRunDeadline = () => {
+      runDeadlineTimer = setTimeout(() => {
+        if (quickScanActiveStreamsRef.current.get(itemId) !== activeHandle) return;
+        log.warn('[QUICK SCAN] Whole-run deadline hit; surfacing retry for', itemId);
+        quickScanActiveStreamsRef.current.delete(itemId);
+        activeHandle.close();
+        markQuickScanRetryable(itemId, 'Scan timed out. Tap to retry.');
+        drainQuickScanQueueRef.current();
+      }, QUICK_SCAN_RUN_DEADLINE_MS);
+    };
     const isRunCancelled = () => (
       quickScanCancelledItemIdsRef.current.has(itemId)
       || taskEpoch !== quickScanSessionEpochRef.current
@@ -4125,6 +4448,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     let completedWithResult = false;
 
     try {
+      // The preflight is a plain unbounded fetch, and it holds a pool slot the whole
+      // time, so it is inside the deadline. Only the gate SHEET is exempt: a seller
+      // reading it is not a hang, and no clock should decide for them.
+      armRunDeadline();
       if (!options?.skipPreflight) {
         const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
           ? buildFreemiumBlockedGate()
@@ -4134,14 +4461,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         if (gate.code === 'credits_exhausted_but_invoiceable') {
           await persistPendingQuickScan(photo, itemId, options?.mode);
+          disarmRunDeadline();
           const decision = await presentBillingGateSheet(gate);
+          if (isRunCancelled()) return;
           if (decision !== 'continue') {
             scanErrorMessage = gate.message;
             return;
           }
-          await clearPendingQuickScan();
+          await clearPendingQuickScan(itemId);
+          armRunDeadline();
         } else if (!gate.canProceed) {
           await persistPendingQuickScan(photo, itemId, options?.mode);
+          disarmRunDeadline();
           await presentBillingGateSheet(gate);
           scanErrorMessage = gate.message;
           return;
@@ -4250,6 +4581,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             targetSites: ['general', 'ebay.com'],
             mode: streamMode,
           },
+          // Adaptive can resolve to a long multi/shelf stream; give the stream the
+          // shelf ceiling. A resolved-single run is still bounded by the tighter
+          // whole-run deadline above.
+          ...(streamMode === 'adaptive' ? { hardTimeoutMs: SHELF_SCAN_STREAM_TIMEOUT_MS } : {}),
           onStallChange: (stalled) => {
             if (streamMode === 'adaptive' && adaptiveResolution === null && stalled) {
               finish(() => reject(new Error('Adaptive scan stalled before mode resolution.')));
@@ -4268,6 +4603,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             if (streamMode === 'adaptive' && evt.type === 'MODE_RESOLVED') {
               if (evt.detected === 'multi') {
                 adaptiveResolution = 'multi';
+                // The single-item placeholder hands off to the shelf folder flow; a
+                // long multi stream is legitimate and has its own stall/error handling,
+                // so the single-scan run deadline must not cut it down mid-stream.
+                disarmRunDeadline();
                 shelfPricingGeneration = shelfPricingGenerationRef.current;
                 beginAdaptiveShelfScan(photo, itemId, evt);
               } else {
@@ -4380,7 +4719,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       // The match ran — count usage + clear any persisted billing-pending scan.
       incrementLocalUsage();
-      await clearPendingQuickScan();
+      await clearPendingQuickScan(itemId);
 
       // Multi results have already streamed through the shared shelf consumer and the
       // normal-camera placeholder item was replaced by a folder at MODE_RESOLVED.
@@ -4652,7 +4991,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       } else {
         log.debug('[QUICK SCAN] No matches found');
-        transitionItem(itemId, 'needs_context', { needsContextReason: 'No matches found' });
+        transitionItem(itemId, 'needs_context', { needsContextReason: 'Add a detail' });
         const noMatchesData: MatchResponse = {
           systemAction: 'fallback_to_manual',
           confidence: 'low',
@@ -4707,6 +5046,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
+      if (runDeadlineTimer) clearTimeout(runDeadlineTimer);
       // Make sure the SSE connection is torn down on every exit (success, error, or early
       // return) so we never leak a live EventSource.
       streamHandleRef.current?.close();
@@ -4801,7 +5141,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Attach a freshly captured photo to a specific item and re-run the full match. First
   // photo becomes the cover. Mirrors the live-camera capture branch, target-id explicit.
   const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean; skipPreflight?: boolean }) => {
-    const wasEmpty = (bulkItemsRef.current.find((i) => i.id === itemId)?.photos.length ?? 0) === 0;
+    const liveItem = bulkItemsRef.current.find((item) => item.id === itemId);
+    if ((liveItem?.photos.length ?? 0) >= MAX_PHOTOS_PER_ITEM) {
+      showNotificationMessage(`${MAX_PHOTOS_PER_ITEM} photos per item`, 1800);
+      return;
+    }
+    if (liveItem?.photos.some((existing) => existing.uri === photo.uri)) return;
+    const wasEmpty = (liveItem?.photos.length ?? 0) === 0;
     // Shelf-scanned items arrive MATCHED and with zero photos, so "first photo" is not
     // evidence the item still needs identifying. Re-matching them threw away the confirmed
     // identity and re-searched off the new photo — adding a photo silently undid the match.
@@ -4812,14 +5158,17 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const empty = item.photos.length === 0;
       return { ...item, photos: [...item.photos, { ...photo, isCover: empty ? true : photo.isCover }] };
     }));
-    setCapturedPhotos((prev) => [...prev, photo]);
+    setCapturedPhotos((prev) => mergeRetainedPhotos(prev, [photo]));
     // Scan when this is the cover (first) photo of an UNMATCHED item, or on an explicit
     // correction/re-match (wrong-item, add-details tag). Adding a photo to an
     // already-matched item is just adding a photo.
     if ((wasEmpty && !alreadyMatched) || opts?.rescan) {
-      setTimeout(() => performQuickScan(photo, itemId, opts?.skipPreflight ? { skipPreflight: true } : undefined), 500);
+      scheduleDelayedScan(
+        itemId,
+        () => performQuickScan(photo, itemId, opts?.skipPreflight ? { skipPreflight: true } : undefined),
+      );
     }
-  }, [performQuickScan, confirmedQuickMatchByItemId, setBulkItems]);
+  }, [performQuickScan, confirmedQuickMatchByItemId, scheduleDelayedScan, setBulkItems, showNotificationMessage]);
 
   // Open / close the inline capture overlay for a target item. `rescan` marks an explicit
   // correction (wrong-item / add-details tag) so the captured shot re-runs the full match;
@@ -4848,7 +5197,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     photoCapturePreflightGrantedRef.current = targetNeedsScan;
     setOverlayFacing('back');
     setOverlayFlash('off');
-    setPhotoCaptureTargetId(itemId);
+    runAfterCartDismissalRef.current(() => setPhotoCaptureTargetId(itemId));
   }, [photoCaptureTargetId, requestQuickScanAccess, confirmedQuickMatchByItemId, showNotificationMessage]);
   const closePhotoCaptureOverlay = useCallback(() => {
     photoCapturePreflightGrantedRef.current = false;
@@ -4874,9 +5223,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     const itemId = activeItemIdRef.current;
     if (!itemId) return;
     setShowViewPhotosModal(false);
-    setTimeout(() => {
-      void openPhotoCaptureForItem(itemId);
-    }, 250);
+    void openPhotoCaptureForItem(itemId);
   }, [openPhotoCaptureForItem]);
 
   // Take one shot in the overlay, attach it, and return to the prior surface.
@@ -4914,11 +5261,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
   }, [photoCaptureTargetId, isOverlayCapturing, attachPhotoToItem]);
 
+  // Everything the focus effect touches goes through refs so its callback identity is
+  // stable. With live deps (performQuickScan changes on every quickScanStore write) the
+  // effect re-fired on state churn WHILE focused, and each re-fire re-attempted the
+  // pending resume — the respawning "Searching…" scan from QA 2026-08-02 pilot-02.
+  const maybeResumeDepsRef = useRef({ preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage, performQuickScan });
+  maybeResumeDepsRef.current = { preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage, performQuickScan };
   useFocusEffect(
     useCallback(() => {
       let active = true;
 
       const maybeResumePendingQuickScan = async () => {
+        const deps = maybeResumeDepsRef.current;
         if (isResumingPendingBillingRef.current) {
           return;
         }
@@ -4928,8 +5282,30 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           return;
         }
 
+        // A pending scan is a short-lived "finish what the gate interrupted" token, not
+        // a standing order. Discard it when it is stale, when its item left the cart, or
+        // when the item already carries a real result (the scan ran after all) — a silent
+        // replay re-spends credits and drops the item back into "Searching…".
+        // Draft hydration installs cart items asynchronously. Judging "item left the
+        // cart" against a cart that has not finished loading would discard a perfectly
+        // good resume, so wait for hydration to settle before ruling on it.
+        if (isHydratingRef.current) return;
+        const ageMs = Date.now() - (pending.createdAt || 0);
+        const itemStillInCart = bulkItemsRef.current.some((it) => it.id === pending.itemId);
+        const storeEntry = quickScanStoreRef.current[pending.itemId];
+        const alreadyHasResult = !!storeEntry?.matchData && !storeEntry.matchData.scanError;
+        if (ageMs > PENDING_QUICK_SCAN_MAX_AGE_MS || !itemStillInCart || alreadyHasResult) {
+          log.debug('[AddProduct] Discarding stale pending quick scan', {
+            ageMs, itemStillInCart, alreadyHasResult,
+          });
+          pendingBillingActionRef.current = null;
+          pendingBillingConsumedRef.current = true;
+          await clearPendingBillingAction();
+          return;
+        }
+
         pendingBillingActionRef.current = pending;
-        const gate = await preflightAIGate(pending.featureKey, 1);
+        const gate = await deps.preflightAIGate(pending.featureKey, 1);
 
         if (!active) {
           return;
@@ -4940,22 +5316,20 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         }
 
         isResumingPendingBillingRef.current = true;
-        await clearPendingQuickScan();
-        showNotificationMessage('Resuming pending scan...', 1800);
+        await deps.clearPendingQuickScan(pending.itemId);
+        deps.showNotificationMessage('Resuming pending scan...', 1800);
 
         try {
-          await performQuickScan(pending.photo as CapturedPhoto, pending.itemId, {
+          await deps.performQuickScan(pending.photo as CapturedPhoto, pending.itemId, {
             skipPreflight: true,
             mode: pending.scanMode,
           });
         } finally {
-          if (active) {
-            isResumingPendingBillingRef.current = false;
-          }
+          isResumingPendingBillingRef.current = false;
         }
       };
 
-      refreshFreemiumStatus().catch(() => null);
+      maybeResumeDepsRef.current.refreshFreemiumStatus().catch(() => null);
       maybeResumePendingQuickScan().catch((error) => {
         log.warn('[AddProduct] Failed to resume pending quick scan:', error);
         isResumingPendingBillingRef.current = false;
@@ -4964,7 +5338,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return () => {
         active = false;
       };
-    }, [performQuickScan, preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage])
+    }, [])
   );
 
   // (Removed dead openMatchSelectionForItem — MatchSelectionScreen was deprecated and deleted.)
@@ -5032,12 +5406,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const promptInventoryDedup = useCallback((itemId: string, match: any, opts?: { fallbackInstruction?: CameraInstruction; onAddAsNew?: () => void }) => {
     if (!match) return;
     const title = String(match.title || 'this item').slice(0, 60);
-    setInventoryDedupDialog({
-      itemId,
-      match,
-      title,
-      fallbackInstruction: opts?.fallbackInstruction,
-      onAddAsNew: opts?.onAddAsNew,
+    runAfterCartDismissalRef.current(() => {
+      setInventoryDedupDialog({
+        itemId,
+        match,
+        title,
+        fallbackInstruction: opts?.fallbackInstruction,
+        onAddAsNew: opts?.onAddAsNew,
+      });
     });
   }, []);
 
@@ -5379,9 +5755,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       ? { ...it, photos: it.photos.map(photo => ({ ...photo, isCover: photo.id === photoId })) }
       : it));
     if (coverChanged && newCoverPhoto) {
-      setTimeout(() => performQuickScan(newCoverPhoto as CapturedPhoto, itemId), 300);
+      scheduleDelayedScan(
+        itemId,
+        () => performQuickScan(newCoverPhoto as CapturedPhoto, itemId),
+        300,
+      );
     }
-  }, [performQuickScan]);
+  }, [performQuickScan, scheduleDelayedScan]);
 
   // Remove photo from bulk item
   const removeBulkItemPhoto = useCallback((itemId: string, photoId: string) => {
@@ -5437,6 +5817,31 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   }, [sheetTranslateY]);
   closeBulkItemsSheetRef.current = closeBulkItemsSheet;
 
+  // Wedge tripwire for the transparent cart Modal. Its window eats every touch while
+  // `visible` is true, so a state wedge (sheet fully down but the Modal never closed —
+  // e.g. after a sibling-Modal presentation glitch) turns the whole capture screen into
+  // dead glass: History/Back taps do nothing (QA 2026-08-02 pilot-02). Two consecutive
+  // seconds fully-down with no close timer in flight is a state no legit flow produces
+  // (open springs up within a frame; close always has its timer armed) — force-close.
+  useEffect(() => {
+    if (!showDeepSearchSheet) return;
+    let downTicks = 0;
+    const interval = setInterval(() => {
+      const fullyDown = sheetTranslateY.value >= SCREEN_HEIGHT - 1;
+      const closeInFlight = cartCloseTimerRef.current != null;
+      // A finger held at the bottom of a drag parks the sheet fully down legitimately.
+      const dragging = cartSheetDraggingRef.current;
+      downTicks = fullyDown && !closeInFlight && !dragging ? downTicks + 1 : 0;
+      if (downTicks >= 2) {
+        log.warn('[CART SHEET] Wedged invisible cart Modal detected; force-closing.');
+        cancelAnimation(sheetTranslateY);
+        sheetTranslateY.value = SCREEN_HEIGHT;
+        setShowDeepSearchSheet(false);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [showDeepSearchSheet, sheetTranslateY]);
+
   // Open bulk items sheet deterministically
   const openBulkItemsSheet = useCallback(() => {
     // Never present the (transparent, touch-eating) cart Modal while another tab is
@@ -5468,6 +5873,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (!showDeepSearchSheetRef.current) action();
     }, 500);
   }, []);
+  runAfterCartDismissalRef.current = runAfterCartDismissal;
 
   const openPlansSafely = useCallback(() => {
     runAfterCartDismissal(() => setShowTierSelector(true));
@@ -5660,6 +6066,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   useFocusEffect(
     useCallback(() => {
       return () => {
+        cancelDelayedScans();
         const queuedItemIds = new Set(quickScanQueueRef.current.map((task) => task.itemId));
         quickScanQueueRef.current = [];
         if (queuedItemIds.size > 0) {
@@ -5679,22 +6086,47 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           clearTimeout(cartCloseTimerRef.current);
           cartCloseTimerRef.current = null;
         }
+        if (billingGatePresentationTimerRef.current) {
+          clearTimeout(billingGatePresentationTimerRef.current);
+          billingGatePresentationTimerRef.current = null;
+        }
+        if (paywallActionTimerRef.current) {
+          clearTimeout(paywallActionTimerRef.current);
+          paywallActionTimerRef.current = null;
+        }
+        photoCaptureDismissActionRef.current = null;
+        photosDismissActionRef.current = null;
         setShowMatchSheet(false);
+        setShowViewPhotosModal(false);
+        setShowBarcodeEntry(false);
         setShowBarcodeResultModal(false);
+        setShowManifestSheet(false);
+        setManifestJobId(null);
+        setShowReceiptSheet(false);
+        setReceiptJobId(null);
+        setShowTierSelector(false);
+        setBillingGateVisible(false);
+        setBillingGate(null);
+        billingGateResolverRef.current?.('dismiss');
+        billingGateResolverRef.current = null;
+        setPhotoCaptureTargetId(null);
         setShowDeepSearchSheet(false);
         setInventoryDedupDialog(null);
         setCreatingListings(null);
+        setListingsReady(null);
         setProcessingCardDismissed(false);
+        setPresentedNativeModal(null);
         cancelAnimation(sheetTranslateY);
         sheetTranslateY.value = SCREEN_HEIGHT;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [cancelDelayedScans])
   );
 
   useEffect(() => () => {
+    cancelDelayedScans();
     cancelQuickScanSession(false);
-  }, [cancelQuickScanSession]);
+  }, [cancelDelayedScans, cancelQuickScanSession]);
 
   // Animated styles
   const captureButtonAnimatedStyle = useAnimatedStyle(() => ({
@@ -5749,6 +6181,67 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const overlayAnimatedStyle = useAnimatedStyle(() => ({
     opacity: overlayOpacity.value,
   }));
+
+  const listingStatusRequested = !!(
+    listingsReady || ((creatingListings && !processingCardDismissed) ? creatingListings : null)
+  );
+  const requestedNativeModalKeys = useMemo<AddProductNativeModalKey[]>(() => {
+    const requests: Array<[AddProductNativeModalKey, boolean]> = [
+      ['billingGate', billingGateVisible],
+      ['tierSelector', showTierSelector],
+      ['inventoryDedup', !!inventoryDedupDialog],
+      ['photoCapture', !!photoCaptureTargetId],
+      ['photos', showViewPhotosModal],
+      ['barcodeEntry', showBarcodeEntry],
+      ['barcodeResult', showBarcodeResultModal],
+      ['manifest', showManifestSheet && !!manifestJobId],
+      ['receipt', showReceiptSheet && !!receiptJobId],
+      ['cart', showDeepSearchSheet],
+      ['listingStatus', listingStatusRequested],
+      ['designPreview', DEV_FORCE_MATCH_PREVIEW || __ds === 'matchPreview'],
+    ];
+    return requests.filter(([, requested]) => requested).map(([key]) => key);
+  }, [
+    billingGateVisible,
+    inventoryDedupDialog,
+    listingStatusRequested,
+    manifestJobId,
+    photoCaptureTargetId,
+    receiptJobId,
+    showBarcodeEntry,
+    showBarcodeResultModal,
+    showDeepSearchSheet,
+    showManifestSheet,
+    showReceiptSheet,
+    showTierSelector,
+    showViewPhotosModal,
+  ]);
+  const [presentedNativeModal, setPresentedNativeModal] = useState<AddProductNativeModalKey | null>(null);
+  const releaseNativeModal = useCallback((key: AddProductNativeModalKey) => {
+    setPresentedNativeModal((current) => current === key ? null : current);
+  }, []);
+
+  useEffect(() => {
+    if (!isFocused) return;
+    if (!presentedNativeModal) {
+      const next = requestedNativeModalKeys[0];
+      if (next) setPresentedNativeModal(next);
+      return;
+    }
+    if (requestedNativeModalKeys.includes(presentedNativeModal)) return;
+
+    // Android does not emit Modal.onDismiss. Release on the next committed frame there;
+    // iOS releases from the native dismissal callback after its host controller is gone.
+    if (Platform.OS !== 'ios') {
+      const frame = requestAnimationFrame(() => releaseNativeModal(presentedNativeModal));
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [isFocused, presentedNativeModal, releaseNativeModal, requestedNativeModalKeys]);
+
+  const nativeModalVisible = useCallback(
+    (key: AddProductNativeModalKey, requested: boolean) => requested && presentedNativeModal === key,
+    [presentedNativeModal],
+  );
 
   // Stand the swipe-back ring down while any sheet is open (their gestures must win).
   // MUST be above the permission early-returns below, or the hook count changes between renders.
@@ -5857,7 +6350,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       {/* DEV/design-export preview Modal only. Real flows render the preview + folder page as
           opaque overlays INSIDE the cart sheet Modal (below) — iOS can't stack Modals. */}
       {(DEV_FORCE_MATCH_PREVIEW || __ds === 'matchPreview') && (
-        <Modal visible animationType="slide" onRequestClose={() => setPreviewItemId(null)}>
+        <Modal
+          visible={nativeModalVisible('designPreview', true)}
+          animationType="slide"
+          onRequestClose={() => setPreviewItemId(null)}
+          onDismiss={() => releaseNativeModal('designPreview')}
+        >
           {renderMatchPreview()}
         </Modal>
       )}
@@ -6127,11 +6625,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       {/* Bulk items sheet (rendered above TabBar via Modal) */}
       <Modal
-        visible={!!showDeepSearchSheet}
+        visible={nativeModalVisible('cart', !!showDeepSearchSheet)}
         transparent
         animationType="none"
         statusBarTranslucent
         onRequestClose={closeBulkItemsSheet}
+        onDismiss={() => releaseNativeModal('cart')}
         presentationStyle="overFullScreen"
       >
         {/* Children stay mounted while `visible` toggles — unmounting Modal children in
@@ -6162,12 +6661,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   onRemovePhoto={removeBulkItemPhoto}
                   performAnalyze={performAnalyze}
                   sheetTranslateY={sheetTranslateY}
+                  onSheetDragStateChange={(dragging) => { cartSheetDraggingRef.current = dragging; }}
                   navigation={navigation}
                   jobResponse={jobResponse}
                   setJobResponse={setJobResponse}
                   quickScanStore={quickScanStore}
                   onOpenQuickMatches={openQuickMatchesForItem}
                   onOpenItemPreview={handleOpenItem}
+                  onReviewGeneratedItem={reviewGeneratedItem}
                   cartTree={cartTree}
                   onOpenFolder={(id) => setOpenFolderId(id)}
                   onQueueGeneration={handleQueueGeneration}
@@ -6183,7 +6684,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   onRetryItemScan={retryQuickScanForItem}
                   onOpenPhotoModal={(itemId) => {
                     selectActiveItem(itemId);
-                    setShowViewPhotosModal(true);
+                    runAfterCartDismissal(() => setShowViewPhotosModal(true));
                   }}
                   itemLoadingStates={itemLoadingStates}
                   setItemLoadingStates={setItemLoadingStates}
@@ -6245,8 +6746,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       {/* View Photos Modal - photo management with item switcher */}
       <ViewPhotosModal
-        visible={showViewPhotosModal}
+        visible={nativeModalVisible('photos', showViewPhotosModal)}
         onClose={() => setShowViewPhotosModal(false)}
+        onDismiss={() => {
+          releaseNativeModal('photos');
+          const action = photosDismissActionRef.current;
+          photosDismissActionRef.current = null;
+          action?.();
+        }}
         photos={(() => {
           const activeItem = activeItemId ? bulkItems.find(item => item.id === activeItemId) : null;
           return activeItem?.photos || [];
@@ -6259,12 +6766,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         onReorder={reorderPhotos}
         onSelectItem={selectActiveItem}
         onTakePhoto={takePhotoFromPhotoModal}
-        onImageUpload={handleImageUpload}
+        onImageUpload={() => {
+          const itemId = activeItemIdRef.current;
+          photosDismissActionRef.current = () => { void handleImageUpload(itemId || undefined); };
+          setShowViewPhotosModal(false);
+        }}
         items={bulkItems}
       />
 
       <BarcodeEntrySheet
-        visible={showBarcodeEntry}
+        visible={nativeModalVisible('barcodeEntry', showBarcodeEntry)}
         barcode={manualBarcode}
         onChangeBarcode={(value) => {
           setManualBarcode(value.replace(/[^0-9]/g, ''));
@@ -6275,17 +6786,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setShowBarcodeEntry(false);
           setBarcodeEntryError(null);
         }}
+        onDismiss={() => releaseNativeModal('barcodeEntry')}
         loading={barcodeSearching}
         errorMessage={barcodeEntryError || undefined}
       />
 
       {/* Barcode Quick Inventory Editor Modal (Reused MatchSheet Style) */}
       <Modal
-        visible={showBarcodeResultModal}
+        visible={nativeModalVisible('barcodeResult', showBarcodeResultModal)}
         transparent={true}
         animationType="none"
         statusBarTranslucent
         onRequestClose={closeBarcodeSheet}
+        onDismiss={() => releaseNativeModal('barcodeResult')}
         presentationStyle="overFullScreen"
       >
         {/* Keep mounted while `visible` toggles — see the cart Modal note (Fabric unmount assert). */}
@@ -6409,7 +6922,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       {/* Manifest Review Sheet Modal */}
       <Modal
-        visible={showManifestSheet && !!manifestJobId}
+        visible={nativeModalVisible('manifest', showManifestSheet && !!manifestJobId)}
         transparent
         animationType="slide"
         statusBarTranslucent
@@ -6417,6 +6930,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setShowManifestSheet(false);
           setManifestJobId(null);
         }}
+        onDismiss={() => releaseNativeModal('manifest')}
         presentationStyle="overFullScreen"
       >
         {showManifestSheet && manifestJobId ? (
@@ -6449,7 +6963,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       {/* Receipt Review Sheet Modal */}
       <Modal
-        visible={showReceiptSheet && !!receiptJobId}
+        visible={nativeModalVisible('receipt', showReceiptSheet && !!receiptJobId)}
         transparent
         animationType="slide"
         statusBarTranslucent
@@ -6457,6 +6971,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setShowReceiptSheet(false);
           setReceiptJobId(null);
         }}
+        onDismiss={() => releaseNativeModal('receipt')}
         presentationStyle="overFullScreen"
       >
         {showReceiptSheet && receiptJobId ? (
@@ -6487,8 +7002,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       {/* Tier Selector Modal (Paywall) */}
       <TierSelectorModal
-        visible={showTierSelector}
+        visible={nativeModalVisible('tierSelector', showTierSelector)}
         onClose={() => setShowTierSelector(false)}
+        onDismiss={() => releaseNativeModal('tierSelector')}
         onSuccess={() => {
           refreshFreemiumStatus();
           setShowTierSelector(false);
@@ -6502,23 +7018,30 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       />
 
       <BillingGateSheet
-        visible={billingGateVisible}
+        visible={nativeModalVisible('billingGate', billingGateVisible)}
         gate={billingGate}
         onClose={() => closeBillingGateSheet('dismiss')}
         onSeePlans={handleBillingGatePlans}
         onAddCredits={handleBillingGateCredits}
         onContinue={() => closeBillingGateSheet('continue')}
+        onDismiss={() => releaseNativeModal('billingGate')}
       />
 
       {/* Inline "add a photo" camera overlay — its own full-screen Modal + CameraView (NO
           children on CameraView; controls are siblings) so it never fights the paused
           persistent camera or the Fabric unmount assert. Slides up, one shot, returns. */}
       <Modal
-        visible={!!photoCaptureTargetId}
+        visible={nativeModalVisible('photoCapture', !!photoCaptureTargetId)}
         animationType="slide"
         statusBarTranslucent
         presentationStyle="overFullScreen"
         onRequestClose={closePhotoCaptureOverlay}
+        onDismiss={() => {
+          releaseNativeModal('photoCapture');
+          const action = photoCaptureDismissActionRef.current;
+          photoCaptureDismissActionRef.current = null;
+          action?.();
+        }}
       >
         <View style={styles.captureOverlayRoot}>
           {/* Unconditional (no `{cond && <CameraView/>}` guard): the Modal only mounts its
@@ -6552,10 +7075,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               onPress={() => {
                 // Switch to the OS gallery for this same item (import instead of shoot).
                 const id = photoCaptureTargetId;
+                if (id) photoCaptureDismissActionRef.current = () => { void handleImageUpload(id); };
                 setPhotoCaptureTargetId(null);
-                // 500ms (not 350) so the overlay's dismiss animation fully settles before the
-                // OS picker presents — launching over a dismissing Modal can silently no-op on iOS.
-                if (id) setTimeout(() => handleImageUpload(id), 500);
               }}
             >
               <MaterialIcons name="photo-library" size={26} color="#FFF" />
@@ -6579,7 +7100,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       </Modal>
 
       <ErrorModal
-        visible={!!inventoryDedupDialog}
+        visible={nativeModalVisible('inventoryDedup', !!inventoryDedupDialog)}
         type="info"
         title="Already in inventory"
         message={inventoryDedupDialog?.title || 'Item'}
@@ -6610,15 +7131,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         quietButtonText="Cancel"
         onQuietPress={() => setInventoryDedupDialog(null)}
         onClose={() => setInventoryDedupDialog(null)}
+        onDismiss={() => releaseNativeModal('inventoryDedup')}
       />
 
       {/* Post-checkout listing status. One slim centred card for both phases — creation
           runs in the background, so it never takes the screen over. */}
       <ListingStatusCard
         state={
-          listingsReady
-            ? 'ready'
-            : (creatingListings && !processingCardDismissed) ? 'creating' : null
+          nativeModalVisible('listingStatus', listingStatusRequested)
+            ? listingsReady
+              ? 'ready'
+              : (creatingListings && !processingCardDismissed) ? 'creating' : null
+            : null
         }
         count={(listingsReady ? listingsReady.count : creatingListings?.count) ?? 1}
         onReview={() => {
@@ -6632,6 +7156,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (listingsReady) setListingsReady(null);
           else setProcessingCardDismissed(true);
         }}
+        onModalDismiss={() => releaseNativeModal('listingStatus')}
       />
     </GestureHandlerRootView>
   );

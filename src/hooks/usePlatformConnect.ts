@@ -9,6 +9,15 @@ import * as WebBrowser from 'expo-web-browser';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { getPlatform } from '../config/platforms';
+import { apiJson, ApiError } from '../lib/apiClient';
+
+// Match useResolution/useImportStatus: endpoint paths below are relative to the
+// normalized `/api` base, regardless of whether runtime configuration already
+// includes that suffix.
+const API_BASE = (() => {
+  const trimmed = API_BASE_URL.replace(/\/$/, '');
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+})();
 
 export type ConnectablePlatform = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook';
 
@@ -29,6 +38,11 @@ export interface ConnectOptions {
   shopifyShop?: string;
 }
 
+interface ConnectIntentResponse {
+  url: string;
+  expiresIn: number;
+}
+
 const parseCallback = (url: string): { status: string | null; connectionId?: string; message?: string } => {
   // Strip any hash fragment (e.g. "#_=_") before reading query params.
   const noHash = url.split('#')[0];
@@ -41,9 +55,7 @@ const parseCallback = (url: string): { status: string | null; connectionId?: str
   };
 };
 
-export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
-  const { orgId } = opts;
-
+export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
   // Start (or reuse) the server-owned scan. OAuth authorization and import
   // queueing are separate outcomes, so callers can render a retry when this
   // returns false instead of claiming inventory is importing.
@@ -52,7 +64,7 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
       const token = await ensureSupabaseJwt();
       if (!token) return false;
       const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-      const response = await fetch(`${API_BASE_URL}/api/sync/connections/${connectionId}/start-scan`, {
+      const response = await fetch(`${API_BASE}/sync/connections/${connectionId}/start-scan`, {
         method: 'POST',
         headers,
       });
@@ -72,8 +84,8 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
         return { success: false, errorMessage: 'Could not identify your account. Please try again.' };
       }
 
-      // Connect flow is described per-platform in the registry (loginPath,
-      // redirect scheme, extra params) — no platform-specific branching here.
+      // Connect flow is described per-platform in the registry (redirect
+      // scheme and extra params) — no platform-specific branching here.
       const def = getPlatform(platform)?.connect;
       if (!def) {
         return { success: false, errorMessage: 'This platform can’t be connected yet.' };
@@ -83,7 +95,6 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
         return { success: false, errorMessage: 'Choose your Shopify store first.' };
       }
 
-      const orgParam = orgId ? `&orgId=${encodeURIComponent(orgId)}` : '';
       // 'bare' platforms (Shopify, Facebook) reuse a single callback; 'tagged'
       // OAuth platforms carry the platform key on the deep link.
       const finalRedirectUri =
@@ -91,27 +102,43 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
           ? 'anorhaapp://auth-callback'
           : `anorhaapp://auth/callback?platform=${platform}`;
 
-      const base = `${API_BASE_URL}${def.loginPath}`;
+      let url: string;
+      try {
+        const intent = await apiJson<ConnectIntentResponse>(
+          `/api/auth/${platform}/connect-intent`,
+          {
+            method: 'POST',
+            body: {
+              finalRedirectUri,
+              ...(def.extraParams || {}),
+              ...(platform === 'shopify' && options.shopifyShop
+                ? { shop: options.shopifyShop }
+                : {}),
+            },
+          },
+        );
 
-      const extraParams = def.extraParams
-        ? Object.entries(def.extraParams)
-            .map(([k, v]) => `&${k}=${encodeURIComponent(v)}`)
-            .join('')
-        : '';
-
-      const shopParam =
-        platform === 'shopify' && options.shopifyShop
-          ? `&shop=${encodeURIComponent(options.shopifyShop)}`
-          : '';
-
-      const url = `${base}?userId=${user.id}&finalRedirectUri=${encodeURIComponent(
-        finalRedirectUri,
-      )}${orgParam}${extraParams}${shopParam}`;
+        if (!intent.url || typeof intent.url !== 'string') {
+          return {
+            success: false,
+            errorMessage: 'Could not securely start the connection. Please try again.',
+          };
+        }
+        url = intent.url;
+      } catch (error) {
+        return {
+          success: false,
+          errorMessage:
+            error instanceof ApiError && error.status === 401
+              ? 'Your session expired. Please sign in again.'
+              : 'Could not securely start the connection. Please try again.',
+        };
+      }
 
       let result: WebBrowser.WebBrowserAuthSessionResult;
       try {
         result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri, { showInRecents: true });
-      } catch (e) {
+      } catch {
         return { success: false, errorMessage: 'Could not open the connection window.' };
       }
 
@@ -139,7 +166,7 @@ export function usePlatformConnect(opts: { orgId?: string | null } = {}) {
 
       return { success: false, errorMessage: 'The connection did not complete. Please try again.' };
     },
-    [orgId, startScan],
+    [startScan],
   );
 
   return { connect, startScan };

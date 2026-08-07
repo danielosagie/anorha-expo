@@ -19,18 +19,19 @@ export default function ListingStatusCard({
   count = 1,
   onReview,
   onDismiss,
+  onModalDismiss,
 }: {
   state: 'creating' | 'ready' | null;
   count?: number;
   onReview: () => void;
   onDismiss: () => void;
+  onModalDismiss?: () => void;
 }) {
-  if (!state) return null;
   const plural = count > 1;
   const creating = state === 'creating';
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onDismiss} statusBarTranslucent>
+    <Modal visible={!!state} transparent animationType="fade" onRequestClose={onDismiss} onDismiss={onModalDismiss} statusBarTranslucent>
       <Pressable style={styles.overlay} onPress={onDismiss}>
         <Pressable style={styles.card} onPress={() => undefined}>
           {creating ? (

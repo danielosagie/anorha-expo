@@ -40,6 +40,7 @@ export function QuickChatHost() {
   return (
     <QuickChatSheet
       {...options}
+      dark={options?.dark === true}
       firstName={firstName}
       focusRequestKey={focusRequestKey}
       onClose={handleClose}

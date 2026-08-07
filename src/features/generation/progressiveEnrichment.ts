@@ -173,6 +173,5 @@ export function applyProgressiveEnrichment(
 
 export function enrichmentLabel(status?: EnrichmentStatus): string | null {
   if (status === 'pending') return 'Draft ready · Finishing category & shipping…';
-  if (status === 'partial' || status === 'failed') return 'Draft ready · Some defaults unavailable';
   return null;
 }
