@@ -23,7 +23,10 @@ const log = createLogger('PartnershipDetailScreen');
 const SSSYNC_API_BASE_URL = API_BASE_URL;
 
 interface LinkedProduct {
-    id: string; // This is the Link ID
+    // NOT the link id: the API groups links by product, so `id` is the PRODUCT
+    // id. The link routes key on CrossOrgProductLinks.Id — use `linkId`.
+    id: string;
+    linkId?: string;
     productId: string;
     title: string;
     sourceVariantSku: string;
@@ -94,9 +97,17 @@ export default function PartnershipDetailScreen() {
     const handleToggleSync = async (link: LinkedProduct) => {
         const action = link.status === 'paused' ? 'resume' : 'pause';
 
+        // These routes take a CrossOrgProductLinks.Id. `link.id` is the grouped
+        // product id, which 404s ("Product link not found").
+        const linkId = link.linkId;
+        if (!linkId) {
+            Alert.alert('Couldn’t update sync', 'This shared product is missing its link reference. Pull to refresh and try again.');
+            return;
+        }
+
         try {
             const token = await ensureSupabaseJwt();
-            const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${link.id}/${action}`, {
+            const response = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/links/${linkId}/${action}`, {
                 method: 'PATCH',
                 headers: { Authorization: `Bearer ${token}` }
             });
