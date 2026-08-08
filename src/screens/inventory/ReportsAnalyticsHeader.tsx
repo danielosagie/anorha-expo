@@ -13,6 +13,7 @@ import { API_BASE_URL } from '../../config/env';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import { ensureSupabaseJwt } from '../../lib/supabase';
 import { createLogger } from '../../utils/logger';
+import EmptyState from '../../components/EmptyState';
 
 const log = createLogger('ReportsAnalyticsHeader');
 const FETCH_TIMEOUT_MS = 15000;
@@ -21,7 +22,7 @@ const DELTA_GREEN = '#4A7C00';
 const DELTA_RED = '#D8434F';
 const PREVIOUS_LINE = '#C4C8CE';
 
-export type ReportsSection = 'overview' | 'sales' | 'platforms' | 'campaigns' | 'reports';
+export type ReportsSection = 'overview' | 'sales' | 'platforms' | 'campaigns' | 'usage' | 'reports';
 type TimeRange = '7D' | '30D' | '90D' | '1Y';
 
 interface ReportsAnalyticsHeaderProps {
@@ -107,6 +108,21 @@ interface RecoverySummary {
   avgDaysToSale: number | null;
 }
 
+interface UsageSessionRow {
+  sessionKey: string;
+  label: string;
+  startedAt: string;
+  totalCostCents: number;
+  eventCount: number;
+  topFeatureKey: string;
+}
+
+interface UsageSessionsState {
+  loading: boolean;
+  available: boolean;
+  sessions: UsageSessionRow[];
+}
+
 async function fetchJsonAuthed(path: string, controller: AbortController): Promise<any> {
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -162,6 +178,21 @@ const money = (amount: number, cents = false): string =>
     minimumFractionDigits: cents ? 2 : 0,
     maximumFractionDigits: cents ? 2 : 0,
   })}`;
+
+const usageCost = (costCents: number): string => `$${(costCents / 100).toFixed(2)}`;
+
+const relativeTime = (isoDate: string): string => {
+  const timestamp = Date.parse(isoDate);
+  if (!Number.isFinite(timestamp)) return '';
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (elapsedMinutes < 1) return 'Now';
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+  const hours = Math.floor(elapsedMinutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+};
 
 const platformLabel = (platform: string): string => {
   const value = String(platform || 'Other').trim();
@@ -562,6 +593,46 @@ function useCampaignPortfolio(): { loading: boolean; available: boolean; campaig
   return state;
 }
 
+function useUsageSessions(): UsageSessionsState {
+  const [state, setState] = useState<UsageSessionsState>({
+    loading: true,
+    available: false,
+    sessions: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const data = await fetchJsonAuthed('/api/billing/usage-sessions', controller);
+        const sessions = Array.isArray(data)
+          ? data.filter((row): row is UsageSessionRow => (
+              typeof row?.sessionKey === 'string'
+              && typeof row?.label === 'string'
+              && typeof row?.startedAt === 'string'
+              && Number.isFinite(row?.totalCostCents)
+              && Number.isFinite(row?.eventCount)
+              && typeof row?.topFeatureKey === 'string'
+            ))
+          : [];
+        if (!cancelled) setState({ loading: false, available: true, sessions });
+      } catch (error) {
+        if (cancelled) return;
+        log.warn('[usage] fetch failed:', error instanceof Error ? error.message : error);
+        setState({ loading: false, available: false, sessions: [] });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
+
+  return state;
+}
+
 const deltaPercent = (current: number, previous: number | null): number | null => {
   if (previous == null || previous <= 0) return null;
   return Math.round(((current - previous) / previous) * 100);
@@ -852,6 +923,25 @@ const WeekdaySalesChart: React.FC<{ points: WeekdayPoint[] }> = ({ points }) => 
   );
 };
 
+const UsageCards: React.FC<{ sessions: UsageSessionRow[] }> = ({ sessions }) => (
+  <View style={styles.usageList}>
+    {sessions.map((session) => (
+      <View key={session.sessionKey} style={styles.usageCard}>
+        <View style={styles.usageCardRow}>
+          <Text style={styles.usageLabel} numberOfLines={1}>{session.label}</Text>
+          <Text style={styles.usageCost}>{usageCost(session.totalCostCents)}</Text>
+        </View>
+        <View style={styles.usageCardRow}>
+          <Text style={styles.usageMeta}>{relativeTime(session.startedAt)}</Text>
+          <Text style={styles.usageMeta}>
+            {session.eventCount} {session.eventCount === 1 ? 'use' : 'uses'}
+          </Text>
+        </View>
+      </View>
+    ))}
+  </View>
+);
+
 const ReportsAnalyticsHeader: React.FC<ReportsAnalyticsHeaderProps> = ({
   activeSection,
   onSectionChange,
@@ -860,6 +950,7 @@ const ReportsAnalyticsHeader: React.FC<ReportsAnalyticsHeaderProps> = ({
   const analytics = useInventoryAnalytics();
   const metrics = usePortfolioMetrics();
   const campaignPortfolio = useCampaignPortfolio();
+  const usage = useUsageSessions();
   const [timeRange, setTimeRange] = useState<TimeRange>('30D');
 
   // TODO: Once /api/orders/summary accepts a days parameter, refetch 90D and 1Y.
@@ -925,6 +1016,7 @@ const ReportsAnalyticsHeader: React.FC<ReportsAnalyticsHeaderProps> = ({
           ['sales', 'Sales'],
           ['platforms', 'Platforms'],
           ['campaigns', 'Campaigns'],
+          ['usage', 'Usage'],
           ['reports', 'Reports'],
         ] as const).map(([key, label]) => {
           const active = activeSection === key;
@@ -1150,6 +1242,18 @@ const ReportsAnalyticsHeader: React.FC<ReportsAnalyticsHeaderProps> = ({
         </View>
       ) : null}
 
+      {activeSection === 'usage' && !usage.loading ? (
+        usage.available && usage.sessions.length > 0 ? (
+          <UsageCards sessions={usage.sessions} />
+        ) : (
+          <EmptyState
+            icon="chart-timeline-variant"
+            title={usage.available ? 'No usage yet' : 'Usage unavailable'}
+            style={styles.usageEmpty}
+          />
+        )
+      ) : null}
+
       {showReportsHeading ? <Text style={styles.reportsHeading}>Reports</Text> : null}
     </View>
   );
@@ -1291,6 +1395,26 @@ const styles = StyleSheet.create({
   campaignFooter: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 9 },
   campaignCollected: { color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular, fontSize: 12 },
   campaignDays: { color: CHAT_COLORS.faint, fontFamily: CHAT_FONT.regular, fontSize: 12 },
+  usageList: { gap: 10 },
+  usageCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#ECEBE6',
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    padding: 16,
+    gap: 10,
+  },
+  usageCardRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  usageLabel: { flex: 1, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.semibold, fontSize: 15 },
+  usageCost: {
+    color: CHAT_COLORS.ink,
+    fontFamily: CHAT_FONT.bold,
+    fontSize: 15,
+    fontVariant: ['tabular-nums'],
+  },
+  usageMeta: { color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular, fontSize: 12, fontVariant: ['tabular-nums'] },
+  usageEmpty: { paddingVertical: 44 },
   reportsHeading: { color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold, fontSize: 16, marginTop: 24, marginBottom: 2 },
 });
 
