@@ -4751,6 +4751,10 @@ const ProductDetailScreen = observer(
                     const rawType = connection?.PlatformType || 'unknown';
                     const typeLabel = rawType.charAt(0).toUpperCase() + rawType.slice(1);
                     const platformName = connection?.DisplayName || `${typeLabel} Account`;
+                    const hasRealPlatformProductId = (value: unknown): boolean => {
+                      const platformProductId = String(value || '').trim();
+                      return Boolean(platformProductId) && !platformProductId.startsWith('facebook-personal-job:');
+                    };
                     const parsedSyncMs = mapping.LastSyncedAt ? new Date(mapping.LastSyncedAt).getTime() : 0;
                     const isStale = !parsedSyncMs || (Date.now() - parsedSyncMs) > 24 * 60 * 60 * 1000;
                     // The backend stamps LastSyncedAt even on a FAILED push (writing
@@ -4770,6 +4774,9 @@ const ProductDetailScreen = observer(
                       statusColor = '#BA7517';
                       statusText = 'Needs review';
                     } else if (syncState === 'pending' || syncState === 'syncing' || syncState === 'queued' || syncState === 'processing') {
+                      statusColor = '#9CA3AF';
+                      statusText = 'Syncing\u2026';
+                    } else if (!hasRealPlatformProductId(mapping.PlatformProductId)) {
                       statusColor = '#9CA3AF';
                       statusText = 'Syncing\u2026';
                     } else {
