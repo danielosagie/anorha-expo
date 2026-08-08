@@ -12,7 +12,7 @@
  * The reachability/install probe lives in the shared <LinkComputerBody>, which
  * is ALSO rendered by the onboarding step so copy never drifts.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -23,14 +23,8 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import BaseModal from './BaseModal';
-import { ensureSupabaseJwt } from '../lib/supabase';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { BRAND_PRIMARY } from '../design/tokens';
-
-const SSSYNC_API_BASE_URL = (
-  process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL ||
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://api.sssync.app'
-).replace(/\/$/, '');
 
 // Companion-app deep link (probe only — never shown to the user).
 const COMPANION_URL_SCHEME = 'ponder://';
@@ -102,6 +96,11 @@ const COPY: Record<LinkComputerState, StateCopy> = {
 // ─────────────────────────── Shared body ───────────────────────────
 
 interface BodyProps {
+  /**
+   * Accepted for call-site compatibility, no longer read: liveness now comes
+   * from the signed-in user's own worker-presence heartbeat, which is already
+   * scoped to them.
+   */
   orgId?: string;
   /** Hide the soft exit (onboarding controls its own continue chrome). */
   hideSkip?: boolean;
@@ -127,64 +126,51 @@ export function LinkComputerBody({
   onDone,
   onStateChange,
 }: BodyProps) {
-  const [state, setState] = useState<LinkComputerState>('checking');
+  // Local install probe. iOS won't answer canOpenURL unless the scheme is
+  // declared in LSApplicationQueriesSchemes — a thrown/false result is
+  // "unknown", never a hard "not installed". `undefined` means still probing.
+  const [installed, setInstalled] = useState<boolean | null | undefined>(undefined);
 
   const runCheck = useCallback(async () => {
-    setState('checking');
-    onStateChange?.('checking');
-
-    // 1. Local install probe. iOS won't answer canOpenURL unless the scheme is
-    //    declared in LSApplicationQueriesSchemes — a thrown/false result is
-    //    "unknown", never a hard "not installed".
-    let installed: boolean | null = null;
+    setInstalled(undefined);
     try {
-      installed = await Linking.canOpenURL(COMPANION_URL_SCHEME);
+      setInstalled(await Linking.canOpenURL(COMPANION_URL_SCHEME));
     } catch {
-      installed = null;
+      setInstalled(null);
     }
-
-    // 2. Reachability via the backend health check. Guarded by an 8s timeout so a
-    //    hung request can never leave the sheet stuck on 'checking' (RN fetch has
-    //    no default timeout) — on abort we fall through to a real state below.
-    let reachable = false;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    try {
-      const token = await ensureSupabaseJwt();
-      const res = await fetch(
-        `${SSSYNC_API_BASE_URL}/api/platform-execution/ponder/health${
-          orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''
-        }`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : undefined, signal: ctrl.signal },
-      );
-      if (res.ok) {
-        const d = await res.json();
-        reachable = !!d?.reachable;
-      }
-    } catch {
-      // Network error OR the timeout abort — treat as not reachable.
-      reachable = false;
-    } finally {
-      clearTimeout(timer);
-    }
-
-    // Backend reachability is authoritative: actually reaching the computer's
-    // runtime means it's linked. canOpenURL is only a weak local hint (iOS returns
-    // false/throws unless the scheme is declared) and must NOT downgrade a
-    // confirmed-reachable computer to not_installed/unknown.
-    let next: LinkComputerState;
-    if (reachable) next = 'installed';
-    else if (installed === true) next = 'runtime_unreachable';
-    else if (installed === false) next = 'not_installed';
-    else next = 'unknown';
-
-    setState(next);
-    onStateChange?.(next);
-  }, [orgId, onStateChange]);
+  }, []);
 
   useEffect(() => {
     runCheck();
   }, [runCheck]);
+
+  // Liveness comes from the computer's own heartbeat in Convex (worker presence
+  // + a staleness TTL), the same signal the rest of the app already trusts.
+  // This used to call a backend health route that was never built: the 404 was
+  // swallowed, so "reachable" was permanently false and the verdict silently
+  // fell back to the local canOpenURL hint alone.
+  const { computerOnline, presenceLoaded, degraded } = useFacebookJobStatus(true);
+
+  const state = useMemo<LinkComputerState>(() => {
+    // Presence is authoritative: a live heartbeat means the computer is linked,
+    // and the weak local hint must never downgrade that. Wait for the first
+    // presence result before trusting computerOnline=false.
+    if (installed === undefined) return 'checking';
+    if (!degraded && !presenceLoaded) return 'checking';
+    if (!degraded && computerOnline) return 'installed';
+    if (installed === true) return 'runtime_unreachable';
+    if (installed === false) return 'not_installed';
+    return 'unknown';
+  }, [installed, computerOnline, presenceLoaded, degraded]);
+
+  // Report transitions only. The parent may setState on every report, so firing
+  // on each render would loop.
+  const lastReported = useRef<LinkComputerState | null>(null);
+  useEffect(() => {
+    if (lastReported.current === state) return;
+    lastReported.current = state;
+    onStateChange?.(state);
+  }, [state, onStateChange]);
 
   const copy = COPY[state];
 
