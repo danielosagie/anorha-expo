@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import { createLogger } from '../utils/logger';
 import type {
   ResolveResult,
@@ -44,19 +45,13 @@ export function useResolution(connectionId: string | null | undefined, importId?
     if (!connectionId) return;
     if (inFlightRef.current) return;
     inFlightRef.current = true;
-    // Without a timeout the review fetch could hang forever and leave a permanent spinner.
-    // Abort at 12s so it lands in the error state the screen already renders (with Retry).
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
+    // The shared client's timeout keeps a stalled review fetch from leaving a permanent
+    // spinner and lands in the error state the screen already renders (with Retry).
     try {
       setLoading(true);
       setError(null);
-      const token = await ensureSupabaseJwt();
       const query = importId ? `?importId=${encodeURIComponent(importId)}` : '';
-      const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolution${query}`, {
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        signal: controller.signal,
-      });
+      const res = await apiFetch(`/api/sync/connections/${connectionId}/resolution${query}`);
       if (!res.ok) throw new Error(`Failed to load inbox: ${res.status}`);
       const payload = (await res.json()) as ResolveResult;
       // Version was added to the rows-backed payload after the original mobile
@@ -71,11 +66,12 @@ export function useResolution(connectionId: string | null | undefined, importId?
       }));
       setResult(payload);
     } catch (err: any) {
-      const msg = err?.name === 'AbortError' ? 'Loading the inbox timed out — pull to retry.' : (err?.message ?? 'Failed to load inbox');
+      const msg = err?.name === 'AbortError' || err?.message === 'Request timed out'
+        ? 'Loading the inbox timed out — pull to retry.'
+        : (err?.message ?? 'Failed to load inbox');
       log.warn('refresh failed', msg);
       setError(msg);
     } finally {
-      clearTimeout(timer);
       inFlightRef.current = false;
       setLoading(false);
     }
@@ -97,22 +93,17 @@ export function useResolution(connectionId: string | null | undefined, importId?
     ): Promise<ResolveResponse | null> => {
       if (!connectionId) return null;
       setResolving(platformId);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
       try {
-        const token = await ensureSupabaseJwt();
-        const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve`, {
+        const res = await apiFetch(`/api/sync/connections/${connectionId}/resolve`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: {
             platformId,
             choice,
             canonicalId,
             valueOverride: options.valueOverride,
             version: options.version,
             importId: options.importId ?? importId ?? undefined,
-          }),
-          signal: controller.signal,
+          },
         });
         // 409 = the row's Version CAS was stale: another device/session resolved
         // this item concurrently. Nothing has been removed locally yet, so there
@@ -132,11 +123,10 @@ export function useResolution(connectionId: string | null | undefined, importId?
         );
         return (await res.json().catch(() => ({ success: true }))) as ResolveResponse;
       } catch (err: any) {
-        log.warn('resolve failed', err?.name === 'AbortError' ? 'request timed out' : err?.message);
+        log.warn('resolve failed', err?.name === 'AbortError' || err?.message === 'Request timed out' ? 'request timed out' : err?.message);
         await refresh(); // reconcile with the true server state (keeps the list visible)
         throw err;
       } finally {
-        clearTimeout(timer);
         setResolving(null);
       }
     },
@@ -154,17 +144,13 @@ export function useResolution(connectionId: string | null | undefined, importId?
 
       setResolving('bulk');
       try {
-        const token = await ensureSupabaseJwt();
         const results = [] as BulkResolveResponse['results'];
         for (const chunk of chunkBulkResolveItems(items)) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 20000);
           try {
-            const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/resolve-bulk`, {
+            const res = await apiFetch(`/api/sync/connections/${connectionId}/resolve-bulk`, {
               method: 'POST',
-              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ importId: bulkImportId ?? importId ?? undefined, items: chunk }),
-              signal: controller.signal,
+              body: { importId: bulkImportId ?? importId ?? undefined, items: chunk },
+              timeoutMs: 20000,
             });
             if (!res.ok) {
               const message = `Bulk answer failed: ${res.status}`;
@@ -174,12 +160,10 @@ export function useResolution(connectionId: string | null | undefined, importId?
             const payload = (await res.json()) as BulkResolveResponse;
             results.push(...normalizeBulkResolveResults(chunk, payload?.results));
           } catch (chunkError: any) {
-            const message = chunkError?.name === 'AbortError'
+            const message = chunkError?.name === 'AbortError' || chunkError?.message === 'Request timed out'
               ? 'Saving this chunk timed out.'
               : (chunkError?.message ?? 'Could not save this chunk.');
             results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
-          } finally {
-            clearTimeout(timer);
           }
         }
         setResult((previous) => previous
@@ -191,7 +175,7 @@ export function useResolution(connectionId: string | null | undefined, importId?
         // resume, or explicit refresh instead of charging every answer for it.
         return { results, summary: bulkResolutionSummary(results) };
       } catch (err: any) {
-        log.warn('bulk resolve failed', err?.name === 'AbortError' ? 'request timed out' : err?.message);
+        log.warn('bulk resolve failed', err?.name === 'AbortError' || err?.message === 'Request timed out' ? 'request timed out' : err?.message);
         await refresh();
         throw err;
       } finally {
@@ -266,20 +250,16 @@ export function useResolution(connectionId: string | null | undefined, importId?
 
       setResolving('undo');
       try {
-        const token = await ensureSupabaseJwt();
         const results = [] as BulkResolveResponse['results'];
         for (const chunk of chunkBulkResolveItems(items as BulkResolveItem[])) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 20000);
           try {
-            const res = await fetch(`${API_BASE}/sync/connections/${connectionId}/unresolve`, {
+            const res = await apiFetch(`/api/sync/connections/${connectionId}/unresolve`, {
               method: 'POST',
-              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
+              body: {
                 importId: bulkImportId ?? importId ?? undefined,
                 items: chunk.map(({ platformId, version }) => ({ platformId, version })),
-              }),
-              signal: controller.signal,
+              },
+              timeoutMs: 20000,
             });
             if (!res.ok) {
               const message = `Undo failed: ${res.status}`;
@@ -289,12 +269,10 @@ export function useResolution(connectionId: string | null | undefined, importId?
             const payload = (await res.json()) as BulkResolveResponse;
             results.push(...normalizeBulkResolveResults(chunk, payload?.results));
           } catch (chunkError: any) {
-            const message = chunkError?.name === 'AbortError'
+            const message = chunkError?.name === 'AbortError' || chunkError?.message === 'Request timed out'
               ? 'Undoing timed out.'
               : (chunkError?.message ?? 'Could not undo this batch.');
             results.push(...chunk.map((item) => ({ platformId: item.platformId, status: 'error' as const, message })));
-          } finally {
-            clearTimeout(timer);
           }
         }
         await refresh();

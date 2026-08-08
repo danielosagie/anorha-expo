@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { ensureSupabaseJwt } from '../lib/supabase';
-import { API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOptimizerQueues } from './useOptimizerQueues';
@@ -9,27 +9,7 @@ import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 const log = createLogger('useImportStatus');
 
-// Same `/api` normalization the rest of the app uses (see useResolution) so a
-// base URL that already ends in `/api` never composes `/api/api/…`.
-const API_BASE = (() => {
-  const trimmed = API_BASE_URL.replace(/\/$/, '');
-  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
-})();
-
 const POLL_MS = 20000;
-
-// A stalled request must never leave `loading` stuck forever: cap every fetch in
-// this hook so a hung socket surfaces as an AbortError (which the existing
-// try/catch fallbacks already treat as failure).
-async function fetchWithTimeout(url: string, init?: RequestInit, ms = 10000): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 export interface HubLaneConnection {
   connectionId: string;
@@ -114,13 +94,9 @@ export interface InboxSummaryResponse {
 
 // Single authoritative aggregate fetch. A malformed or unavailable response is
 // an error state, never a fabricated empty inbox.
-async function fetchInboxSummary(token: string | null): Promise<InboxSummaryResponse | null> {
-  const headers = {
-    Authorization: `Bearer ${token ?? ''}`,
-    'Content-Type': 'application/json',
-  };
+async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
   try {
-    const res = await fetchWithTimeout(`${API_BASE}/sync/inbox/summary`, { headers });
+    const res = await apiFetch('/api/sync/inbox/summary');
     if (!res.ok) return null; // 404 (not shipped yet) or any non-2xx → fall back
     const j: any = await res.json();
     if (!j || typeof j.totalNeedsAttention !== 'number' || !Array.isArray(j.connections)) {
@@ -224,7 +200,7 @@ export function useImportStatus(): ImportStatusData {
       token = null;
     }
 
-    const agg = token ? await fetchInboxSummary(token) : null;
+    const agg = token ? await fetchInboxSummary() : null;
     if (!isCurrent()) return;
     setSummary(agg);
     setError(agg ? null : 'Couldn’t verify your import status. Pull to retry.');

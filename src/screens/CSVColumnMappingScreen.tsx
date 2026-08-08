@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useAuth } from '@clerk/expo';
 import Animated, { FadeInUp } from 'react-native-reanimated';
-import { API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import {
     IC,
     InboxHeader,
@@ -30,13 +30,6 @@ import { createLogger } from '../utils/logger';
 const log = createLogger('CSVColumnMappingScreen');
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-
-// Some deployments set API_BASE_URL with a trailing `/api` — normalize once so
-// we never compose `/api/api/…` (matches useResolution / ConnectedPlatformItem).
-const API_BASE = (() => {
-    const trimmed = API_BASE_URL.replace(/\/$/, '');
-    return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
-})();
 
 // The server column brain speaks ProductField names; the mapping UI speaks
 // canonical Anorha keys. Only fields both sides know are prefilled — the rest
@@ -137,10 +130,9 @@ export function CSVColumnMappingScreen() {
         const fetchServerMappings = async (): Promise<boolean> => {
             const token = await ensureSupabaseJwt();
             if (!token) return false;
-            const res = await fetch(`${API_BASE}/sync/imports/normalize`, {
+            const res = await apiFetch('/api/sync/imports/normalize', {
                 method: 'POST',
-                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ platformType: 'csv', rawRows: csvData.slice(0, 25) }),
+                body: { platformType: 'csv', rawRows: csvData.slice(0, 25) },
             });
             if (!res.ok) return false;
             const envelope = await res.json().catch(() => null);
@@ -172,16 +164,12 @@ export function CSVColumnMappingScreen() {
                     return;
                 }
 
-                const response = await fetch(`${API_BASE_URL}/api/products/csv-column-mapping`, {
+                const response = await apiFetch('/api/products/csv-column-mapping', {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
+                    body: {
                         headers: csvHeaders,
                         sampleRow: sampleRow,
-                    }),
+                    },
                 });
 
                 if (!response.ok) {
@@ -311,20 +299,17 @@ export function CSVColumnMappingScreen() {
             setStage('uploading');
             let normRes: Response;
             try {
-                normRes = await fetch(`${API_BASE}/sync/imports/normalize`, {
+                normRes = await apiFetch('/api/sync/imports/normalize', {
                     method: 'POST',
-                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    body: {
                         connectionId: newConnection.Id,
                         platformType: 'csv',
                         items: transformedData,
-                    }),
+                    },
                 });
             } catch (fetchError) {
                 try {
-                    const probeRes = await fetch(`${API_BASE}/sync/connections/${newConnection.Id}/resolution`, {
-                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    });
+                    const probeRes = await apiFetch(`/api/sync/connections/${newConnection.Id}/resolution`);
                     if (probeRes.status === 404) {
                         await rollbackConnection();
                         throw fetchError;

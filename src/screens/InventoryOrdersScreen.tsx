@@ -60,7 +60,7 @@ import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
 import { getVariantPlatforms } from '../lib/platforms';
-import { api } from '../lib/apiClient';
+import { api, apiFetch } from '../lib/apiClient';
 import {
   buildPartnerInventoryOrigins,
   PartnerInventoryOrigin,
@@ -1582,11 +1582,9 @@ const InventoryOrdersScreen = observer(() => {
       }
 
       const traceHeaders = await getTraceHeaders();
-      const response = await fetch(`${API_BASE_URL}/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
+      const response = await apiFetch(`/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
           ...traceHeaders,
         },
       });

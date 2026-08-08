@@ -211,25 +211,25 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   const [publishResults, setPublishResults] = useState<Record<string, { success: boolean; error?: string }>>({});
   const [imageFailed, setImageFailed] = useState(false);
   const ranRef = useRef(false);
-  // ONE idempotency key per publish intent. This screen is mounted fresh per publish (new
-  // route params), so a per-instance key is the intent's identity — and "Try again" reuses
-  // it. That's the whole point: a POST that stalled but actually succeeded on the server
-  // must not create a DUPLICATE live listing when the user retries. The apiFetch layer
-  // sends it as the Idempotency-Key header so the backend dedupes the retry.
+  // ONE base idempotency key per full-publish intent. This screen is mounted fresh per
+  // publish (new route params), so a per-instance key identifies that full payload and
+  // "Try again" reuses it. A per-channel retry is a different payload, so it derives a
+  // subset-scoped key from the same base plus the sorted, lowercased channel identity.
+  // Retrying that same subset reuses its key, while a different subset cannot be falsely
+  // deduped. The apiFetch layer sends the selected key as the Idempotency-Key header.
   const publishIdemKeyRef = useRef<string>('');
   if (!publishIdemKeyRef.current) {
     publishIdemKeyRef.current = `publish-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
   const activePublishSubsetRef = useRef<string[] | null>(null);
   const activePublishIdemKeyRef = useRef(publishIdemKeyRef.current);
-  const retrySequenceRef = useRef(0);
 
   const runPublish = useCallback(async (platformSubset?: string[]) => {
     if (!publishPayload) { setPhase('done'); return; }
     if (platformSubset) {
       activePublishSubsetRef.current = platformSubset;
-      retrySequenceRef.current += 1;
-      activePublishIdemKeyRef.current = `${publishIdemKeyRef.current}-retry-${retrySequenceRef.current}`;
+      const subsetIdentity = platformSubset.map((platform) => platform.toLowerCase()).sort().join(',');
+      activePublishIdemKeyRef.current = `${publishIdemKeyRef.current}-subset-${subsetIdentity}`;
     }
     const requestedPlatforms = activePublishSubsetRef.current;
     const requestPayload = requestedPlatforms

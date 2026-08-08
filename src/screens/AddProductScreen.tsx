@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { CHAT_COLORS } from '../design/chatGlass';
 import type {
@@ -2992,14 +2993,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         return;
       }
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
+      const response = await apiFetch(
+        `/api/products/search-by-barcode?barcode=${encodeURIComponent(barcode)}`,
         {
           method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
         }
       );
 
@@ -6836,8 +6833,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     updatesByVariant[u.variantId].push(u);
                   });
 
-                  const API_BASE = API_BASE_URL;
-
                   // Process per variant, tracking which variants persisted so a
                   // partial failure can be reconciled instead of reported as a
                   // single blanket error (a naive retry would otherwise re-apply
@@ -6876,13 +6871,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                     if (payloadUpdates.length === 0) continue;
 
                     try {
-                      const response = await fetch(`${API_BASE}/api/products/${variantId}/inventory`, {
+                      const response = await apiFetch(`/api/products/${variantId}/inventory`, {
                         method: 'PUT',
-                        headers: {
-                          'Authorization': `Bearer ${token}`,
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ updates: payloadUpdates }),
+                        body: { updates: payloadUpdates },
                       });
 
                       if (!response.ok) {

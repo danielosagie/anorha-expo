@@ -21,6 +21,7 @@ import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
@@ -1807,10 +1808,9 @@ const ProductDetailScreen = observer(
       try {
         const authToken = await ensureSupabaseJwt();
         if (!authToken) throw new Error('Not signed in. Changes not saved');
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${item.Id}`, {
+        const response = await apiFetch(`/api/products/${item.Id}`, {
           method: 'PUT',
-          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(updateData),
+          body: updateData,
         });
         const saveResult = await response.json().catch(() => null);
         if (!response.ok) throw new Error(saveResult?.message || `Failed to update product. Status: ${response.status}`);
@@ -2233,9 +2233,9 @@ const ProductDetailScreen = observer(
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('Not signed in');
-        const res = await fetch(
-          `${SSSYNC_API_BASE_URL}/api/products/drafts/${detailedItem.Id}/restore-version/${versionId}`,
-          { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } },
+        const res = await apiFetch(
+          `/api/products/drafts/${detailedItem.Id}/restore-version/${versionId}`,
+          { method: 'POST' },
         );
         if (!res.ok) {
           const err = await res.json().catch(() => ({} as any));
@@ -2262,9 +2262,7 @@ const ProductDetailScreen = observer(
         try {
           const token = await ensureSupabaseJwt();
           if (!token) return;
-          const res = await fetch(`${SSSYNC_API_BASE_URL}/api/products/drafts/${detailedItem.Id}`, {
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          });
+          const res = await apiFetch(`/api/products/drafts/${detailedItem.Id}`);
           if (res.ok && !canceled) {
             const data = await res.json();
             setDraftVersions(data.versions || []);
@@ -2637,13 +2635,9 @@ const ProductDetailScreen = observer(
           },
         };
 
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/publish`, {
+        const response = await apiFetch('/api/products/publish', {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(publishPayload),
+          body: publishPayload,
         });
 
         const responseData = await response.json().catch(() => ({}));
@@ -2754,13 +2748,9 @@ const ProductDetailScreen = observer(
                     try {
                       const token = await ensureSupabaseJwt();
                       if (!token) return;
-                      await fetch(`${SSSYNC_API_BASE_URL}/api/products/facebook-personal/sync-now`, {
+                      await apiFetch('/api/products/facebook-personal/sync-now', {
                         method: 'POST',
-                        headers: {
-                          'Authorization': `Bearer ${token}`,
-                          'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ connectionId: targetConnection.Id, variantId: detailedItem.Id }),
+                        body: { connectionId: targetConnection.Id, variantId: detailedItem.Id },
                       });
                       showBanner('Facebook sync requested.');
                     } catch (syncErr: any) {
@@ -2792,10 +2782,8 @@ const ProductDetailScreen = observer(
           style: 'destructive',
           onPress: async () => {
             try {
-              const token = await ensureSupabaseJwt();
-              const res = await fetch(`${SSSYNC_API_BASE_URL}/api/sync/connections/${connectionId}/mappings/${mappingId}`, {
+              const res = await apiFetch(`/api/sync/connections/${connectionId}/mappings/${mappingId}`, {
                 method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
               });
 
               if (!res.ok) {
@@ -2846,13 +2834,9 @@ const ProductDetailScreen = observer(
           }]
         };
 
-        const response = await fetch(`${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}/inventory`, {
+        const response = await apiFetch(`/api/products/${detailedItem.Id}/inventory`, {
           method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updateData),
+          body: updateData,
         });
 
         if (!response.ok) {
@@ -3049,12 +3033,10 @@ const ProductDetailScreen = observer(
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('Authentication required');
-        const url = `${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`;
         const payload = { IsArchived: true };
-        const response = await fetch(url, {
+        const response = await apiFetch(`/api/products/${detailedItem.Id}`, {
           method: 'PUT',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: payload,
         });
         const responseBody = await response.text().catch(() => '');
         if (!response.ok) {
@@ -3072,10 +3054,8 @@ const ProductDetailScreen = observer(
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('Authentication required');
-        const url = `${SSSYNC_API_BASE_URL}/api/products/${detailedItem.Id}`;
-        const response = await fetch(url, {
+        const response = await apiFetch(`/api/products/${detailedItem.Id}`, {
           method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
         });
         const responseBody = await response.text().catch(() => '');
         if (!response.ok) {
@@ -3818,19 +3798,14 @@ const ProductDetailScreen = observer(
       (async () => {
         try {
           const token = await ensureSupabaseJwt();
-          const baseUrl = API_BASE_URL;
 
           if (!token) {
             log.debug('[ProductDetail] No auth token for draft loading');
             return;
           }
 
-          const response = await fetch(`${baseUrl}/api/products/drafts/${detailedItem.Id}`, {
+          const response = await apiFetch(`/api/products/drafts/${detailedItem.Id}`, {
             method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
           });
 
           if (response.ok) {

@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { BRAND_PRIMARY } from '../design/tokens';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing, BackHandler } from 'react-native';
 import { CameraView } from 'expo-camera';
@@ -745,10 +746,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const authToken = await ensureSupabaseJwt();
         if (!baseUrl) throw new Error('Backend draft save is unavailable');
         if (!authToken) throw new Error('Not signed in. Draft not saved');
-        const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+        const response = await apiFetch(`/api/products/drafts/${variantId}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ draftData: snapshot, media: mediaSnapshot }),
+          body: { draftData: snapshot, media: mediaSnapshot },
         });
         if (!response.ok) {
           const errorText = await response.text();
@@ -959,9 +959,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const token = await ensureSupabaseJwt();
         if (!baseUrl || !token) return;
 
-        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const connRes = await apiFetch('/api/platform-connections');
         let connections = connRes.ok ? await connRes.json() : [];
         setAllConnections(connections);
 
@@ -1870,17 +1868,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
       log.debug('[doSaveToInventory] Saving payload:', JSON.stringify(payload, null, 2));
 
-      const res = await fetch(`${baseUrl}/api/products/publish`, {
+      const res = await apiFetch('/api/products/publish', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           productId,
           variantId,
           publishIntent: 'SAVE_TO_INVENTORY', // Changed intent
           platformDetails: payload.platformDetails,
           media: payload.media,
           selectedPlatformsToPublish: [],
-        })
+        }
       });
 
       if (res.ok) {
@@ -1935,9 +1932,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       let connectionsToUse = allConnections;
       if (!connectionsToUse || connectionsToUse.length === 0) {
         log.debug('[doPublish] Connections not loaded yet, fetching now...');
-        const connRes = await fetch(`${baseUrl}/api/platform-connections`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const connRes = await apiFetch('/api/platform-connections');
         connectionsToUse = connRes.ok ? await connRes.json() : [];
         setAllConnections(connectionsToUse);
       }
@@ -2497,11 +2492,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         }
 
         log.debug('[GEN-DETAILS DraftLoad] ⏳ Loading draft for variant:', variantId);
-        const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+        const response = await apiFetch(`/api/products/drafts/${variantId}`, {
           method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
         });
 
         if (!response.ok) {

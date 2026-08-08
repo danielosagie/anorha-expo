@@ -28,6 +28,7 @@ import { black, grey400 } from 'react-native-paper/lib/typescript/styles/themes/
 import { overlay } from 'react-native-paper';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { apiFetch } from '../lib/apiClient';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
@@ -661,9 +662,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     setTaxonomyLoading(prev => ({ ...prev, [normalizedPlatform]: true }));
 
     try {
-      const token = await ensureSupabaseJwt();
-      const url = `${API_BASE_URL}/api/taxonomy/${normalizedPlatform}/search?q=${encodeURIComponent(normalizedQuery)}&limit=25&preferLeaf=true`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await apiFetch(`/api/taxonomy/${normalizedPlatform}/search?q=${encodeURIComponent(normalizedQuery)}&limit=25&preferLeaf=true`);
 
       if (!res.ok) {
         log.error('[ListingEditorForm] Taxonomy search failed:', res.status);
@@ -710,7 +709,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     setTaxonomyLoading(prev => ({ ...prev, [activePlatformKeyLower]: true }));
 
     try {
-      const token = await ensureSupabaseJwt();
       const safeQuery = query.trim();
       log.debug(`[Taxonomy] Auto-suggesting for ${activePlatformKeyLower} using query: "${safeQuery}"`);
 
@@ -736,11 +734,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         : undefined;
       const sourceUrls = sources?.map((s: any) => s?.url).filter((u: any) => typeof u === 'string');
 
-      const headers = {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      };
-      const taxonomyUrl = `${API_BASE_URL}/api/taxonomy/${activePlatformKeyLower}/suggest`;
       const taxonomyPayload = {
         query: safeQuery,
         title: activeData.title,
@@ -761,12 +754,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       // never silently breaks. Shopify always uses the local resolver.
       let res: Response | undefined;
       if (activePlatformKeyLower === 'ebay') {
-        res = await fetch(`${API_BASE_URL}/api/ebay/category-suggest`, {
-          method: 'POST', headers, body: JSON.stringify({ query: safeQuery, title: activeData.title, limit: 15 }),
+        res = await apiFetch('/api/ebay/category-suggest', {
+          method: 'POST', body: { query: safeQuery, title: activeData.title, limit: 15 },
         }).catch(() => undefined);
       }
       if (!res || !res.ok) {
-        res = await fetch(taxonomyUrl, { method: 'POST', headers, body: JSON.stringify(taxonomyPayload) });
+        res = await apiFetch(`/api/taxonomy/${activePlatformKeyLower}/suggest`, { method: 'POST', body: taxonomyPayload });
       }
 
       if (!res.ok) throw new Error('Failed to fetch suggestions');
@@ -858,9 +851,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const currentId = lk === 'shopify' ? (pdata.productCategoryId || pdata.categoryId) : pdata.categoryId;
     if (currentId) return null;
     try {
-      const token = await ensureSupabaseJwt();
       const categorySuggestion = pdata.categorySuggestion || pdata.categoryPath || pdata.productCategory || pdata.category;
-      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
       const taxonomyBody = JSON.stringify({
         query, title: pdata.title, description: pdata.description, brand: pdata.brand,
         tags: pdata.tags, categorySuggestion, productType: pdata.productType,
@@ -870,12 +861,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       // the local resolver if it's unavailable (e.g. backend not deployed yet). Shopify → local.
       let res: Response | undefined;
       if (lk === 'ebay') {
-        res = await fetch(`${API_BASE_URL}/api/ebay/category-suggest`, {
-          method: 'POST', headers, body: JSON.stringify({ query, title: pdata.title, limit: 15 }),
+        res = await apiFetch('/api/ebay/category-suggest', {
+          method: 'POST', body: { query, title: pdata.title, limit: 15 },
         }).catch(() => undefined);
       }
       if (!res || !res.ok) {
-        res = await fetch(`${API_BASE_URL}/api/taxonomy/${lk}/suggest`, { method: 'POST', headers, body: taxonomyBody });
+        res = await apiFetch(`/api/taxonomy/${lk}/suggest`, { method: 'POST', body: taxonomyBody });
       }
       if (!res.ok) return null;
       const data = await res.json();
@@ -949,9 +940,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     if (!categoryId || activePlatformKeyLower !== 'ebay') return;
     setAspectsLoading(true);
     try {
-      const token = await ensureSupabaseJwt();
-      const url = `${API_BASE_URL}/api/taxonomy/ebay/${encodeURIComponent(categoryId)}/aspects`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await apiFetch(`/api/taxonomy/ebay/${encodeURIComponent(categoryId)}/aspects`);
       if (!res.ok) throw new Error('Failed to fetch aspects');
       const data = await res.json();
       setAspects(Array.isArray(data) ? data : (data?.aspects || []));
@@ -968,10 +957,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     if (activePlatformKeyLower !== 'ebay') return;
     setEbayConditionsLoading(true);
     try {
-      const token = await ensureSupabaseJwt();
       const q = categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : '';
-      const url = `${API_BASE_URL}/api/ebay/conditions${q}`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await apiFetch(`/api/ebay/conditions${q}`);
       if (!res.ok) throw new Error('Failed to fetch conditions');
       const data = await res.json();
       const conditions = data?.conditions || [];
@@ -1014,16 +1001,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     setPricingResearchLoading(true);
     setPricingResearchResult(null);
     try {
-      const token = await ensureSupabaseJwt();
-      const res = await fetch(`${API_BASE_URL}/api/ebay/pricing-research`, {
+      const res = await apiFetch('/api/ebay/pricing-research', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           title: input.title,
           categoryId: input.categoryId || undefined,
           condition: input.condition || undefined,
           limit: 20,
-        }),
+        },
       });
       const data = await res.json();
       if (data && !data.error) PRICING_RESEARCH_CACHE.set(key, { data, ts: Date.now() });
@@ -1098,7 +1083,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setShippingEstimateLoading(true);
       setShippingEstimateResult(null);
       try {
-        const token = await ensureSupabaseJwt();
         const dims = override?.estimatedDimensions ?? (activeData as any).estimatedDimensions;
         const weightUnit = override?.weightUnit ?? (activeData.weightUnit || ew?.unit || 'lb');
         const params = new URLSearchParams({
@@ -1110,9 +1094,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         if (dims?.height != null) params.set('height', String(dims.height));
         // Speed maps to the backend ShippingRateMatrix Speed rows (Standard→Ground, Expedited→Expedited).
         params.set('speed', shippingSpeed === 'expedited' ? 'Expedited' : 'Ground');
-        const res = await fetch(`${API_BASE_URL}/api/shipping/estimate?${params.toString()}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await apiFetch(`/api/shipping/estimate?${params.toString()}`);
         const data = await res.json();
         if (data.error && !data.estimatedMin) {
           setShippingEstimateResult({ estimatedMin: 0, estimatedMax: 0, midpoint: 0, error: data.error });
