@@ -36,6 +36,7 @@ import { useUser } from '@clerk/expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SessionContext } from '../context/SessionContext';
 import { createLogger } from '../utils/logger';
+import { projectProductVariantTitle } from '../utils/productVariantTitle';
 const log = createLogger('ActivityFeedScreen');
 
 
@@ -186,7 +187,7 @@ const ActivityFeedScreen = observer(() => {
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
 
   // Subscribe to real-time product variant changes
-  useProductVariantRealtime();
+  const { updateCounter: productVariantUpdateCounter } = useProductVariantRealtime();
 
   // Get current user's profile image for "You" attribution
   const currentUserImageUrl = clerkUser?.imageUrl;
@@ -218,8 +219,11 @@ const ActivityFeedScreen = observer(() => {
 
   // Legend observables for live product data (titles, SKUs, images)
   const productVariantsMap = useMemo(
-    () => legendState?.productVariants$?.get?.() || {},
-    [legendState?.productVariants$],
+    () => Object.fromEntries(
+      Object.entries(legendState?.productVariants$?.get?.() || {})
+        .map(([id, variant]) => [id, projectProductVariantTitle(variant as any)]),
+    ),
+    [legendState?.productVariants$, productVariantUpdateCounter],
   );
 
   // Fetch org members and build user image map

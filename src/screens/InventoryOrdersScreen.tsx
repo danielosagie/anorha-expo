@@ -614,7 +614,7 @@ const InventoryOrdersScreen = observer(() => {
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
   // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
-  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Description, Tags)';
+  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)';
 
   const loadPartnerOrigins = useCallback(async () => {
     if (!currentOrg?.id) {
@@ -1223,6 +1223,8 @@ const InventoryOrdersScreen = observer(() => {
       const variant = variants[variantId];
       const variantWithType = variant as any;
       const parentProduct = Array.isArray(variant.Products) ? variant.Products[0] : variant.Products;
+      const hasOptions = variant.Options && typeof variant.Options === 'object' && Object.keys(variant.Options).length > 0;
+      const isOptionVariant = variantWithType.VariantType === 'option' || hasOptions;
 
       // Get images - check variant first, then product-level images
       const variantImages = imagesByVariantId.get(variantId) || [];
@@ -1295,6 +1297,7 @@ const InventoryOrdersScreen = observer(() => {
 
       return {
         ...variant,
+        Title: isOptionVariant ? variant.Title : parentProduct?.Title ?? variant.Title,
         imageUrl,
         productDescription: parentProduct?.Description || undefined,
         productTags: parentProduct?.Tags || [],

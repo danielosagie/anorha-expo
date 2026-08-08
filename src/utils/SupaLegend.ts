@@ -34,9 +34,11 @@ const log = createLogger('SupaLegend');
 export interface ProductVariant extends ProductVariantsRow {
   // Product copy moved to the parent Products row in item-model Phase 4B.
   Products?: {
+    Title: string;
     Description: string | null;
     Tags: string[] | null;
   } | Array<{
+    Title: string;
     Description: string | null;
     Tags: string[] | null;
   }> | null;
@@ -150,12 +152,12 @@ export async function initializeLegendState(
             collection: 'ProductVariants',
             // OPTIMIZED: Only fetch columns we actually use in the UI
             // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
-            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Description, Tags)'),
+            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)'),
             filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v7`, // Bumped for parent product copy
+                name: `productVariants_user_${currentUserId}_v8`, // Bumped for canonical parent title projection
                 retrySync: true,
             },
         })

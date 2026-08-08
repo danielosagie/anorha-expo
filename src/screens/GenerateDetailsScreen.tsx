@@ -485,6 +485,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const updatePlatforms = (updater: (prev: GeneratedPlatformDetails) => GeneratedPlatformDetails) => {
     platformsRef.current = updater(platformsRef.current);
     draftEditVersionRef.current += 1;
+    setSaveState(current => current === 'saved' ? 'idle' : current);
     forceUpdate({}); // Trigger re-render
     setUpdateCounter(c => c + 1); // Signal content change
     log.debug('[GEN-DETAILS] Updated platforms, triggering auto-save...');
@@ -742,16 +743,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (variantId) {
         const baseUrl = API_BASE_URL;
         const authToken = await ensureSupabaseJwt();
-        if (baseUrl && authToken) {
-          const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-            body: JSON.stringify({ draftData: snapshot, media: mediaSnapshot }),
-          });
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Backend draft failed (${response.status}): ${errorText}`);
-          }
+        if (!baseUrl) throw new Error('Backend draft save is unavailable');
+        if (!authToken) throw new Error('Not signed in. Draft not saved');
+        const response = await fetch(`${baseUrl}/api/products/drafts/${variantId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ draftData: snapshot, media: mediaSnapshot }),
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Backend draft failed (${response.status}): ${errorText}`);
         }
       }
 

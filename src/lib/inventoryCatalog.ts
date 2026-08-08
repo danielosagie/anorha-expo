@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 
 export type InventoryCatalogItem = {
   id: string;
@@ -10,7 +11,7 @@ export type InventoryCatalogItem = {
 export async function loadInventoryCatalog(userId: string): Promise<InventoryCatalogItem[]> {
   const { data, error } = await supabase
     .from('ProductVariants')
-    .select('Id, Title, Price, PrimaryImageUrl, VariantType, IsArchived, ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )')
+    .select('Id, Title, Price, PrimaryImageUrl, Options, VariantType, IsArchived, Products(Title), ProductImages!ProductImages_ProductVariantId_fkey ( ImageUrl, Position )')
     .eq('UserId', userId)
     .not('Sku', 'like', 'DRAFT-%')
     .range(0, 499);
@@ -30,7 +31,7 @@ export async function loadInventoryCatalog(userId: string): Promise<InventoryCat
 
       return {
         id: String(row.Id),
-        title: String(row.Title || 'Item'),
+        title: String(getProductVariantDisplayTitle(row) || 'Item'),
         price: Number(row.Price ?? 0),
         imageUrl,
       };

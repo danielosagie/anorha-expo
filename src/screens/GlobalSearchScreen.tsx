@@ -20,6 +20,7 @@ import { CameraView } from 'expo-camera';
 import { supabase } from '../lib/supabase';
 import { useLegendState } from '../context/LegendStateContext';
 import { createLogger } from '../utils/logger';
+import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 const log = createLogger('GlobalSearchScreen');
 
 
@@ -60,6 +61,7 @@ const PLATFORM_COLUMN: Partial<Record<SearchCategory, string>> = {
 };
 
 const escapeFilter = (s: string) => s.replace(/[%,()]/g, '\\$&');
+const PRODUCT_SEARCH_SELECT = 'Id, ProductId, Title, Sku, Barcode, Price, Options, VariantType, status, IsArchived, PrimaryImageUrl, OnShopify, OnSquare, OnEbay, Products(Title)';
 
 const GlobalSearchScreen: React.FC = () => {
   const navigation = useNavigation<any>();
@@ -142,27 +144,51 @@ const GlobalSearchScreen: React.FC = () => {
       try {
         const aggregated: SearchResult[] = [];
         const safe = escapeFilter(trimmed);
-        let req = supabase
+        let directVariantReq = supabase
           .from('ProductVariants')
-          .select('Id, ProductId, Title, Sku, Barcode, Price, status, IsArchived, PrimaryImageUrl')
+          .select(PRODUCT_SEARCH_SELECT)
           .eq('UserId', userId)
           .or(`Title.ilike.%${safe}%,Sku.ilike.%${safe}%,Barcode.ilike.%${safe}%`)
           .limit(50);
 
         const platformColumn = PLATFORM_COLUMN[category];
         if (platformColumn) {
-          req = req.eq(platformColumn, true);
+          directVariantReq = directVariantReq.eq(platformColumn, true);
         }
 
-        const { data, error } = await req;
+        const [directResult, parentResult] = await Promise.all([
+          directVariantReq,
+          supabase
+            .from('Products')
+            .select('Id')
+            .eq('UserId', userId)
+            .ilike('Title', `%${safe}%`)
+            .limit(50),
+        ]);
 
-        if (!error && data) {
-          data.forEach((v: any) => {
+        let parentVariants: any[] = [];
+        const matchingProductIds = (parentResult.data || []).map((product: any) => product.Id).filter(Boolean);
+        if (matchingProductIds.length > 0) {
+          let parentVariantReq = supabase
+            .from('ProductVariants')
+            .select(PRODUCT_SEARCH_SELECT)
+            .eq('UserId', userId)
+            .in('ProductId', matchingProductIds)
+            .limit(50);
+          if (platformColumn) parentVariantReq = parentVariantReq.eq(platformColumn, true);
+          const parentVariantResult = await parentVariantReq;
+          if (!parentVariantResult.error) parentVariants = parentVariantResult.data || [];
+        }
+
+        const rowsById = new Map<string, any>();
+        for (const variant of [...(directResult.data || []), ...parentVariants]) rowsById.set(variant.Id, variant);
+        if (!directResult.error || parentVariants.length > 0) {
+          rowsById.forEach((v: any) => {
             aggregated.push({
               type: 'product',
               id: v.Id,
               productId: v.ProductId,
-              title: v.Title || '(Untitled)',
+              title: getProductVariantDisplayTitle(v) || '(Untitled)',
               imageUrl: v.PrimaryImageUrl || undefined,
               price: typeof v.Price === 'number' ? v.Price : undefined,
               sku: v.Sku || undefined,

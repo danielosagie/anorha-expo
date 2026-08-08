@@ -4,6 +4,7 @@ import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import { getPlatform } from '../config/platforms';
+import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 const log = createLogger('useOptimizerQueues');
 
 
@@ -169,7 +170,7 @@ export interface UseOptimizerQueuesOptions {
 }
 
 export const OPTIMIZER_VARIANT_SELECT = `
-  Id, ProductId, Title, Sku, Price,
+  Id, ProductId, Title, Sku, Price, Options, VariantType,
   ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl),
   Products!inner(Title, Description)
 `;
@@ -179,9 +180,7 @@ export function normalizeOptimizerVariantRow(row: any): any {
   return {
     ...row,
     ProductId: row?.ProductId || parent?.Id,
-    // Product copy was normalized onto Products in item-model Phase 4B.
-    // A variant Title is only an option label now, not the canonical product title.
-    Title: parent?.Title || row?.Title || '',
+    Title: getProductVariantDisplayTitle(row) || '',
     Description: parent?.Description || '',
     ProductImages: Array.isArray(row?.ProductImages) ? row.ProductImages : [],
   };

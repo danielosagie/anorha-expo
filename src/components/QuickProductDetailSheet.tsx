@@ -21,6 +21,7 @@ import { getPlatform } from '../config/platforms';
 import PlatformFilterChips from './PlatformFilterChips';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { createLogger } from '../utils/logger';
+import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 const log = createLogger('QuickProductDetailSheet');
 
 
@@ -64,6 +65,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
   const [variants, setVariants] = useState<VariantInventory[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [displayTitle, setDisplayTitle] = useState(() => getProductVariantDisplayTitle(product.variant) || 'Product');
   const [inventoryUpdates, setInventoryUpdates] = useState<Record<string, { quantity: number; price?: number }>>({});
   // Note: Keys are composite: `${variantId}:${locationId}`
   const [selectedPlatformFilter, setSelectedPlatformFilter] = useState<string | null>(null);
@@ -73,6 +75,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
     const loadData = async () => {
       try {
         setIsLoading(true);
+        setDisplayTitle(getProductVariantDisplayTitle(product.variant) || 'Product');
         log.debug('[QUICK DETAIL] Loading data for product:', product.variant?.Id || 'unknown');
 
         let loadedVariants: VariantInventory[] = [];
@@ -107,8 +110,12 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
               const { data: allVariants, error: variantsError } = await supabase
                 .from('ProductVariants')
                 // Production-verified schema: ProductVariants has no Description; this sheet does not render it.
-                .select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, PrimaryImageUrl, CreatedAt, UpdatedAt')
+                .select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title)')
                 .eq('ProductId', baseVariant.ProductId);
+
+              const selectedVariant = (allVariants || []).find((v: any) => v.Id === baseVariant.Id)
+                || (allVariants || []).find((v: any) => v.VariantType !== 'option');
+              if (selectedVariant) setDisplayTitle(getProductVariantDisplayTitle(selectedVariant) || 'Product');
 
               log.debug('[QUICK DETAIL] DB Query result:', {
                 productId: baseVariant.ProductId,
@@ -166,7 +173,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
                 const hasOptions = Object.keys(optionValues).length > 0;
                 const variantName = hasOptions
                   ? Object.values(optionValues).join(' / ')
-                  : (v.Title || 'Default');
+                  : (getProductVariantDisplayTitle(v) || 'Default');
 
                 return {
                   id: v.Id,
@@ -378,7 +385,7 @@ const QuickProductDetailSheet: React.FC<QuickProductDetailSheetProps> = ({
   }
 
   const mainImage = product.images?.[0]?.ImageUrl || product.variant?.ImageUrl;
-  const title = product.variant?.Title || 'Product';
+  const title = displayTitle;
   const price = product.variant?.Price || 0;
   const sku = product.variant?.Sku || 'N/A';
   const totalStock = variants.reduce((sum, v) => {

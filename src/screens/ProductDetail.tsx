@@ -50,6 +50,7 @@ import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
+import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 const log = createLogger('ProductDetail');
 
 
@@ -175,6 +176,7 @@ const toProductDetailItem = (variant: any, fallback?: ProductDetailItem | null):
   const product = Array.isArray(variant?.Products) ? variant.Products[0] : variant?.Products;
   return {
     ...variant,
+    Title: getProductVariantDisplayTitle(variant) ?? fallback?.Title,
     Description: product?.Description ?? variant?.Description ?? fallback?.Description ?? null,
     Tags: Array.isArray(product?.Tags)
       ? product.Tags
@@ -1473,6 +1475,7 @@ const ProductDetailScreen = observer(
             CreatedAt,
             UpdatedAt,
             Products (
+              Title,
               Description,
               Tags
             ),
@@ -3144,7 +3147,7 @@ const ProductDetailScreen = observer(
         // stale lookup can't overwrite the newer product's state.
         let canceled = false;
         // Production-verified schema: Description/Tags live on Products; ProductVariants has no Metadata.
-        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, IsArchived, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, CreatedAt, UpdatedAt, Products(Description, Tags)';
+        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, IsArchived, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, CreatedAt, UpdatedAt, Products(Title, Description, Tags)';
         const applyVariant = (data: any) => {
           const item = toProductDetailItem(data);
           setDetailedItem(item);
@@ -3955,7 +3958,7 @@ const ProductDetailScreen = observer(
         if (!next || !prev) return;
         if (JSON.stringify(next) === JSON.stringify(prev)) return;
 
-        const updatedProduct = next as ProductVariant;
+        const updatedProduct = toProductDetailItem(next, detailedItem);
         log.debug('[ProductDetail] REALTIME EVENT FIRED: UPDATE');
         log.debug('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
 

@@ -30,6 +30,7 @@ import {
   startOfLocalDay,
 } from '../../features/liquidationConversation/campaignTiming';
 import { getSproutTheme } from '../../design/sproutTheme';
+import { projectProductVariantTitle } from '../../utils/productVariantTitle';
 
 const BRAND = '#93C822';
 const FONT = {
@@ -65,6 +66,8 @@ type InventoryRow = {
   Price?: number;
   PrimaryImageUrl?: string;
   VariantType?: string;
+  Options?: Record<string, unknown> | null;
+  Products?: { Title?: string | null } | Array<{ Title?: string | null }> | null;
   IsArchived?: boolean;
 };
 
@@ -75,7 +78,7 @@ type PricingResearchState =
   | { status: 'empty' }
   | { status: 'error' };
 
-const SELECT_COLS = 'Id, Title, Sku, Price, PrimaryImageUrl, VariantType, IsArchived';
+const SELECT_COLS = 'Id, Title, Sku, Price, PrimaryImageUrl, Options, VariantType, IsArchived, Products(Title)';
 
 // How much of the listed value a clearout is expected to recover. The goal we
 // pre-fill is grounded in the items the seller actually picked, not a guess,
@@ -199,7 +202,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
             .not('Sku', 'like', 'DRAFT-%')
             .range(from, to);
           if (error) throw error;
-          const r = (data as InventoryRow[]) || [];
+          const r = ((data as InventoryRow[]) || []).map(projectProductVariantTitle);
           all.push(...r);
           if (r.length < size || all.length >= MAX_ITEMS) break;
           from += size;

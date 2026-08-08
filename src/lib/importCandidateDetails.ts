@@ -1,4 +1,5 @@
 import { ensureSupabaseJwt, supabase } from './supabase';
+import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 import type { CanonicalRef, SyncItem } from '../types/syncItem';
 
 export interface IncomingItemDetails {
@@ -155,7 +156,7 @@ export async function fetchImportIncomingItemDetails(
       ? supabase
           .from('ProductVariants')
           // Production-verified schema: ProductVariants has no Description; product copy lives on Products.
-          .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+          .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Options, VariantType, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
           .eq('Sku', draftKey)
           .limit(1)
           .maybeSingle()
@@ -164,7 +165,7 @@ export async function fetchImportIncomingItemDetails(
       ? supabase
           .from('ProductVariants')
           // Production-verified schema: ProductVariants has no Description; product copy lives on Products.
-          .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+          .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Options, VariantType, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
           .eq('Id', item.platformId)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -179,7 +180,7 @@ export async function fetchImportIncomingItemDetails(
     const result = await supabase
       .from('ProductVariants')
       // Production-verified schema: ProductVariants has no Description; product copy lives on Products.
-      .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+      .select('Id, Title, Sku, PrimaryImageUrl, SourceOrgId, Options, VariantType, Products(Title, Description), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
       .eq('Id', mapping.ProductVariantId)
       .maybeSingle();
     if (result.error) throw result.error;
@@ -217,8 +218,7 @@ export async function fetchImportIncomingItemDetails(
     title:
       firstText(mappingObjects, ['listingTitle', 'sourceTitle', 'title', 'name'], true) ||
       usefulTitle(mapping?.ConnectionTitle) ||
-      usefulTitle(variant?.Title) ||
-      usefulTitle(product?.Title) ||
+      usefulTitle(getProductVariantDisplayTitle(variant)) ||
       (!isDraftId(mapping?.PlatformSku) ? cleanText(mapping?.PlatformSku) : '') ||
       (!isDraftId(variant?.Sku) ? cleanText(variant?.Sku) : '') ||
       descriptionTitle(description),
@@ -248,7 +248,7 @@ export async function fetchImportCandidateDetails(
   const [variantsResult, mappingsResult] = await Promise.all([
     supabase
       .from('ProductVariants')
-      .select('Id, Title, Sku, Price, PrimaryImageUrl, ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+      .select('Id, Title, Sku, Price, PrimaryImageUrl, Options, VariantType, Products(Title), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
       .in('Id', ids),
     supabase
       .from('PlatformProductMappings')
@@ -298,7 +298,7 @@ export async function fetchImportCandidateDetails(
       sources.find((source) => !incoming.includes(source.toLowerCase())) ?? sources[0] ?? null;
     details[String(row.Id)] = {
       id: String(row.Id),
-      title: row.Title ?? null,
+      title: getProductVariantDisplayTitle(row) ?? null,
       sku: row.Sku ?? null,
       price: row.Price ?? null,
       imageUrl: row.PrimaryImageUrl ?? images[0] ?? null,

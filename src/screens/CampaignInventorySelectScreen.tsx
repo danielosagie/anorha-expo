@@ -26,6 +26,7 @@ import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { useLegendState } from '../context/LegendStateContext';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { API_BASE_URL } from '../config/env';
+import { projectProductVariantTitle } from '../utils/productVariantTitle';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -35,7 +36,7 @@ const CONVEX_TEMPLATE =
 const BRAND = '#93C822';
 // Production-verified schema: ProductVariants has no Tags; product tags live on Products.
 const SELECT_COLS =
-  'Id, Title, Sku, Price, PrimaryImageUrl, VariantType, IsArchived, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, Products(Tags)';
+  'Id, Title, Sku, Price, PrimaryImageUrl, Options, VariantType, IsArchived, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, Products(Title, Tags)';
 
 const productTags = (row: any): string[] => {
   const product = Array.isArray(row?.Products) ? row.Products[0] : row?.Products;
@@ -112,7 +113,9 @@ const CampaignInventorySelectScreen = () => {
           if (error) throw error;
           if (cancelled) return;
 
-          const page = (data || []).filter(row => row.VariantType !== 'option' && !row.IsArchived);
+          const page = (data || [])
+            .filter(row => row.VariantType !== 'option' && !row.IsArchived)
+            .map(projectProductVariantTitle);
           if (!renderedFirstPage) {
             setRows(page);
             setLoading(false);
