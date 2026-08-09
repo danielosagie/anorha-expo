@@ -31,7 +31,9 @@
         "EXPO_PUBLIC_ENV": "production",
         "SENTRY_ORG": "inirha",
         "SENTRY_PROJECT": "anorha-expo",
-        "SENTRY_ALLOW_FAILURE": "true"
+        "SENTRY_ALLOW_FAILURE": "true",
+        "EXPO_PUBLIC_POSTHOG_KEY": "phc_Hgb2LwpSRvt2hGFEw80givHDqh3hIJn88Txz1ZvhphE",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
       },
       "ios": {
         "simulator": false
