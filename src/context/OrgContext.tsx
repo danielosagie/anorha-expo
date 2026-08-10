@@ -4,6 +4,8 @@ import React, { createContext, useState, useEffect, useCallback, useContext, use
 import { useUser, useOrganizationList } from '@clerk/expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../lib/supabase';
+import { getCollaborationSocket, onCollaborationSocketReady, type Socket } from '../lib/collaborationSocket';
+import { markCatalogStale } from '../lib/catalogPatches';
 import { SessionContext } from './SessionContext';
 import { API_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
@@ -249,6 +251,50 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [hydrateFromCache, isSignedIn, persistOrgCache]);
 
+  // ── org:switch socket half ────────────────────────────────────────────────
+  // The collaboration socket joins rooms per org on CONNECT; after an in-app
+  // org switch the server would keep routing this client the OLD org's events.
+  // Emit 'org:switch' so the backend (handler added in parallel) can re-room
+  // the connection — emitting to a server that ignores it is harmless.
+  // Reconnect handling: socket.io re-runs the server-side connect flow on every
+  // reconnect (which rooms by the token's active org, refreshed by the PATCH
+  // below), but re-emit on 'connect' anyway so a reconnect that raced the
+  // switch still converges on the current org.
+  const currentOrgIdRef = useRef<string | null>(null);
+  currentOrgIdRef.current = currentOrg?.id ?? null;
+
+  const emitOrgSwitch = useCallback((socket: Socket | null, orgId: string | null) => {
+    if (!socket || !orgId) return;
+    try {
+      socket.emit('org:switch', { orgId });
+      log.debug('[OrgContext] Emitted org:switch for org:', orgId);
+    } catch (e) {
+      log.warn('[OrgContext] Failed to emit org:switch:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    let trackedSocket: Socket | null = null;
+    const handleReconnect = () => emitOrgSwitch(trackedSocket, currentOrgIdRef.current);
+
+    // Fires immediately if a shared socket already exists, and again for every
+    // NEW socket created after a teardown — covering "socket created after the
+    // org was already selected" without polling.
+    const offReady = onCollaborationSocketReady((socket) => {
+      if (trackedSocket && trackedSocket !== socket) {
+        trackedSocket.off('connect', handleReconnect);
+      }
+      trackedSocket = socket;
+      socket.on('connect', handleReconnect);
+      emitOrgSwitch(socket, currentOrgIdRef.current);
+    });
+
+    return () => {
+      offReady();
+      trackedSocket?.off('connect', handleReconnect);
+    };
+  }, [emitOrgSwitch]);
+
   /**
    * 3. Switch active org
    */
@@ -283,6 +329,12 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await persistOrgCache({ ...switched, isActive: true }, updatedOrgs);
       }
 
+      // Point the realtime connection at the new org, and flag org-scoped
+      // catalog state (shelf freshness gate) as stale.
+      currentOrgIdRef.current = orgId;
+      emitOrgSwitch(getCollaborationSocket(), orgId);
+      markCatalogStale('org-switch');
+
       setError(null);
       log.debug('[OrgContext] Switched to org:', orgId);
     } catch (err) {
@@ -291,7 +343,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setError(errMsg);
       throw err;
     }
-  }, [availableOrgs, persistOrgCache]);
+  }, [availableOrgs, emitOrgSwitch, persistOrgCache]);
 
   /**
    * Refresh orgs (re-fetch from API)

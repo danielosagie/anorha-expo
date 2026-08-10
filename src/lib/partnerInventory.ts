@@ -1,3 +1,74 @@
+/**
+ * Pool sync behavior, mirroring the backend's canonical fold
+ * (sssync-bknd src/canonical-data/inventory.service.ts):
+ * 'shared'/'aggregate' pools REPLICATE one absolute quantity to every level
+ * row, so folding them must take max (sum multiplies stock by location count
+ * and oversells). Only 'independent' pools hold genuinely distinct
+ * per-location stock and may be summed.
+ */
+export type PoolInventoryMode = 'shared' | 'independent' | 'aggregate';
+
+export const isIndependentPoolMode = (inventoryMode?: string | null): boolean =>
+  (inventoryMode || 'shared') === 'independent';
+
+/** Fold one pool's per-row quantities into that pool's quantity. */
+export const foldPoolQuantities = (
+  quantities: number[],
+  inventoryMode?: string | null,
+): number => {
+  const values = (quantities || []).map((q) => Number(q) || 0);
+  if (values.length === 0) return 0;
+  if (isIndependentPoolMode(inventoryMode)) {
+    return values.reduce((sum, q) => sum + q, 0);
+  }
+  return Math.max(...values);
+};
+
+/**
+ * PoolId -> inventoryMode index from the /api/pools/org/:orgId payload
+ * (which returns inventoryMode; older callers ignored it).
+ */
+export const buildPoolModeIndex = (pools: any[]): Record<string, string> => {
+  const index: Record<string, string> = {};
+  for (const pool of pools || []) {
+    const id = typeof pool?.id === 'string' && pool.id ? pool.id : undefined;
+    if (!id) continue;
+    index[id] = typeof pool?.inventoryMode === 'string' && pool.inventoryMode
+      ? pool.inventoryMode
+      : 'shared';
+  }
+  return index;
+};
+
+/**
+ * Total quantity across a set of pool-backed level rows: rows are grouped per
+ * pool, each pool folded by its mode (replicated -> max, independent -> sum),
+ * then DISTINCT pools are summed (different pools are different stock).
+ * Rows without a PoolId are treated as their own singleton pools.
+ */
+export const sumPooledLevelQuantities = (
+  levels: Array<{ PoolId?: string | null; Quantity?: number | null }>,
+  poolModeById: Record<string, string>,
+): number => {
+  const byPool = new Map<string, number[]>();
+  let poollessTotal = 0;
+  for (const level of levels || []) {
+    const poolId = (level as any)?.PoolId;
+    if (typeof poolId === 'string' && poolId) {
+      const bucket = byPool.get(poolId);
+      if (bucket) bucket.push(Number(level.Quantity) || 0);
+      else byPool.set(poolId, [Number(level.Quantity) || 0]);
+    } else {
+      poollessTotal += Number(level?.Quantity) || 0;
+    }
+  }
+  let total = poollessTotal;
+  for (const [poolId, quantities] of byPool) {
+    total += foldPoolQuantities(quantities, poolModeById[poolId]);
+  }
+  return total;
+};
+
 export type PartnerInventoryOrigin = {
   id: string;
   name: string;

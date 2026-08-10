@@ -34,6 +34,8 @@ import * as Sentry from '@sentry/react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { init as initFlowLogger } from './src/lib/mobileFlowLogger';
 import { LiveActivityProvider } from './src/context/LiveActivityContext';
+import { useCatalogRealtimeBridge } from './src/hooks/useCollaboration';
+import { markCatalogStale } from './src/lib/catalogPatches';
 import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
 import SessionReconnectScreen from './src/components/SessionReconnectScreen';
@@ -92,6 +94,16 @@ const App: React.FC = () => {
 
   // Use Clerk's official Expo SecureStore token cache
   const tokenCache = clerkTokenCache;
+
+  // Socket → catalog patch bus bridge, mounted once at app level so team edits,
+  // webhook inventory changes, and partnership updates keep the shelf live even
+  // while it is not focused. Isolated in a null component so the hook's
+  // re-renders never touch the app tree. useCollaboration no-ops until a Clerk
+  // user exists, so it is safe in all auth states.
+  const CatalogRealtimeBridge: React.FC = () => {
+    useCatalogRealtimeBridge();
+    return null;
+  };
 
   // Authed app content (without NavigationContainer)
   const AuthedAppContent: React.FC<{ navigationRef: React.RefObject<NavigationContainerRef<any> | null> }> = ({ navigationRef }) => {
@@ -476,6 +488,12 @@ const App: React.FC = () => {
         // Realtime + API calls don't silently 401 before the next scheduled refresh.
         void forceRefreshSupabaseJwt();
 
+        // Anything could have changed server-side while backgrounded (and the
+        // realtime channels were suspended with the app). Flag catalog state as
+        // stale: the inventory shelf resets its freshness stamp and, if focused,
+        // runs a cheap delta refetch instead of waiting out its 20s gate.
+        markCatalogStale('foreground');
+
         void (async () => {
           const checkpoint = await loadActiveFlowCheckpoint(userId);
           if (!checkpoint || checkpoint.status === 'completed') return;
@@ -632,6 +650,7 @@ const App: React.FC = () => {
             )}
             <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
+            <CatalogRealtimeBridge />
           </ThemeProvider>
         </LegendStateContext.Provider>
       </LegendStateControlContext.Provider>
