@@ -90,6 +90,11 @@ const TAB_BAR_BOTTOM_OFFSET = 18;
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 const INVENTORY_CHAT_PEEK_RATIO = 0.38;
+// Focus refetch freshness window (run 8 P2: every tab visit re-ran the full
+// ProductVariants pagination + links + levels). 20s covers a tab bounce while
+// staying far under any real edit-elsewhere-then-return gap; edits landing
+// through explicit paths never wait on it.
+const SHELF_FOCUS_FRESH_MS = 20_000;
 
 type InventoryQuickChatMode = 'select' | 'edit';
 
@@ -701,6 +706,10 @@ const InventoryOrdersScreen = observer(() => {
     return allRows;
   }, []);
 
+  // Last SUCCESSFUL shelf fetch (mount or focus), for the focus freshness
+  // window. A ref, not state: reading it must never re-render the shelf.
+  const lastShelfFetchAtRef = useRef(0);
+
   useEffect(() => {
     const directFetchProducts = async () => {
       if (supabase && legendState?.userId) {
@@ -766,6 +775,7 @@ const InventoryOrdersScreen = observer(() => {
                 setDirectFetchLevels(levelsMap);
               }
             }
+            lastShelfFetchAtRef.current = Date.now();
           }
         } catch (e) {
           log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
@@ -795,6 +805,17 @@ const InventoryOrdersScreen = observer(() => {
 
       const refreshOnFocus = async () => {
         if (!legendState?.userId) return;
+
+        // Freshness window: a full shelf refetch is pagination over every
+        // ProductVariant plus links and levels (multi-second at 344 items,
+        // run 8), so a tab bounce within 20s just shows the cached shelf.
+        // Only this focus path is gated; explicit refetches (mount, edits)
+        // never route through here, so they always run.
+        const sinceLastFetch = Date.now() - lastShelfFetchAtRef.current;
+        if (sinceLastFetch < SHELF_FOCUS_FRESH_MS) {
+          log.debug(`[InventoryOrdersScreen] Focus refetch skipped - shelf is ${Math.round(sinceLastFetch / 1000)}s fresh`);
+          return;
+        }
 
         log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
         void loadPartnerOrigins();
@@ -854,6 +875,7 @@ const InventoryOrdersScreen = observer(() => {
               });
               setDirectFetchLevels(levelsMap);
             }
+            lastShelfFetchAtRef.current = Date.now();
             log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
           }
         } catch (e) {

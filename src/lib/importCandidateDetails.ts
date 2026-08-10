@@ -248,7 +248,7 @@ export async function fetchImportCandidateDetails(
   const [variantsResult, mappingsResult] = await Promise.all([
     supabase
       .from('ProductVariants')
-      .select('Id, Title, Sku, Price, PrimaryImageUrl, Options, VariantType, Products(Title), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
+      .select('Id, Title, Sku, Price, PrimaryImageUrl, UpdatedAt, Options, VariantType, Products(Title), ProductImages:ProductImages!ProductImages_ProductVariantId_fkey(ImageUrl, Position)')
       .in('Id', ids),
     supabase
       .from('PlatformProductMappings')
@@ -290,7 +290,7 @@ export async function fetchImportCandidateDetails(
     const images = Array.isArray(row.ProductImages)
       ? [...row.ProductImages]
           .sort((a, b) => Number(a?.Position ?? 0) - Number(b?.Position ?? 0))
-          .map((image) => image?.ImageUrl)
+          .map((image) => cleanText(image?.ImageUrl))
           .filter(Boolean)
       : [];
     const sources = sourcesByVariant.get(String(row.Id)) ?? [];
@@ -299,10 +299,14 @@ export async function fetchImportCandidateDetails(
     details[String(row.Id)] = {
       id: String(row.Id),
       title: getProductVariantDisplayTitle(row) ?? null,
-      sku: row.Sku ?? null,
+      sku: cleanText(row.Sku) || null,
       price: row.Price ?? null,
-      imageUrl: row.PrimaryImageUrl ?? images[0] ?? null,
+      // `??` alone was the hydration hole: an EMPTY-STRING PrimaryImageUrl is
+      // not nullish, so it blocked the ProductImages fallback and rendered a
+      // placeholder even when the variant had real photos (run 8 P2-2).
+      imageUrl: cleanText(row.PrimaryImageUrl) || images[0] || null,
       sourcePlatform,
+      updatedAt: cleanText(row.UpdatedAt) || null,
     };
   }
   return details;
