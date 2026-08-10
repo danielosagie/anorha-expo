@@ -5,7 +5,6 @@ import {
     View,
     Text,
     StyleSheet,
-    Modal,
     TouchableOpacity,
     Pressable,
     ScrollView,
@@ -74,6 +73,7 @@ export function PublishConfirmationContent({
     allConnections,
     selectedConnectionIds,
     setSelectedConnectionIds,
+    productSummary,
     isPublishing = false,
     onSaveToInventory,
     onAddChannel,
@@ -191,6 +191,11 @@ export function PublishConfirmationContent({
                 </View>
 
                 <View style={styles.titleBlock}>
+                    {/* Same title grammar as the wizard's field steps: context kicker + title,
+                        so the channel step doesn't jump sizes when it slides in. */}
+                    <Text style={styles.contextLabel} numberOfLines={1}>
+                        {productSummary?.title ? String(productSummary.title) : 'Channels'}
+                    </Text>
                     <Text style={styles.title}>Where should we publish?</Text>
                 </View>
 
@@ -303,19 +308,11 @@ export function PublishConfirmationContent({
                     </Pressable>
                     {onSaveToInventory ? (
                         <Pressable onPress={onSaveToInventory} disabled={isPublishing} style={({ pressed }) => [styles.saveBtn, pressed && styles.pressed]}>
-                            <Text style={styles.saveBtnText}>Just save to inventory</Text>
+                            <Text style={styles.saveBtnText}>Save to inventory</Text>
                         </Pressable>
                     ) : null}
                 </View>
         </View>
-    );
-}
-
-export default function PublishConfirmationModal({ visible, ...contentProps }: PublishConfirmationModalProps) {
-    return (
-        <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={contentProps.onClose}>
-            <PublishConfirmationContent {...contentProps} active={visible} />
-        </Modal>
     );
 }
 
@@ -328,27 +325,28 @@ const styles = StyleSheet.create({
     progSeg: { flex: 1, height: 4, borderRadius: 999, backgroundColor: '#E5E7EB' },
     progSegOn: { backgroundColor: BRAND_PRIMARY },
     doneText: { color: '#18181B', fontSize: 13, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
-    titleBlock: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 6 },
+    titleBlock: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 6, gap: 4 },
+    contextLabel: { color: '#71717A', fontSize: 11, fontFamily: CHAT_FONT.semibold, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
     title: { color: '#18181B', fontSize: 22, fontFamily: CHAT_FONT.bold, fontWeight: '800', letterSpacing: -0.22, lineHeight: 28 },
-    list: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 10 },
-    platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 12 },
+    list: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, gap: 10 },
+    platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 18, padding: 14 },
     cardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 11 },
-    platformName: { color: '#18181B', fontSize: 18, fontFamily: CHAT_FONT.bold, fontWeight: '700', lineHeight: 18 },
-    platformStatus: { color: '#9CA3AF', fontSize: 16, fontFamily: CHAT_FONT.medium, fontWeight: '500', lineHeight: 16, marginTop: 1 },
-    checkOn: { width: 32, height: 32, borderRadius: 7, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
-    checkOff: { width: 32, height: 32, borderRadius: 7, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
+    platformName: { color: '#18181B', fontSize: 16, fontFamily: CHAT_FONT.bold, fontWeight: '700', lineHeight: 20 },
+    platformStatus: { color: '#9CA3AF', fontSize: 13, fontFamily: CHAT_FONT.medium, fontWeight: '500', lineHeight: 17, marginTop: 2 },
+    checkOn: { width: 32, height: 32, borderRadius: 10, backgroundColor: BRAND_PRIMARY, alignItems: 'center', justifyContent: 'center' },
+    checkOff: { width: 32, height: 32, borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'transparent' },
     optRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 11, borderTopWidth: 1, borderTopColor: '#F1F2F4' },
-    optPill: { borderRadius: 999, paddingVertical: 9, paddingHorizontal: 10 },
+    optPill: { borderRadius: 999, paddingVertical: 5, paddingHorizontal: 9 },
     optPillGood: { backgroundColor: 'rgba(147,200,34,0.12)' },
     optPillWarn: { backgroundColor: 'rgba(186,117,23,0.10)' },
-    optPillText: { fontSize: 16, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
+    optPillText: { fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
     optPillTextGood: { color: '#4A7C00' },
     optPillTextWarn: { color: '#BA7517' },
-    optDetail: { flex: 1, color: '#9CA3AF', fontSize: 16, fontFamily: CHAT_FONT.medium, fontWeight: '500' },
-    optAdd: { color: '#BA7518', fontSize: 12, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
+    optDetail: { flex: 1, color: '#9CA3AF', fontSize: 13, fontFamily: CHAT_FONT.medium, fontWeight: '500' },
+    optAdd: { color: '#BA7518', fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
     addLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11 },
-    addText: { color: '#9CA3AF', fontSize: 16, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
-    emptyCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, padding: 16, gap: 4 },
+    addText: { color: '#9CA3AF', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+    emptyCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 18, padding: 16, gap: 4 },
     emptyTitle: { color: '#18181B', fontSize: 15, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
     emptySub: { color: '#6B7280', fontSize: 13, fontFamily: CHAT_FONT.regular, lineHeight: 18 },
     computerNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 2, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#FBF5EA', borderRadius: 12, borderWidth: 1, borderColor: '#F0E2C8' },
@@ -361,11 +359,13 @@ const styles = StyleSheet.create({
     pickerChipText: { color: '#18181B', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
     pickerChipTextOn: { color: '#FFFFFF' },
     pickerDot: { width: 8, height: 8, borderRadius: 4 },
-    footer: { alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 12 },
-    publishBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 18, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
+    // Footer matches the wizard's field steps exactly: one filled primary,
+    // one quiet text action under it.
+    footer: { gap: 4, paddingHorizontal: 16, paddingTop: 12 },
+    publishBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 54, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
     publishBtnDisabled: { backgroundColor: '#D6D6D1' },
     publishText: { color: '#FFFFFF', fontSize: 16, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
-    saveBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', paddingVertical: 18, borderRadius: 16, backgroundColor: '#EFEFEC' },
-    saveBtnText: { color: '#3F3F46', fontSize: 16, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
-    pressed: { transform: [{ scale: 0.96 }], opacity: 0.96 },
+    saveBtn: { alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 42 },
+    saveBtnText: { color: '#71717A', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+    pressed: { opacity: 0.72 },
 });
