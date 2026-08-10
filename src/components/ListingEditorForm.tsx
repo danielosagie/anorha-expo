@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Modal, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
 import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
@@ -11,8 +11,7 @@ import { VoiceRecorder } from './VoiceRecorder';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Boxes, X, Sparkles, Car, Package, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, ChevronLeft, Plus, Check, ArrowRight, AlertTriangle } from 'lucide-react-native';
-import { getListingQuality } from '../utils/listingQuality';
+import { Boxes, X, Sparkles, Car, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, Plus, Check } from 'lucide-react-native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Dropdown as ElementDropdown } from 'react-native-element-dropdown';
@@ -31,6 +30,7 @@ import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { apiFetch } from '../lib/apiClient';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
+import { pricingCacheKey, getFreshPricing, putPricing } from '../lib/pricingResearchCache';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -46,14 +46,8 @@ export type PlatformsData = Record<string, any>;
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
-// Module-level pricing-research cache. Keyed by the request inputs so reopening
-// the sheet for the same item serves the previous result instantly instead of
-// clearing to a loading state and re-hitting the network every time. Survives
-// modal close/reopen and component remounts within the session.
-const PRICING_RESEARCH_CACHE = new Map<string, { data: any; ts: number }>();
-const PRICING_RESEARCH_TTL = 30 * 60 * 1000; // 30 min — refetch only if older
-const pricingCacheKey = (input: { title: string; categoryId?: string; condition?: string }) =>
-  `${input.title}|${input.categoryId ?? ''}|${input.condition ?? ''}`.trim().toLowerCase();
+// Pricing-research cache lives in src/lib/pricingResearchCache (module-global,
+// 24h staleness window, manual refresh bypasses it). Shared across remounts.
 
 // Coerce any saved price (which may be a non-numeric string, '', or 'NaN') to a finite
 // number, defaulting to 0. Prevents the "$NaN" the inventory editor showed for base products.
@@ -61,26 +55,6 @@ const toPrice = (v: any): number => {
   const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(n) ? n : 0;
 };
-
-// Full-screen Steps wizard (one field per screen, progress + Next).
-const wizStyles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { width: "100%", flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, height: 44 },
-  headerBtn: { minWidth: 48, height: 44, justifyContent: 'center' },
-  stepCount: { fontSize: 13, fontWeight: '700', color: CHAT_COLORS.dim },
-  doneText: { fontSize: 15, fontWeight: '700', color: BRAND_PRIMARY, textAlign: 'right' },
-  progress: { flex: 1, flexDirection: 'row', gap: 4, paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
-  seg: { flex: 1,  height: 4, borderRadius: 2 },
-  body: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 },
-  headline: { fontSize: 26, fontWeight: '800', color: CHAT_COLORS.ink, marginBottom: 18, letterSpacing: -0.3 },
-  footer: { paddingHorizontal: 20, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EEF0F2' },
-  nextBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 54, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
-  nextText: { fontSize: 17, fontWeight: '800', color: '#FFFFFF' },
-  qRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
-  qIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  qLabel: { fontSize: 15, fontWeight: '600', color: CHAT_COLORS.ink },
-  qHint: { fontSize: 13, fontWeight: '600', color: '#BA7517' },
-});
 
 // Styles for the row→sheet redesign (clickable detail rows + focused field sheets).
 const rowStyles = StyleSheet.create({
@@ -166,6 +140,19 @@ const rowStyles = StyleSheet.create({
   researchBtnText: {
     color: CHAT_COLORS.brandDeep,
     fontSize: 14,
+    fontFamily: CHAT_FONT.semibold,
+  },
+  // The one quiet manual affordance under the auto-loaded pricing card.
+  refreshBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  refreshBtnText: {
+    color: CHAT_COLORS.dim,
+    fontSize: 13,
     fontFamily: CHAT_FONT.semibold,
   },
   sectionLabel: {
@@ -265,9 +252,6 @@ export type ListingEditorFormProps = {
   onScrollToOffset?: (y: number) => void;
   /** Total deduped required-missing fields across platforms — shown as a badge on the All pill. */
   allMissingCount?: number;
-  /** Invoked when the Steps wizard reaches its final "Ready to publish" step — hands off to
-   *  the parent's publish flow (pre-publish quality check → publish modal). */
-  onRequestPublish?: () => void;
   /** Render only one of the listing editor's existing field bodies inside a parent flow. */
   inlineField?: string;
   /** Platform context for an inline field. Use `all` for shared canonical edits. */
@@ -281,12 +265,6 @@ export type ListingEditorFormRef = {
   openFieldSheet: (field: string, platform?: string) => void;
   /** Scroll the full editor to a composed section that is not represented by a field sheet. */
   scrollToSection: (section: 'variants' | 'inventory') => void;
-  /** Steps mode: walk the listing's key fields in the full-screen wizard. */
-  startStepsWalk: () => void;
-  /** Open the full-screen wizard over the empty required fields. Pass an explicit field
-   *  list (e.g. from the parent's cross-platform missing-field count) so the wizard walks
-   *  exactly those; omit to use the active tab's own computed gaps. */
-  startFixGaps: (fields?: string[]) => void;
 };
 
 type Variant = {
@@ -412,7 +390,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish, inlineField, inlinePlatform }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
   const latestPlatformsRef = useRef(platforms);
   latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
@@ -441,15 +419,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [newOptionValues, setNewOptionValues] = useState<string[]>(['']);
   // Which field's edit sheet is open (row → sheet redesign). null = none.
   const [openField, setOpenField] = useState<string | null>(null);
-  // Declared early (used by the imperative handle below); body assigned later where
-  // supportsTaxonomy + the gap-queue refs are in scope.
-  const startStepsWalkRef = useRef<() => void>(() => {});
-  const startFixGapsRef = useRef<(fields?: string[]) => void>(() => {});
-  // Full-screen Steps wizard (replaces the old open-sheets-one-by-one walk).
-  const [wizardOpen, setWizardOpen] = useState(false);
   const [categoryVoiceOpen, setCategoryVoiceOpen] = useState(false);
-  const [wizardSteps, setWizardSteps] = useState<string[]>([]);
-  const [wizardIdx, setWizardIdx] = useState(0);
   // Which variant ("size") tab is selected inside the Photos sheet. null → manage the
   // shared set. Set when the seller taps a specific variant's photo in the inventory row.
   const [photoSizeTab, setPhotoSizeTab] = useState<string | null>(null);
@@ -493,7 +463,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const [ebayConditions, setEbayConditions] = useState<Array<{ conditionId: string; conditionName: string; description?: string }>>([]);
   const [ebayConditionsLoading, setEbayConditionsLoading] = useState<boolean>(false);
   const [pricingResearchLoading, setPricingResearchLoading] = useState<boolean>(false);
-  const [pricingResearchModalVisible, setPricingResearchModalVisible] = useState<boolean>(false);
   // Suggested-price pills only appear once the price field is focused (not always-on).
   const [pricingResearchResult, setPricingResearchResult] = useState<{
     low?: number; median?: number; high?: number; recommended?: number;
@@ -596,8 +565,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       const offset = fieldYOffsets.current[section];
       if (offset !== undefined) onScrollToOffset?.(offset);
     },
-    startStepsWalk: () => startStepsWalkRef.current(),
-    startFixGaps: (fields?: string[]) => startFixGapsRef.current(fields),
   }), [onScrollToOffset, platformPickerOverlay, platforms]);
 
   const lastPlatformRef = useRef<string>('');
@@ -984,18 +951,19 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     else setAspects([]);
   }, [activePlatformKeyLower, activeData.categoryId, fetchAspects]);
 
-  const fetchPricingResearch = useCallback(async () => {
+  const fetchPricingResearch = useCallback(async (opts?: { force?: boolean }) => {
     const input = pricingResearchInput;
     if (!input?.title) return;
 
-    // Serve a recent cached result instantly — open the sheet with the previous
-    // result and skip the network round-trip / loading flash entirely.
+    // Serve a recent cached result instantly and skip the network round-trip /
+    // loading flash entirely. A manual refresh (force) always re-requests.
     const key = pricingCacheKey(input);
-    const cached = PRICING_RESEARCH_CACHE.get(key);
-    if (cached && Date.now() - cached.ts < PRICING_RESEARCH_TTL) {
-      setPricingResearchResult(cached.data);
-      setPricingResearchModalVisible(true);
-      return;
+    if (!opts?.force) {
+      const cached = getFreshPricing<typeof pricingResearchResult>(key);
+      if (cached) {
+        setPricingResearchResult(cached);
+        return;
+      }
     }
 
     setPricingResearchLoading(true);
@@ -1011,60 +979,27 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         },
       });
       const data = await res.json();
-      if (data && !data.error) PRICING_RESEARCH_CACHE.set(key, { data, ts: Date.now() });
+      if (data && !data.error) putPricing(key, data);
       setPricingResearchResult(data);
-      setPricingResearchModalVisible(true);
     } catch (e) {
       log.error('[ListingEditorForm] Pricing research error:', e);
       setPricingResearchResult({ error: (e as Error)?.message || 'Failed to research pricing' });
-      setPricingResearchModalVisible(true);
     } finally {
       setPricingResearchLoading(false);
     }
   }, [pricingResearchInput]);
 
-  // Auto-load sold-comps pricing research the moment the Price step appears — in the
-  // bottom sheet (openField) AND the full-screen wizard — so the going-rate bar + recent
-  // comps are there waiting, instead of hiding behind a "See what it sells for" tap.
+  // Auto-load sold-comps pricing research the moment a Price surface appears — the
+  // field sheet (openField) AND the publish wizard's inline price step — so the
+  // going-rate band + recent comps are there waiting, never behind a manual tap.
+  // Fire-and-forget: the request never blocks typing a price.
   useEffect(() => {
-    const onPriceStep = openField === 'price' || (wizardOpen && wizardSteps[wizardIdx] === 'price');
+    const onPriceStep = openField === 'price' || inlineField === 'price';
     if (onPriceStep && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
-      fetchPricingResearch();
+      void fetchPricingResearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField, wizardOpen, wizardIdx, wizardSteps, titleForPricingResearch]);
-
-  // The Category editor only renders on a taxonomy platform tab (Shopify/eBay), never on
-  // 'all'. When the wizard reaches the Category step from the 'all' tab, switch to the
-  // taxonomy platform that's actually missing a category — otherwise it shows the dead
-  // "No category needed." fallback.
-  useEffect(() => {
-    if (!(wizardOpen && wizardSteps[wizardIdx] === 'category')) return;
-    if (activeTab !== 'all') return;
-    const needsCat = (k: string) => {
-      const pd: any = (platforms as any)[k];
-      if (!pd) return false;
-      return k === 'shopify' ? !pd.productCategoryId : !pd.categoryId;
-    };
-    const target = ['shopify', 'ebay'].find(needsCat) || ['shopify', 'ebay'].find((k) => (platforms as any)[k]);
-    if (target) setActiveTab(target);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wizardOpen, wizardIdx, wizardSteps, activeTab]);
-
-  // Barcodes are scanned, not typed — when the guided Barcode WIZARD step opens with no
-  // code yet, jump straight to the scanner. The field *sheet* does NOT auto-scan: tapping
-  // the Barcode row opens the editor, and the scan button (row + inside the input) launches
-  // the scanner on demand.
-  const barcodeAutoScanRef = useRef(false);
-  useEffect(() => {
-    const onBarcode = wizardOpen && wizardSteps[wizardIdx] === 'barcode';
-    if (!onBarcode) { barcodeAutoScanRef.current = false; return; }
-    if (barcodeAutoScanRef.current || (activeData as any).barcode || !onOpenBarcodeScanner) return;
-    barcodeAutoScanRef.current = true;
-    const t = setTimeout(() => onOpenBarcodeScanner((code: string) => patchField('barcode', code)), 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wizardOpen, wizardIdx, wizardSteps]);
+  }, [openField, inlineField, titleForPricingResearch]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
@@ -1220,42 +1155,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     : taxonomyOptions;
   const categoryRequired = requiredFields?.includes?.('category');
   const categoryMissing = categoryRequired && !selectedCategoryId;
-
-  // ── Fix-the-gaps + Steps wizard ─────────────────────────────────────────
-  // Both open a real full-screen wizard (renderStepsWizard) — Steps walks the key
-  // fields, Fix-gaps walks only the empty required ones. One field per full step.
-  const computeGaps = (): string[] => {
-    const d: any = activeData;
-    const gaps: string[] = [];
-    if (requiredFields?.includes?.('title') && !d.title) gaps.push('title');
-    const hasVariantsPriced = ((d.options || []).length > 0 && (d.variants || []).length > 0)
-      && (d.variants || []).every((v: any) => v.price != null && v.price !== '' && Number(v.price) > 0);
-    const priceEmpty = d.price == null || String(d.price) === '' || Number(d.price) === 0;
-    if (requiredFields?.includes?.('price') && !hasVariantsPriced && priceEmpty) gaps.push('price');
-    if (requiredFields?.includes?.('sku') && !d.sku) gaps.push('sku');
-    if (categoryRequired && !selectedCategoryId) gaps.push('category');
-    return gaps;
-  };
-  const openWizard = (steps: string[]) => {
-    if (!steps.length) return;
-    setWizardSteps(steps);
-    setWizardIdx(0);
-    setWizardOpen(true);
-  };
-  // The wizard's LAST field step's button is "Publish" → hands off to the publish settings.
-  // No separate review/overview step — the quality check already leads the Steps walk, so a
-  // second one at the end is redundant (per the seller's ask).
-  const startFixGaps = (fields?: string[]) => {
-    const steps = fields && fields.length ? fields : computeGaps();
-    if (!steps.length) return;
-    openWizard(steps);
-  };
-  startFixGapsRef.current = startFixGaps;
-  startStepsWalkRef.current = () => openWizard([
-    '__quality__', 'title', 'price',
-    ...(supportsTaxonomy ? ['category'] : []),
-    'condition', 'sku', 'tags',
-  ]);
 
   const patchField = (key: string, value: any) => {
     const current = latestPlatformsRef.current;
@@ -2099,24 +1998,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     );
   };
 
-  // ── Steps wizard: one field per full screen (NOT a bottom sheet) ─────────
-  const STEP_META: Record<string, string> = {
-    __quality__: 'Quick check',
-    title: 'Name it',
-    description: 'Describe it',
-    price: "What's it worth?",
-    category: 'Category',
-    condition: 'Condition',
-    sku: 'SKU',
-    barcode: 'Barcode',
-    tags: 'Tags',
-    weight: 'Weight',
-    photos: 'Photos',
-  };
-
-  // The focused editor for a single wizard step. Reuses the same field
-  // components as the sheets; price/category/condition are focused variants.
-  // ── Smart (AI) category editor — shared by the wizard step + the field sheet ──
+  // ── Smart (AI) category editor — shared by the inline step + the field sheet ──
   // Surfaces the taxonomy engine's RANKED candidates with their confidence scores (a real
   // best-match + a couple of alternates), instead of a flat keyword list where everything
   // looked like a "perfect match". Typing refines via the same ranked search.
@@ -2220,26 +2102,45 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     );
   };
 
+  // ── Pricing guidance — the ONE research block under every price editor ──────
+  // Auto-requested when the price surface appears (see the effect near
+  // fetchPricingResearch); renders suggested price + compact comp evidence inline.
+  // The single manual affordance is the quiet Refresh link, which bypasses the cache.
+  const renderPricingGuidance = (currentPrice: number): React.ReactNode => {
+    if (!titleForPricingResearch) return null;
+    const hasData = pricingResearchResult && typeof pricingResearchResult.low === 'number';
+    return (
+      <View style={{ marginTop: 16 }}>
+        <PricingGuidanceCard
+          headers="none"
+          loading={pricingResearchLoading}
+          pricing={hasData ? pricingResearchResult! : undefined}
+          currentPrice={currentPrice}
+          onApplyPrice={(price) => {
+            const low = pricingResearchResult?.low ?? 0;
+            const recommended = pricingResearchResult?.recommended ?? pricingResearchResult?.median ?? 0;
+            const high = pricingResearchResult?.high ?? 0;
+            // One atomic write: price + band together, so the price isn't clobbered.
+            patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
+          }}
+        />
+        {!pricingResearchLoading ? (
+          <TouchableOpacity
+            onPress={() => { void fetchPricingResearch({ force: true }); }}
+            style={rowStyles.refreshBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <RefreshCw size={12} color={CHAT_COLORS.dim} />
+            <Text style={rowStyles.refreshBtnText}>Refresh</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    );
+  };
+
   const renderStepEditor = (field: string): React.ReactNode => {
     const d: any = activeData;
     switch (field) {
-      case '__quality__': {
-        const q = getListingQuality({ canonical: d, photoCount: (images || []).filter(Boolean).length });
-        return (
-          <View style={{ gap: 10 }}>
-            {q.rows.map((r) => (
-              <View key={r.key} style={wizStyles.qRow}>
-                <View style={[wizStyles.qIcon, { backgroundColor: r.ok ? CHAT_COLORS.brandSoft : '#FBF1DF' }]}>
-                  {r.ok ? <Check size={15} color={BRAND_PRIMARY} /> : <AlertTriangle size={14} color="#BA7517" />}
-                </View>
-                <Text style={wizStyles.qLabel}>{r.label}</Text>
-                <View style={{ flex: 1 }} />
-                {!r.ok ? <Text style={wizStyles.qHint}>{r.hint}</Text> : null}
-              </View>
-            ))}
-          </View>
-        );
-      }
       case 'title':
         return <SheetTextField value={d.title} onChangeText={(t) => patchField('title', t)} multiline autoFocus placeholder="Product title" maxLength={80} showCount />;
       case 'description':
@@ -2286,26 +2187,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               <Text style={rowStyles.priceCurrency}>$</Text>
               <TextInput style={rowStyles.priceInput} value={String(d.price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
             </View>
-            {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <View style={{ marginTop: 16 }}>
-                <PricingGuidanceCard
-                  headers="none"
-                  pricing={pricingResearchResult}
-                  currentPrice={currentPrice}
-                  onApplyPrice={(price) => {
-                    const low = pricingResearchResult.low ?? 0;
-                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
-                    const high = pricingResearchResult.high ?? 0;
-                    patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
-                  }}
-                />
-              </View>
-            ) : titleForPricingResearch ? (
-              <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={rowStyles.researchBtn}>
-                {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={15} color={BRAND_PRIMARY} />}
-                <Text style={rowStyles.researchBtnText}>{pricingResearchLoading ? 'Researching…' : 'See what it sells for'}</Text>
-              </TouchableOpacity>
-            ) : null}
+            {renderPricingGuidance(currentPrice)}
           </View>
         );
       }
@@ -2352,53 +2234,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       default:
         return <SheetTextField value={String(d[field] ?? '')} onChangeText={(t) => patchField(field, t)} autoFocus />;
     }
-  };
-
-  const renderStepsWizard = () => {
-    if (!wizardOpen || wizardSteps.length === 0) return null;
-    const total = wizardSteps.length;
-    const idx = Math.min(wizardIdx, total - 1);
-    const field = wizardSteps[idx];
-    const isLast = idx === total - 1;
-    const headline = STEP_META[field] || field;
-    const close = () => { setWizardOpen(false); setPricingResearchModalVisible(false); };
-    const goBack = () => setWizardIdx((i) => Math.max(0, i - 1));
-    const goNext = () => { if (isLast) close(); else setWizardIdx((i) => Math.min(total - 1, i + 1)); };
-    // The last field step's button publishes: close the wizard, then (after it slides away)
-    // hand off to the parent's publish settings (which platforms + publish).
-    const goPublish = () => { close(); setTimeout(() => onRequestPublish?.(), 320); };
-    return (
-      <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
-        <View style={[wizStyles.screen, { paddingTop: insets.top + 4 }]}>
-          <View style={wizStyles.header}>
-            {/* Back to the previous step (or exit on the first); "Exit" always leaves the wizard. */}
-            <TouchableOpacity onPress={idx === 0 ? close : goBack} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <ChevronLeft size={22} color={CHAT_COLORS.ink} />
-            </TouchableOpacity>
-            <Text style={wizStyles.stepCount}>{idx + 1} / {total}</Text>
-            <View style={[wizStyles.progress, { flex: 1 }]}>
-              {wizardSteps.map((s, i) => (
-                <View key={`${s}-${i}`} style={[wizStyles.seg, { backgroundColor: i <= idx ? BRAND_PRIMARY : '#E9EBEF' }]} />
-              ))}
-            </View>
-            <TouchableOpacity onPress={close} style={wizStyles.headerBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={wizStyles.doneText}>Exit</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={wizStyles.body} keyboardShouldPersistTaps="handled">
-            <Text style={wizStyles.headline}>{headline}</Text>
-            {renderStepEditor(field)}
-          </ScrollView>
-          <View style={[wizStyles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <TouchableOpacity onPress={isLast ? goPublish : goNext} style={wizStyles.nextBtn} activeOpacity={0.9}>
-              <Text style={wizStyles.nextText}>{isLast ? 'Publish' : 'Next'}</Text>
-              {!isLast && <ArrowRight size={18} color="#FFFFFF" />}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-    );
   };
 
   const renderFieldSheets = () => {
@@ -2450,34 +2285,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         </FieldSheet>
 
         {/* Price — number + sold-comps research (never a bare number to defend) */}
-        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onClose={() => { setOpenField(null); setPricingResearchModalVisible(false); }} onSave={() => { setOpenField(null); setPricingResearchModalVisible(false); }}>
+        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
           <View style={rowStyles.priceInputWrap}>
             <Text style={rowStyles.priceCurrency}>$</Text>
             <TextInput style={rowStyles.priceInput} value={String((activeData as any).price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
           </View>
-
-
-          {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-            <View style={{ marginTop: 16 }}>
-              <PricingGuidanceCard
-                headers="none"
-                pricing={pricingResearchResult}
-                currentPrice={currentPrice}
-                onApplyPrice={(price) => {
-                  const low = pricingResearchResult.low ?? 0;
-                  const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
-                  const high = pricingResearchResult.high ?? 0;
-                  // One atomic write: price + band together, so the price isn't clobbered.
-                  patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
-                }}
-              />
-            </View>
-          ) : titleForPricingResearch ? (
-            <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={rowStyles.researchBtn}>
-              {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={15} color={BRAND_PRIMARY} />}
-              <Text style={rowStyles.researchBtnText}>{pricingResearchLoading ? 'Researching…' : 'See what it sells for'}</Text>
-            </TouchableOpacity>
-          ) : null}
+          {renderPricingGuidance(currentPrice)}
         </FieldSheet>
 
         {/* Category — AI ranked best-match + alternates (shared with the wizard). */}
@@ -2956,48 +2769,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {/* Details — clickable rows; each opens its focused field sheet */}
       {renderDetailsCard()}
       {renderFieldSheets()}
-      {renderStepsWizard()}
-
-      {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
-          Suppressed while the Price sheet is open — that sheet inlines the same card. */}
-      <Modal visible={pricingResearchModalVisible && openField !== 'price' && !wizardOpen} transparent animationType="slide">
-        <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
-          <Pressable style={{ backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%', paddingHorizontal: 16, paddingBottom: 8 }} onPress={e => e.stopPropagation()}>
-            <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 999, backgroundColor: '#E5E7EB', marginTop: 8, marginBottom: 4 }} />
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, paddingBottom: 12 }}>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>Pricing research</Text>
-              <TouchableOpacity onPress={() => setPricingResearchModalVisible(false)}>
-                <Icon name="close" size={24} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            {pricingResearchResult?.error ? (
-              <View style={{ paddingBottom: 20 }}>
-                <Text style={{ fontSize: 14, color: '#ef4444' }}>{pricingResearchResult.error}</Text>
-              </View>
-            ) : pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ paddingHorizontal: 0, paddingBottom: 28 }}>
-                {/* The one shared pricing overview (same card as the add-product preview). */}
-                <PricingGuidanceCard
-                  headers="none"
-                  pricing={pricingResearchResult}
-                  currentPrice={Number((activeData as any).price) || 0}
-                  onApplyPrice={(price) => {
-                    const low = pricingResearchResult.low ?? 0;
-                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
-                    const high = pricingResearchResult.high ?? 0;
-                    patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
-                    setPricingResearchModalVisible(false);
-                  }}
-                />
-              </ScrollView>
-            ) : (
-              <View style={{ paddingBottom: 20 }}>
-                <Text style={{ fontSize: 14, color: '#6B7280' }}>Loading...</Text>
-              </View>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
       {/* Variants: only for platforms that support variants */}
       {
         supportsVariants && (
