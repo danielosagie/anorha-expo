@@ -1883,6 +1883,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (res.ok) {
         log.debug('[doSaveToInventory] Saved to inventory successfully');
 
+        // Saved to inventory with no external platforms selected. The backend's
+        // publish_completed only fires per platform connection, so this
+        // inventory-only path would otherwise be invisible.
+        capture(AnalyticsEvents.LISTING_CREATED, {
+          product_id: productId,
+          destination: 'inventory',
+          image_count: Array.isArray(payload.media?.imageUris) ? payload.media.imageUris.length : 0,
+        });
+
         // Navigate to confirmation screen
         // We construct the params similar to doPublish
         const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];

@@ -671,7 +671,6 @@ const App: React.FC = () => {
 
     return (
       <EnhancedSessionProvider getClerkToken={getClerkToken} isSignedIn={isSignedIn}>
-        <PostHogIdentify />
         {children}
       </EnhancedSessionProvider>
     );
@@ -729,6 +728,11 @@ const App: React.FC = () => {
                   ThemeProvider, StatusBar and FlashMessage). */}
               <WithSessionProvider>
                 <OrgProvider>
+                  {/* Binds the PostHog identity to the signed-in user AND their
+                      active org, so it must sit inside OrgProvider (it reads
+                      OrgContext) and inside the session provider (it reads the
+                      Supabase user id the backend also captures under). */}
+                  <PostHogIdentify />
                   {/* 2nd Convex client (browserJobs deployment). Pure context
                       carrier — does NOT wrap a ConvexProvider, so it never
                       hijacks chat's useQuery (the top-level agent-chat

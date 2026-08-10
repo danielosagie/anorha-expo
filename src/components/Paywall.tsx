@@ -13,6 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import Button from './Button';
 import { UserEntitlements, FREE_TRIAL_DAYS } from '../utils/entitlements';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 interface PaywallProps {
   visible: boolean;
@@ -37,6 +38,14 @@ const Paywall: React.FC<PaywallProps> = ({
 }) => {
   const theme = useTheme();
   const themeColors = theme?.colors ?? { text: '#333333', textSecondary: '#777777' };
+
+  React.useEffect(() => {
+    if (!visible) return;
+    capture(AnalyticsEvents.PAYWALL_VIEWED, {
+      ...(feature ? { feature } : {}),
+      plan: entitlements?.planName ?? null,
+    });
+  }, [visible, feature, entitlements?.planName]);
 
   const ANORHA_GREEN = BRAND_PRIMARY;
   const WHITE_BG = '#FFFFFF';

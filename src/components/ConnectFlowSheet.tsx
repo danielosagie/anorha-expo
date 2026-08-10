@@ -26,6 +26,7 @@ import { refreshInboxSummary } from '../hooks/useImportStatus';
 import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { getPlatform, connectStepsFor, type ConnectStepKind } from '../config/platforms';
 import { BRAND_PRIMARY } from '../design/tokens';
+import { capture, AnalyticsEvents } from '../lib/analytics';
 
 type FlowPhase = 'consent' | 'shopifyPicker' | 'connecting' | 'importFailed' | 'linkComputer' | 'done';
 
@@ -129,12 +130,19 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
         }
         advanceAfterOAuth();
       } else if (res.cancelled) {
+        capture(AnalyticsEvents.PLATFORM_CONNECT_FAILED, { platform, reason: 'cancelled' });
         setPhase('consent');
       } else {
+        capture(AnalyticsEvents.PLATFORM_CONNECT_FAILED, {
+          platform,
+          reason: 'error',
+          error: res.errorMessage || null,
+        });
         setConnectError(res.errorMessage || 'Connection failed. Please try again.');
         setPhase('consent');
       }
     } catch {
+      capture(AnalyticsEvents.PLATFORM_CONNECT_FAILED, { platform, reason: 'threw' });
       setConnectError('Something went wrong. Please try again.');
       setPhase('consent');
     }

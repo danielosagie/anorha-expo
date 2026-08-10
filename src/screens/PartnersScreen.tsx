@@ -331,6 +331,12 @@ export default function PartnersScreen() {
 
             if (res.ok) {
                 const data = await res.json();
+                // No invitee email in the properties: that is another person's PII
+                // and PostHog is not where it belongs.
+                capture(AnalyticsEvents.PARTNER_INVITE_SENT, {
+                    share_type: inviteCanRevoke ? 'consignment' : 'sync',
+                    can_revoke: inviteCanRevoke,
+                });
                 setInviteModalVisible(false);
                 setInviteEmail('');
                 setInvitePoolId('');
