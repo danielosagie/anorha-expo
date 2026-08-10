@@ -42,7 +42,9 @@ import {
   groupDecisions,
   handoffKey,
   manualTitleDecision,
+  mergeCandidateDetails,
   pairDecision,
+  remainingItemCount,
   retryCommitDecision,
   selectBestGuessCards,
   whichOneDecision,
@@ -297,14 +299,14 @@ export default function ImportQuestionQueueScreen() {
       if (!candidate.id || seen.has(candidate.id)) return false;
       seen.add(candidate.id);
       return true;
-    }).map((candidate) => ({ ...candidate, ...candidateDetails[candidate.id] }));
+    }).map((candidate) => mergeCandidateDetails(candidate, candidateDetails[candidate.id]));
   }, [currentCard?.items, candidateDetails]);
 
   const hydratedCandidateForFirst = useMemo(() => {
     const item = hydratedItems[0];
     if (!item) return null;
     const candidate = candidateForItem(item);
-    return candidate ? { ...candidate, ...candidateDetails[candidate.id] } : null;
+    return candidate ? mergeCandidateDetails(candidate, candidateDetails[candidate.id]) : null;
   }, [hydratedItems, candidateDetails]);
 
   const recordDecisions = useCallback((
@@ -510,11 +512,13 @@ export default function ImportQuestionQueueScreen() {
         // Nothing stuck (all conflicts or errors): the notice explains, the deck
         // still holds every card. No point celebrating zero.
         void AsyncStorage.setItem(activeKey(connectionId), '1');
-        setQueueStartCount(remainingCards.reduce((total, card) => total + card.items.length, 0));
+        setQueueStartCount(remainingItemCount(remainingCards, settled));
         setStage('queue');
         return;
       }
-      setGuessSummary({ confirmed: response.summary.saved, remaining: remainingCards.length });
+      // ITEMS, not cards: the deck header right after this counts items
+      // (needsAttention length), so the interstitial must too (run 8 P2-3).
+      setGuessSummary({ confirmed: response.summary.saved, remaining: remainingItemCount(remainingCards, settled) });
       setStage('guess_handoff');
     } catch (bulkError) {
       setActionError(displayError(bulkError, 'Those answers did not save. They are still here.'));
@@ -900,7 +904,6 @@ export default function ImportQuestionQueueScreen() {
   }
 
   if (stage === 'front') {
-    const questionCount = mainCards.length;
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
         <InboxHeader onBack={() => navigation.goBack()} />
@@ -919,8 +922,10 @@ export default function ImportQuestionQueueScreen() {
           </View>
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+          {/* ITEM count, matching the "Still need some review" row above and
+              the deck's "N left" (run 8 P2-3: 77 cards vs 244 items whiplash). */}
           <PillButton
-            label={questionCount > 0 ? `${questionCount} more ${questionCount === 1 ? 'question' : 'questions'}` : 'Start'}
+            label={questionItemCount > 0 ? `Review ${countLabel(questionItemCount, 'item')}` : 'Start'}
             onPress={beginQuestions}
           />
           <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />

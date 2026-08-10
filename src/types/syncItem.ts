@@ -13,6 +13,8 @@ export interface CanonicalRef {
   imageUrl?: string | null;
   /** Client-enriched from the candidate's platform mapping. */
   sourcePlatform?: string | null;
+  /** Client-enriched ProductVariants.UpdatedAt; a discriminator for look-alike candidates. */
+  updatedAt?: string | null;
 }
 
 export type SyncResolution =

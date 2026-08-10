@@ -168,6 +168,61 @@ export function buildQuestionCards(items: SyncItem[]): QuestionCardModel[] {
   return cards;
 }
 
+/**
+ * ITEM count left across cards once some rows have settled. Every count a
+ * seller sees in one flow — front door review count, guess-handoff
+ * interstitial, deck "N left" — must count ITEMS, never cards: run 8 P2-3 saw
+ * "6" (cards) then "9 left" (items) within thirty seconds of each other.
+ */
+export function remainingItemCount(
+  cards: QuestionCardModel[],
+  settledIds: ReadonlySet<string> = new Set(),
+): number {
+  let total = 0;
+  for (const card of cards) {
+    for (const item of card.items) {
+      if (!settledIds.has(item.platformId)) total += 1;
+    }
+  }
+  return total;
+}
+
+/**
+ * Overlays hydrated candidate fields onto the resolver payload's candidate
+ * without letting a null hydration field clobber a real payload value. A bare
+ * spread did exactly that: a catalog variant with no stored image nulled out
+ * an imageUrl the payload already carried.
+ */
+export function mergeCandidateDetails(base: CanonicalRef, hydrated?: CanonicalRef | null): CanonicalRef {
+  if (!hydrated) return base;
+  return {
+    ...base,
+    ...hydrated,
+    title: hydrated.title ?? base.title,
+    sku: hydrated.sku ?? base.sku,
+    price: hydrated.price ?? base.price,
+    imageUrl: hydrated.imageUrl ?? base.imageUrl,
+    sourcePlatform: hydrated.sourcePlatform ?? base.sourcePlatform ?? null,
+    updatedAt: hydrated.updatedAt ?? base.updatedAt ?? null,
+  };
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * "Updated Jun 12" (adds the year when it differs from `now`). Empty string
+ * for missing or unparseable stamps so the card row simply does not render.
+ */
+export function candidateUpdatedLabel(updatedAt?: string | null, now: Date = new Date()): string {
+  if (!updatedAt) return '';
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return '';
+  const day = `${MONTHS[date.getMonth()]} ${date.getDate()}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `Updated ${day}`
+    : `Updated ${day}, ${date.getFullYear()}`;
+}
+
 export function candidateForItem(item: SyncItem): CanonicalRef | null {
   if (item.resolution.kind === 'link') return item.resolution.canonical;
   const candidates = item.candidates ?? [];

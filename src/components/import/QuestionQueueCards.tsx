@@ -12,8 +12,9 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import PlatformLogo from '../PlatformLogo';
 import { IC, PillButton } from '../importinbox/InboxKit';
+import { getPlatform, normalizeDisplayName } from '../../config/platforms';
 import type { CanonicalRef, SyncItem } from '../../types/syncItem';
-import type { CardAnswer, QuestionCardModel } from './questionQueue';
+import { candidateUpdatedLabel, type CardAnswer, type QuestionCardModel } from './questionQueue';
 
 const SURFACE = '#F5F5F7';
 const CARD = '#FFFFFF';
@@ -219,6 +220,27 @@ function ItemCopy({ title, price }: { title: string; price?: string | number | n
   );
 }
 
+// The tellable-apart block for a which_one candidate: platform badge, SKU,
+// updated-at. When two candidates share title, price, and placeholder images
+// (run 8 P2-2), these rows are the ONLY thing the seller can choose by.
+function CandidateMeta({ candidate, shownTitle }: { candidate: CanonicalRef; shownTitle: string }) {
+  const platformRaw = (candidate.sourcePlatform || '').trim();
+  const platformLabel = platformRaw
+    ? getPlatform(platformRaw.toLowerCase())?.label || normalizeDisplayName(platformRaw) || platformRaw
+    : '';
+  const sku = (candidate.sku || '').trim();
+  const updated = candidateUpdatedLabel(candidate.updatedAt);
+  const showSku = Boolean(sku) && sku !== shownTitle;
+  if (!platformLabel && !showSku && !updated) return null;
+  return (
+    <View style={styles.candidateMeta}>
+      {platformLabel ? <SourceTag platformKey={platformRaw.toLowerCase()} label={platformLabel} /> : null}
+      {showSku ? <Text style={styles.candidateMetaText} numberOfLines={1}>{sku}</Text> : null}
+      {updated ? <Text style={styles.candidateMetaText} numberOfLines={1}>{updated}</Text> : null}
+    </View>
+  );
+}
+
 function conflictValues(item: SyncItem, candidate: CanonicalRef | null): { incoming: string; catalog: string } {
   const conflict = item.fieldConflicts?.[0];
   const incoming = displayValue(conflict?.incomingValue ?? conflict?.platformValue ?? item.price);
@@ -327,6 +349,7 @@ export function WhichOneQuestionCard({
       <View style={styles.pairRow}>
         {candidates.slice(0, 2).map((candidate) => {
           const selected = candidate.id === selectedId;
+          const shownTitle = candidate.title || candidate.sku || 'Catalog item';
           return (
             <Pressable
               key={candidate.id}
@@ -340,7 +363,8 @@ export function WhichOneQuestionCard({
               ]}
             >
               <ProductImage uri={candidate.imageUrl} style={styles.pairImage} />
-              <ItemCopy title={candidate.title || candidate.sku || 'Catalog item'} price={candidate.price} />
+              <ItemCopy title={shownTitle} price={candidate.price} />
+              <CandidateMeta candidate={candidate} shownTitle={shownTitle} />
               {selected ? (
                 <View style={styles.selectedCheck}>
                   <MaterialCommunityIcons name="check" size={14} color="#FFFFFF" />
@@ -780,6 +804,8 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   candidateSelected: { borderColor: IC.accent },
+  candidateMeta: { gap: 3, alignItems: 'flex-start' },
+  candidateMetaText: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 11.5, lineHeight: 15 },
   selectedCheck: {
     position: 'absolute',
     top: 14,
