@@ -572,20 +572,8 @@ const App: React.FC = () => {
           <View style={{ flexDirection: "column", alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 12, paddingBottom: 24, width: '100%' }}>
             <BottomNav
               state={'platformPicker'}
-              selectedCount={0}
-              selectedTemplate={null}
-              selectedPlatforms={[]}
               isConnected={(p) => (connections || []).some((c: any) => c.PlatformType === p && (c.Status || '').toLowerCase() === 'active')}
               platformActiveCounts={counts}
-              onShowSelection={() => { }}
-              onShowPlatforms={() => { }}
-              onShowTemplates={() => { }}
-              onBackToEmpty={() => { overlay.hide(); }}
-              onBackToSelection={() => { }}
-              onOpenTemplateModal={() => { }}
-              onTemplateSelect={() => { }}
-              onPlatformToggle={() => { }}
-              onGeneratePress={() => { }}
               onStartConnect={(platform) => {
                 overlay.hide();
                 overlay.onStartConnect?.(platform);

@@ -3635,8 +3635,6 @@ const styles = StyleSheet.create({
   draftChannelDotNeeds: { backgroundColor: '#BA7517' },
   draftChannelStatus: { color: '#71717A', fontSize: 12.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
   draftChannelStatusNeeds: { color: '#BA7517' },
-  heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
-  subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },
   enrichmentNotice: {
     alignSelf: 'flex-start',
@@ -3651,14 +3649,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#F4F4F2',
   },
   enrichmentNoticeText: { color: CHAT_COLORS.dim, fontSize: 12, fontFamily: CHAT_FONT.medium },
-  card: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, padding: 12, marginTop: 12 },
-  section: { marginTop: 8 },
-  platform: { color: '#000', fontWeight: '700', marginBottom: 4 },
-  field: { color: '#000', marginBottom: 2 },
-  // Docked scanner close to the notch / bezel
-  scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
-  scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
-  scannerClose: { position: 'absolute', top: 14, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', width: 48, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   // Full-bleed variant that hugs the top bezel
   scannerDockFull: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5000 },
   scannerFullBleed: { backgroundColor: '#000', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
@@ -3689,35 +3679,4 @@ const styles = StyleSheet.create({
   missingBadge: { backgroundColor: '#fecaca', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
   modalCancelButton: { marginTop: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   btnSecondary: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  btnPrimary: { backgroundColor: BRAND_PRIMARY, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-  blackBtnPrimary: { backgroundColor: '#000', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
-
-  // Platform picker modal styles
-  platformPickerModal: { position: 'absolute', top: '15%', left: 16, right: 16, backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '70%', zIndex: 6001 },
-  platformPill: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 12, backgroundColor: '#fff' },
-  generatePlatformPill: { borderColor: BRAND_PRIMARY, backgroundColor: 'rgba(147,200,34,0.05)' },
-  addMissingFieldButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#71717A',
-    marginTop: 16,
-    gap: 8
-  },
-  addMissingFieldText: {
-    color: '#71717A',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  addTagBtn: { alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
-  tagChip: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10 },
-  fieldLabel: { color: '#71717A', fontWeight: '600', marginBottom: 6, fontSize: 12, textTransform: 'uppercase' },
-  input: { borderWidth: 1, borderColor: '#E5E5E5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10, color: '#000' },
-  sectionTitle: { color: '#000', fontWeight: '700' },
-  subtle: { color: '#71717A', marginTop: 4 },
 });

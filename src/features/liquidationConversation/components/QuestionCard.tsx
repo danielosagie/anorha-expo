@@ -182,13 +182,11 @@ const s = StyleSheet.create({
   optBody: { flex: 1 },
   optLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   optLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
-  optLabelAccent: { color: '#3B6D11' },
   recPill: {
     fontSize: 12, color: '#3B6D11', borderWidth: 0.5, borderColor: '#93C822',
     paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, overflow: 'hidden', fontFamily: 'Inter_500Medium',
   },
   optDesc: { marginTop: 3, fontSize: 14, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 19 },
-  optDescAccent: { color: '#3B6D11' },
   other: {
     borderWidth: 0.5, borderColor: '#ECEBE6', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
     fontSize: 15, color: '#18181B', fontFamily: 'Inter_400Regular', backgroundColor: '#FAFAF8', marginTop: 2,

@@ -21,7 +21,7 @@ import {
 const log = createLogger('useResolution');
 
 // Some deployments set API_BASE_URL with a trailing `/api` (the rest of the app
-// normalizes the same way — see ConnectedPlatformItem / InviteMemberModal).
+// normalizes the same way — see InviteMemberModal).
 // Normalize once so we never compose `/api/api/…` and silently 404 the inbox.
 const API_BASE = (() => {
   const trimmed = API_BASE_URL.replace(/\/$/, '');
@@ -54,16 +54,6 @@ export function useResolution(connectionId: string | null | undefined, importId?
       const res = await apiFetch(`/api/sync/connections/${connectionId}/resolution${query}`);
       if (!res.ok) throw new Error(`Failed to load inbox: ${res.status}`);
       const payload = (await res.json()) as ResolveResult;
-      // Version was added to the rows-backed payload after the original mobile
-      // mirror. Accept either casing during the rolling deployment.
-      payload.needsAttention = (payload.needsAttention ?? []).map((item: any) => ({
-        ...item,
-        version: Number.isInteger(item?.version)
-          ? item.version
-          : Number.isInteger(item?.Version)
-            ? item.Version
-            : undefined,
-      }));
       setResult(payload);
     } catch (err: any) {
       const msg = err?.name === 'AbortError' || err?.message === 'Request timed out'

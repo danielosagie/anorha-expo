@@ -336,9 +336,6 @@ const styles = StyleSheet.create({
     color: '#000',
     marginBottom: 4,
   },
-  variantGroup: {
-    marginBottom: 4,
-  },
   emptyText: {
     color: '#999',
     fontStyle: 'italic',
@@ -401,56 +398,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: BRAND_PRIMARY,
   },
-  // All Tab Styles - Editable Rows
-  // Flat 2-line row: name on top, controls below, hairline divider between rows.
-  allRowCard: {
-    flexDirection: 'column',
-    gap: 12,
-    paddingHorizontal: 2,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F1F3',
-    backgroundColor: 'transparent',
-  },
-  allRowHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    minWidth: 0,
-  },
-  allRowControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  locationName: {
-    fontWeight: '600',
-    fontSize: 15,
-    color: '#111827',
-    flexShrink: 1,
-  },
-  globalBadge: {
-    backgroundColor: '#E3F2FD',
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  globalBadgeText: {
-    fontSize: 9,
-    color: '#1976D2',
-    fontWeight: '600',
-  },
-  // Input Groups — label sits inline to the left of the control.
-  inputGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  inputLabel: {
-    color: '#9CA3AF',
-    fontSize: 12,
-    fontWeight: '500',
-  },
   qtyContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -488,11 +435,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
     height: 40,
   },
-  priceInputShopify: {
-    borderColor: '#1976D2', // Global Blue 
-    backgroundColor: '#E3F2FD', // Light green
-    borderWidth: 1.5,
-  },
   currencySymbol: {
     color: '#9CA3AF',
     paddingLeft: 8,
@@ -509,9 +451,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     justifyContent: "center",
     height: '100%',
-  },
-  priceInputTextShopify: {
-    color: '#1976D2', // Global Blue text
   },
 });
 

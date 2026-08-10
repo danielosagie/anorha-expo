@@ -138,9 +138,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  itemText: {
-    color: 'white',
-  },
   itemImage: {
     width: '100%',
     height: '100%',

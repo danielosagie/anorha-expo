@@ -366,9 +366,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginBottom: 20,
     },
-    iconContainer: {
-        marginBottom: 8,
-    },
     closeButton: {
         position: 'absolute',
         top: 16,

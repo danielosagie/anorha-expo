@@ -161,24 +161,6 @@ const styles = StyleSheet.create({
   keyboardAvoider: {
     width: '100%',
   },
-  topContent: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingBottom: 32,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#F9FAFB',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#D1D5DB',
-    textAlign: 'center',
-    paddingHorizontal: 40,
-  },
   sheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,

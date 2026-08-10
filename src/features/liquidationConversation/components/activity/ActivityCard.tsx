@@ -530,5 +530,4 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   activitySummaryText: { flexShrink: 1, fontSize: 14, lineHeight: 20, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium },
-  activitySpacer: { flex: 1 },
 });

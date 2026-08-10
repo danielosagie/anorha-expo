@@ -270,11 +270,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginLeft: 12,
   },
-  reason: {
-    fontSize: 13,
-    color: COLORS.label,
-    marginBottom: 4,
-  },
   input: {
     fontSize: 18,
     lineHeight: 30,

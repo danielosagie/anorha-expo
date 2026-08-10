@@ -1656,8 +1656,6 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     paddingBottom: 8,
   },
-  docActionKicker: { fontSize: 10.5, letterSpacing: 0.8, color: CHAT_COLORS.brandDeep, fontFamily: CHAT_FONT.bold },
-  docActionTitle: { fontSize: 19, lineHeight: 24, color: CHAT_COLORS.ink, fontFamily: CHAT_FONT.bold },
   docActionDescription: { fontSize: 14, lineHeight: 20, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.regular },
   docActionButton: {
     minHeight: 52,

@@ -250,7 +250,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
   },
   title: { color: COLORS.text, fontSize: 28, fontWeight: '800', lineHeight: 34, letterSpacing: -0.5 },
-  wrongItem: { color: COLORS.label, fontSize: 15, textDecorationLine: 'underline', marginTop: 12 },
   description: { color: COLORS.body, fontSize: 16, lineHeight: 24, marginTop: 16 },
 
 

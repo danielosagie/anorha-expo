@@ -203,14 +203,6 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 16,
   },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
   title: {
     fontSize: 22,
     fontWeight: '700',

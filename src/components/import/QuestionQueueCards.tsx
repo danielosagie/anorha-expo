@@ -720,7 +720,6 @@ const styles = StyleSheet.create({
   itemTitle: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 14, lineHeight: 18 },
   itemPrice: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 13 },
   actions: { gap: 10, marginTop: 'auto' },
-  actionRow: { flexDirection: 'row', gap: 10 },
   // Paper V2A control row: undo circle · secondary pill · primary pill.
   controlRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   undoCircle: {

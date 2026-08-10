@@ -386,14 +386,11 @@ const styles = StyleSheet.create({
   emptyText: { color: COLORS.label, fontSize: 13.5, fontFamily: FONT.medium },
   kicker: { color: COLORS.label, fontSize: 10.5, fontFamily: FONT.semibold, letterSpacing: 0.8 },
   bigValue: { color: COLORS.text, fontSize: 26, fontFamily: FONT.bold, letterSpacing: -0.5, marginTop: 4 },
-  metaLine: { color: COLORS.label, fontSize: 11.5, fontFamily: FONT.regular, marginTop: 4 },
 
   metricRow: { flexDirection: 'row', marginTop: 14 },
   metricRowFirst: { marginTop: 0 },
   metricCol: { flex: 1 },
   metricValue: { color: COLORS.text, fontSize: 16, fontFamily: FONT.semibold, marginTop: 4 },
-  liveKicker: { color: GREEN },
-  liveMeta: { color: COLORS.label, fontSize: 11, fontFamily: FONT.regular, marginTop: 6 },
 
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: COLORS.hairline, marginVertical: 14 },
 

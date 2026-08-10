@@ -473,22 +473,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '600',
   },
-  chipAllFilters: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 16,
-    backgroundColor: 'transparent',
-  },
-  chipAllFiltersIcon: {
-    marginRight: 6,
-  },
-  chipAllFiltersText: {
-    color: '#FFFFFF',
-    fontSize: 13.5,
-    fontWeight: '500',
-  },
   body: {
     flex: 1,
     backgroundColor: '#FFFFFF',
