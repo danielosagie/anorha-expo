@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { API_BASE_URL } from '../config/env';
 import {
     View,
@@ -9,9 +9,10 @@ import {
     TouchableOpacity,
     Alert,
     FlatList,
+    RefreshControl,
     Switch
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -46,9 +47,13 @@ export default function PartnershipDetailScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [products, setProducts] = useState<LinkedProduct[]>([]);
 
+    // After the first cycle, refetches run quietly — refocus and pull-to-refresh
+    // must not blank the list that's already on screen.
+    const hasLoadedRef = useRef(false);
+
     const loadProducts = useCallback(async () => {
         try {
-            setLoading(true);
+            if (!hasLoadedRef.current) setLoading(true);
             const token = await ensureSupabaseJwt();
 
             const res = await fetch(`${SSSYNC_API_BASE_URL}/api/cross-org/partnerships/${partnership.id}/products`, {
@@ -80,14 +85,19 @@ export default function PartnershipDetailScreen() {
             log.error(error);
             Alert.alert('Error', 'Failed to load shared products');
         } finally {
+            hasLoadedRef.current = true;
             setLoading(false);
             setRefreshing(false);
         }
     }, [partnership.id]);
 
-    useEffect(() => {
-        loadProducts();
-    }, [loadProducts]);
+    // Refetch on every focus — pause/share changes happen on screens pushed over
+    // this one and on the partner's side; a stale list here reads as sync truth.
+    useFocusEffect(
+        useCallback(() => {
+            void loadProducts();
+        }, [loadProducts]),
+    );
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -170,12 +180,16 @@ export default function PartnershipDetailScreen() {
                 renderItem={renderProduct}
                 keyExtractor={item => item.id}
                 contentContainerStyle={styles.listContent}
-                refreshControl={<ActivityIndicator animating={loading} />} // Simple loading for now
-                ListEmptyComponent={!loading ? (
+                // A real pull-to-refresh — the old `<ActivityIndicator>` here was
+                // not a RefreshControl, so pulling never refetched anything.
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+                ListEmptyComponent={loading ? (
+                    <ActivityIndicator style={styles.emptyState} color="#93C822" />
+                ) : (
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyText}>No linked products found.</Text>
                     </View>
-                ) : null}
+                )}
             />
         </View>
     );

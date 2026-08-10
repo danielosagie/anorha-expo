@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { apiFetch } from '../lib/apiClient';
 import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOptimizerQueues } from './useOptimizerQueues';
-import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { isVisiblePlatformConnection, isImportingConnectionStatus } from '../lib/platformConnectStatus';
 
 const log = createLogger('useImportStatus');
 
@@ -132,6 +132,70 @@ async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Shared summary store — ONE inbox summary for every consumer.
+//
+// The hook used to keep its summary in per-instance useState, so the three
+// simultaneous instances (Connections, Settings, SyncRules) each held their own
+// copy: a refresh in one screen never reached the others, and connect/
+// disconnect flows had no way to freshen the inbox at all. The summary now
+// lives in this module-level store; hooks subscribe via useSyncExternalStore,
+// and refreshInboxSummary() is callable from anywhere (ConnectFlowSheet's
+// post-OAuth path included) to update every consumer at once.
+// ---------------------------------------------------------------------------
+interface InboxSummaryStore {
+  summary: InboxSummaryResponse | null;
+  error: string | null;
+  loading: boolean;
+  /** At least one fetch attempt has settled (success or failure). */
+  firstDone: boolean;
+}
+
+let inboxStore: InboxSummaryStore = { summary: null, error: null, loading: true, firstDone: false };
+const inboxListeners = new Set<() => void>();
+
+function setInboxStore(patch: Partial<InboxSummaryStore>) {
+  inboxStore = { ...inboxStore, ...patch };
+  inboxListeners.forEach((listener) => listener());
+}
+
+function subscribeInboxStore(listener: () => void): () => void {
+  inboxListeners.add(listener);
+  return () => {
+    inboxListeners.delete(listener);
+  };
+}
+
+const getInboxStoreSnapshot = () => inboxStore;
+
+// Monotonic refresh id. Refreshes run from focus, the 20s poll, pull-to-refresh,
+// and connect/disconnect flows, so a slow older request can resolve after a
+// newer one — the write below is skipped unless its request is still latest.
+let inboxRefreshSeq = 0;
+
+/**
+ * Refresh the shared inbox summary. Call after every connect, disconnect, or
+ * re-enable so the inbox numbers move WITH the connection set instead of
+ * waiting for the next focus/poll. Safe to fire-and-forget.
+ */
+export async function refreshInboxSummary(): Promise<void> {
+  const myId = ++inboxRefreshSeq;
+  let token: string | null = null;
+  try {
+    token = await ensureSupabaseJwt();
+  } catch {
+    token = null;
+  }
+  const agg = token ? await fetchInboxSummary() : null;
+  if (inboxRefreshSeq !== myId) return;
+  setInboxStore({
+    summary: agg,
+    error: agg ? null : 'Couldn’t verify your import status. Pull to retry.',
+    loading: false,
+    firstDone: true,
+  });
+}
+
 /**
  * Client-side aggregate for the Import Inbox (see docs/import-hub-redesign.md).
  *
@@ -165,54 +229,19 @@ export function useImportStatus(): ImportStatusData {
   // (status changes are picked up by the poll / the live-status fallback below).
   const connSig = useMemo(() => enabled.map((c) => c.Id).sort().join('|'), [enabled]);
 
-  const [summary, setSummary] = useState<InboxSummaryResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { summary, error, loading, firstDone } = useSyncExternalStore(subscribeInboxStore, getInboxStoreSnapshot);
   const [focused, setFocused] = useState(false);
 
-  const mountedRef = useRef(true);
-  // Monotonic refresh id. refresh() runs from focus, the 20s poll, and
-  // pull-to-refresh, so a slow older request can resolve after a newer one —
-  // every setState below bails unless its request is still the latest.
-  const refreshIdRef = useRef(0);
-  const firstDoneRef = useRef(false);
   const optFirstDoneRef = useRef(false);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
   useEffect(() => {
     if (!optLoading) optFirstDoneRef.current = true;
   }, [optLoading]);
 
-  const refresh = useCallback(async () => {
-    // Claim this refresh as the latest; a later refresh bumps the id and any
-    // in-flight setState from this (now stale) run is skipped.
-    const myId = ++refreshIdRef.current;
-    const isCurrent = () => mountedRef.current && refreshIdRef.current === myId;
-
-    let token: string | null = null;
-    try {
-      token = await ensureSupabaseJwt();
-    } catch {
-      token = null;
-    }
-
-    const agg = token ? await fetchInboxSummary() : null;
-    if (!isCurrent()) return;
-    setSummary(agg);
-    setError(agg ? null : 'Couldn’t verify your import status. Pull to retry.');
-    firstDoneRef.current = true;
-    setLoading(false);
-  }, []);
-
   const refreshAll = useCallback(async () => {
     // Await BOTH sources so callers (pull-to-refresh) can keep their spinner up
     // until the data has actually settled.
-    await Promise.all([refresh(), refreshOpt()]);
-  }, [refresh, refreshOpt]);
+    await Promise.all([refreshInboxSummary(), refreshOpt()]);
+  }, [refreshOpt]);
 
   useFocusEffect(
     useCallback(() => {
@@ -238,17 +267,25 @@ export function useImportStatus(): ImportStatusData {
       }));
   }, [summary]);
 
-  const anyScanning = scanning.length > 0;
+  // Poll while ANYTHING is still importing — judged from the summary lanes OR
+  // the live connection rows. The summary alone is not enough: a connection's
+  // summary state can flip to 'needs-attention' MID-scan (items parked early),
+  // which used to stop the 20s poll while the scan was still running.
+  const anyConnectionImporting = useMemo(
+    () => enabled.some((c) => isImportingConnectionStatus(c.Status)),
+    [enabled],
+  );
+  const anyScanning = scanning.length > 0 || anyConnectionImporting;
 
   // Light poll (connection statuses only) while focused AND something is still
   // importing. Stops the moment nothing is scanning; cleared on blur/unmount.
   useEffect(() => {
     if (!focused || !anyScanning) return;
     const id = setInterval(() => {
-      refresh();
+      void refreshInboxSummary();
     }, POLL_MS);
     return () => clearInterval(id);
-  }, [focused, anyScanning, refresh]);
+  }, [focused, anyScanning]);
 
   // When a scan finishes, pull fresh optimizer counts once — the newly-imported
   // items now need photos/details.
@@ -284,7 +321,7 @@ export function useImportStatus(): ImportStatusData {
   const totalNeedsYou = matchesCount + optCounts.required;
 
   const initialLoading =
-    (loading && !firstDoneRef.current) || (!optFirstDoneRef.current && optLoading);
+    (loading && !firstDone) || (!optFirstDoneRef.current && optLoading);
 
   return {
     loading: initialLoading,

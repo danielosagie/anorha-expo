@@ -93,7 +93,7 @@ const SyncRulesScreen = () => {
   const insets = useSafeAreaInsets();
   const { connectionId } = route.params;
   const routeParams = route.params as any;
-  const { connections, refresh, updateConnectionLocally } = usePlatformConnections();
+  const { refresh, updateConnectionLocally } = usePlatformConnections();
 
   const [platformType, setPlatformType] = useState<string>(routeParams?.platformName || '');
   const [displayName, setDisplayName] = useState<string>('');
@@ -232,7 +232,6 @@ const SyncRulesScreen = () => {
 
   const disconnect = async () => {
     setDisconnectOpen(false);
-    const previous = connections.find(connection => connection.Id === connectionId);
     updateConnectionLocally(connectionId, { IsEnabled: false, Status: 'inactive' });
     try {
       const { data: session } = await supabase.auth.getSession();
@@ -249,9 +248,14 @@ const SyncRulesScreen = () => {
       navigation.goBack();
     } catch (e: any) {
       log.error('disconnect', e);
-      if (previous) updateConnectionLocally(connectionId, previous);
-      else await refresh();
+      // NEVER restore the pre-disconnect row: the backend disables the row
+      // BEFORE its cascade and leaves it disabled even on failure — an
+      // optimistic rollback would show "connected" for a dead connection.
+      await refresh();
       Alert.alert('Error', 'Failed to disconnect. Please try again.');
+    } finally {
+      // The inbox summary counts per-connection work; move it with the row.
+      void importStatus.refresh();
     }
   };
 

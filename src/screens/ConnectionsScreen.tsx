@@ -25,7 +25,7 @@ import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformCon
 import { useImportStatus } from '../hooks/useImportStatus';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
-import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { isListedPlatformConnection } from '../lib/platformConnectStatus';
 import PartnerBadge from '../components/PartnerBadge';
 import { buildPartnerInventoryOrigins, PartnerInventoryOrigin } from '../lib/partnerInventory';
 import { findResumableCsvImports } from '../lib/resumableImports';
@@ -69,7 +69,6 @@ const ConnectionsScreen = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const {
-    connections,
     liveConnections,
     loading,
     error: connectionsError,
@@ -79,11 +78,13 @@ const ConnectionsScreen = () => {
   const overlay = usePlatformPickerOverlay();
   const { currentOrg } = useOrg();
 
-  // Soft-disconnected rows (IsEnabled=false) stay in the API payload, but a
-  // platform the user disconnected must leave this list. Reconnecting goes
-  // through the real OAuth flow on ConnectPlatforms, not PATCH /enable.
+  // Soft-disconnected rows (IsEnabled=false / 'inactive') STAY in this list and
+  // render the grey Disconnected state — vanishing made a failed disconnect look
+  // successful and hid the built reconnect-in-place path (tap → PATCH /enable →
+  // backend re-queues the import). Genuinely-deleted rows are hard-deleted
+  // server-side and never appear in the payload.
   const visibleConnections = useMemo(
-    () => (liveConnections || []).filter(isVisiblePlatformConnection),
+    () => (liveConnections || []).filter(isListedPlatformConnection),
     [liveConnections]
   );
 
@@ -166,6 +167,9 @@ const ConnectionsScreen = () => {
       if (res.success) {
         setConsentPlatform(null);
         refresh?.();
+        // New store, new inbox work — refresh the shared summary too so the
+        // "needs you" counts move with the connect, not on the next focus.
+        void importStatus.refresh();
         if (res.connectionId) {
           navigation.navigate('ImportQuestionQueue', {
             connectionId: res.connectionId,
@@ -179,7 +183,7 @@ const ConnectionsScreen = () => {
     } finally {
       setConnecting(false);
     }
-  }, [consentPlatform, connect, navigation, refresh]);
+  }, [consentPlatform, connect, navigation, refresh, importStatus.refresh]);
 
   // Hold the latest handler in a ref so the focus effect below can stay stable.
   const startConnectRef = useRef(handleStartConnect);
@@ -198,7 +202,6 @@ const ConnectionsScreen = () => {
         text: 'Disconnect',
         style: 'destructive',
         onPress: async () => {
-          const previous = connections.find(connection => connection.Id === c.Id);
           updateConnectionLocally(c.Id, { IsEnabled: false, Status: 'inactive' });
           try {
             const token = await ensureSupabaseJwt();
@@ -210,9 +213,15 @@ const ConnectionsScreen = () => {
             if (!r.ok) throw new Error(await r.text());
             await refresh?.();
           } catch {
-            if (previous) updateConnectionLocally(c.Id, previous);
-            else await refresh?.();
+            // NEVER restore the pre-disconnect row: the backend disables the row
+            // BEFORE its cascade and leaves it disabled even on failure, so an
+            // optimistic rollback would show "connected" for a dead connection.
+            // Refetch — the server is the only party that knows the real state.
+            await refresh?.();
             Alert.alert('Error', 'Failed to disconnect. Please try again.');
+          } finally {
+            // The inbox summary counts per-connection work; move it with the row.
+            void importStatus.refresh();
           }
         },
       },
@@ -235,10 +244,12 @@ const ConnectionsScreen = () => {
         throw new Error(message || `Request failed (${response.status})`);
       }
       await refresh?.();
+      // Re-enable/rescan re-queues import work — freshen the inbox summary.
+      void importStatus.refresh();
     } catch (error: any) {
       Alert.alert('Couldn’t start import', error?.message || 'Please try again.');
     }
-  }, [refresh]);
+  }, [refresh, importStatus.refresh]);
 
   const [poolsLoading, setPoolsLoading] = useState(false);
   const [createPoolOpen, setCreatePoolOpen] = useState(false);

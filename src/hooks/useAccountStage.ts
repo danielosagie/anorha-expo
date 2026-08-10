@@ -12,6 +12,7 @@
  */
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useProfileProductCount } from './useProfileProductCount';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 export type AccountStage = 'cold' | 'connected' | 'stocked' | 'clearing' | 'active';
 
@@ -59,7 +60,9 @@ export function useAccountStage(opts?: { campaigns?: number; anySales?: boolean 
   const { liveConnections } = usePlatformConnections();
   const { productCount } = useProfileProductCount();
   const stage = classifyAccountStage({
-    connections: liveConnections?.length || 0,
+    // The context fetches includeDisabled=true, so liveConnections still holds
+    // soft-disconnected rows — only usable connections advance the stage.
+    connections: (liveConnections || []).filter(isVisiblePlatformConnection).length,
     inventory: productCount || 0,
     campaigns: opts?.campaigns ?? 0,
     anySales: opts?.anySales ?? false,
