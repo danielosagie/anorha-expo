@@ -3965,7 +3965,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         // Call the manifest parsing API
         const jwt = await ensureSupabaseJwt();
-        const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
+        const API_URL = `${API_BASE_URL}/api`; // env module host + backend global /api prefix
 
         let requestBody = JSON.stringify({ images: validImages });
         validImages.length = 0;
@@ -4032,7 +4032,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         // Call the receipt parsing API
         const jwt = await ensureSupabaseJwt();
-        const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
+        const API_URL = `${API_BASE_URL}/api`; // env module host + backend global /api prefix
 
         let requestBody = JSON.stringify({ images: validImages });
         validImages.length = 0;

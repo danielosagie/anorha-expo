@@ -16,6 +16,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { useJobStatus } from '../hooks/useJobStatus';
+import { API_BASE_URL } from '../config/env';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -60,7 +61,9 @@ interface ReceiptReviewSheetProps {
     onCreateNew?: (itemName: string) => void;
 }
 
-const API_URL = process.env.EXPO_PUBLIC_SSSYNC_BACKEND_URL || 'https://sssync-bknd.onrender.com';
+// Host comes from the single env module (see src/config/env.ts policy); the
+// backend serves everything under its global /api prefix.
+const API_URL = `${API_BASE_URL}/api`;
 
 const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
     jobId,
