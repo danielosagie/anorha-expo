@@ -2,12 +2,13 @@
 // (add/remove), partner sharing (list + invite), rename, and delete-with-merge.
 // Replaces bouncing to the legacy Account & login mega-screen from Connections.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Clipboard,
   Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -16,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Check, Handshake, Layers, Pencil, Plus, Trash2, X } from 'lucide-react-native';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -84,9 +85,15 @@ const PoolDetailScreen = () => {
   const [mergeTarget, setMergeTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // After the first successful cycle, refetches run quietly (no full-screen
+  // spinner) — refocus and pull-to-refresh must not blank content that's there.
+  const hasLoadedRef = useRef(false);
+  const [refreshing, setRefreshing] = useState(false);
+
   const load = useCallback(async () => {
     if (!poolId) return;
-    setLoading(true);
+    const silent = hasLoadedRef.current;
+    if (!silent) setLoading(true);
     try {
       const headers = await authHeaders();
       const [poolRes, partnersRes, siblingsRes] = await Promise.all([
@@ -116,12 +123,26 @@ const PoolDetailScreen = () => {
     } catch {
       // surfaced via empty states
     } finally {
+      hasLoadedRef.current = true;
       setLoading(false);
     }
   }, [poolId, currentOrg?.id]);
 
-  useEffect(() => {
-    void load();
+  // Refetch on every focus — locations/partnerships change on screens pushed
+  // over this one (invite flows, location pickers) and on other devices.
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
   }, [load]);
 
   // Partnerships that reference this pool (rows only carry poolName).
@@ -276,6 +297,7 @@ const PoolDetailScreen = () => {
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor="#93C822" />}
       >
         <PageHeader
           title={poolName}

@@ -15,22 +15,18 @@ import {
   type ConnectStepKind,
 } from '../config/platforms';
 import type { PlatformConnectionRow } from '../context/PlatformConnectionsContext';
+import { NOT_CONNECTED_STATUSES } from './platformConnectionVisibility';
 
-// Statuses that mean a connection row is NOT a live marker. This includes the
-// backend's soft-disconnect status even when the row remains in the payload.
-const NOT_CONNECTED = new Set(['inactive', 'disconnected', 'error', 'revoked', 'disabled', 'needs_reauth']);
-
-// Soft-disconnected rows remain in includeDisabled API responses. Lists and
-// publish pickers must omit those records while still retaining error rows that
-// need a reconnect action.
-const HIDDEN_CONNECTION_STATUSES = new Set(['inactive', 'disconnected', 'disabled']);
-
-export function isVisiblePlatformConnection(
-  connection: Pick<PlatformConnectionRow, 'IsEnabled' | 'Status'>,
-): boolean {
-  const status = (connection.Status || '').toLowerCase().trim();
-  return connection.IsEnabled !== false && !HIDDEN_CONNECTION_STATUSES.has(status);
-}
+// The row-visibility predicates are pure and live in their own dependency-free
+// module (platformConnectionVisibility) so node:test can import them without
+// dragging in config/platforms' SVG assets. Re-exported here so every existing
+// consumer keeps its import path.
+export {
+  isVisiblePlatformConnection,
+  isListedPlatformConnection,
+  isDisconnectedPlatformConnection,
+  isImportingConnectionStatus,
+} from './platformConnectionVisibility';
 
 /** Live computer-presence signal (from useFacebookJobStatus). */
 export interface ComputerPresence {
@@ -77,7 +73,7 @@ export function derivePlatformConnectStatus(
     !!key &&
     (liveConnections || []).some((c) => {
       const status = (c.Status || '').toLowerCase();
-      if (NOT_CONNECTED.has(status) || c.IsEnabled === false) return false;
+      if (NOT_CONNECTED_STATUSES.has(status) || c.IsEnabled === false) return false;
       return resolvePlatformKey(c.PlatformType) === key;
     });
 

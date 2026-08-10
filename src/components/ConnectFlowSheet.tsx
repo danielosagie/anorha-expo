@@ -22,6 +22,7 @@ import LinkComputerScanSheet from './LinkComputerScanSheet';
 import ShopifyStorePicker from './ShopifyStorePicker';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { refreshInboxSummary } from '../hooks/useImportStatus';
 import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { getPlatform, connectStepsFor, type ConnectStepKind } from '../config/platforms';
 import { BRAND_PRIMARY } from '../design/tokens';
@@ -112,8 +113,14 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
       if (res.success) {
         connectedConnectionIdRef.current = res.connectionId;
         refresh?.();
+        // The inbox summary must move with the new connection (shared store —
+        // every mounted consumer updates), not wait for the next focus/poll.
+        void refreshInboxSummary();
         // Nudge once more after the callback row commits, then decide next step.
-        setTimeout(() => refresh?.(), 2500);
+        setTimeout(() => {
+          refresh?.();
+          void refreshInboxSummary();
+        }, 2500);
         if (res.connectionId && res.scanStarted === false) {
           setFailedConnectionId(res.connectionId);
           setConnectError('Your store is connected, but the inventory import did not start.');
@@ -149,6 +156,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     const started = await startScan(failedConnectionId);
     if (started) {
       refresh?.();
+      void refreshInboxSummary();
       advanceAfterOAuth();
       return;
     }

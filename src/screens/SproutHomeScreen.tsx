@@ -38,6 +38,7 @@ import { useOrg } from '../context/OrgContext';
 import { useIsNight } from '../hooks/useIsNight';
 import { trackInsightAction, useOrgNudges } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import { useProfileProductCount } from '../hooks/useProfileProductCount';
 import ActivityTraySheet from '../features/liquidationConversation/components/activity/ActivityTraySheet';
 import { useActivityTray } from '../features/liquidationConversation/components/activity/useActivityTray';
@@ -464,6 +465,13 @@ const SproutHomeScreen: React.FC = () => {
   const currentInsightRef = useRef(insight);
   currentInsightRef.current = insight;
   const { liveConnections } = usePlatformConnections();
+  // The context fetches includeDisabled=true, so liveConnections still holds
+  // soft-disconnected rows — setup/checklist logic must only count usable ones
+  // or disconnecting your only store would still read "Connect a platform: done".
+  const enabledConnections = useMemo(
+    () => (liveConnections || []).filter(isVisiblePlatformConnection),
+    [liveConnections],
+  );
   const {
     productCount,
     loading: productCountLoading,
@@ -487,7 +495,7 @@ const SproutHomeScreen: React.FC = () => {
   // onboarding — only the "Start a clearout" CTA. `setupUnknown` suppresses the
   // pre-bridge flash where productCount is still 0 (initial value) and the
   // 3-step checklist would briefly paint "Add your first items" as incomplete.
-  const hasSetup = (liveConnections?.length || 0) > 0 && (productCount || 0) > 0;
+  const hasSetup = enabledConnections.length > 0 && (productCount || 0) > 0;
   // "Unknown" until the org is resolved AND the count has settled — the count
   // gates on currentOrg (see AppDataContext.refreshProductCount), so before the
   // org loads productCount is its 0 default and would flash the checklist.
@@ -1579,7 +1587,7 @@ const SproutHomeScreen: React.FC = () => {
                       icon: 'storefront-outline',
                       label: 'Connect a platform',
                       sub: 'Shopify, Square, eBay and more',
-                      done: (liveConnections?.length || 0) > 0,
+                      done: enabledConnections.length > 0,
                       onPress: () => navigation.navigate('Connections'),
                     },
                     {

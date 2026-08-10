@@ -15,7 +15,7 @@ import {
     Switch,
     StatusBar
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import {
     AlertCircle,
@@ -282,6 +282,24 @@ export default function PartnersScreen() {
         setRefreshing(true);
         refreshData().finally(() => setRefreshing(false));
     };
+
+    // Freshness: invites are accepted / partnerships end on OTHER screens (and
+    // other devices) while this list stays mounted underneath — refetch on every
+    // refocus. The ref keeps the focus callback stable (refreshData is redeclared
+    // per render); the first focus is skipped because the mount effect above
+    // already fetched everything.
+    const refreshDataRef = useRef(refreshData);
+    refreshDataRef.current = refreshData;
+    const focusedOnceRef = useRef(false);
+    useFocusEffect(
+        useCallback(() => {
+            if (!focusedOnceRef.current) {
+                focusedOnceRef.current = true;
+                return;
+            }
+            void refreshDataRef.current();
+        }, []),
+    );
 
     // --- Actions ---
 

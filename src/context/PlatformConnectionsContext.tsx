@@ -46,14 +46,16 @@ type ContextValue = {
   refresh: () => Promise<void>;
   loading: boolean;
   error?: string;
-  toggles: Record<string, { enabled: boolean; allowPublish: boolean; allowSync: boolean; message?: string }>;
 };
 
 const PlatformConnectionsContext = createContext<ContextValue | undefined>(undefined);
 
 const API_BASE = API_BASE_URL;
 const CONNECTION_STATUS_SET = new Set(['active', 'inactive', 'pending', 'review', 'ready_to_sync', 'scanning', 'syncing', 'reconciling', 'error']);
-const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error']);
+// Statuses that end a lifecycle transition and warrant an authoritative refetch.
+// 'inactive' is here so a disconnect event (from this device or another) pulls
+// the real row state instead of leaving a stale "connected" row on screen.
+const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error', 'inactive']);
 const PROGRESS_OVERRIDE_TTL_MS = 2 * 60 * 1000;
 
 const normalizeStatus = (value?: string) => (value || '').toLowerCase().trim();
@@ -62,7 +64,6 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   const [connections, setConnections] = useState<PlatformConnectionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
-  const [toggles, setToggles] = useState<Record<string, { enabled: boolean; allowPublish: boolean; allowSync: boolean; message?: string }>>({});
   const [progressByConnectionId, setProgressByConnectionId] = useState<Record<string, SyncProgressUpdate>>({});
   const [authReady, setAuthReady] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,21 +99,9 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
         return next;
       });
 
-      // Fetch toggles
-      try {
-        const togResp = await fetch(`${API_BASE}/api/platform-connections/toggles`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (togResp.ok) {
-          const arr = await togResp.json();
-          const map: Record<string, { enabled: boolean; allowPublish: boolean; allowSync: boolean; message?: string }> = {};
-          for (const t of arr || []) {
-            const key = (t.PlatformType || '').toLowerCase();
-            map[key] = { enabled: !!t.Enabled, allowPublish: t.AllowPublish ?? true, allowSync: t.AllowSync ?? true, message: t.Message };
-          }
-          setToggles(map);
-        }
-      } catch { }
+      // NOTE: no toggles fetch. GET /api/platform-connections/toggles no longer
+      // exists on the backend — the path fell into the :id route and 400'd on
+      // every refresh. Nothing consumed the result.
     } catch (e: any) {
       setError(e?.message || 'Failed to load connections');
     } finally {
@@ -172,12 +161,28 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       }
     };
 
-    const onConnectionStatus = (data: { connectionId: string; status: string; platformType?: string; timestamp?: string }) => {
+    // The backend is being upgraded to include isEnabled/platformType on
+    // connection:status (disconnect events especially) — handle BOTH the old
+    // {connectionId,status} shape and the richer one.
+    const onConnectionStatus = (data: { connectionId: string; status: string; isEnabled?: boolean; platformType?: string; timestamp?: string }) => {
       if (!data?.connectionId) return;
       const status = normalizeStatus(data.status);
       if (!status) return;
       setConnections(prev =>
-        prev.map(conn => (conn.Id === data.connectionId ? { ...conn, Status: status } : conn))
+        prev.map(conn => {
+          if (conn.Id !== data.connectionId) return conn;
+          const patch: Partial<PlatformConnectionRow> = { Status: status };
+          if (typeof data.isEnabled === 'boolean') {
+            patch.IsEnabled = data.isEnabled;
+          } else if (status === 'inactive') {
+            // Old payload shape: the disconnect cascade always pairs
+            // Status='inactive' with IsEnabled=false, so mirror it locally
+            // until the authoritative refetch below lands.
+            patch.IsEnabled = false;
+          }
+          if (data.platformType && !conn.PlatformType) patch.PlatformType = data.platformType;
+          return { ...conn, ...patch };
+        })
       );
       if (TERMINAL_STATUS_SET.has(status)) {
         scheduleRefresh('connection-status');
@@ -265,8 +270,10 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     return !!connectedByPlatform[key];
   }, [connectedByPlatform]);
 
-  // Immediate shared-store update for mutations such as disconnect. Callers keep
-  // the previous row and restore it if the request fails, then refresh on success.
+  // Immediate shared-store update for mutations such as disconnect. On failure
+  // callers must refetch (refresh()) rather than restore the previous row — the
+  // backend disables the row BEFORE its cascade and can leave it disabled even
+  // when the request reports failure, so only the server knows the real state.
   const updateConnectionLocally = useCallback((connectionId: string, patch: Partial<PlatformConnectionRow>) => {
     setConnections(prev =>
       prev.map(connection => connection.Id === connectionId ? { ...connection, ...patch } : connection)
@@ -283,8 +290,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     refresh: fetchConnections,
     loading,
     error,
-    toggles,
-  }), [connections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, updateConnectionLocally, fetchConnections, loading, error, toggles]);
+  }), [connections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, updateConnectionLocally, fetchConnections, loading, error]);
 
   return (
     <PlatformConnectionsContext.Provider value={value}>

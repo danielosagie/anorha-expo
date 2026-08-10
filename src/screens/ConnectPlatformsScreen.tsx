@@ -253,8 +253,10 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         onConnected={(connectionId) => {
           setFlowPlatform(null);
           // The backend commits the connection row on the OAuth callback; nudge
-          // twice so the row flips to Connected without a manual reload.
+          // twice so the row flips to Connected without a manual reload. The
+          // shared inbox summary moves with it (imports start immediately).
           refresh?.();
+          void importStatus.refresh();
           setTimeout(() => refresh?.(), 2500);
           if (connectionId) {
             navigation.navigate('ImportQuestionQueue', {
