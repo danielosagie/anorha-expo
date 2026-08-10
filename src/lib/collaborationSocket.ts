@@ -43,6 +43,38 @@ let refCount = 0;
 let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentUserName: string | undefined;
 
+/**
+ * Ready listeners fire whenever a shared socket instance becomes available —
+ * immediately on registration if one already exists, and again for every NEW
+ * socket created after a full teardown. Consumers that need to emit stateful
+ * context (e.g. OrgContext's 'org:switch') use this instead of polling
+ * getCollaborationSocket(), which is null until some subscriber connects.
+ */
+type SocketReadyListener = (socket: Socket) => void;
+const readyListeners = new Set<SocketReadyListener>();
+
+export function onCollaborationSocketReady(listener: SocketReadyListener): () => void {
+  readyListeners.add(listener);
+  if (sharedSocket) {
+    try {
+      listener(sharedSocket);
+    } catch (e) {
+      log.warn('[collaborationSocket] ready listener threw:', e);
+    }
+  }
+  return () => readyListeners.delete(listener);
+}
+
+function notifySocketReady(socket: Socket) {
+  readyListeners.forEach((listener) => {
+    try {
+      listener(socket);
+    } catch (e) {
+      log.warn('[collaborationSocket] ready listener threw:', e);
+    }
+  });
+}
+
 async function createSocket(): Promise<Socket | null> {
   const token = await ensureSupabaseJwt();
   if (!token) {
@@ -76,6 +108,7 @@ export async function acquireCollaborationSocket(opts?: { userName?: string }): 
     connectPromise = createSocket().then((s) => {
       sharedSocket = s;
       connectPromise = null;
+      if (s) notifySocketReady(s);
       return s;
     });
   }

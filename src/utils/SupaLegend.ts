@@ -260,11 +260,17 @@ export async function initializeLegendState(
     productVariants$.get(); // Call get() to activate and start syncing
     log.debug(`[SupaLegend] productVariants$ activated. Current local count: ${Object.keys(productVariants$.get() || {}).length}`);
 
-    // Optionally activate others if needed, but productVariants is primary for now
-    // platformProductMappings$.get();
+    // Activate the rest at init. These observables declare `realtime: true`, but a
+    // Legend synced observable opens its realtime channel lazily on first .get();
+    // leaving these commented out meant the shelf's inventory quantities and
+    // platform badges had NO live subscription until some other code path happened
+    // to touch them — a primary cause of the "stale until restart" shelf.
+    log.debug("[SupaLegend] Activating platformProductMappings$...");
+    platformProductMappings$.get();
     log.debug("[SupaLegend] Activating productImages$...");
     productImages$.get();
-    // inventoryLevels$.get();
+    log.debug("[SupaLegend] Activating inventoryLevels$...");
+    inventoryLevels$.get();
 
     legendStateObservablesSingleton = {
         productVariants$,

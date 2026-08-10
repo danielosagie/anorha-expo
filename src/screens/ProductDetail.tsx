@@ -22,6 +22,8 @@ import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { API_BASE_URL } from '../config/env';
 import { apiFetch } from '../lib/apiClient';
+import { applyLevelPatch, applyVariantPatch } from '../lib/catalogPatches';
+import { buildPoolModeIndex, sumPooledLevelQuantities } from '../lib/partnerInventory';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
@@ -1009,12 +1011,35 @@ const ProductDetailScreen = observer(
             log.warn('[ProductDetail] Error loading CrossOrgProductLinks:', sharedError);
           } else if (sharedLinks && sharedLinks.length > 0) {
             isSharedProductRef.current = true;
-            const poolQtyByVariant = new Map<string, number>();
+
+            // Pool totals must honor each pool's inventoryMode (the backend
+            // folds replicated pools with max — inventory.service.ts): a
+            // 'shared'/'aggregate' pool writes the SAME quantity to every
+            // level row, so summing multiplies stock. Only fetched when the
+            // product actually carries shared links.
+            let poolModeById: Record<string, string> = {};
+            try {
+              const poolsResponse = await apiFetch(`/api/pools/org/${currentOrg.id}`, { method: 'GET' });
+              if (poolsResponse.ok) {
+                const poolsPayload = await poolsResponse.json().catch(() => []);
+                poolModeById = buildPoolModeIndex(Array.isArray(poolsPayload) ? poolsPayload : []);
+              }
+            } catch (poolErr) {
+              // Missing modes degrade to the default 'shared' (max) fold.
+              log.warn('[ProductDetail] Could not load pool modes:', poolErr);
+            }
+
+            const poolLevelsByVariant = new Map<string, InventoryLevel[]>();
             mergedInventory.forEach((level: InventoryLevel) => {
               if (!level.PlatformConnectionId && (level as any).PoolId) {
-                const current = poolQtyByVariant.get(level.ProductVariantId) || 0;
-                poolQtyByVariant.set(level.ProductVariantId, current + (level.Quantity || 0));
+                const existing = poolLevelsByVariant.get(level.ProductVariantId);
+                if (existing) existing.push(level);
+                else poolLevelsByVariant.set(level.ProductVariantId, [level]);
               }
+            });
+            const poolQtyByVariant = new Map<string, number>();
+            poolLevelsByVariant.forEach((variantPoolLevels, variantId) => {
+              poolQtyByVariant.set(variantId, sumPooledLevelQuantities(variantPoolLevels as any[], poolModeById));
             });
 
             sharedLinks.forEach((link: any) => {
@@ -1838,6 +1863,32 @@ const ProductDetailScreen = observer(
             ...updateData,
             Metadata: { ...(prev as any).Metadata, platformSpecificData: cleanedPlatformData },
           } as ProductDetailItem) : prev);
+
+          // Feed the catalog patch bus so the inventory shelf shows this save
+          // immediately (its caches refetch on a gated schedule). Prefer the
+          // post-write row the backend returns (`item`, with the server
+          // UpdatedAt); fall back to what we sent.
+          {
+            const savedItem = (saveResult?.item && typeof saveResult.item === 'object')
+              ? saveResult.item as Record<string, any>
+              : null;
+            const patchSource = savedItem || updateData;
+            const patchFields: Record<string, any> = {};
+            (['Title', 'Price', 'CompareAtPrice', 'Sku', 'Barcode'] as const).forEach((column) => {
+              if (patchSource[column] !== undefined) patchFields[column] = patchSource[column];
+            });
+            // Product copy is displayed from the embedded Products projection.
+            const productsPatch: Record<string, any> = {};
+            if (updateData.Title !== undefined) productsPatch.Title = updateData.Title;
+            if (updateData.Description !== undefined) productsPatch.Description = updateData.Description;
+            if (updateData.Tags !== undefined) productsPatch.Tags = updateData.Tags;
+            if (Object.keys(productsPatch).length > 0) patchFields.Products = productsPatch;
+            applyVariantPatch(item.Id, {
+              ...patchFields,
+              UpdatedAt: typeof savedItem?.UpdatedAt === 'string' ? savedItem.UpdatedAt : new Date().toISOString(),
+            });
+          }
+
           const textStillCurrent = editVersionRef.current === saveStartEditVersion;
           hasUnsavedChangesRef.current = !textStillCurrent;
           setHasUnsavedChanges(!textStillCurrent);
@@ -2857,6 +2908,27 @@ const ProductDetailScreen = observer(
           return updated;
         });
 
+        // Feed the catalog patch bus so the shelf's quantity updates instantly.
+        // Resolve the exact InventoryLevels row when we have it; otherwise pass
+        // a match descriptor the shelf resolves against its own level map.
+        {
+          const dbLocationId = locationId === 'default' ? null : locationId;
+          const levelRow = (rawInventoryLevels || []).find((level) =>
+            level.ProductVariantId === detailedItem.Id
+            && level.PlatformConnectionId === platformConnectionId
+            && (level.PlatformLocationId ?? null) === dbLocationId,
+          );
+          applyLevelPatch(
+            levelRow?.Id ?? null,
+            { Quantity: quantity, UpdatedAt: new Date().toISOString() },
+            levelRow ? undefined : {
+              productVariantId: detailedItem.Id,
+              platformConnectionId,
+              platformLocationId: dbLocationId,
+            },
+          );
+        }
+
         log.debug('Inventory updated successfully');
         capture(AnalyticsEvents.INVENTORY_UPDATED, { product_id: detailedItem?.ProductId });
 
@@ -2864,7 +2936,7 @@ const ProductDetailScreen = observer(
         log.error('Failed to update inventory:', error);
         Alert.alert('Error', 'Failed to update inventory. Please try again.');
       }
-    }, [detailedItem]);
+    }, [detailedItem, rawInventoryLevels]);
 
     // Image management functions
     const applyEditorImageUpdate = useCallback((updater: (current: string[]) => string[]) => {

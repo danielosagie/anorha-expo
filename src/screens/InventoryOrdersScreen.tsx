@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useSyncExternalStore } from 'react';
 import { listPlatforms } from '../config/platforms';
 import { API_BASE_URL } from '../config/env';
 import {
@@ -16,6 +16,7 @@ import {
   PanResponderInstance,
   LayoutChangeEvent,
   Pressable,
+  RefreshControl,
   useWindowDimensions,
   Animated as RNAnimated,
   Easing
@@ -63,9 +64,22 @@ import { getVariantPlatforms } from '../lib/platforms';
 import { api, apiFetch } from '../lib/apiClient';
 import {
   buildPartnerInventoryOrigins,
+  buildPoolModeIndex,
   PartnerInventoryOrigin,
   resolvePartnerInventoryOrigin,
+  sumPooledLevelQuantities,
 } from '../lib/partnerInventory';
+import {
+  applyLevelPatchesToMap,
+  applyVariantPatchesToMap,
+  drainCatalogPatches,
+  getCatalogPatchVersion,
+  getLevelPatches,
+  getVariantPatches,
+  mergeNewestByUpdatedAt,
+  subscribeCatalogPatches,
+  subscribeCatalogStale,
+} from '../lib/catalogPatches';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
@@ -618,6 +632,11 @@ const InventoryOrdersScreen = observer(() => {
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
+  // PoolId -> inventoryMode from /api/pools/org/:id. Replicated ('shared'/
+  // 'aggregate') pools write the SAME quantity to every level row, so summing
+  // them multiplies stock; the fold helpers below take max for those and only
+  // sum 'independent' pools — matching the backend's canonical fold.
+  const [poolModeById, setPoolModeById] = useState<Record<string, string>>({});
   // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
   const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)';
 
@@ -636,11 +655,13 @@ const InventoryOrdersScreen = observer(() => {
       ]);
       const partnershipPayload = partnershipsResponse.ok ? await partnershipsResponse.json() : {};
       const poolPayload = poolsResponse.ok ? await poolsResponse.json() : [];
+      const pools = Array.isArray(poolPayload) ? poolPayload : [];
       setPartnerOrigins(buildPartnerInventoryOrigins(
         partnershipPayload?.partnerships || [],
-        Array.isArray(poolPayload) ? poolPayload : [],
+        pools,
         currentOrg.id,
       ));
+      setPoolModeById(buildPoolModeIndex(pools));
     } catch (error) {
       log.warn('[InventoryOrdersScreen] Could not load partner metadata:', error);
     }
@@ -709,95 +730,201 @@ const InventoryOrdersScreen = observer(() => {
   // Last SUCCESSFUL shelf fetch (mount or focus), for the focus freshness
   // window. A ref, not state: reading it must never re-render the shelf.
   const lastShelfFetchAtRef = useRef(0);
+  // Newest UpdatedAt seen across fetched variant/level rows — the watermark for
+  // delta refetches. Derived from SERVER rows (not the client clock) so clock
+  // skew can never skip a change.
+  const shelfWatermarkRef = useRef<string | null>(null);
+  // Variant ids from the last full fetch, for targeted links+levels refetches.
+  const shelfVariantIdsRef = useRef<string[]>([]);
+  const shelfFetchInFlightRef = useRef(false);
+
+  const bumpShelfWatermark = useCallback((rows: Array<{ UpdatedAt?: string | null }>) => {
+    let maxIso = shelfWatermarkRef.current;
+    let maxMs = maxIso ? new Date(maxIso).getTime() : 0;
+    rows.forEach((row) => {
+      const iso = typeof row?.UpdatedAt === 'string' ? row.UpdatedAt : null;
+      if (!iso) return;
+      const ms = new Date(iso).getTime();
+      if (Number.isFinite(ms) && ms > maxMs) {
+        maxMs = ms;
+        maxIso = iso;
+      }
+    });
+    shelfWatermarkRef.current = maxIso;
+  }, []);
+
+  // Shared links + inventory levels for a set of variants (REPLACES state —
+  // used by the full fetch and by partnership-triggered refetches).
+  const fetchSharedLinksAndLevels = useCallback(async (variantIds: string[], label: string) => {
+    if (variantIds.length === 0) return;
+
+    const linksData = await fetchByIdChunks(
+      variantIds,
+      (chunk) => supabase
+        .from('CrossOrgProductLinks')
+        .select('*')
+        .in('TargetVariantId', chunk)
+        .eq('Status', 'active'),
+      `shared links (${label})`,
+    );
+    const linkMap: Record<string, SharedProductLinkInfo> = {};
+    linksData.forEach((link: any) => {
+      if (link.TargetVariantId) {
+        linkMap[link.TargetVariantId] = {
+          quantity: link.AvailableQuantity || 0,
+          poolId: link.TargetPoolId || undefined,
+          link,
+        };
+      }
+    });
+    setSharedLinkQuantities(linkMap);
+
+    const levelsData = await fetchByIdChunks(
+      variantIds,
+      (chunk) => supabase
+        .from('InventoryLevels')
+        // Production-verified schema: InventoryLevels stores quantity data, not variant price.
+        .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
+        .in('ProductVariantId', chunk),
+      `inventory levels (${label})`,
+    );
+    log.debug(`[InventoryOrdersScreen] Fetched inventory levels (${label}):`, levelsData.length);
+    const levelsMap: Record<string, InventoryLevel> = {};
+    levelsData.forEach((l: any) => {
+      levelsMap[l.Id] = l;
+    });
+    setDirectFetchLevels(levelsMap);
+    bumpShelfWatermark(levelsData);
+  }, [fetchByIdChunks, bumpShelfWatermark]);
+
+  // FULL shelf fetch: pagination over every ProductVariant + links + levels.
+  // One implementation shared by mount, gated focus, and pull-to-refresh.
+  const runFullShelfFetch = useCallback(async (label: string): Promise<boolean> => {
+    const userId = legendState?.userId;
+    if (!supabase || !userId) return false;
+    if (shelfFetchInFlightRef.current) return false;
+    shelfFetchInFlightRef.current = true;
+    const fetchStartedAt = Date.now();
+
+    try {
+      const data = await fetchAllProductVariants(userId);
+
+      if (!data) {
+        log.error(`[InventoryOrdersScreen] Full fetch (${label}): empty response`);
+        return false;
+      }
+
+      log.debug(`[InventoryOrdersScreen] Full fetch (${label}): fetched products:`, data.length);
+      // Defensive: a transient empty page must not wipe an already-shown shelf.
+      if (data.length > 0) {
+        const variantMap: Record<string, ProductVariantData> = {};
+        const variantIds: string[] = [];
+        data.forEach((v: any) => {
+          variantMap[v.Id] = v;
+          variantIds.push(v.Id);
+        });
+        setDirectFetchVariants(variantMap);
+        setShelfLoadError(false);
+        bumpShelfWatermark(data);
+        shelfVariantIdsRef.current = variantIds;
+
+        await fetchSharedLinksAndLevels(variantIds, label);
+      }
+      lastShelfFetchAtRef.current = Date.now();
+      // Rows fetched after these patches were created now carry the truth;
+      // holding drained patches would only risk masking newer server rows.
+      drainCatalogPatches(fetchStartedAt);
+      return true;
+    } catch (e) {
+      log.error(`[InventoryOrdersScreen] Full fetch (${label}) failed:`, e);
+      setShelfLoadError(true);
+      return false;
+    } finally {
+      shelfFetchInFlightRef.current = false;
+    }
+  }, [legendState?.userId, fetchAllProductVariants, fetchSharedLinksAndLevels, bumpShelfWatermark]);
+
+  // DELTA fetch: only rows with UpdatedAt newer than the watermark — cheap
+  // enough to run inside the freshness gate on every focus, so an edit made
+  // elsewhere shows up even during the 20s window that used to hide it.
+  // Merges changed rows over existing state; full pagination stays gated.
+  const runShelfDeltaFetch = useCallback(async (): Promise<void> => {
+    const userId = legendState?.userId;
+    const sinceIso = shelfWatermarkRef.current;
+    if (!supabase || !userId || !sinceIso) return;
+
+    try {
+      const [variantsResult, levelsResult] = await Promise.all([
+        supabase
+          .from('ProductVariants')
+          // Same projection as the full fetch (WITH the Products join) so a
+          // delta row is a drop-in replacement for a full row.
+          .select(PRODUCT_VARIANT_SELECT)
+          .eq('UserId', userId)
+          .not('Sku', 'like', 'DRAFT-%')
+          .gt('UpdatedAt', sinceIso)
+          .limit(500),
+        supabase
+          .from('InventoryLevels')
+          // RLS scopes rows to this user; extra rows for undisplayed variants
+          // are ignored downstream.
+          .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
+          .gt('UpdatedAt', sinceIso)
+          .limit(1000),
+      ]);
+
+      const changedVariants = variantsResult.error ? [] : (variantsResult.data || []);
+      const changedLevels = levelsResult.error ? [] : (levelsResult.data || []);
+      if (variantsResult.error) {
+        log.warn('[InventoryOrdersScreen] Delta fetch variants failed:', variantsResult.error);
+      }
+      if (levelsResult.error) {
+        log.warn('[InventoryOrdersScreen] Delta fetch levels failed:', levelsResult.error);
+      }
+      if (changedVariants.length === 0 && changedLevels.length === 0) return;
+
+      log.debug('[InventoryOrdersScreen] Delta fetch merged:', changedVariants.length, 'variants,', changedLevels.length, 'levels');
+      if (changedVariants.length > 0) {
+        setDirectFetchVariants((prev) => {
+          const next = { ...prev };
+          changedVariants.forEach((v: any) => {
+            next[v.Id] = v;
+          });
+          return next;
+        });
+        bumpShelfWatermark(changedVariants);
+      }
+      if (changedLevels.length > 0) {
+        setDirectFetchLevels((prev) => {
+          const next = { ...prev };
+          changedLevels.forEach((l: any) => {
+            next[l.Id] = l;
+          });
+          return next;
+        });
+        bumpShelfWatermark(changedLevels);
+      }
+    } catch (e) {
+      // Delta is an opportunistic freshness path; the gated full fetch remains
+      // the reliable fallback, so log and move on.
+      log.warn('[InventoryOrdersScreen] Delta fetch failed:', e);
+    }
+  }, [legendState?.userId, bumpShelfWatermark]);
 
   useEffect(() => {
-    const directFetchProducts = async () => {
-      if (supabase && legendState?.userId) {
-        try {
-          // Fetch ProductVariants
-          const data = await fetchAllProductVariants(legendState.userId);
-
-          if (!data) {
-            log.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
-          } else {
-            log.debug('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
-            // Store in fallback state, keyed by Id
-            if (data && data.length > 0) {
-              const variantMap: Record<string, ProductVariantData> = {};
-              const variantIds: string[] = [];
-              data.forEach((v: any) => {
-                variantMap[v.Id] = v;
-                variantIds.push(v.Id);
-              });
-              setDirectFetchVariants(variantMap);
-              setShelfLoadError(false);
-
-              // Fetch CrossOrgProductLinks for shared inventory quantities
-              if (variantIds.length > 0) {
-                const linksData = await fetchByIdChunks(
-                  variantIds,
-                  (chunk) => supabase
-                    .from('CrossOrgProductLinks')
-                    .select('*')
-                    .in('TargetVariantId', chunk)
-                    .eq('Status', 'active'),
-                  'shared links',
-                );
-                const linkMap: Record<string, SharedProductLinkInfo> = {};
-                linksData.forEach((link: any) => {
-                  if (link.TargetVariantId) {
-                    linkMap[link.TargetVariantId] = {
-                      quantity: link.AvailableQuantity || 0,
-                      poolId: link.TargetPoolId || undefined,
-                      link,
-                    };
-                  }
-                });
-                setSharedLinkQuantities(linkMap);
-              }
-
-              // Also fetch InventoryLevels for these variants
-              if (variantIds.length > 0) {
-                const levelsData = await fetchByIdChunks(
-                  variantIds,
-                  (chunk) => supabase
-                    .from('InventoryLevels')
-                    // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-                    .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-                    .in('ProductVariantId', chunk),
-                  'inventory levels',
-                );
-                log.debug('[InventoryScreen - Direct Fetch] Fetched inventory levels:', levelsData.length);
-                const levelsMap: Record<string, InventoryLevel> = {};
-                levelsData.forEach((l: any) => {
-                  levelsMap[l.Id] = l;
-                });
-                setDirectFetchLevels(levelsMap);
-              }
-            }
-            lastShelfFetchAtRef.current = Date.now();
-          }
-        } catch (e) {
-          log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
-          setShelfLoadError(true);
-        }
-      }
-    };
-
     if (legendState?.userId) {
-      directFetchProducts();
+      void runFullShelfFetch('mount');
     }
-  }, [fetchAllProductVariants, legendState]);
+  }, [legendState?.userId, runFullShelfFetch]);
 
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
 
   // CRITICAL: Refresh data when screen comes into focus (e.g., after editing product or CSV import)
   // This ensures updated products show fresh data without requiring a full app restart
-  // UPDATED: Always refetch on focus since count-only check misses product UPDATES
   useFocusEffect(
     useCallback(() => {
-      // Skip the first render since directFetchProducts already runs on mount
+      // Skip the first render since the mount effect already runs the full fetch
       if (isFirstRender.current) {
         isFirstRender.current = false;
         return;
@@ -808,85 +935,63 @@ const InventoryOrdersScreen = observer(() => {
 
         // Freshness window: a full shelf refetch is pagination over every
         // ProductVariant plus links and levels (multi-second at 344 items,
-        // run 8), so a tab bounce within 20s just shows the cached shelf.
-        // Only this focus path is gated; explicit refetches (mount, edits)
-        // never route through here, so they always run.
+        // run 8), so a tab bounce within 20s runs only the cheap delta fetch.
         const sinceLastFetch = Date.now() - lastShelfFetchAtRef.current;
         if (sinceLastFetch < SHELF_FOCUS_FRESH_MS) {
-          log.debug(`[InventoryOrdersScreen] Focus refetch skipped - shelf is ${Math.round(sinceLastFetch / 1000)}s fresh`);
+          log.debug(`[InventoryOrdersScreen] Focus full refetch skipped - shelf is ${Math.round(sinceLastFetch / 1000)}s fresh, running delta`);
+          void runShelfDeltaFetch();
           return;
         }
 
         log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
         void loadPartnerOrigins();
-
-        try {
-          // Always refetch products to get latest data (covers both new AND updated products)
-          const data = await fetchAllProductVariants(legendState.userId);
-
-          if (data) {
-            const variantMap: Record<string, ProductVariantData> = {};
-            const variantIds: string[] = [];
-            data.forEach((v: any) => {
-              variantMap[v.Id] = v;
-              variantIds.push(v.Id);
-            });
-            setDirectFetchVariants(variantMap);
-            setShelfLoadError(false);
-
-            // Refresh CrossOrgProductLinks for shared inventory quantities
-            if (variantIds.length > 0) {
-              const linksData = await fetchByIdChunks(
-                variantIds,
-                (chunk) => supabase
-                  .from('CrossOrgProductLinks')
-                  .select('*')
-                  .in('TargetVariantId', chunk)
-                  .eq('Status', 'active'),
-                'shared links (focus)',
-              );
-              const linkMap: Record<string, SharedProductLinkInfo> = {};
-              linksData.forEach((link: any) => {
-                if (link.TargetVariantId) {
-                  linkMap[link.TargetVariantId] = {
-                    quantity: link.AvailableQuantity || 0,
-                    poolId: link.TargetPoolId || undefined,
-                    link,
-                  };
-                }
-              });
-              setSharedLinkQuantities(linkMap);
-            }
-
-            // Also refresh inventory levels
-            if (variantIds.length > 0) {
-              const levelsData = await fetchByIdChunks(
-                variantIds,
-                (chunk) => supabase
-                  .from('InventoryLevels')
-                  // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-                  .in('ProductVariantId', chunk),
-                'inventory levels (focus)',
-              );
-              const levelsMap: Record<string, InventoryLevel> = {};
-              levelsData.forEach((l: any) => {
-                levelsMap[l.Id] = l;
-              });
-              setDirectFetchLevels(levelsMap);
-            }
-            lastShelfFetchAtRef.current = Date.now();
-            log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
-          }
-        } catch (e) {
-          log.error('[InventoryOrdersScreen] Error during focus refresh:', e);
-          setShelfLoadError(true);
-        }
+        await runFullShelfFetch('focus');
       };
 
       refreshOnFocus();
-    }, [fetchAllProductVariants, legendState?.userId, loadPartnerOrigins])
+    }, [legendState?.userId, loadPartnerOrigins, runFullShelfFetch, runShelfDeltaFetch])
   );
+
+  // Pull-to-refresh always takes the full path, bypassing the freshness gate.
+  const [shelfRefreshing, setShelfRefreshing] = useState(false);
+  const handleShelfRefresh = useCallback(async () => {
+    setShelfRefreshing(true);
+    lastShelfFetchAtRef.current = 0;
+    try {
+      await Promise.all([loadPartnerOrigins(), runFullShelfFetch('pull-to-refresh')]);
+    } finally {
+      setShelfRefreshing(false);
+    }
+  }, [loadPartnerOrigins, runFullShelfFetch]);
+
+  // Patch bus: a patch means fresh local truth exists that the server caches
+  // may not reflect yet — force the next focus past the freshness gate.
+  useEffect(() => {
+    return subscribeCatalogPatches(() => {
+      lastShelfFetchAtRef.current = 0;
+    });
+  }, []);
+
+  // Stale marks (partnership changed, app foregrounded, org switched): reset
+  // the gate, and when this screen is what the seller is looking at, refetch
+  // the affected slices immediately instead of waiting for a nav bounce.
+  useEffect(() => {
+    return subscribeCatalogStale((reason) => {
+      lastShelfFetchAtRef.current = 0;
+      if (!navigation.isFocused()) return;
+      if (reason === 'partnership' || reason === 'org-switch') {
+        void loadPartnerOrigins();
+        void fetchSharedLinksAndLevels(shelfVariantIdsRef.current, `stale:${reason}`)
+          .catch((e) => log.warn('[InventoryOrdersScreen] Stale links+levels refetch failed:', e));
+        if (reason === 'org-switch') {
+          // Different org, different catalog — the delta watermark is useless.
+          void runFullShelfFetch('org-switch');
+        }
+        return;
+      }
+      void runShelfDeltaFetch();
+    });
+  }, [navigation, loadPartnerOrigins, fetchSharedLinksAndLevels, runFullShelfFetch, runShelfDeltaFetch]);
 
 
   // CRITICAL FIX: Use useSelector to properly track observable changes for real-time reactivity
@@ -898,29 +1003,50 @@ const InventoryOrdersScreen = observer(() => {
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
 
-  // Union of the Legend mirror and the direct fetch, direct winning per key.
-  // The old rule ("whichever map is bigger wins") was a landmine: right after
-  // a big import the stale-but-larger Legend mirror beat the fresh direct
-  // fetch, and none of the new items appeared until an app restart.
+  // Re-render + recompute signal for catalog patches (saves in ProductDetail,
+  // socket events). Version bumps on every patch write/drain.
+  const catalogPatchVersion = useSyncExternalStore(subscribeCatalogPatches, getCatalogPatchVersion);
+
+  // Union of the Legend mirror and the direct fetch — per key, the row with the
+  // NEWEST UpdatedAt wins (both sides carry it). The old positional spread
+  // ("direct always wins") silently masked realtime: a Legend row updated by a
+  // realtime event lost to a stale direct-fetch row until the next full
+  // refetch. Post-import correctness is preserved: fresh direct rows carry
+  // newer-or-equal UpdatedAt (ties go to direct), so they still win.
+  // Patches merge LAST — a local save or socket event beats both caches — and
+  // are themselves newest-UpdatedAt-gated so they can't override fresher rows.
   const activeProductVariants = useMemo(
-    () => ({ ...legendProductVariants, ...directFetchVariants }),
-    [legendProductVariants, directFetchVariants],
+    () => applyVariantPatchesToMap(
+      mergeNewestByUpdatedAt(legendProductVariants, directFetchVariants),
+      getVariantPatches(),
+    ),
+    [legendProductVariants, directFetchVariants, catalogPatchVersion],
   );
   const activeInventoryLevels = useMemo(
-    () => ({ ...legendInventoryLevels, ...directFetchLevels }),
-    [legendInventoryLevels, directFetchLevels],
+    () => applyLevelPatchesToMap(
+      mergeNewestByUpdatedAt(legendInventoryLevels, directFetchLevels),
+      getLevelPatches(),
+    ),
+    [legendInventoryLevels, directFetchLevels, catalogPatchVersion],
   );
 
   const inventoryLevelsWithShared = useMemo(() => {
     const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
-    const poolQtyByVariant = new Map<string, number>();
+    // Pool totals honor each pool's inventoryMode: replicated ('shared'/
+    // 'aggregate') pools fold with max — their rows are projections of ONE
+    // stock — and only 'independent' pools sum (matches the backend fold in
+    // inventory.service.ts).
+    const poolLevelsByVariant = new Map<string, InventoryLevel[]>();
     Object.values(activeInventoryLevels).forEach((level: InventoryLevel) => {
       if (!level.PlatformConnectionId && (level as any).PoolId) {
-        poolQtyByVariant.set(
-          level.ProductVariantId,
-          (poolQtyByVariant.get(level.ProductVariantId) || 0) + (level.Quantity || 0),
-        );
+        const existing = poolLevelsByVariant.get(level.ProductVariantId);
+        if (existing) existing.push(level);
+        else poolLevelsByVariant.set(level.ProductVariantId, [level]);
       }
+    });
+    const poolQtyByVariant = new Map<string, number>();
+    poolLevelsByVariant.forEach((variantPoolLevels, variantId) => {
+      poolQtyByVariant.set(variantId, sumPooledLevelQuantities(variantPoolLevels as any[], poolModeById));
     });
     Object.entries(sharedLinkQuantities).forEach(([variantId, info]) => {
       if (info.quantity > 0 && (poolQtyByVariant.get(variantId) || 0) <= 0) {
@@ -937,7 +1063,7 @@ const InventoryOrdersScreen = observer(() => {
       }
     });
     return levels;
-  }, [activeInventoryLevels, inventoryUpdateCounter, sharedLinkQuantities]);
+  }, [activeInventoryLevels, inventoryUpdateCounter, sharedLinkQuantities, poolModeById]);
 
   const levelsByVariantId = useMemo(() => {
     const index = new Map<string, InventoryLevel[]>();
@@ -1058,13 +1184,13 @@ const InventoryOrdersScreen = observer(() => {
       const locationFilterActive = selectedLocationIds.length > 0;
       if (platformFilterActive || locationFilterActive) {
         const platformFilter = selectedPlatformType ? selectedPlatformType.toLowerCase() : null;
-        return variantLevels.reduce((sum, level) => {
+        const matched = variantLevels.filter((level) => {
           if (platformFilter) {
             const levelPlatform = level.PlatformConnectionId
               ? (connectionToPlatform.get(level.PlatformConnectionId) || 'unknown')
               : 'pool';
             if (levelPlatform.toLowerCase() !== platformFilter) {
-              return sum;
+              return false;
             }
           }
           if (locationFilterActive) {
@@ -1073,11 +1199,17 @@ const InventoryOrdersScreen = observer(() => {
             const isLocationMatch = selectedLocationIds.includes(locationId);
             const isPoolMatch = poolId && selectedLocationIds.includes(poolId);
             if (!isLocationMatch && !isPoolMatch) {
-              return sum;
+              return false;
             }
           }
-          return sum + (level.Quantity || 0);
-        }, 0);
+          return true;
+        });
+        // Platform rows sum; pool rows fold per pool by inventoryMode (a
+        // replicated pool's rows are copies of one stock — summing oversells).
+        const platformRows = matched.filter((level) => !!level.PlatformConnectionId);
+        const poolRows = matched.filter((level) => !level.PlatformConnectionId);
+        return platformRows.reduce((sum, level) => sum + (level.Quantity || 0), 0)
+          + sumPooledLevelQuantities(poolRows as any[], poolModeById);
       }
 
       const hasRealPlatformLevels = variantLevels.some(level => !!level.PlatformConnectionId);
@@ -1085,16 +1217,20 @@ const InventoryOrdersScreen = observer(() => {
       // Group by platform (or 'pool' for levels without connection)
       // IMPORTANT: if real platform levels exist, ignore pool/synthetic rows so list matches editor/platform truth.
       const byPlatform: Record<string, number> = {};
+      const poolRowsForVariant: InventoryLevel[] = [];
       variantLevels.forEach(level => {
-        if (hasRealPlatformLevels && !level.PlatformConnectionId) {
+        if (!level.PlatformConnectionId) {
+          if (!hasRealPlatformLevels) poolRowsForVariant.push(level);
           return;
         }
-        // For pool-based inventory (partner shares), use 'pool' as platform
-        const platform = level.PlatformConnectionId
-          ? (connectionToPlatform.get(level.PlatformConnectionId) || 'unknown')
-          : 'pool';
+        const platform = connectionToPlatform.get(level.PlatformConnectionId) || 'unknown';
         byPlatform[platform] = (byPlatform[platform] || 0) + (level.Quantity || 0);
       });
+      // Pool rows fold per pool by inventoryMode: replicated pools take max,
+      // independent (split) pools sum — then distinct pools sum together.
+      if (poolRowsForVariant.length > 0) {
+        byPlatform['pool'] = sumPooledLevelQuantities(poolRowsForVariant as any[], poolModeById);
+      }
 
       // Pick PRIMARY platform only (priority order) - include 'pool' at end for partners
       const platformPriority = [...listPlatforms({ connectableOnly: true }).map((d) => d.key), 'pool'];
@@ -1346,7 +1482,7 @@ const InventoryOrdersScreen = observer(() => {
     });
 
     return Array.from(uniqueVariants.values());
-  }, [activeProductVariants, imagesByVariantId, levelsByVariantId, mappingsByVariantId, partnerOriginByVariantId, platformConnections, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
+  }, [activeProductVariants, imagesByVariantId, levelsByVariantId, mappingsByVariantId, partnerOriginByVariantId, platformConnections, poolModeById, selectedPlatformType, selectedLocationIds, filterStatus, legendObservables, variantUpdateCounter, inventoryUpdateCounter]);
 
   // Apply search and sort filters
   const filteredInventory = useMemo(() => {
@@ -1812,6 +1948,13 @@ const InventoryOrdersScreen = observer(() => {
                 renderItem={renderInventoryItem}
                 keyExtractor={item => item.Id.toString()}
                 contentContainerStyle={styles.listContent}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={shelfRefreshing}
+                    onRefresh={handleShelfRefresh}
+                    tintColor={theme.colors.primary}
+                  />
+                }
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
                 onEndReached={handleLoadMore}

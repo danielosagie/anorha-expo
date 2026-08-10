@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useUser } from '@clerk/expo';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
+import { applyLevelPatch, applyVariantPatch, markCatalogStale } from '../lib/catalogPatches';
 import { createLogger } from '../utils/logger';
 const log = createLogger('useCollaboration');
 
@@ -11,6 +12,30 @@ interface ProductUpdate {
   userId: string;
   updates: Record<string, any>;
   timestamp: number;
+}
+
+/** Payload of 'inventory:updated' (collaboration.gateway.ts emitInventoryUpdated / emitInventoryUpdate). */
+export interface InventoryUpdateEvent {
+  variantId: string;
+  locationId?: string;
+  newQuantity: number;
+  sourcePlatform: string;
+  webhookId?: string;
+  timestamp: string;
+}
+
+/** Payload of 'partnership:updated' (collaboration.gateway.ts emitPartnershipUpdate). */
+export interface PartnershipUpdateEvent {
+  type: string;
+  inviteId?: string;
+  sourceOrgId?: string;
+  partnerOrgId?: string;
+  partnerPoolId?: string;
+  linkId?: string;
+  sourceVariantId?: string;
+  newQuantity?: number;
+  timestamp: string;
+  [key: string]: unknown;
 }
 
 interface ProductEditEvent {
@@ -31,6 +56,30 @@ export function useCollaboration() {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
+
+  // Pending-attach registry for the robust listener path. The shared socket is
+  // acquired ASYNCHRONOUSLY, so any consumer that registers a listener in its
+  // own mount effect races the acquire: the legacy on* helpers below return a
+  // no-op when socketRef.current is still null — the listener NEVER attaches
+  // (the "null-socketRef early-return bug"). Robust listeners are recorded here
+  // and attached the moment the socket resolves; registrations made after that
+  // attach immediately. socket.io keeps listeners across reconnects, so no
+  // re-attach on 'connect' is needed.
+  const robustListenersRef = useRef<Map<string, Set<(data: any) => void>>>(new Map());
+
+  const registerRobustListener = useCallback((event: string, handler: (data: any) => void) => {
+    let set = robustListenersRef.current.get(event);
+    if (!set) {
+      set = new Set();
+      robustListenersRef.current.set(event, set);
+    }
+    set.add(handler);
+    socketRef.current?.on(event, handler);
+    return () => {
+      robustListenersRef.current.get(event)?.delete(handler);
+      socketRef.current?.off(event, handler);
+    };
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -63,6 +112,10 @@ export function useCollaboration() {
         s.on('disconnect', handleDisconnect);
         s.on('connect_error', handleConnectError);
         s.on('presence:update', handlePresence);
+        // Attach every robust listener registered before the socket resolved.
+        robustListenersRef.current.forEach((handlers, event) => {
+          handlers.forEach((handler) => s.on(event, handler));
+        });
       })
       .catch((error) => {
         log.error('[Collaboration] Failed to initialize socket:', error);
@@ -75,6 +128,12 @@ export function useCollaboration() {
         socket.off('disconnect', handleDisconnect);
         socket.off('connect_error', handleConnectError);
         socket.off('presence:update', handlePresence);
+        // Detach robust listeners here too: the socket is SHARED, and consumer
+        // cleanups that run after socketRef is nulled could otherwise leave
+        // handlers attached to a socket other components keep alive.
+        robustListenersRef.current.forEach((handlers, event) => {
+          handlers.forEach((handler) => socket?.off(event, handler));
+        });
       }
       socketRef.current = null;
       releaseCollaborationSocket();
@@ -148,22 +207,38 @@ export function useCollaboration() {
   }, []);
 
   /**
-   * Listen for product updates from backend
+   * Listen for product updates from backend.
+   * Robust path: attaches once the shared socket resolves instead of silently
+   * no-oping when it is registered before the async acquire completes.
    */
   const onProductUpdate = useCallback((callback: (update: ProductUpdate) => void) => {
-    if (!socketRef.current) return () => { };
-
-    const handler = (data: ProductUpdate) => {
+    return registerRobustListener('product:updated', (data: ProductUpdate) => {
       log.debug('[Collaboration] Product updated:', data);
       callback(data);
-    };
+    });
+  }, [registerRobustListener]);
 
-    socketRef.current.on('product:updated', handler);
+  /**
+   * Listen for inventory quantity changes pushed by the backend (webhooks,
+   * cross-org sync). Robust path — see onProductUpdate.
+   */
+  const onInventoryUpdate = useCallback((callback: (update: InventoryUpdateEvent) => void) => {
+    return registerRobustListener('inventory:updated', (data: InventoryUpdateEvent) => {
+      log.debug('[Collaboration] Inventory updated:', data);
+      callback(data);
+    });
+  }, [registerRobustListener]);
 
-    return () => {
-      socketRef.current?.off('product:updated', handler);
-    };
-  }, []);
+  /**
+   * Listen for cross-org partnership changes (invite accepted, quantity synced,
+   * pause/resume…). Robust path — see onProductUpdate.
+   */
+  const onPartnershipUpdate = useCallback((callback: (update: PartnershipUpdateEvent) => void) => {
+    return registerRobustListener('partnership:updated', (data: PartnershipUpdateEvent) => {
+      log.debug('[Collaboration] Partnership updated:', data);
+      callback(data);
+    });
+  }, [registerRobustListener]);
 
   /**
    * Listen for edit started events
@@ -238,9 +313,86 @@ export function useCollaboration() {
     broadcastFieldUpdate,
     onFieldUpdate,
     onProductUpdate,
+    onInventoryUpdate,
+    onPartnershipUpdate,
     onEditStarted,
     onEditEnded,
     updatePresence,
     onJobProgress, // New export
   };
+}
+
+/** ProductVariants columns a 'product:updated' payload may legally patch. */
+const VARIANT_PATCH_COLUMNS = ['Title', 'Price', 'CompareAtPrice', 'Sku', 'Barcode'] as const;
+
+/**
+ * App-level bridge: socket events → catalog patch bus. Mount ONCE near the app
+ * root (App.tsx) so team edits, webhook-driven inventory changes, and
+ * partnership updates reach the inventory shelf even while it is not focused.
+ *
+ * - product:updated with field updates  → variant patch (instant shelf update)
+ * - inventory:updated with a locationId → level patch on that exact row
+ * - anything less precise               → stale mark (shelf runs a cheap
+ *                                         delta refetch, bypassing its gate)
+ */
+export function useCatalogRealtimeBridge() {
+  const { onProductUpdate, onInventoryUpdate, onPartnershipUpdate } = useCollaboration();
+
+  useEffect(() => {
+    const offProduct = onProductUpdate((update) => {
+      const variantId = update?.variantId;
+      const updates = update?.updates;
+      if (variantId && updates && typeof updates === 'object') {
+        const fields: Record<string, unknown> = {};
+        for (const column of VARIANT_PATCH_COLUMNS) {
+          if (updates[column] !== undefined) fields[column] = updates[column];
+        }
+        // Product copy lives on the embedded Products projection on the shelf.
+        const products: Record<string, unknown> = {};
+        if (updates.Title !== undefined) products.Title = updates.Title;
+        if (updates.Description !== undefined) products.Description = updates.Description;
+        if (updates.Tags !== undefined) products.Tags = updates.Tags;
+        if (Object.keys(products).length > 0) fields.Products = products;
+        if (Object.keys(fields).length > 0) {
+          applyVariantPatch(variantId, {
+            ...fields,
+            UpdatedAt: new Date(update.timestamp || Date.now()).toISOString(),
+          });
+          return;
+        }
+      }
+      // Webhook-shaped payloads carry no field updates — refetch instead.
+      markCatalogStale('product');
+    });
+
+    const offInventory = onInventoryUpdate((update) => {
+      if (update?.variantId && update?.locationId && Number.isFinite(update?.newQuantity)) {
+        applyLevelPatch(
+          null,
+          {
+            Quantity: update.newQuantity,
+            UpdatedAt: update.timestamp || new Date().toISOString(),
+          },
+          {
+            productVariantId: update.variantId,
+            platformLocationId: update.locationId,
+          },
+        );
+        return;
+      }
+      // Without a locationId we cannot know WHICH of the variant's level rows
+      // changed; guessing would corrupt quantities. Delta refetch instead.
+      markCatalogStale('inventory');
+    });
+
+    const offPartnership = onPartnershipUpdate(() => {
+      markCatalogStale('partnership');
+    });
+
+    return () => {
+      offProduct();
+      offInventory();
+      offPartnership();
+    };
+  }, [onProductUpdate, onInventoryUpdate, onPartnershipUpdate]);
 }
