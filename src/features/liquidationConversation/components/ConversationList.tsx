@@ -333,11 +333,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  content: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 18,
-  },
   loadingWrap: {
     paddingVertical: 20,
     alignItems: 'center',

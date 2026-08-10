@@ -202,7 +202,6 @@ const styles = StyleSheet.create({
   rowInfo: { flex: 1 },
   rowName: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: INK },
   rowStatus: { fontSize: 12, fontFamily: 'Inter_500Medium', color: GREEN_DEEP, marginTop: 2 },
-  rowError: { color: '#DC2626' },
 
   connectPill: {
     height: 32,
@@ -214,17 +213,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   connectText: { color: GREEN_DEEP, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
-
-  connectingPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    height: 32,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(147,200,34,0.12)',
-  },
-  connectingText: { color: GREEN_DEEP, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
 
   connectedWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   checkCircle: { width: 18, height: 18, borderRadius: 9, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center' },

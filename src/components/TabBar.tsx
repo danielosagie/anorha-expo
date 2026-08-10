@@ -286,13 +286,6 @@ const styles = StyleSheet.create({
   tabInnerActiveDark: {
     backgroundColor: sproutDarkTheme.chat.surfaceMuted,
   },
-  tabLabel: {
-    fontSize: 12,
-    lineHeight: 14,
-    marginTop: 4,
-    includeFontPadding: false,
-    textAlign: 'center',
-  },
   addButton: {
     height: ADD_BUTTON_SIZE,
     width: ADD_BUTTON_SIZE,

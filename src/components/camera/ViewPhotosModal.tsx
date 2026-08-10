@@ -314,14 +314,6 @@ const styles = StyleSheet.create({
   navButtonDisabled: {
     opacity: 0.4,
   },
-  navButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: ANORHA_GREEN,
-  },
-  navButtonTextDisabled: {
-    color: '#999',
-  },
   navCounterSubtext: {
     fontSize: 13,
     fontWeight: '600',

@@ -180,34 +180,6 @@ const styles = StyleSheet.create({
     color: CHAT_COLORS.faint,
     marginLeft: 8,
   },
-  chipRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: CHAT_COLORS.border,
-    backgroundColor: CHAT_COLORS.white,
-  },
-  chipFilled: {
-    backgroundColor: CHAT_COLORS.brandSoft,
-    borderColor: 'transparent',
-  },
-  chipText: {
-    fontSize: 13,
-    fontFamily: CHAT_FONT.semibold,
-    color: CHAT_COLORS.inkSoft,
-  },
-  chipTextFilled: {
-    color: CHAT_COLORS.brandDeep,
-  },
   scopeRow: {
     flexDirection: 'row',
     alignItems: 'center',

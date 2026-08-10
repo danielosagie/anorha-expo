@@ -1085,20 +1085,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFF",
     flex: 1,
   },
-  header: {
-    paddingHorizontal: 16,
-    paddingVertical: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-  },
   listContent: {},
   dateHeader: {
     paddingHorizontal: 16,
@@ -1111,105 +1097,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-  },
-  eventItem: {
-    flexDirection: 'row',
-    padding: 16,
-    marginHorizontal: 16,
-    marginVertical: 4,
-    borderRadius: 12,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  eventIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  eventContent: {
-    flex: 1,
-  },
-  eventMessage: {
-    fontSize: 14,
-    lineHeight: 18,
-    marginBottom: 4,
-  },
-  eventMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
-  eventTime: {
-    fontSize: 12,
-    marginRight: 8,
-  },
-  platformBadge: {
-    backgroundColor: '#E0E7FF',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  platformText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#3730A3',
-  },
-  variantTitle: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  variantMeta: {
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  ownerBadge: {
-    backgroundColor: '#FFE4D0',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    marginLeft: 6,
-  },
-  ownerText: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: '#9A3412',
-  },
-  reasonPill: {
-    marginTop: 6,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#F3F4F6',
-  },
-  reasonText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#374151',
-  },
-  eventImage: {
-    marginLeft: 12,
-  },
-  imagePlaceholder: {
-    width: 32,
-    height: 32,
-    borderRadius: 6,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   loadingText: {
     marginTop: 16,

@@ -1409,12 +1409,6 @@ const styles = StyleSheet.create({
   countLabel: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   countValue: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 16 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#E8E8EA' },
-  questionFrontCard: { minHeight: 88, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: GREEN_TINT, borderRadius: 18, paddingHorizontal: 18, marginTop: 16 },
-  questionFrontCopy: { flex: 1, gap: 3 },
-  questionFrontTitle: { color: '#4A6812', fontFamily: 'Inter_700Bold', fontSize: 19 },
-  questionFrontSub: { color: '#61713D', fontFamily: 'Inter_500Medium', fontSize: 14 },
-
-  progressWrap: { paddingHorizontal: 20, paddingBottom: 6 },
   inlineError: { color: '#B42318', fontFamily: 'Inter_500Medium', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 14 },
 
   receiptScreen: { alignItems: 'stretch' },
@@ -1425,8 +1419,6 @@ const styles = StyleSheet.create({
   receiptRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   receiptLabel: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   receiptValue: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 16 },
-  needsCard: { alignSelf: 'stretch', minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: AMBER_TINT, borderRadius: 16, borderWidth: 1, borderColor: AMBER, paddingHorizontal: 16, marginTop: 14 },
-  needsCardText: { color: AMBER, fontFamily: 'Inter_700Bold', fontSize: 15 },
 
   headerTotal: { color: IC.muted, fontFamily: 'Inter_700Bold', fontSize: 15, paddingRight: 2 },
   listScrollView: { flex: 1 },

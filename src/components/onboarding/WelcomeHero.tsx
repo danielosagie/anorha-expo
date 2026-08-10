@@ -285,7 +285,6 @@ const styles = StyleSheet.create({
   orbitChip: { position: 'absolute', width: 26, height: 26, borderRadius: 9, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center' },
   orbitLogo: { width: 16, height: 16 },
   flowDot: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: BRAND, shadowColor: BRAND, shadowOpacity: 0.9, shadowRadius: 3 },
-  radialRing: { position: 'absolute', left: RC - 24, top: RC - 24, width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: BRAND },
   radialCenter: { position: 'absolute', left: RC - 19, top: RC - 19, width: 38, height: 38, borderRadius: 19, backgroundColor: CARD, borderWidth: 2, borderColor: BRAND, alignItems: 'center', justifyContent: 'center', shadowColor: BRAND, shadowOpacity: 0.3, shadowRadius: 8 },
   radialMark: { width: 26, height: 26 },
 

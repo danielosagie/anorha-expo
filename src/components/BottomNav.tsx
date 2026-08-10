@@ -471,15 +471,6 @@ const styles = StyleSheet.create({
     width: '100%'
   },
   backButtonText: { color: '#888', fontSize: 16, fontWeight: '600' },
-  optionalTemplateLink: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  optionalTemplateLinkText: {
-    color: '#666',
-    fontSize: 13,
-    textDecorationLine: 'underline',
-  },
   disabledButton: { backgroundColor: '#555' },
   dropdownSelect: {
     flexDirection: 'row',

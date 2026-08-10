@@ -361,11 +361,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginBottom: 8,
   },
-  syncText: {
-    fontSize: 10,
-    marginTop: -4,
-    marginBottom: 8,
-  },
   statusChip: {
     alignSelf: 'flex-start',
     borderWidth: 1,

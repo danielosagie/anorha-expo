@@ -691,44 +691,6 @@ export const SmartCommandInput: React.FC<SmartCommandInputProps> = ({
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-    // Collapsed
-    collapsedGradient: {
-        paddingTop: 20,
-        paddingBottom: 8,
-    },
-    collapsed: {
-        marginHorizontal: 16,
-        marginVertical: 8,
-        backgroundColor: '#fff',
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        overflow: 'hidden',
-        ...Platform.select({
-            ios: {
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.05,
-                shadowRadius: 3,
-            },
-            android: {
-                elevation: 2,
-            },
-        }),
-    },
-    collapsedInner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        gap: 8,
-    },
-    collapsedText: {
-        flex: 1,
-        color: '#4B5563',
-        fontSize: 14,
-        fontWeight: '500',
-    },
     // Simple clean collapsed style (no border/card)
     collapsedSimple: {
         flexDirection: 'row',

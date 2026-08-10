@@ -668,7 +668,6 @@ const styles = StyleSheet.create({
 
   poolIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
   poolIconPartner: { backgroundColor: 'rgba(162,97,26,0.12)' },
-  newPoolPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#18181B', borderRadius: 999, paddingHorizontal: 13, paddingVertical: 7 },
   newPoolPillText: { color: '#FFFFFF', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 
   appIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
@@ -688,7 +687,6 @@ const styles = StyleSheet.create({
 
   connectBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#93C822', borderRadius: 16, paddingVertical: 15, marginTop: 14 },
   connectText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 15 },
-  appsHint: { color: '#9CA3AF', fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 10, marginLeft: 4, lineHeight: 17 },
 });
 
 export default ConnectionsScreen;

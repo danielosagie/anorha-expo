@@ -736,9 +736,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textTransform: 'capitalize',
   },
-  userActionMetaText: {
-    color: '#E5E7EB',
-  },
   messageText: {
     color: '#111827',
     fontFamily: 'Inter_500Medium',
@@ -876,23 +873,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
-  userSummaryText: {
-    color: '#D1D5DB',
-  },
-  footerRow: {
-    marginTop: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  timeText: {
-    color: '#9CA3AF',
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-  },
-  userTimeText: {
-    color: '#D1D5DB',
-  },
   statusText: {
     color: '#A1A1AA',
     fontFamily: 'Inter_500Medium',
@@ -910,9 +890,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.75)',
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
-  },
-  cursor: {
-    color: BRAND_PRIMARY,
   },
   revealTime: {
     position: 'absolute',

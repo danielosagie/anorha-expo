@@ -356,49 +356,6 @@ const styles = StyleSheet.create({
   },
   divider: { height: 1, backgroundColor: '#F1F1EE' },
 
-  // Passkey promo card
-  passkeyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#ECEBE6',
-    padding: 16,
-    marginBottom: 24,
-  },
-  passkeyTitle: {
-    fontSize: 16,
-    fontFamily: 'Inter_700Bold',
-    color: '#18181B',
-    marginBottom: 10,
-  },
-  benefitRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  benefitText: {
-    flex: 1,
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: '#71717A',
-  },
-  passkeyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#18181B',
-    borderRadius: 16,
-    paddingVertical: 14,
-    marginTop: 6,
-  },
-  passkeyButtonText: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
-  },
-
   // Log out of all devices
   logoutAllButton: {
     borderWidth: 1.5,

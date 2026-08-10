@@ -150,12 +150,6 @@ const styles = StyleSheet.create({
   container: {
     marginBottom: 16,
   },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    marginBottom: 12,
-    marginLeft: 8,
-  },
   platformFiltersContainer: {
     marginBottom: 0,
   },

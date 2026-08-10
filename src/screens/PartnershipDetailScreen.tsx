@@ -275,11 +275,6 @@ const styles = StyleSheet.create({
         borderTopColor: '#F3F4F6',
         gap: 16,
     },
-    actionButton: {
-        padding: 8,
-        backgroundColor: '#F9FAFB',
-        borderRadius: 8,
-    },
     emptyState: {
         padding: 32,
         alignItems: 'center',
