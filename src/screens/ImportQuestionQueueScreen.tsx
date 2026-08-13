@@ -71,6 +71,7 @@ import type {
   ResolveChoice,
   SyncItem,
 } from '../types/syncItem';
+import { buildImportFrontDoorRows, importFrontDoorAction } from '../lib/importFrontDoor';
 
 const log = createLogger('ImportQuestionQueue');
 const SURFACE = '#F5F5F7';
@@ -661,6 +662,8 @@ export default function ImportQuestionQueueScreen() {
 
   const summary = result?.summary;
   const questionItemCount = v7QuestionItemCount(result?.needsAttention ?? []);
+  const frontDoorRows = buildImportFrontDoorRows(summary);
+  const frontDoorCta = importFrontDoorAction(questionItemCount);
   const remainingCount = questionItemCount;
   const progressTotal = Math.max(queueStartCount, remainingCount, 1);
   const progressPct = ((progressTotal - remainingCount) / progressTotal) * 100;
@@ -751,17 +754,26 @@ export default function ImportQuestionQueueScreen() {
         <ScrollView contentContainerStyle={styles.frontScroll} showsVerticalScrollIndicator={false}>
           <HeroNumeral value={summary?.total ?? 0} label={`items from ${platform}`} animate />
           <View style={styles.countCard}>
-            <CountRow label="Linked to your catalog" count={summary?.autoLinked ?? 0} />
-            <View style={styles.divider} />
-            <CountRow label="Added as new" count={summary?.autoCreated ?? 0} />
+            {frontDoorRows.map((row, index) => (
+              <React.Fragment key={row.kind}>
+                {index > 0 ? <View style={styles.divider} /> : null}
+                <CountRow
+                  label={row.label}
+                  count={row.count}
+                  color={row.kind === 'needsLook' ? AMBER : row.kind === 'skipped' ? GREY : IC.accent}
+                />
+              </React.Fragment>
+            ))}
           </View>
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
           <PillButton
-            label={`${questionItemCount} more questions`}
-            onPress={beginQuestions}
+            label={frontDoorCta.label}
+            onPress={frontDoorCta.opensQuestions ? beginQuestions : () => navigation.goBack()}
           />
-          <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />
+          {frontDoorCta.showLater ? (
+            <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />
+          ) : null}
         </View>
       </View>
     );
@@ -1009,11 +1021,11 @@ export default function ImportQuestionQueueScreen() {
   );
 }
 
-function CountRow({ label, count }: { label: string; count: number }) {
+function CountRow({ label, count, color }: { label: string; count: number; color: string }) {
   return (
     <View style={styles.countRow}>
       <View style={styles.countLabelWrap}>
-        <View style={styles.greenDot} />
+        <View style={[styles.greenDot, { backgroundColor: color }]} />
         <Text style={styles.countLabel}>{label}</Text>
       </View>
       <Text style={styles.countValue}>{count}</Text>
