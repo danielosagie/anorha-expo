@@ -1,9 +1,16 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ensureSupabaseJwt } from '../../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useUser } from '@clerk/expo';
+import { ensureSupabaseJwt, getSupabaseJwtState, subscribeToSupabaseJwtState } from '../lib/supabase';
 import { subscribePlatformConnectionChanges } from '../lib/platformConnectionsRealtime';
 import { API_BASE_URL } from '../config/env';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 import { createLogger } from '../utils/logger';
+import {
+  parsePlatformConnectionsCache,
+  platformConnectionsCacheKey,
+  serializePlatformConnectionsCache,
+} from '../lib/platformConnectionsCache';
 const log = createLogger('PlatformConnectionsContext');
 
 
@@ -45,6 +52,7 @@ type ContextValue = {
   updateConnectionLocally: (connectionId: string, patch: Partial<PlatformConnectionRow>) => void;
   refresh: () => Promise<void>;
   loading: boolean;
+  hasResolvedConnections: boolean;
   error?: string;
 };
 
@@ -61,21 +69,73 @@ const PROGRESS_OVERRIDE_TTL_MS = 2 * 60 * 1000;
 const normalizeStatus = (value?: string) => (value || '').toLowerCase().trim();
 
 export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isLoaded: clerkLoaded, user: clerkUser } = useUser();
+  const cacheOwnerId = clerkUser?.id || '';
   const [connections, setConnections] = useState<PlatformConnectionRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [connectionsOwnerId, setConnectionsOwnerId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [hasResolvedConnections, setHasResolvedConnections] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [progressByConnectionId, setProgressByConnectionId] = useState<Record<string, SyncProgressUpdate>>({});
   const [authReady, setAuthReady] = useState(false);
+  const [jwtReady, setJwtReady] = useState(() => !!getSupabaseJwtState().token);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeOwnerRef = useRef(cacheOwnerId);
+  activeOwnerRef.current = cacheOwnerId;
+
+  useEffect(() => subscribeToSupabaseJwtState(({ token }) => {
+    setJwtReady(!!token);
+  }), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const startedAt = Date.now();
+
+    if (!clerkLoaded || !cacheOwnerId) {
+      setConnections([]);
+      setConnectionsOwnerId('');
+      setHasResolvedConnections(false);
+      setAuthReady(false);
+      setLoading(!clerkLoaded);
+      return () => { cancelled = true; };
+    }
+
+    setAuthReady(false);
+    setConnections([]);
+    setConnectionsOwnerId('');
+    setProgressByConnectionId({});
+    setLoading(true);
+    setHasResolvedConnections(false);
+    AsyncStorage.getItem(platformConnectionsCacheKey(cacheOwnerId))
+      .then((raw) => {
+        if (cancelled || activeOwnerRef.current !== cacheOwnerId) return;
+        const cachedRows = parsePlatformConnectionsCache(raw, cacheOwnerId);
+        if (!cachedRows) return;
+        setConnections(cachedRows);
+        setConnectionsOwnerId(cacheOwnerId);
+        log.debug('[PlatformConnectionsContext][measure] cache hydrated', {
+          rows: cachedRows.length,
+          durationMs: Date.now() - startedAt,
+        });
+      })
+      .catch((cacheError) => {
+        log.warn('[PlatformConnectionsContext] Could not hydrate connection cache:', cacheError);
+      });
+
+    return () => { cancelled = true; };
+  }, [cacheOwnerId, clerkLoaded]);
 
   const fetchConnections = useCallback(async () => {
+    if (!cacheOwnerId) return;
+    const requestedOwnerId = cacheOwnerId;
+    const startedAt = Date.now();
     setLoading(true);
     setError(undefined);
     try {
       const token = await ensureSupabaseJwt();
+      if (activeOwnerRef.current !== requestedOwnerId) return;
       if (!token) {
         setError('Authentication required to load connections');
-        setConnections([]);
         setAuthReady(false);
         return;
       }
@@ -83,13 +143,27 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       const resp = await fetch(`${API_BASE}/api/platform-connections?includeDisabled=true`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (activeOwnerRef.current !== requestedOwnerId) return;
       if (!resp.ok) {
         setError(`Failed to load connections (${resp.status})`);
         return;
       }
       const rows: PlatformConnectionRow[] = await resp.json();
+      if (activeOwnerRef.current !== requestedOwnerId) return;
       const safeRows = Array.isArray(rows) ? rows : [];
       setConnections(safeRows);
+      setConnectionsOwnerId(requestedOwnerId);
+      setHasResolvedConnections(true);
+      void AsyncStorage.setItem(
+        platformConnectionsCacheKey(requestedOwnerId),
+        serializePlatformConnectionsCache(requestedOwnerId, safeRows),
+      ).catch((cacheError) => {
+        log.warn('[PlatformConnectionsContext] Could not persist connection cache:', cacheError);
+      });
+      log.debug('[PlatformConnectionsContext][measure] live rows received', {
+        rows: safeRows.length,
+        durationMs: Date.now() - startedAt,
+      });
       setProgressByConnectionId(prev => {
         const next = { ...prev };
         const validIds = new Set(safeRows.map(r => r.Id));
@@ -103,11 +177,13 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       // exists on the backend — the path fell into the :id route and 400'd on
       // every refresh. Nothing consumed the result.
     } catch (e: any) {
-      setError(e?.message || 'Failed to load connections');
+      if (activeOwnerRef.current === requestedOwnerId) {
+        setError(e?.message || 'Failed to load connections');
+      }
     } finally {
-      setLoading(false);
+      if (activeOwnerRef.current === requestedOwnerId) setLoading(false);
     }
-  }, []);
+  }, [cacheOwnerId]);
 
   const scheduleRefresh = useCallback((reason: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -121,13 +197,14 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   }, [fetchConnections]);
 
   useEffect(() => {
+    if (!clerkLoaded || !cacheOwnerId || !jwtReady) return;
     fetchConnections();
     // Realtime change-signal now lives in the data layer (src/lib) per the
     // no-raw-channel-in-contexts rule; on any PlatformConnections change we refetch
     // (the API enriches the rows beyond what a raw table row provides).
     const unsubscribe = subscribePlatformConnectionChanges(() => scheduleRefresh('realtime'));
     return unsubscribe;
-  }, [fetchConnections, scheduleRefresh]);
+  }, [cacheOwnerId, clerkLoaded, fetchConnections, jwtReady, scheduleRefresh]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -217,9 +294,11 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     };
   }, [authReady, scheduleRefresh]);
 
+  const ownedConnections = connectionsOwnerId === cacheOwnerId ? connections : [];
+
   const liveConnections = useMemo(() => {
-    if (connections.length === 0) return [];
-    return connections.map((conn) => {
+    if (ownedConnections.length === 0) return [];
+    return ownedConnections.map((conn) => {
       const storedStatus = normalizeStatus(conn.Status);
       // A stale sync-progress event must never revive a row the disconnect
       // endpoint has already marked inactive/disabled.
@@ -234,7 +313,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       if (progressStatus === normalizeStatus(conn.Status)) return conn;
     return { ...conn, Status: progressStatus };
     });
-  }, [connections, progressByConnectionId]);
+  }, [ownedConnections, progressByConnectionId]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -281,7 +360,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   }, []);
 
   const value = useMemo<ContextValue>(() => ({
-    connections,
+    connections: ownedConnections,
     liveConnections,
     progressByConnectionId,
     connectedByPlatform,
@@ -289,8 +368,9 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     updateConnectionLocally,
     refresh: fetchConnections,
     loading,
+    hasResolvedConnections,
     error,
-  }), [connections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, updateConnectionLocally, fetchConnections, loading, error]);
+  }), [ownedConnections, liveConnections, progressByConnectionId, connectedByPlatform, isConnected, updateConnectionLocally, fetchConnections, loading, hasResolvedConnections, error]);
 
   return (
     <PlatformConnectionsContext.Provider value={value}>

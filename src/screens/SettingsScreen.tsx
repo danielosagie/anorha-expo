@@ -1,8 +1,8 @@
 // Profile tab — identity header (avatar / name / org), live Connected Platforms
 // preview, then the settings grid. Every card goes somewhere REAL.
 
-import React, { useContext, useEffect, useState } from 'react';
-import { Alert, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useContext, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ErrorModal from '../components/ErrorModal';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +22,9 @@ import { normalizeDisplayName } from '../config/platforms';
 import { useImportStatus } from '../hooks/useImportStatus';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('SettingsScreen');
 
 type Card = {
   key: string;
@@ -47,14 +50,17 @@ const SettingsScreen = () => {
   const authContext = useContext(AuthContext);
   const { user } = useUser();
   const { currentOrg } = useOrg();
-  const { liveConnections, refresh } = usePlatformConnections();
+  const {
+    liveConnections,
+    refresh,
+    hasResolvedConnections,
+    error: connectionsError,
+  } = usePlatformConnections();
   const { computerOnline, presenceLoaded } = useFacebookJobStatus();
   // Import inbox aggregate — feeds the passive "needs you" badge on Integrations.
   const importStatus = useImportStatus();
-
-  useEffect(() => {
-    refresh?.();
-  }, [refresh]);
+  const screenEnteredAtRef = useRef(Date.now());
+  const firstConnectionsPaintLoggedRef = useRef(false);
 
   const displayName = user?.fullName || user?.firstName || 'Your account';
   const orgLine = currentOrg?.name || user?.primaryEmailAddress?.emailAddress || '';
@@ -63,6 +69,18 @@ const SettingsScreen = () => {
     (total, connection) => total + connection.count,
     0,
   );
+
+  useEffect(() => {
+    if (firstConnectionsPaintLoggedRef.current || platformPreview.length === 0) return;
+    firstConnectionsPaintLoggedRef.current = true;
+    const frame = requestAnimationFrame(() => {
+      log.debug('[SettingsScreen][measure] connection rows painted', {
+        timeToRowsMs: Date.now() - screenEnteredAtRef.current,
+        rows: platformPreview.length,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [platformPreview.length]);
   // Dev tools (dev builds only): the agent bundle + the raw auth token.
   const openDevTools = () => {
     Alert.alert('Developer', 'Tools for local development.', [
@@ -173,20 +191,31 @@ const SettingsScreen = () => {
         </TouchableOpacity>
         <View style={styles.platformCard}>
           {platformPreview.length === 0 ? (
-            <TouchableOpacity
-              style={styles.platformEmptyRow}
-              activeOpacity={0.7}
-              onPress={() => navigation.navigate('ConnectPlatforms')}
-            >
-              <View style={styles.platformEmptyIcon}>
-                <Plus size={18} color="#43631A" />
+            hasResolvedConnections ? (
+              <TouchableOpacity
+                style={styles.platformEmptyRow}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('ConnectPlatforms')}
+              >
+                <View style={styles.platformEmptyIcon}>
+                  <Plus size={18} color="#43631A" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.platformName}>Connect your first platform</Text>
+                  <Text style={styles.platformEmptySub}>Shopify, Square, eBay, Clover and more</Text>
+                </View>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
+            ) : connectionsError ? (
+              <TouchableOpacity style={styles.platformLoadingRow} onPress={() => refresh?.()} activeOpacity={0.7}>
+                <Text style={styles.platformLoadingText}>Couldn’t load connections. Tap to retry.</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.platformLoadingRow}>
+                <ActivityIndicator size="small" color="#5D7E16" />
+                <Text style={styles.platformLoadingText}>Loading connections</Text>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.platformName}>Connect your first platform</Text>
-                <Text style={styles.platformEmptySub}>Shopify, Square, eBay, Clover and more</Text>
-              </View>
-              <ChevronRight size={20} color="#D4D4D8" />
-            </TouchableOpacity>
+            )
           ) : (
             platformPreview.map((c: any, i: number) => {
               const connectStatus = derivePlatformConnectStatus(c.PlatformType, liveConnections, {
@@ -274,6 +303,8 @@ const styles = StyleSheet.create({
   dot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   platformEmptyRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16 },
+  platformLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 68 },
+  platformLoadingText: { fontSize: 14, color: '#71717A', fontFamily: 'Inter_500Medium' },
   platformEmptyIcon: {
     width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(147,200,34,0.16)',
     alignItems: 'center', justifyContent: 'center',

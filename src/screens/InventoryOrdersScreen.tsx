@@ -37,8 +37,10 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
 import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { observer } from '@legendapp/state/react';
+import { syncState } from '@legendapp/state';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
+import { PRODUCT_VARIANT_LIST_SELECT } from '../lib/pagedCollectionSync';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -72,7 +74,6 @@ import {
 import {
   applyLevelPatchesToMap,
   applyVariantPatchesToMap,
-  drainCatalogPatches,
   getCatalogPatchVersion,
   getLevelPatches,
   getVariantPatches,
@@ -104,11 +105,6 @@ const TAB_BAR_BOTTOM_OFFSET = 18;
 const SCANNER_GROW_HEIGHT = 240;
 const SCANNER_CLOSE_DURATION = 220;
 const INVENTORY_CHAT_PEEK_RATIO = 0.38;
-// Focus refetch freshness window (run 8 P2: every tab visit re-ran the full
-// ProductVariants pagination + links + levels). 20s covers a tab bounce while
-// staying far under any real edit-elsewhere-then-return gap; edits landing
-// through explicit paths never wait on it.
-const SHELF_FOCUS_FRESH_MS = 20_000;
 
 type InventoryQuickChatMode = 'select' | 'edit';
 
@@ -166,6 +162,8 @@ const InventoryOrdersScreen = observer(() => {
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+  const screenEnteredAtRef = useRef(Date.now());
+  const firstRowsLoggedRef = useRef(false);
 
   // Subscribe to real-time product variant and inventory changes
   // These hooks return updateCounter values that we'll use to trigger useMemo re-computation
@@ -630,6 +628,7 @@ const InventoryOrdersScreen = observer(() => {
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
+  const [directBackfillActive, setDirectBackfillActive] = useState(false);
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
   // PoolId -> inventoryMode from /api/pools/org/:id. Replicated ('shared'/
@@ -637,12 +636,13 @@ const InventoryOrdersScreen = observer(() => {
   // them multiplies stock; the fold helpers below take max for those and only
   // sum 'independent' pools — matching the backend's canonical fold.
   const [poolModeById, setPoolModeById] = useState<Record<string, string>>({});
-  // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
-  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)';
-
+  const productVariantSyncPhase = legendState?.syncProgress$?.get()?.ProductVariants.phase ?? 'idle';
+  const productVariantSyncPhaseRef = useRef(productVariantSyncPhase);
+  productVariantSyncPhaseRef.current = productVariantSyncPhase;
   const loadPartnerOrigins = useCallback(async () => {
     if (!currentOrg?.id) {
       setPartnerOrigins([]);
+      setPoolModeById({});
       return;
     }
 
@@ -700,8 +700,11 @@ const InventoryOrdersScreen = observer(() => {
     return rows;
   }, []);
 
-  const fetchAllProductVariants = useCallback(async (userId: string) => {
-    const pageSize = 200;
+  const fetchAllProductVariants = useCallback(async (
+    userId: string,
+    onPage?: (rows: ProductVariantData[], progress: { offset: number; hasMore: boolean; loadedRows: number }) => void,
+  ) => {
+    const pageSize = 250;
     const allRows: any[] = [];
     let from = 0;
 
@@ -709,54 +712,44 @@ const InventoryOrdersScreen = observer(() => {
       const to = from + pageSize - 1;
       const { data, error } = await supabase
         .from('ProductVariants')
-        // Production-verified schema: product Description/Tags are embedded from Products.
-        .select(PRODUCT_VARIANT_SELECT)
+        // Description is detail-only. Keeping it off this list path removed the
+        // largest repeated parent field from every variant row.
+        .select(PRODUCT_VARIANT_LIST_SELECT)
         .eq('UserId', userId)
         .not('Sku', 'like', 'DRAFT-%')
+        .order('UpdatedAt', { ascending: false })
+        .order('Id', { ascending: false })
         .range(from, to);
 
       if (error) throw error;
 
       const rows = data || [];
       allRows.push(...rows);
+      const hasMore = rows.length === pageSize;
+      onPage?.(rows as ProductVariantData[], { offset: from, hasMore, loadedRows: allRows.length });
+      log.debug('[InventoryOrdersScreen][measure] fallback page', {
+        offset: from,
+        rows: rows.length,
+        hasMore,
+      });
 
-      if (rows.length < pageSize) break;
+      if (!hasMore) break;
       from += pageSize;
+      // Yield between bounded pages so the first page can paint before the
+      // fallback finishes walking a large catalog.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
 
     return allRows;
   }, []);
 
-  // Last SUCCESSFUL shelf fetch (mount or focus), for the focus freshness
-  // window. A ref, not state: reading it must never re-render the shelf.
-  const lastShelfFetchAtRef = useRef(0);
-  // Newest UpdatedAt seen across fetched variant/level rows — the watermark for
-  // delta refetches. Derived from SERVER rows (not the client clock) so clock
-  // skew can never skip a change.
-  const shelfWatermarkRef = useRef<string | null>(null);
-  // Variant ids from the last full fetch, for targeted links+levels refetches.
-  const shelfVariantIdsRef = useRef<string[]>([]);
-  const shelfFetchInFlightRef = useRef(false);
-
-  const bumpShelfWatermark = useCallback((rows: Array<{ UpdatedAt?: string | null }>) => {
-    let maxIso = shelfWatermarkRef.current;
-    let maxMs = maxIso ? new Date(maxIso).getTime() : 0;
-    rows.forEach((row) => {
-      const iso = typeof row?.UpdatedAt === 'string' ? row.UpdatedAt : null;
-      if (!iso) return;
-      const ms = new Date(iso).getTime();
-      if (Number.isFinite(ms) && ms > maxMs) {
-        maxMs = ms;
-        maxIso = iso;
-      }
-    });
-    shelfWatermarkRef.current = maxIso;
-  }, []);
-
-  // Shared links + inventory levels for a set of variants (REPLACES state —
-  // used by the full fetch and by partnership-triggered refetches).
-  const fetchSharedLinksAndLevels = useCallback(async (variantIds: string[], label: string) => {
-    if (variantIds.length === 0) return;
+  // Cross-org links are not one of the persisted Legend mirrors. Refresh only
+  // that targeted slice using the ids already painted by ProductVariants.
+  const fetchSharedLinks = useCallback(async (variantIds: string[], label: string) => {
+    if (variantIds.length === 0) {
+      setSharedLinkQuantities({});
+      return;
+    }
 
     const linksData = await fetchByIdChunks(
       variantIds,
@@ -778,220 +771,178 @@ const InventoryOrdersScreen = observer(() => {
       }
     });
     setSharedLinkQuantities(linkMap);
+  }, [fetchByIdChunks]);
 
-    const levelsData = await fetchByIdChunks(
-      variantIds,
-      (chunk) => supabase
-        .from('InventoryLevels')
-        // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-        .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-        .in('ProductVariantId', chunk),
-      `inventory levels (${label})`,
+  const syncShelfMirrors = useCallback(async (label: string) => {
+    if (!legendState?.userId) return;
+    const mirrors = [
+      legendState.productVariants$,
+      legendState.platformProductMappings$,
+      legendState.productImages$,
+      legendState.inventoryLevels$,
+      legendState.marketplaceListings$,
+    ].filter(Boolean);
+    await Promise.all(mirrors.map((mirror) => syncState(mirror!).sync()));
+    await fetchSharedLinks(
+      Object.keys(legendState.productVariants$?.get() || {}),
+      label,
     );
-    log.debug(`[InventoryOrdersScreen] Fetched inventory levels (${label}):`, levelsData.length);
-    const levelsMap: Record<string, InventoryLevel> = {};
-    levelsData.forEach((l: any) => {
-      levelsMap[l.Id] = l;
-    });
-    setDirectFetchLevels(levelsMap);
-    bumpShelfWatermark(levelsData);
-  }, [fetchByIdChunks, bumpShelfWatermark]);
+    setShelfLoadError(false);
+  }, [fetchSharedLinks, legendState]);
 
-  // FULL shelf fetch: pagination over every ProductVariant + links + levels.
-  // One implementation shared by mount, gated focus, and pull-to-refresh.
-  const runFullShelfFetch = useCallback(async (label: string): Promise<boolean> => {
-    const userId = legendState?.userId;
-    if (!supabase || !userId) return false;
-    if (shelfFetchInFlightRef.current) return false;
-    shelfFetchInFlightRef.current = true;
-    const fetchStartedAt = Date.now();
-
-    try {
-      const data = await fetchAllProductVariants(userId);
-
-      if (!data) {
-        log.error(`[InventoryOrdersScreen] Full fetch (${label}): empty response`);
-        return false;
-      }
-
-      log.debug(`[InventoryOrdersScreen] Full fetch (${label}): fetched products:`, data.length);
-      // Defensive: a transient empty page must not wipe an already-shown shelf.
-      if (data.length > 0) {
-        const variantMap: Record<string, ProductVariantData> = {};
-        const variantIds: string[] = [];
-        data.forEach((v: any) => {
-          variantMap[v.Id] = v;
-          variantIds.push(v.Id);
-        });
-        setDirectFetchVariants(variantMap);
-        setShelfLoadError(false);
-        bumpShelfWatermark(data);
-        shelfVariantIdsRef.current = variantIds;
-
-        await fetchSharedLinksAndLevels(variantIds, label);
-      }
-      lastShelfFetchAtRef.current = Date.now();
-      // Rows fetched after these patches were created now carry the truth;
-      // holding drained patches would only risk masking newer server rows.
-      drainCatalogPatches(fetchStartedAt);
-      return true;
-    } catch (e) {
-      log.error(`[InventoryOrdersScreen] Full fetch (${label}) failed:`, e);
-      setShelfLoadError(true);
-      return false;
-    } finally {
-      shelfFetchInFlightRef.current = false;
+  // Resolve partner link metadata from the already-hydrated mirror immediately,
+  // then refresh it as the bounded ProductVariants sync advances.
+  useEffect(() => {
+    if (!legendState?.userId) {
+      setSharedLinkQuantities({});
+      return;
     }
-  }, [legendState?.userId, fetchAllProductVariants, fetchSharedLinksAndLevels, bumpShelfWatermark]);
-
-  // DELTA fetch: only rows with UpdatedAt newer than the watermark — cheap
-  // enough to run inside the freshness gate on every focus, so an edit made
-  // elsewhere shows up even during the 20s window that used to hide it.
-  // Merges changed rows over existing state; full pagination stays gated.
-  const runShelfDeltaFetch = useCallback(async (): Promise<void> => {
-    const userId = legendState?.userId;
-    const sinceIso = shelfWatermarkRef.current;
-    if (!supabase || !userId || !sinceIso) return;
-
-    try {
-      const [variantsResult, levelsResult] = await Promise.all([
-        supabase
-          .from('ProductVariants')
-          // Same projection as the full fetch (WITH the Products join) so a
-          // delta row is a drop-in replacement for a full row.
-          .select(PRODUCT_VARIANT_SELECT)
-          .eq('UserId', userId)
-          .not('Sku', 'like', 'DRAFT-%')
-          .gt('UpdatedAt', sinceIso)
-          .limit(500),
-        supabase
-          .from('InventoryLevels')
-          // RLS scopes rows to this user; extra rows for undisplayed variants
-          // are ignored downstream.
-          .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-          .gt('UpdatedAt', sinceIso)
-          .limit(1000),
-      ]);
-
-      const changedVariants = variantsResult.error ? [] : (variantsResult.data || []);
-      const changedLevels = levelsResult.error ? [] : (levelsResult.data || []);
-      if (variantsResult.error) {
-        log.warn('[InventoryOrdersScreen] Delta fetch variants failed:', variantsResult.error);
-      }
-      if (levelsResult.error) {
-        log.warn('[InventoryOrdersScreen] Delta fetch levels failed:', levelsResult.error);
-      }
-      if (changedVariants.length === 0 && changedLevels.length === 0) return;
-
-      log.debug('[InventoryOrdersScreen] Delta fetch merged:', changedVariants.length, 'variants,', changedLevels.length, 'levels');
-      if (changedVariants.length > 0) {
-        setDirectFetchVariants((prev) => {
-          const next = { ...prev };
-          changedVariants.forEach((v: any) => {
-            next[v.Id] = v;
-          });
-          return next;
-        });
-        bumpShelfWatermark(changedVariants);
-      }
-      if (changedLevels.length > 0) {
-        setDirectFetchLevels((prev) => {
-          const next = { ...prev };
-          changedLevels.forEach((l: any) => {
-            next[l.Id] = l;
-          });
-          return next;
-        });
-        bumpShelfWatermark(changedLevels);
-      }
-    } catch (e) {
-      // Delta is an opportunistic freshness path; the gated full fetch remains
-      // the reliable fallback, so log and move on.
-      log.warn('[InventoryOrdersScreen] Delta fetch failed:', e);
-    }
-  }, [legendState?.userId, bumpShelfWatermark]);
+    if (productVariantSyncPhase === 'error') return;
+    void fetchSharedLinks(
+      Object.keys(legendState.productVariants$?.get() || {}),
+      `mirror:${productVariantSyncPhase}`,
+    );
+  }, [currentOrg?.id, fetchSharedLinks, legendState, productVariantSyncPhase]);
 
   useEffect(() => {
-    if (legendState?.userId) {
-      void runFullShelfFetch('mount');
+    let cancelled = false;
+    const directFetchProducts = async () => {
+      if (supabase && legendState?.userId) {
+        try {
+          // Keep the defensive direct path progressive too. Page one merges
+          // immediately; older pages fill without delaying first paint.
+          const data = await fetchAllProductVariants(legendState.userId, (page, progress) => {
+            if (cancelled) return;
+            setDirectFetchVariants((previous) => {
+              const next = progress.offset === 0 ? {} : { ...previous };
+              page.forEach((variant) => { next[variant.Id] = variant; });
+              return next;
+            });
+            setDirectBackfillActive(progress.hasMore);
+            if (page.length > 0) setShelfLoadError(false);
+          });
+          if (cancelled) return;
+
+          if (!data) {
+            log.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
+          } else {
+            log.debug('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
+            // Store in fallback state, keyed by Id
+            if (data && data.length > 0) {
+              const variantMap: Record<string, ProductVariantData> = {};
+              const variantIds: string[] = [];
+              data.forEach((v: any) => {
+                variantMap[v.Id] = v;
+                variantIds.push(v.Id);
+              });
+              setDirectFetchVariants(variantMap);
+              setShelfLoadError(false);
+
+              await fetchSharedLinks(variantIds, 'fallback');
+
+              // Also fetch InventoryLevels for these variants
+              if (variantIds.length > 0) {
+                const levelsData = await fetchByIdChunks(
+                  variantIds,
+                  (chunk) => supabase
+                    .from('InventoryLevels')
+                    // Production-verified schema: InventoryLevels stores quantity data, not variant price.
+                    .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
+                    .in('ProductVariantId', chunk),
+                  'inventory levels',
+                );
+                log.debug('[InventoryScreen - Direct Fetch] Fetched inventory levels:', levelsData.length);
+                const levelsMap: Record<string, InventoryLevel> = {};
+                levelsData.forEach((l: any) => {
+                  levelsMap[l.Id] = l;
+                });
+                setDirectFetchLevels(levelsMap);
+              }
+            }
+          }
+        } catch (e) {
+          if (cancelled) return;
+          log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
+          setShelfLoadError(true);
+        } finally {
+          if (!cancelled) setDirectBackfillActive(false);
+        }
+      }
+    };
+
+    // This path is now a true fallback instead of a second unconditional full
+    // catalog read racing Legend on every mount.
+    if (legendState?.userId && productVariantSyncPhase === 'error') {
+      directFetchProducts();
     }
-  }, [legendState?.userId, runFullShelfFetch]);
+    return () => { cancelled = true; };
+  }, [fetchAllProductVariants, fetchByIdChunks, fetchSharedLinks, legendState?.userId, productVariantSyncPhase]);
 
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
 
-  // CRITICAL: Refresh data when screen comes into focus (e.g., after editing product or CSV import)
-  // This ensures updated products show fresh data without requiring a full app restart
+  // Refresh the shared local-first mirrors on focus. Each mirror paints its cache
+  // first and bounds its network pages, so focus never starts a second full-table
+  // direct fetch behind the list.
   useFocusEffect(
     useCallback(() => {
-      // Skip the first render since the mount effect already runs the full fetch
+      // Initial activation already started all five mirrors.
       if (isFirstRender.current) {
         isFirstRender.current = false;
         return;
       }
 
+      let cancelled = false;
       const refreshOnFocus = async () => {
         if (!legendState?.userId) return;
 
-        // Freshness window: a full shelf refetch is pagination over every
-        // ProductVariant plus links and levels (multi-second at 344 items,
-        // run 8), so a tab bounce within 20s runs only the cheap delta fetch.
-        const sinceLastFetch = Date.now() - lastShelfFetchAtRef.current;
-        if (sinceLastFetch < SHELF_FOCUS_FRESH_MS) {
-          log.debug(`[InventoryOrdersScreen] Focus full refetch skipped - shelf is ${Math.round(sinceLastFetch / 1000)}s fresh, running delta`);
-          void runShelfDeltaFetch();
-          return;
-        }
-
-        log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
+        // Partner metadata is not mirrored, so every focus refreshes it even if
+        // an existing bounded catalog walk is still finishing in the background.
         void loadPartnerOrigins();
-        await runFullShelfFetch('focus');
+
+        // Do not restart a catalog walk that is already filling older pages.
+        if (productVariantSyncPhaseRef.current === 'initial' || productVariantSyncPhaseRef.current === 'background') return;
+
+        log.debug('[InventoryOrdersScreen] Screen focused - refreshing cached mirrors...');
+        try {
+          await syncShelfMirrors('focus');
+          if (cancelled) return;
+        } catch (e) {
+          if (cancelled) return;
+          log.error('[InventoryOrdersScreen] Error during focus refresh:', e);
+        }
       };
 
-      refreshOnFocus();
-    }, [legendState?.userId, loadPartnerOrigins, runFullShelfFetch, runShelfDeltaFetch])
+      void refreshOnFocus();
+      return () => { cancelled = true; };
+    }, [legendState, loadPartnerOrigins, syncShelfMirrors])
   );
 
-  // Pull-to-refresh always takes the full path, bypassing the freshness gate.
+  // Pull-to-refresh uses the same bounded mirrors and exposes progress in-list.
   const [shelfRefreshing, setShelfRefreshing] = useState(false);
   const handleShelfRefresh = useCallback(async () => {
     setShelfRefreshing(true);
-    lastShelfFetchAtRef.current = 0;
     try {
-      await Promise.all([loadPartnerOrigins(), runFullShelfFetch('pull-to-refresh')]);
+      await Promise.all([loadPartnerOrigins(), syncShelfMirrors('pull-to-refresh')]);
+    } catch (e) {
+      log.error('[InventoryOrdersScreen] Pull-to-refresh failed:', e);
     } finally {
       setShelfRefreshing(false);
     }
-  }, [loadPartnerOrigins, runFullShelfFetch]);
+  }, [loadPartnerOrigins, syncShelfMirrors]);
 
-  // Patch bus: a patch means fresh local truth exists that the server caches
-  // may not reflect yet — force the next focus past the freshness gate.
-  useEffect(() => {
-    return subscribeCatalogPatches(() => {
-      lastShelfFetchAtRef.current = 0;
-    });
-  }, []);
-
-  // Stale marks (partnership changed, app foregrounded, org switched): reset
-  // the gate, and when this screen is what the seller is looking at, refetch
-  // the affected slices immediately instead of waiting for a nav bounce.
+  // Stale marks refresh the mirrors immediately while the local patch overlay
+  // continues to provide same-frame truth for edits and socket events.
   useEffect(() => {
     return subscribeCatalogStale((reason) => {
-      lastShelfFetchAtRef.current = 0;
       if (!navigation.isFocused()) return;
       if (reason === 'partnership' || reason === 'org-switch') {
         void loadPartnerOrigins();
-        void fetchSharedLinksAndLevels(shelfVariantIdsRef.current, `stale:${reason}`)
-          .catch((e) => log.warn('[InventoryOrdersScreen] Stale links+levels refetch failed:', e));
-        if (reason === 'org-switch') {
-          // Different org, different catalog — the delta watermark is useless.
-          void runFullShelfFetch('org-switch');
-        }
-        return;
       }
-      void runShelfDeltaFetch();
+      void syncShelfMirrors(`stale:${reason}`)
+        .catch((e) => log.warn('[InventoryOrdersScreen] Stale mirror refresh failed:', e));
     });
-  }, [navigation, loadPartnerOrigins, fetchSharedLinksAndLevels, runFullShelfFetch, runShelfDeltaFetch]);
+  }, [navigation, loadPartnerOrigins, syncShelfMirrors]);
 
 
   // CRITICAL FIX: Use useSelector to properly track observable changes for real-time reactivity
@@ -1002,6 +953,7 @@ const InventoryOrdersScreen = observer(() => {
   const legendInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
+  const legendSyncProgress = legendObservables?.syncProgress$?.get();
 
   // Re-render + recompute signal for catalog patches (saves in ProductDetail,
   // socket events). Version bumps on every patch write/drain.
@@ -1029,6 +981,14 @@ const InventoryOrdersScreen = observer(() => {
     ),
     [legendInventoryLevels, directFetchLevels, catalogPatchVersion],
   );
+  const legendBackfillActive = Object.values(legendSyncProgress || {}).some(
+    (progress) => progress.phase === 'background',
+  );
+  const initialShelfLoading =
+    Object.keys(activeProductVariants).length === 0 &&
+    !shelfLoadError &&
+    (!legendSyncProgress || legendSyncProgress.ProductVariants.phase === 'idle' || legendSyncProgress.ProductVariants.phase === 'initial');
+  const backgroundShelfLoading = directBackfillActive || legendBackfillActive;
 
   const inventoryLevelsWithShared = useMemo(() => {
     const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
@@ -1709,6 +1669,20 @@ const InventoryOrdersScreen = observer(() => {
     return filteredInventory.slice(0, displayCount);
   }, [filteredInventory, displayCount]);
 
+  useEffect(() => {
+    if (firstRowsLoggedRef.current || inventoryToDisplay.length === 0) return;
+    firstRowsLoggedRef.current = true;
+    const frame = requestAnimationFrame(() => {
+      log.debug('[InventoryOrdersScreen][measure] first rows painted', {
+        timeToRowsMs: Date.now() - screenEnteredAtRef.current,
+        visibleRows: inventoryToDisplay.length,
+        legendRows: Object.keys(legendProductVariants).length,
+        fallbackRows: Object.keys(directFetchVariants).length,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [directFetchVariants, inventoryToDisplay.length, legendProductVariants]);
+
   const handleLoadMore = () => {
     if (displayCount < filteredInventory.length && !isLoadingMore) {
       setIsLoadingMore(true);
@@ -1929,7 +1903,7 @@ const InventoryOrdersScreen = observer(() => {
       <View style={[styles.container, { marginTop: 110, paddingTop: 20, backgroundColor: "#FFF", }]}>
 
         {activeTab === 'inventory' && (
-          <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
+          <Animated.View style={styles.listContainer}>
             {/* Search + filters now live in the FlatList header (below) so they scroll away
                 with the list instead of staying sticky. */}
 
@@ -1987,6 +1961,12 @@ const InventoryOrdersScreen = observer(() => {
                 }
                 ListHeaderComponent={
                   <View>
+                    {backgroundShelfLoading ? (
+                      <View style={styles.backgroundSyncRow}>
+                        <ActivityIndicator size="small" color="#5D7E16" />
+                        <Text style={styles.backgroundSyncText}>Refreshing older inventory in the background</Text>
+                      </View>
+                    ) : null}
                     {isSelectionMode ? (
                       <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
                         <View style={styles.selectionHeaderLeft}>
@@ -2067,7 +2047,12 @@ const InventoryOrdersScreen = observer(() => {
                   </View>
                 }
                 ListEmptyComponent={
-                  isLoadingConnections ? (
+                  initialShelfLoading ? (
+                    <View style={styles.loadingContainer}>
+                      <ActivityIndicator size="small" color={theme.colors.primary} />
+                      <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>Loading your inventory...</Text>
+                    </View>
+                  ) : isLoadingConnections ? (
                     <View style={styles.loadingContainer}>
                       <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
                         Loading platform connections...
@@ -2554,6 +2539,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     flex: 1,
+  },
+  backgroundSyncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 8,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: 'rgba(147,200,34,0.12)',
+  },
+  backgroundSyncText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#5D7E16',
+    fontFamily: 'Inter_600SemiBold',
   },
   emptyText: {
     textAlign: 'center',
