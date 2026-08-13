@@ -154,7 +154,9 @@ export async function initializeLegendState(
             // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
             select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)'),
             filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
-            actions: ['read', 'create', 'update', 'delete'],
+            // READ-ONLY sync: canonical item mutations go through the backend. Keep
+            // list and realtime enabled so server changes still flow into this cache.
+            actions: ['read'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
                 name: `productVariants_user_${currentUserId}_v8`, // Bumped for canonical parent title projection
@@ -296,51 +298,6 @@ export function getLegendStateObservables(): LegendStateObservables {
         throw new Error("[SupaLegend] Legend State or productVariants$ not initialized. Call initializeLegendState first.");
     }
     return legendStateObservablesSingleton;
-}
-
-// Helper functions - these will now need to get productVariants$ via getLegendStateObservables()
-// or be methods on a class that holds the observables.
-// For simplicity, let's adjust one:
-
-export function addProductVariant(variantData: Omit<ProductVariant, 'Id' | 'CreatedAt' | 'UpdatedAt' | 'UserId'>) {
-    if (!legendStateObservablesSingleton?.productVariants$ || !legendStateObservablesSingleton?.userId) {
-        log.error("[SupaLegend] Cannot add product variant: Observables or user context not ready.");
-        return;
-    }
-    const obs = legendStateObservablesSingleton.productVariants$;
-    const currentUserId = legendStateObservablesSingleton.userId;
-    const id = generateId();
-    const now = new Date().toISOString();
-    obs[id].set({
-        ...variantData,
-        Id: id,
-        UserId: currentUserId, // Automatically set UserId
-        CreatedAt: now,
-        UpdatedAt: now,
-    } as ProductVariant);
-}
-
-export function updateProductVariant(id: string, updates: Partial<ProductVariant>) {
-    if (!legendStateObservablesSingleton?.productVariants$) return;
-    const obs = legendStateObservablesSingleton.productVariants$;
-    if (!obs[id].get()) {
-        log.warn(`ProductVariant with id ${id} not found for update.`);
-        return;
-    }
-    obs[id].assign({
-        ...updates,
-        UpdatedAt: new Date().toISOString(),
-    });
-}
-
-export function deleteProductVariant(id: string) {
-    if (!legendStateObservablesSingleton?.productVariants$) return;
-    const obs = legendStateObservablesSingleton.productVariants$;
-    if (!obs[id].get()) {
-        log.warn(`ProductVariant with id ${id} not found for hard deletion.`);
-        return;
-    }
-    obs[id].delete();
 }
 
 // Temporarily commented out code for other observables will be re-introduced into the initializeLegendState function later.
