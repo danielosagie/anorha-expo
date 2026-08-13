@@ -650,21 +650,19 @@ const ImportCompleteView: React.FC<{ params: any; navigation: any; onBack: () =>
     platformName,
   } = params;
 
-  const linked = importCounts?.linked ?? 0;
-  const created = importCounts?.created ?? 0;
+  const linked = (importCounts?.linked ?? 0) + (importCounts?.autoLinked ?? 0);
+  const created = (importCounts?.created ?? 0) + (importCounts?.autoCreated ?? 0);
   const ignored = importCounts?.ignored ?? 0;
-  const autoImported = (importCounts?.autoLinked ?? 0) + (importCounts?.autoCreated ?? 0);
 
   // Only non-zero rows, per the brief.
   const segments = [
     linked > 0 ? `${linked} linked` : null,
     created > 0 ? `${created} added` : null,
     ignored > 0 ? `${ignored} ignored` : null,
-    autoImported > 0 ? `${autoImported} auto-imported` : null,
   ].filter(Boolean) as string[];
 
   const receiptN = importCounts
-    ? linked + created + autoImported
+    ? linked + created
     : typeof importCount === 'number'
       ? importCount
       : platforms?.length || 0;

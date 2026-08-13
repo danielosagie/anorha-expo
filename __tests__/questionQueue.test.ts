@@ -117,58 +117,48 @@ test('an item with no CAS token is never sent as a fabricated version 0', () => 
   assert.ok(!sendable.some((i) => i.version === 0));
 });
 
-test('three same-answer group cards offer a handoff for the remaining reason class', () => {
-  const cards = ['group-a', 'group-b', 'group-c', 'group-d'].map((groupId, groupIndex) => ({
-    reason: 'look_alike_group',
-    kind: 'look_alike_group',
-    id: groupId,
-    items: [
-      { ...syncItem(`${groupId}-1`, groupIndex * 2 + 1), groupId },
-      { ...syncItem(`${groupId}-2`, groupIndex * 2 + 2), groupId },
-    ],
+test('three yes pair cards offer a handoff for the remaining reason class', () => {
+  const cards = ['pair-a', 'pair-b', 'pair-c', 'pair-d'].map((id) => ({
+    reason: 'weak_match',
+    kind: 'pair',
+    id,
   }));
   let streak = null;
   for (const card of cards.slice(0, 3)) {
-    streak = advanceAnswerStreak(streak, card, 'secondary', null, true);
+    streak = advanceAnswerStreak(streak, card, 'primary', null, true);
   }
 
-  const offer = selectHandoffCards(streak, cards.slice(3), () => true);
+  const offer = selectHandoffCards(streak, cards.slice(3), (card) => card.kind === 'pair');
   assert.ok(offer);
-  assert.equal(offer.reason, 'look_alike_group');
-  assert.equal(offer.answer, 'secondary');
-  const decisions = offer.cards.flatMap((card) => buildLookAlikeGroupDecisions(card.items, card.id, offer.answer));
-  assert.deepEqual(offer.cards.flatMap((card) => card.items).map((item) => item.platformId), ['group-d-1', 'group-d-2']);
-  assert.deepEqual(decisions.map((decision) => [decision.platformId, decision.version]), [
-    ['group-d-1', 7],
-    ['group-d-2', 8],
-  ]);
-  assert.ok(decisions.every((decision) => decision.platformId && decision.version !== 0));
+  assert.equal(offer.reason, 'weak_match');
+  assert.equal(offer.answer, 'primary');
+  assert.deepEqual(offer.cards.map((card) => card.id), ['pair-d']);
 });
 
-test('a mixed group answer resets the reason-plus-answer streak and does not offer a handoff', () => {
-  const cards = ['group-a', 'group-b', 'group-c', 'group-d'].map((id) => ({
-    reason: 'look_alike_group',
-    kind: 'look_alike_group',
+test('a no answer resets the yes streak and does not offer a handoff', () => {
+  const cards = ['pair-a', 'pair-b', 'pair-c', 'pair-d'].map((id) => ({
+    reason: 'weak_match',
+    kind: 'pair',
     id,
   }));
-  let streak = advanceAnswerStreak(null, cards[0], 'secondary', null, true);
-  streak = advanceAnswerStreak(streak, cards[1], 'primary', null, true);
-  streak = advanceAnswerStreak(streak, cards[2], 'secondary', null, true);
+  let streak = advanceAnswerStreak(null, cards[0], 'primary', null, true);
+  streak = advanceAnswerStreak(streak, cards[1], 'secondary', null, false);
+  streak = advanceAnswerStreak(streak, cards[2], 'primary', null, true);
 
   assert.equal(streak?.count, 1);
-  assert.equal(selectHandoffCards(streak, cards.slice(3), () => true), null);
+  assert.equal(selectHandoffCards(streak, cards.slice(3), (card) => card.kind === 'pair'), null);
 });
 
-test('a look-alike streak never includes bundle or other reason classes in its handoff', () => {
-  const lookAlikeCards = ['a', 'b', 'c', 'd'].map((id) => ({
-    id: `look:${id}`,
-    reason: 'look_alike_group',
-    kind: 'look_alike_group',
+test('a pair streak never includes field conflicts or other reason classes', () => {
+  const pairCards = ['a', 'b', 'c', 'd'].map((id) => ({
+    id: `pair:${id}`,
+    reason: 'weak_match',
+    kind: 'pair',
   }));
-  const bundleCard = {
-    id: 'bundle:set-1',
-    reason: 'bundle',
-    kind: 'bundle',
+  const whichCard = {
+    id: 'which:1',
+    reason: 'multiple_candidates',
+    kind: 'which_one',
   };
   const conflictCard = {
     id: 'field:conflict-1',
@@ -177,62 +167,60 @@ test('a look-alike streak never includes bundle or other reason classes in its h
   };
 
   let streak = null;
-  for (const card of lookAlikeCards.slice(0, 3)) {
-    streak = advanceAnswerStreak(streak, card, 'secondary', null, true);
+  for (const card of pairCards.slice(0, 3)) {
+    streak = advanceAnswerStreak(streak, card, 'primary', null, true);
   }
 
   const offer = selectHandoffCards(
     streak,
-    [bundleCard, conflictCard, lookAlikeCards[3]],
-    () => true,
+    [whichCard, conflictCard, pairCards[3]],
+    (card) => card.kind === 'pair' && card.reason !== 'field_conflict',
   );
   assert.ok(offer);
-  assert.equal(offer.reason, 'look_alike_group');
-  assert.deepEqual(offer.cards.map((card) => card.id), ['look:d']);
-  assert.ok(offer.cards.every((card) => card.reason === 'look_alike_group'));
+  assert.equal(offer.reason, 'weak_match');
+  assert.deepEqual(offer.cards.map((card) => card.id), ['pair:d']);
 });
 
-test('bundle cards can earn their own bundle-only handoff', () => {
+test('which-one cards cannot earn the reusable pair handoff', () => {
   const cards = ['a', 'b', 'c', 'd'].map((id) => ({
-    id: `bundle:${id}`,
-    reason: 'bundle',
-    kind: 'bundle',
+    id: `which:${id}`,
+    reason: 'multiple_candidates',
+    kind: 'which_one',
   }));
 
   let streak = null;
   for (const card of cards.slice(0, 3)) {
-    streak = advanceAnswerStreak(streak, card, 'primary', null, true);
+    streak = advanceAnswerStreak(streak, card, 'primary', null, false);
   }
 
-  const offer = selectHandoffCards(streak, cards.slice(3), () => true);
-  assert.ok(offer);
-  assert.equal(offer.reason, 'bundle');
-  assert.equal(offer.answer, 'primary');
-  assert.deepEqual(offer.cards.map((card) => card.id), ['bundle:d']);
+  assert.equal(selectHandoffCards(streak, cards.slice(3), (card) => card.kind === 'pair'), null);
 });
 
-test('a Later mid-class keeps the streak, and three consistent answers still earn the offer', () => {
-  const cards = ['a', 'b', 'later', 'c', 'd'].map((id) => ({
-    id: `field:${id}`,
-    reason: 'field_conflict',
+test('three consecutive yes answers are required after any no', () => {
+  const cards = ['a', 'b', 'no', 'c', 'd', 'e', 'f'].map((id) => ({
+    id: `pair:${id}`,
+    reason: 'weak_match',
     kind: 'pair',
   }));
 
   let streak = advanceAnswerStreak(null, cards[0], 'primary', null, true);
   streak = advanceAnswerStreak(streak, cards[1], 'primary', null, true);
-  streak = advanceAnswerStreak(streak, cards[2], 'unsure', null, false);
+  streak = advanceAnswerStreak(streak, cards[2], 'secondary', null, false);
   streak = advanceAnswerStreak(streak, cards[3], 'primary', null, true);
+  streak = advanceAnswerStreak(streak, cards[4], 'primary', null, true);
+  assert.equal(selectHandoffCards(streak, cards.slice(5), (card) => card.kind === 'pair'), null);
+  streak = advanceAnswerStreak(streak, cards[5], 'primary', null, true);
 
-  const offer = selectHandoffCards(streak, cards.slice(4), () => true);
+  const offer = selectHandoffCards(streak, cards.slice(6), (card) => card.kind === 'pair');
   assert.ok(offer);
-  assert.equal(offer.reason, 'field_conflict');
+  assert.equal(offer.reason, 'weak_match');
   assert.equal(offer.answer, 'primary');
 });
 
-test('the offer window stays open past three answers instead of firing exactly once', () => {
+test('the V7 offer window stays open past three yes answers', () => {
   const cards = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({
-    id: `field:${id}`,
-    reason: 'field_conflict',
+    id: `pair:${id}`,
+    reason: 'weak_match',
     kind: 'pair',
   }));
 
@@ -242,7 +230,7 @@ test('the offer window stays open past three answers instead of firing exactly o
   }
 
   assert.equal(streak?.count, 5);
-  const offer = selectHandoffCards(streak, cards.slice(5), () => true);
+  const offer = selectHandoffCards(streak, cards.slice(5), (card) => card.kind === 'pair');
   assert.ok(offer);
-  assert.deepEqual(offer.cards.map((card) => card.id), ['field:f']);
+  assert.deepEqual(offer.cards.map((card) => card.id), ['pair:f']);
 });
