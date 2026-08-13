@@ -1,5 +1,5 @@
 // Adding a comment to force a save and hopefully refresh linter state
-import { observable, ObservableObject } from '@legendapp/state';
+import { observable, ObservableObject, syncState, when } from '@legendapp/state';
 import { syncedSupabase, configureSyncedSupabase } from '@legendapp/state/sync-plugins/supabase';
 import { configureSynced } from '@legendapp/state/sync'; // Removed SyncedOptions for now
 import { observablePersistAsyncStorage } from '@legendapp/state/persist-plugins/async-storage';
@@ -16,6 +16,15 @@ import type {
   PlatformConnectionsRow,
 } from '../types/database.types';
 import { createLogger } from './logger';
+import {
+  COLLECTION_PAGE_SIZES,
+  PRODUCT_VARIANT_LIST_SELECT,
+  type BoundedCollectionName,
+  type CollectionSyncProgress,
+  createCollectionPageAccumulator,
+  normalizePersistedCollection,
+  utf8ByteLength,
+} from '../lib/pagedCollectionSync';
 const log = createLogger('SupaLegend');
 
 
@@ -35,11 +44,11 @@ export interface ProductVariant extends ProductVariantsRow {
   // Product copy moved to the parent Products row in item-model Phase 4B.
   Products?: {
     Title: string;
-    Description: string | null;
+    Description?: string | null;
     Tags: string[] | null;
   } | Array<{
     Title: string;
-    Description: string | null;
+    Description?: string | null;
     Tags: string[] | null;
   }> | null;
   // Client-only / derived (NOT database columns):
@@ -60,11 +69,21 @@ export interface LegendStateObservables {
     inventoryLevels$?: ObservableObject<Record<string, InventoryLevel>>;
     marketplaceListings$?: ObservableObject<Record<string, MarketplaceListing>>;
     platformLocations$?: ObservableObject<Record<string, PlatformLocation>>;
+    syncProgress$?: ObservableObject<Record<BoundedCollectionName, CollectionSyncProgress>>;
     userId?: string; // Added userId to the return type
 }
 
 // This will hold the initialized observables
 let legendStateObservablesSingleton: LegendStateObservables | null = null;
+let legendInitializationGeneration = 0;
+
+const INITIAL_SYNC_PROGRESS: Record<BoundedCollectionName, CollectionSyncProgress> = {
+    ProductVariants: { pageSize: COLLECTION_PAGE_SIZES.ProductVariants, loadedRows: 0, phase: 'idle' },
+    PlatformProductMappings: { pageSize: COLLECTION_PAGE_SIZES.PlatformProductMappings, loadedRows: 0, phase: 'idle' },
+    ProductImages: { pageSize: COLLECTION_PAGE_SIZES.ProductImages, loadedRows: 0, phase: 'idle' },
+    InventoryLevels: { pageSize: COLLECTION_PAGE_SIZES.InventoryLevels, loadedRows: 0, phase: 'idle' },
+    MarketplaceListings: { pageSize: COLLECTION_PAGE_SIZES.MarketplaceListings, loadedRows: 0, phase: 'idle' },
+};
 
 function buildFallbackLegendState(userId: string): LegendStateObservables {
     return {
@@ -74,6 +93,7 @@ function buildFallbackLegendState(userId: string): LegendStateObservables {
         inventoryLevels$: observable<Record<string, InventoryLevel>>({}),
         marketplaceListings$: observable<Record<string, MarketplaceListing>>({}),
         platformLocations$: observable<Record<string, PlatformLocation>>({}),
+        syncProgress$: observable<Record<BoundedCollectionName, CollectionSyncProgress>>({ ...INITIAL_SYNC_PROGRESS }),
         userId,
     };
 }
@@ -122,7 +142,17 @@ export async function initializeLegendState(
     legendStateObservablesSingleton = null; // Clear previous instance if user is different
 
     const currentUserId = userIdToInitialize;
+    const initializationGeneration = ++legendInitializationGeneration;
+    const initializationStartedAt = Date.now();
     log.debug(`[SupaLegend] currentUserId set to: ${currentUserId}`);
+
+    const persistenceNames = {
+        ProductVariants: `productVariants_user_${currentUserId}_v8`,
+        PlatformProductMappings: `platformProductMappings_user_${currentUserId}_v3`,
+        ProductImages: `productImages_user_${currentUserId}_v3`,
+        InventoryLevels: `inventoryLevels_user_${currentUserId}_v7`,
+        MarketplaceListings: `marketplaceListings_user_${currentUserId}_v3`,
+    } as const;
 
     configureSyncedSupabase({
         generateId,
@@ -132,6 +162,9 @@ export async function initializeLegendState(
         persist: {
             plugin: observablePersistAsyncStorage({
                 AsyncStorage,
+                // One batched local read lets every inventory dependency hydrate before
+                // the signed-in navigator paints. Remote sync starts only after persist.
+                preload: Object.values(persistenceNames),
             }),
         },
         supabase: supabaseClient,
@@ -147,29 +180,120 @@ export async function initializeLegendState(
     };
     const customSynced = configureSynced(syncedSupabase, syncBaseOptions);
 
-    const productVariants$ = observable<Record<string, ProductVariant>>(
+    const syncProgress$ = observable<Record<BoundedCollectionName, CollectionSyncProgress>>({
+        ...INITIAL_SYNC_PROGRESS,
+    });
+
+    let productVariants$: ObservableObject<Record<string, ProductVariant>>;
+    let platformProductMappings$: ObservableObject<Record<string, PlatformProductMapping>>;
+    let productImages$: ObservableObject<Record<string, ProductImage>>;
+    let inventoryLevels$: ObservableObject<Record<string, InventoryLevel>>;
+    let marketplaceListings$: ObservableObject<Record<string, MarketplaceListing>>;
+
+    const createBoundedList = <T extends { Id?: string }>(options: {
+        collection: BoundedCollectionName;
+        select: string;
+        filter?: (query: any) => any;
+        getObservable: () => ObservableObject<Record<string, T>>;
+    }) => {
+        const pageSize = COLLECTION_PAGE_SIZES[options.collection];
+        const accumulator = createCollectionPageAccumulator<T>(pageSize);
+
+        return async (params: any) => {
+            const { offset } = accumulator.beginPage();
+            syncProgress$[options.collection].set({
+                pageSize,
+                loadedRows: offset,
+                phase: offset === 0 ? 'initial' : 'background',
+            });
+
+            let query = supabaseClient
+                .from(options.collection)
+                .select(options.select)
+                .order('UpdatedAt', { ascending: false })
+                .order('Id', { ascending: false })
+                .range(offset, offset + pageSize - 1);
+            if (options.filter) query = options.filter(query);
+
+            const pageStartedAt = Date.now();
+            const response = await query;
+            if (response.error) {
+                accumulator.reset();
+                syncProgress$[options.collection].set({
+                    pageSize,
+                    loadedRows: offset,
+                    phase: 'error',
+                });
+                return response;
+            }
+
+            const pageRows = (response.data || []) as unknown as T[];
+            const accepted = accumulator.acceptPage(offset, pageRows);
+            params.mode = accepted.mode;
+            syncProgress$[options.collection].set({
+                pageSize,
+                loadedRows: accepted.loadedRows,
+                phase: accepted.hasMore ? 'background' : 'complete',
+            });
+
+            log.debug('[SupaLegend][measure] bounded page', {
+                collection: options.collection,
+                offset,
+                rows: pageRows.length,
+                payloadBytes: utf8ByteLength(pageRows),
+                durationMs: Date.now() - pageStartedAt,
+                hasMore: accepted.hasMore,
+            });
+
+            if (accepted.hasMore) {
+                setTimeout(() => {
+                    if (initializationGeneration !== legendInitializationGeneration) return;
+                    const observable = options.getObservable();
+                    void syncState(observable).sync();
+                }, 16);
+            }
+
+            return { ...response, data: accepted.rows };
+        };
+    };
+
+    const persistedRecordTransform = {
+        load: (value: Record<string, any>) => normalizePersistedCollection(value),
+    };
+
+    productVariants$ = observable<Record<string, ProductVariant>>(
         customSynced({
             collection: 'ProductVariants',
-            // OPTIMIZED: Only fetch columns we actually use in the UI
-            // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
-            select: (from: any) => from.select('Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)'),
-            filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
+            fieldId: 'Id',
+            // The inventory list never renders parent descriptions. ProductDetail
+            // fetches Products.Description when the seller opens a detail surface.
+            list: createBoundedList<ProductVariant>({
+                collection: 'ProductVariants',
+                select: PRODUCT_VARIANT_LIST_SELECT,
+                filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
+                getObservable: () => productVariants$,
+            }),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
-                name: `productVariants_user_${currentUserId}_v8`, // Bumped for canonical parent title projection
+                name: persistenceNames.ProductVariants,
                 retrySync: true,
+                transform: persistedRecordTransform,
             },
         })
     );
     log.debug(`[SupaLegend] productVariants$ observable configured for UserId: ${currentUserId}`);
 
     // Add onChange listener for diagnostics
-    productVariants$.onChange(syncedData => {
-        const dataCount = Object.keys(syncedData || {}).length;
-        log.debug(`[SupaLegend - productVariants$.onChange] Data changed. Count: ${dataCount}`);
+    productVariants$.onChange(({ value, isFromPersist, isFromSync }) => {
+        const dataCount = Object.keys(value || {}).length;
+        log.debug('[SupaLegend][measure] ProductVariants changed', {
+            rows: dataCount,
+            source: isFromPersist ? 'persist' : isFromSync ? 'remote' : 'local',
+            sinceInitializationMs: Date.now() - initializationStartedAt,
+        });
         if (dataCount > 0 && dataCount < 5) { // Log first few items if count is small
-            log.debug('[SupaLegend - productVariants$.onChange] Sample data:', JSON.stringify(Object.values(syncedData || {}).slice(0, 5), null, 2));
+            log.debug('[SupaLegend - productVariants$.onChange] Small cache hydrated.');
         } else if (dataCount === 0) {
             log.debug('[SupaLegend - productVariants$.onChange] Data is empty.');
         }
@@ -183,69 +307,88 @@ export async function initializeLegendState(
     // This is NOT ideal for performance or security if RLS is off for these tables.
 
     // OPTIMIZED: Reduced columns, relies on RLS to filter via ProductVariantId join
-    const platformProductMappings$ = observable<Record<string, PlatformProductMapping>>(
+    platformProductMappings$ = observable<Record<string, PlatformProductMapping>>(
         customSynced({
             collection: 'PlatformProductMappings',
-            // Only fetch essential columns
-            select: (from: any) => from.select('Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt'),
+            fieldId: 'Id',
+            list: createBoundedList<PlatformProductMapping>({
+                collection: 'PlatformProductMappings',
+                select: 'Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt',
+                getObservable: () => platformProductMappings$,
+            }),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: true, // RLS filters via ProductVariantId->UserId join
             persist: {
-                name: `platformProductMappings_user_${currentUserId}_v3`,
+                name: persistenceNames.PlatformProductMappings,
                 retrySync: true,
+                transform: persistedRecordTransform,
             },
         })
     );
     log.debug(`[SupaLegend] platformProductMappings$ configured (filtered by RLS)`);
 
     // OPTIMIZED: Only fetch essential image columns, disable realtime
-    const productImages$ = observable<Record<string, ProductImage>>(
+    productImages$ = observable<Record<string, ProductImage>>(
         customSynced({
             collection: 'ProductImages',
-            // Only fetch what's needed to display images
-            select: (from: any) => from.select('Id, ProductVariantId, ImageUrl, Position'),
+            fieldId: 'Id',
+            list: createBoundedList<ProductImage>({
+                collection: 'ProductImages',
+                select: 'Id, ProductVariantId, ImageUrl, Position',
+                getObservable: () => productImages$,
+            }),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: false, // DISABLED: Images rarely change, reduces egress significantly
             persist: {
-                name: `productImages_user_${currentUserId}_v3`, // Bumped for column change
+                name: persistenceNames.ProductImages,
                 retrySync: true,
+                transform: persistedRecordTransform,
             },
         })
     );
     log.debug(`[SupaLegend] productImages$ configured (realtime disabled to reduce egress)`);
 
     // OPTIMIZED: Essential columns only, relies on RLS to filter via ProductVariantId join
-    const inventoryLevels$ = observable<Record<string, InventoryLevel>>(
+    inventoryLevels$ = observable<Record<string, InventoryLevel>>(
         customSynced({
             collection: 'InventoryLevels',
-            // Only fetch essential columns for inventory tracking
-            // IMPORTANT: PoolId and OrgId are needed for partner-shared inventory
-            // Production-verified schema: InventoryLevels stores quantity/version data, never product price.
-            select: (from: any) => from.select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt'),
+            fieldId: 'Id',
+            list: createBoundedList<InventoryLevel>({
+                collection: 'InventoryLevels',
+                // PoolId and OrgId are needed for partner-shared inventory.
+                select: 'Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt',
+                getObservable: () => inventoryLevels$,
+            }),
             // READ-ONLY sync: the client never writes InventoryLevels (inventory is mutated
             // server-side and flows back via realtime). Allowing write actions let realtime
             // echoes upsert rows back to Supabase, failing RLS with HTTP 400 → retry storm.
             actions: ['read'],
             realtime: true, // Live updates essential for inventory (read-only mirror)
             persist: {
-                name: `inventoryLevels_user_${currentUserId}_v7`, // Bumped after removing legacy price fields
+                name: persistenceNames.InventoryLevels,
                 retrySync: true,
+                transform: persistedRecordTransform,
             },
         })
     );
     log.debug(`[SupaLegend] inventoryLevels$ configured with live updates (filtered by RLS)`);
 
-    const marketplaceListings$ = observable<Record<string, MarketplaceListing>>(
+    marketplaceListings$ = observable<Record<string, MarketplaceListing>>(
         customSynced({
             collection: 'MarketplaceListings',
-            // OPTIMIZED: Only fetch essential columns
-            select: (from: any) => from.select('Id, ProductVariantId, SellerUserId, Price, AvailableQuantity, IsEnabled, CreatedAt, UpdatedAt'),
-            filter: (query: any) => query.eq('SellerUserId', currentUserId),
+            fieldId: 'Id',
+            list: createBoundedList<MarketplaceListing>({
+                collection: 'MarketplaceListings',
+                select: 'Id, ProductVariantId, SellerUserId, Price, AvailableQuantity, IsEnabled, CreatedAt, UpdatedAt',
+                filter: (query: any) => query.eq('SellerUserId', currentUserId),
+                getObservable: () => marketplaceListings$,
+            }),
             actions: ['read', 'create', 'update', 'delete'],
             realtime: { filter: `SellerUserId=eq.${currentUserId}` },
             persist: {
-                name: `marketplaceListings_user_${currentUserId}_v3`, // Bumped for column change
+                name: persistenceNames.MarketplaceListings,
                 retrySync: true,
+                transform: persistedRecordTransform,
             },
         })
     );
@@ -255,16 +398,32 @@ export async function initializeLegendState(
     const platformLocations$ = observable<Record<string, PlatformLocation>>({});
     log.debug(`[SupaLegend] platformLocations$ observable initialized (placeholder).`);
 
-    // --- Activate observables to potentially kickstart sync --- 
-    log.debug("[SupaLegend] Activating productVariants$...");
-    productVariants$.get(); // Call get() to activate and start syncing
-    log.debug(`[SupaLegend] productVariants$ activated. Current local count: ${Object.keys(productVariants$.get() || {}).length}`);
+    // Activate every persisted dependency together. Legend waits for AsyncStorage
+    // before starting each remote getter, so this is cache-first without chaining
+    // the five network reads behind one another.
+    const persistedObservables = [
+        productVariants$,
+        platformProductMappings$,
+        productImages$,
+        inventoryLevels$,
+        marketplaceListings$,
+    ];
+    persistedObservables.forEach((observable) => observable.get());
 
-    // Optionally activate others if needed, but productVariants is primary for now
-    // platformProductMappings$.get();
-    log.debug("[SupaLegend] Activating productImages$...");
-    productImages$.get();
-    // inventoryLevels$.get();
+    // The navigator's dataReady flag should mean local data is actually available,
+    // not merely that observable shells were allocated. This wait is local-only;
+    // remote page one continues independently after persistence has hydrated.
+    await Promise.all(persistedObservables.map((observable) =>
+        when(() => syncState(observable).isPersistLoaded.get()),
+    ));
+    log.debug('[SupaLegend][measure] all caches hydrated', {
+        durationMs: Date.now() - initializationStartedAt,
+        variants: Object.keys(productVariants$.get() || {}).length,
+        mappings: Object.keys(platformProductMappings$.get() || {}).length,
+        images: Object.keys(productImages$.get() || {}).length,
+        levels: Object.keys(inventoryLevels$.get() || {}).length,
+        listings: Object.keys(marketplaceListings$.get() || {}).length,
+    });
 
     legendStateObservablesSingleton = {
         productVariants$,
@@ -273,6 +432,7 @@ export async function initializeLegendState(
         inventoryLevels$,
         marketplaceListings$,
         platformLocations$,
+        syncProgress$,
         userId: currentUserId, // Store the userId with the initialized observables
     };
 

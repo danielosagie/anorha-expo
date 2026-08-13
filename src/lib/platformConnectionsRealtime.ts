@@ -1,6 +1,7 @@
 import { supabase, getUserLike } from './supabase';
 import { TABLES } from '../constants/tableNames';
 import { createLogger } from '../utils/logger';
+import { nextRealtimeRetry, PLATFORM_CONNECTION_REALTIME_MAX_RETRIES } from './realtimeRetry';
 
 const log = createLogger('platformConnectionsRealtime');
 
@@ -16,12 +17,15 @@ const log = createLogger('platformConnectionsRealtime');
  */
 export function subscribePlatformConnectionChanges(onChange: () => void): () => void {
   let channel: ReturnType<typeof supabase.channel> | null = null;
-  let retryCount = 0;
-  const maxRetries = 3;
+  let retriesScheduled = 0;
   let retryTimeout: ReturnType<typeof setTimeout> | null = null;
   let cancelled = false;
+  let terminal = false;
+  let setupGeneration = 0;
 
   const setup = async () => {
+    if (cancelled || terminal) return;
+    const generation = ++setupGeneration;
     // Resolve the INTERNAL user UUID from the `me` view — NOT the JWT `sub`. Under native
     // Clerk auth `sub` is the Clerk id (user_xxx), not Users.Id, so `UserId=eq.<sub>` would
     // match zero rows and drop every change event. The `me` view returns the real UUID in
@@ -32,7 +36,7 @@ export function subscribePlatformConnectionChanges(onChange: () => void): () => 
     } catch {
       currentUserId = null;
     }
-    if (cancelled) return;
+    if (cancelled || terminal || generation !== setupGeneration) return;
 
     channel = supabase
       // Stable channel name: a `Date.now()` suffix produced a new, distinctly-named
@@ -52,31 +56,53 @@ export function subscribePlatformConnectionChanges(onChange: () => void): () => 
         },
       )
       .subscribe((status) => {
+        if (cancelled || terminal || generation !== setupGeneration) return;
         log.debug('Realtime subscription status:', status);
         if (status === 'SUBSCRIBED') {
-          retryCount = 0; // Reset on success
-        } else if (status === 'CHANNEL_ERROR') {
-          if (retryCount < maxRetries) {
-            const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-            log.debug(`Retrying in ${delay}ms (attempt ${retryCount + 1}/${maxRetries})`);
-            retryTimeout = setTimeout(() => {
-              retryCount++;
-              if (channel) supabase.removeChannel(channel);
-              setup();
-            }, delay);
-          } else {
-            log.error('Max retries reached for realtime subscription');
+          retryTimeout = null;
+          return;
+        }
+
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          // A channel can emit more than one terminal callback while it tears
+          // down. Coalesce them so one failed attempt schedules one retry.
+          if (retryTimeout) return;
+
+          const retry = nextRealtimeRetry(retriesScheduled);
+          if (retry.terminal) {
+            terminal = true;
+            const failedChannel = channel;
+            channel = null;
+            if (failedChannel) void supabase.removeChannel(failedChannel);
+            // Background-only failure. Existing focus/progress polling remains
+            // the fallback, so never escalate this to a user-facing error toast.
+            log.warn('Realtime unavailable after capped retries; continuing with polling', {
+              attempts: PLATFORM_CONNECTION_REALTIME_MAX_RETRIES,
+              status,
+            });
+            return;
           }
+
+          retriesScheduled = retry.attempt;
+          log.debug(`Retrying in ${retry.delayMs}ms (attempt ${retry.attempt}/${PLATFORM_CONNECTION_REALTIME_MAX_RETRIES})`);
+          const failedChannel = channel;
+          channel = null;
+          if (failedChannel) void supabase.removeChannel(failedChannel);
+          retryTimeout = setTimeout(() => {
+            retryTimeout = null;
+            void setup();
+          }, retry.delayMs);
         }
       });
   };
 
-  setup();
+  void setup();
 
   return () => {
     log.debug('Unsubscribing from realtime updates');
     cancelled = true;
+    setupGeneration += 1;
     if (retryTimeout) clearTimeout(retryTimeout);
-    if (channel) supabase.removeChannel(channel);
+    if (channel) void supabase.removeChannel(channel);
   };
 }

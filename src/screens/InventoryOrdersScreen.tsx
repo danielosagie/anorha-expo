@@ -36,8 +36,10 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Button from '../components/Button';
 import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { observer } from '@legendapp/state/react';
+import { syncState } from '@legendapp/state';
 import { useLegendState } from '../context/LegendStateContext';
 import { ProductVariant as ProductVariantData, ProductImage, InventoryLevel, PlatformProductMapping, LegendStateObservables, MarketplaceListing, PlatformLocation, PlatformConnection } from '../utils/SupaLegend';
+import { PRODUCT_VARIANT_LIST_SELECT } from '../lib/pagedCollectionSync';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -152,6 +154,8 @@ const InventoryOrdersScreen = observer(() => {
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
+  const screenEnteredAtRef = useRef(Date.now());
+  const firstRowsLoggedRef = useRef(false);
 
   // Subscribe to real-time product variant and inventory changes
   // These hooks return updateCounter values that we'll use to trigger useMemo re-computation
@@ -616,11 +620,12 @@ const InventoryOrdersScreen = observer(() => {
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
+  const [directBackfillActive, setDirectBackfillActive] = useState(false);
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
-  // Production-verified schema: ProductVariants has no Description/Tags; product copy lives on Products.
-  const PRODUCT_VARIANT_SELECT = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, status, OnShopify, OnSquare, OnClover, OnAmazon, OnEbay, OnFacebook, VariantType, IsArchived, PrimaryImageUrl, CreatedAt, UpdatedAt, Products(Title, Description, Tags)';
-
+  const productVariantSyncPhase = legendState?.syncProgress$?.get()?.ProductVariants.phase ?? 'idle';
+  const productVariantSyncPhaseRef = useRef(productVariantSyncPhase);
+  productVariantSyncPhaseRef.current = productVariantSyncPhase;
   const loadPartnerOrigins = useCallback(async () => {
     if (!currentOrg?.id) {
       setPartnerOrigins([]);
@@ -679,8 +684,11 @@ const InventoryOrdersScreen = observer(() => {
     return rows;
   }, []);
 
-  const fetchAllProductVariants = useCallback(async (userId: string) => {
-    const pageSize = 200;
+  const fetchAllProductVariants = useCallback(async (
+    userId: string,
+    onPage?: (rows: ProductVariantData[], progress: { offset: number; hasMore: boolean; loadedRows: number }) => void,
+  ) => {
+    const pageSize = 250;
     const allRows: any[] = [];
     let from = 0;
 
@@ -688,19 +696,32 @@ const InventoryOrdersScreen = observer(() => {
       const to = from + pageSize - 1;
       const { data, error } = await supabase
         .from('ProductVariants')
-        // Production-verified schema: product Description/Tags are embedded from Products.
-        .select(PRODUCT_VARIANT_SELECT)
+        // Description is detail-only. Keeping it off this list path removed the
+        // largest repeated parent field from every variant row.
+        .select(PRODUCT_VARIANT_LIST_SELECT)
         .eq('UserId', userId)
         .not('Sku', 'like', 'DRAFT-%')
+        .order('UpdatedAt', { ascending: false })
+        .order('Id', { ascending: false })
         .range(from, to);
 
       if (error) throw error;
 
       const rows = data || [];
       allRows.push(...rows);
+      const hasMore = rows.length === pageSize;
+      onPage?.(rows as ProductVariantData[], { offset: from, hasMore, loadedRows: allRows.length });
+      log.debug('[InventoryOrdersScreen][measure] fallback page', {
+        offset: from,
+        rows: rows.length,
+        hasMore,
+      });
 
-      if (rows.length < pageSize) break;
+      if (!hasMore) break;
       from += pageSize;
+      // Yield between bounded pages so the first page can paint before the
+      // fallback finishes walking a large catalog.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
 
     return allRows;
@@ -711,11 +732,29 @@ const InventoryOrdersScreen = observer(() => {
   const lastShelfFetchAtRef = useRef(0);
 
   useEffect(() => {
+    if (productVariantSyncPhase === 'complete') {
+      lastShelfFetchAtRef.current = Date.now();
+    }
+  }, [productVariantSyncPhase]);
+
+  useEffect(() => {
+    let cancelled = false;
     const directFetchProducts = async () => {
       if (supabase && legendState?.userId) {
         try {
-          // Fetch ProductVariants
-          const data = await fetchAllProductVariants(legendState.userId);
+          // Keep the defensive direct path progressive too. Page one merges
+          // immediately; older pages fill without delaying first paint.
+          const data = await fetchAllProductVariants(legendState.userId, (page, progress) => {
+            if (cancelled) return;
+            setDirectFetchVariants((previous) => {
+              const next = progress.offset === 0 ? {} : { ...previous };
+              page.forEach((variant) => { next[variant.Id] = variant; });
+              return next;
+            });
+            setDirectBackfillActive(progress.hasMore);
+            if (page.length > 0) setShelfLoadError(false);
+          });
+          if (cancelled) return;
 
           if (!data) {
             log.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
@@ -778,31 +817,38 @@ const InventoryOrdersScreen = observer(() => {
             lastShelfFetchAtRef.current = Date.now();
           }
         } catch (e) {
+          if (cancelled) return;
           log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
           setShelfLoadError(true);
+        } finally {
+          if (!cancelled) setDirectBackfillActive(false);
         }
       }
     };
 
-    if (legendState?.userId) {
+    // This path is now a true fallback instead of a second unconditional full
+    // catalog read racing Legend on every mount.
+    if (legendState?.userId && productVariantSyncPhase === 'error') {
       directFetchProducts();
     }
-  }, [fetchAllProductVariants, legendState]);
+    return () => { cancelled = true; };
+  }, [fetchAllProductVariants, fetchByIdChunks, legendState?.userId, productVariantSyncPhase]);
 
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
 
-  // CRITICAL: Refresh data when screen comes into focus (e.g., after editing product or CSV import)
-  // This ensures updated products show fresh data without requiring a full app restart
-  // UPDATED: Always refetch on focus since count-only check misses product UPDATES
+  // Refresh the shared local-first mirrors on focus. Each mirror paints its cache
+  // first and bounds its network pages, so focus never starts a second full-table
+  // direct fetch behind the list.
   useFocusEffect(
     useCallback(() => {
-      // Skip the first render since directFetchProducts already runs on mount
+      // Initial activation already started all five mirrors.
       if (isFirstRender.current) {
         isFirstRender.current = false;
         return;
       }
 
+      let cancelled = false;
       const refreshOnFocus = async () => {
         if (!legendState?.userId) return;
 
@@ -817,75 +863,33 @@ const InventoryOrdersScreen = observer(() => {
           return;
         }
 
-        log.debug('[InventoryOrdersScreen] Screen focused - refreshing products...');
+        // Do not restart a catalog walk that is already filling older pages.
+        if (productVariantSyncPhaseRef.current === 'initial' || productVariantSyncPhaseRef.current === 'background') return;
+
+        log.debug('[InventoryOrdersScreen] Screen focused - refreshing cached mirrors...');
         void loadPartnerOrigins();
 
         try {
-          // Always refetch products to get latest data (covers both new AND updated products)
-          const data = await fetchAllProductVariants(legendState.userId);
-
-          if (data) {
-            const variantMap: Record<string, ProductVariantData> = {};
-            const variantIds: string[] = [];
-            data.forEach((v: any) => {
-              variantMap[v.Id] = v;
-              variantIds.push(v.Id);
-            });
-            setDirectFetchVariants(variantMap);
-            setShelfLoadError(false);
-
-            // Refresh CrossOrgProductLinks for shared inventory quantities
-            if (variantIds.length > 0) {
-              const linksData = await fetchByIdChunks(
-                variantIds,
-                (chunk) => supabase
-                  .from('CrossOrgProductLinks')
-                  .select('*')
-                  .in('TargetVariantId', chunk)
-                  .eq('Status', 'active'),
-                'shared links (focus)',
-              );
-              const linkMap: Record<string, SharedProductLinkInfo> = {};
-              linksData.forEach((link: any) => {
-                if (link.TargetVariantId) {
-                  linkMap[link.TargetVariantId] = {
-                    quantity: link.AvailableQuantity || 0,
-                    poolId: link.TargetPoolId || undefined,
-                    link,
-                  };
-                }
-              });
-              setSharedLinkQuantities(linkMap);
-            }
-
-            // Also refresh inventory levels
-            if (variantIds.length > 0) {
-              const levelsData = await fetchByIdChunks(
-                variantIds,
-                (chunk) => supabase
-                  .from('InventoryLevels')
-                  // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-                  .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-                  .in('ProductVariantId', chunk),
-                'inventory levels (focus)',
-              );
-              const levelsMap: Record<string, InventoryLevel> = {};
-              levelsData.forEach((l: any) => {
-                levelsMap[l.Id] = l;
-              });
-              setDirectFetchLevels(levelsMap);
-            }
-            lastShelfFetchAtRef.current = Date.now();
-            log.debug('[InventoryOrdersScreen] Refresh complete, now showing', data.length, 'products');
-          }
+          const mirrors = [
+            legendState.productVariants$,
+            legendState.platformProductMappings$,
+            legendState.productImages$,
+            legendState.inventoryLevels$,
+            legendState.marketplaceListings$,
+          ].filter(Boolean);
+          await Promise.all(mirrors.map((mirror) => syncState(mirror!).sync()));
+          if (cancelled) return;
+          lastShelfFetchAtRef.current = Date.now();
+          setShelfLoadError(false);
         } catch (e) {
+          if (cancelled) return;
           log.error('[InventoryOrdersScreen] Error during focus refresh:', e);
-          setShelfLoadError(true);
         }
       };
 
-      refreshOnFocus();
-    }, [fetchAllProductVariants, legendState?.userId, loadPartnerOrigins])
+      void refreshOnFocus();
+      return () => { cancelled = true; };
+    }, [legendState, loadPartnerOrigins])
   );
 
 
@@ -897,6 +901,7 @@ const InventoryOrdersScreen = observer(() => {
   const legendInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
+  const legendSyncProgress = legendObservables?.syncProgress$?.get();
 
   // Union of the Legend mirror and the direct fetch, direct winning per key.
   // The old rule ("whichever map is bigger wins") was a landmine: right after
@@ -910,6 +915,14 @@ const InventoryOrdersScreen = observer(() => {
     () => ({ ...legendInventoryLevels, ...directFetchLevels }),
     [legendInventoryLevels, directFetchLevels],
   );
+  const legendBackfillActive = Object.values(legendSyncProgress || {}).some(
+    (progress) => progress.phase === 'background',
+  );
+  const initialShelfLoading =
+    Object.keys(activeProductVariants).length === 0 &&
+    !shelfLoadError &&
+    (!legendSyncProgress || legendSyncProgress.ProductVariants.phase === 'idle' || legendSyncProgress.ProductVariants.phase === 'initial');
+  const backgroundShelfLoading = directBackfillActive || legendBackfillActive;
 
   const inventoryLevelsWithShared = useMemo(() => {
     const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
@@ -1573,6 +1586,20 @@ const InventoryOrdersScreen = observer(() => {
     return filteredInventory.slice(0, displayCount);
   }, [filteredInventory, displayCount]);
 
+  useEffect(() => {
+    if (firstRowsLoggedRef.current || inventoryToDisplay.length === 0) return;
+    firstRowsLoggedRef.current = true;
+    const frame = requestAnimationFrame(() => {
+      log.debug('[InventoryOrdersScreen][measure] first rows painted', {
+        timeToRowsMs: Date.now() - screenEnteredAtRef.current,
+        visibleRows: inventoryToDisplay.length,
+        legendRows: Object.keys(legendProductVariants).length,
+        fallbackRows: Object.keys(directFetchVariants).length,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [directFetchVariants, inventoryToDisplay.length, legendProductVariants]);
+
   const handleLoadMore = () => {
     if (displayCount < filteredInventory.length && !isLoadingMore) {
       setIsLoadingMore(true);
@@ -1793,7 +1820,7 @@ const InventoryOrdersScreen = observer(() => {
       <View style={[styles.container, { marginTop: 110, paddingTop: 20, backgroundColor: "#FFF", }]}>
 
         {activeTab === 'inventory' && (
-          <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.listContainer}>
+          <Animated.View style={styles.listContainer}>
             {/* Search + filters now live in the FlatList header (below) so they scroll away
                 with the list instead of staying sticky. */}
 
@@ -1844,6 +1871,12 @@ const InventoryOrdersScreen = observer(() => {
                 }
                 ListHeaderComponent={
                   <View>
+                    {backgroundShelfLoading ? (
+                      <View style={styles.backgroundSyncRow}>
+                        <ActivityIndicator size="small" color="#5D7E16" />
+                        <Text style={styles.backgroundSyncText}>Refreshing older inventory in the background</Text>
+                      </View>
+                    ) : null}
                     {isSelectionMode ? (
                       <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
                         <View style={styles.selectionHeaderLeft}>
@@ -1924,7 +1957,12 @@ const InventoryOrdersScreen = observer(() => {
                   </View>
                 }
                 ListEmptyComponent={
-                  isLoadingConnections ? (
+                  initialShelfLoading ? (
+                    <View style={styles.loadingContainer}>
+                      <ActivityIndicator size="small" color={theme.colors.primary} />
+                      <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>Loading your inventory...</Text>
+                    </View>
+                  ) : isLoadingConnections ? (
                     <View style={styles.loadingContainer}>
                       <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
                         Loading platform connections...
@@ -2554,6 +2592,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     flex: 1,
+  },
+  backgroundSyncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 8,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: 'rgba(147,200,34,0.12)',
+  },
+  backgroundSyncText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#5D7E16',
+    fontFamily: 'Inter_600SemiBold',
   },
   emptyText: {
     textAlign: 'center',
