@@ -82,7 +82,6 @@ export function PublishConfirmationContent({
     channelOptimization,
     onOptimize,
     progress,
-    productSummary,
 }: PublishConfirmationContentProps) {
     const insets = useSafeAreaInsets();
     const [summaryImageFailed, setSummaryImageFailed] = React.useState(false);

@@ -1299,6 +1299,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       photoUri,
       title: chosen?.title || item?.title || 'Item',
       description: chosen?.description,
+      confidence: qs?.matchData?.confidence,
       // Match chosen but pricing not yet stored → still researching ("Finding comps…").
       pricingLoading: !!chosen && pr === undefined,
       pricing: pr
