@@ -9,6 +9,7 @@ import {
     Pressable,
     ScrollView,
     ActivityIndicator,
+    Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -45,6 +46,7 @@ export interface PublishConfirmationModalProps {
         title?: string;
         sku?: string;
         price?: number | string;
+        imageUrl?: string;
     };
     isPublishing?: boolean;
     /** When provided, shows a "Just save to inventory" option (no platform publish). */
@@ -80,8 +82,22 @@ export function PublishConfirmationContent({
     channelOptimization,
     onOptimize,
     progress,
+    productSummary,
 }: PublishConfirmationContentProps) {
     const insets = useSafeAreaInsets();
+    const [summaryImageFailed, setSummaryImageFailed] = React.useState(false);
+
+    useEffect(() => {
+        setSummaryImageFailed(false);
+    }, [active, productSummary.imageUrl]);
+
+    const summaryPrice = (() => {
+        if (productSummary.price === undefined || productSummary.price === null || productSummary.price === '') return 'Not set';
+        const numericPrice = typeof productSummary.price === 'number'
+            ? productSummary.price
+            : Number(String(productSummary.price).replace(/[$,]/g, ''));
+        return Number.isFinite(numericPrice) && numericPrice > 0 ? `$${numericPrice.toFixed(2)}` : 'Not set';
+    })();
 
     // Which platforms are toggled on for publishing.
     const [selectedPlatforms, setSelectedPlatforms] = React.useState<Set<string>>(new Set());
@@ -200,6 +216,25 @@ export function PublishConfirmationContent({
                 </View>
 
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+                    <View style={styles.summaryCard}>
+                        {productSummary.imageUrl && !summaryImageFailed ? (
+                            <Image
+                                source={{ uri: productSummary.imageUrl }}
+                                style={styles.summaryImage}
+                                resizeMode="cover"
+                                onError={() => setSummaryImageFailed(true)}
+                            />
+                        ) : (
+                            <View style={[styles.summaryImage, styles.summaryImageEmpty]}>
+                                <Icon name="image-outline" size={22} color="#9CA3AF" />
+                            </View>
+                        )}
+                        <View style={styles.summaryCopy}>
+                            <Text style={styles.summaryTitle} numberOfLines={2}>{productSummary.title?.trim() || 'Untitled item'}</Text>
+                            <Text style={styles.summaryPrice}>{summaryPrice}</Text>
+                        </View>
+                    </View>
+
                     {hasNoConnections ? (
                         <View style={styles.emptyCard}>
                             <Text style={styles.emptyTitle}>No channels connected</Text>
@@ -329,6 +364,12 @@ const styles = StyleSheet.create({
     contextLabel: { color: '#71717A', fontSize: 11, fontFamily: CHAT_FONT.semibold, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
     title: { color: '#18181B', fontSize: 22, fontFamily: CHAT_FONT.bold, fontWeight: '800', letterSpacing: -0.22, lineHeight: 28 },
     list: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, gap: 10 },
+    summaryCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 18, borderCurve: 'continuous', padding: 12 },
+    summaryImage: { width: 56, height: 56, borderRadius: 12, borderCurve: 'continuous', backgroundColor: '#F3F4F6' },
+    summaryImageEmpty: { alignItems: 'center', justifyContent: 'center' },
+    summaryCopy: { flex: 1, minWidth: 0, gap: 4 },
+    summaryTitle: { color: '#18181B', fontSize: 15, lineHeight: 19, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
+    summaryPrice: { color: '#3F3F46', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
     platformCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 18, padding: 14 },
     cardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 11 },
     platformName: { color: '#18181B', fontSize: 16, fontFamily: CHAT_FONT.bold, fontWeight: '700', lineHeight: 20 },

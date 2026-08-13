@@ -955,7 +955,7 @@ function QuickChatConversation({
             onFeedback={controller.submitMessageFeedback}
             onFollowUp={sendSuggestion}
             onOpenCart={(sessionId: string) => {
-              const origin = { screen: 'GlobalSproutChat' };
+              const origin = { screen: 'GlobalSproutChat', params: { returnToHomeOnClose: true } };
               try {
                 navigation.navigate('TabNavigator', {
                   screen: 'AddProduct',

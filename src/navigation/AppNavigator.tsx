@@ -247,6 +247,7 @@ export type AppStackParamList = {
     placeholder?: string;
     emptyHint?: string;
     peekHeightRatio?: number;
+    returnToHomeOnClose?: boolean;
   } | undefined;
   Partners: undefined;
 };
