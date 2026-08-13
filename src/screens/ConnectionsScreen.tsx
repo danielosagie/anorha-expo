@@ -17,34 +17,39 @@ import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import PlatformAvatar from '../components/PlatformAvatar';
-import PlatformConnectSheet from '../components/PlatformConnectSheet';
+import ConnectFlowSheet from '../components/ConnectFlowSheet';
 import CreatePoolSheet from '../components/pools/CreatePoolSheet';
 import { PageHeader } from '../components/ui/PageHeader';
 import { getPlatform, normalizeDisplayName } from '../config/platforms';
-import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { useImportStatus } from '../hooks/useImportStatus';
+import { api } from '../lib/apiClient';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
 import { isListedPlatformConnection } from '../lib/platformConnectStatus';
 import PartnerBadge from '../components/PartnerBadge';
 import { buildPartnerInventoryOrigins, PartnerInventoryOrigin } from '../lib/partnerInventory';
-import { findResumableCsvImports } from '../lib/resumableImports';
-import { PendingCsvImportRow } from '../components/import/PendingCsvImportRow';
+import {
+  deriveConnectionImportPresentation,
+  latestImportsByConnection,
+} from '../lib/connectionImportPresentation';
 
-const statusOf = (raw?: string, enabled = true): { label: string; color: string } => {
-  const s = (raw || '').toLowerCase();
-  if (!enabled || s === 'inactive') return { label: 'Disconnected', color: '#71717A' };
-  if (s === 'active' || s === 'live') return { label: 'Synced', color: '#43631A' };
-  if (s === 'review' || s === 'needs-attention') return { label: 'Needs review', color: '#BA7517' };
-  if (s === 'error' || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Import failed', color: '#DC2626' };
-  if (s === 'pending' || s === 'scanning') return { label: 'Scanning products…', color: '#A2611A' };
-  if (s === 'syncing' || s === 'reconciling' || s === 'ready_to_sync') return { label: 'Importing inventory…', color: '#A2611A' };
-  return { label: 'Checking status', color: '#71717A' };
-};
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IMPORT_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
-const shopLabel = (c: any): string =>
-  normalizeDisplayName(String(c.DisplayName || c.PlatformType || 'Platform'));
+const shopLabel = (c: any): string => {
+  const displayName = String(c.DisplayName || '').trim();
+  if (String(c.PlatformType || '').toLowerCase() === 'csv' && (!displayName || UUID_PATTERN.test(displayName))) {
+    return 'CSV import';
+  }
+  return normalizeDisplayName(displayName || String(c.PlatformType || 'Platform'));
+};
+
+const importDateLabel = (createdAt?: string): string | null => {
+  if (!createdAt) return null;
+  const date = new Date(createdAt);
+  return Number.isNaN(date.getTime()) ? null : IMPORT_DATE_FORMATTER.format(date);
+};
 
 /** "just now" / "5m ago" / "2h ago" / "3d ago" for a last-heartbeat timestamp. */
 const lastSeenLabel = (ms: number): string => {
@@ -70,7 +75,7 @@ const ConnectionsScreen = () => {
   const insets = useSafeAreaInsets();
   const {
     liveConnections,
-    loading,
+    hasResolvedConnections,
     error: connectionsError,
     refresh,
     updateConnectionLocally,
@@ -95,10 +100,13 @@ const ConnectionsScreen = () => {
     for (const b of importStatus.lanes.matches.byConnection) m[b.connectionId] = b.count;
     return m;
   }, [importStatus.lanes.matches.byConnection]);
-  const resumableCsvImports = useMemo(
-    () => findResumableCsvImports(importStatus),
-    [importStatus.connections, importStatus.recentImports],
+  const importConnectionById = useMemo(
+    () => new Map(importStatus.connections.map((connection) => [connection.connectionId, connection])),
+    [importStatus.connections],
   );
+  const recentImportByConnection = useMemo(() => {
+    return latestImportsByConnection(importStatus.recentImports);
+  }, [importStatus.recentImports]);
   const [pools, setPools] = useState<Pool[]>([]);
   const [partners, setPartners] = useState<PartnerInventoryOrigin[]>([]);
   const [managing, setManaging] = useState(false);
@@ -127,14 +135,9 @@ const ConnectionsScreen = () => {
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
-  // Wire the global platform-picker overlay so choosing a platform from the
-  // "Connect a platform" sheet shows the consent page, then opens the OAuth
-  // webview. Without this, the sheet opened but `overlay.onStartConnect` was
-  // undefined here (only ProfileScreen registered one), so taps did nothing.
-  const { connect } = usePlatformConnect({ orgId: currentOrg?.id });
-  const [consentPlatform, setConsentPlatform] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
+  // The global picker hands every platform to the one shared connect flow. This
+  // keeps store-specific steps, such as Shopify's picker, on the same path.
+  const [flowPlatform, setFlowPlatform] = useState<string | null>(null);
 
   const handleStartConnect = useCallback(
     (platform: string) => {
@@ -150,40 +153,10 @@ const ConnectionsScreen = () => {
         Alert.alert(def?.label ?? 'Platform', `${def?.label ?? 'This platform'} can’t be connected in-app yet.`);
         return;
       }
-      // Show the per-platform consent page; the webview opens on "Continue".
-      setConnectError(null);
-      setConsentPlatform(def.key);
+      setFlowPlatform(def.key);
     },
     [overlay, runCsvImport],
   );
-
-  // "Continue to <Platform>" on the consent page → run the OAuth webview.
-  const handleContinueConnect = useCallback(async () => {
-    if (!consentPlatform) return;
-    setConnecting(true);
-    setConnectError(null);
-    try {
-      const res = await connect(consentPlatform as ConnectablePlatform);
-      if (res.success) {
-        setConsentPlatform(null);
-        refresh?.();
-        // New store, new inbox work — refresh the shared summary too so the
-        // "needs you" counts move with the connect, not on the next focus.
-        void importStatus.refresh();
-        if (res.connectionId) {
-          navigation.navigate('ImportQuestionQueue', {
-            connectionId: res.connectionId,
-            platformName: consentPlatform,
-          });
-        }
-      } else if (!res.cancelled && res.errorMessage) {
-        setConnectError(res.errorMessage);
-      }
-      // res.cancelled → user backed out of the browser; keep the sheet open.
-    } finally {
-      setConnecting(false);
-    }
-  }, [consentPlatform, connect, navigation, refresh, importStatus.refresh]);
 
   // Hold the latest handler in a ref so the focus effect below can stay stable.
   const startConnectRef = useRef(handleStartConnect);
@@ -251,6 +224,28 @@ const ConnectionsScreen = () => {
     }
   }, [refresh, importStatus.refresh]);
 
+  const cancelImport = useCallback((connection: any) => {
+    Alert.alert(
+      'Cancel import?',
+      'Pending items will be skipped. Products already imported will stay.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Cancel import',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.post(`/api/sync/connections/${connection.Id}/cancel-import`);
+              await Promise.all([refresh?.(), importStatus.refresh()]);
+            } catch (error: any) {
+              Alert.alert('Couldn’t cancel import', error?.message || 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  }, [importStatus.refresh, refresh]);
+
   const [poolsLoading, setPoolsLoading] = useState(false);
   const [createPoolOpen, setCreatePoolOpen] = useState(false);
 
@@ -308,24 +303,6 @@ const ConnectionsScreen = () => {
       >
         <PageHeader title="Connections" onBack={() => navigation.goBack()} />
 
-        {resumableCsvImports.length > 0 ? (
-          <>
-            <Text style={styles.section}>Unfinished imports</Text>
-            {resumableCsvImports.map((entry) => (
-              <PendingCsvImportRow
-                key={entry.importId || entry.connectionId}
-                pendingItems={entry.pendingItems}
-                onPress={() => navigation.navigate('ImportQuestionQueue', {
-                  connectionId: entry.connectionId,
-                  importId: entry.importId,
-                  platformName: 'csv',
-                })}
-                style={styles.resumeImport}
-              />
-            ))}
-          </>
-        ) : null}
-
         {/* Selling platforms — Manage flips rows into refresh/remove */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Selling platforms</Text>
@@ -342,7 +319,7 @@ const ConnectionsScreen = () => {
           )}
         </View>
         <View style={styles.card}>
-          {loading && visibleConnections.length === 0 ? (
+          {!hasResolvedConnections && visibleConnections.length === 0 && !connectionsError ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
           ) : connectionsError && visibleConnections.length === 0 ? (
             <TouchableOpacity style={styles.loadingRow} onPress={() => refresh?.()}>
@@ -352,27 +329,40 @@ const ConnectionsScreen = () => {
             <Text style={styles.empty}>No platforms connected yet.</Text>
           ) : (
             visibleConnections.map((c: any, i: number) => {
-              const st = statusOf(c.Status, c.IsEnabled !== false);
+              const importConnection = importConnectionById.get(c.Id);
+              const recentImport = recentImportByConnection.get(c.Id);
+              const aggregateState = String(importConnection?.state || '').toLowerCase();
+              const st = deriveConnectionImportPresentation({
+                enabled: c.IsEnabled !== false,
+                connectionStatus: c.Status,
+                aggregateState,
+                latestImport: recentImport,
+              });
+              const importInProgress = st.importInProgress;
               const attn = attentionByConn[c.Id] || 0;
+              const title = shopLabel(c);
+              const isCsv = String(c.PlatformType || '').toLowerCase() === 'csv';
+              const started = importDateLabel(st.occurredAt || undefined);
+              const statusParts = [isCsv && importInProgress && title !== 'CSV import' ? 'CSV import' : st.label];
+              if (importInProgress && attn > 0) statusParts.push(`${attn} pending`);
+              if (started) {
+                statusParts.push(started);
+              }
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.row, i > 0 && styles.rowBorder]}
                   activeOpacity={0.7}
+                  onLongPress={importInProgress ? () => cancelImport(c) : undefined}
                   onPress={() => {
                     if (c.IsEnabled === false || String(c.Status).toLowerCase() === 'inactive') {
                       void retryImport(c);
                       return;
                     }
-                    // Anything mid-import (scanning/pending/syncing/…) or failed
-                    // opens this store's import review.
-                    const s = String(c.Status || '').toLowerCase();
-                    const inFlight =
-                      s === 'pending' || s === 'scanning' || s === 'syncing' || s === 'reconciling' ||
-                      s === 'ready_to_sync' || s === 'error' || s.includes('fail');
-                    if (inFlight) {
+                    if (importInProgress || st.kind === 'failed') {
                       navigation.navigate('ImportQuestionQueue', {
                         connectionId: c.Id,
+                        importId: recentImport?.importId,
                         platformName: c.PlatformType,
                       });
                       return;
@@ -386,13 +376,17 @@ const ConnectionsScreen = () => {
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
                   <View style={styles.rowInfo}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>{shopLabel(c)}</Text>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{title}</Text>
                     <View style={styles.statusRow}>
                       <View style={[styles.dot, { backgroundColor: st.color }]} />
-                      <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
+                      <Text style={[styles.statusText, { color: st.color }]} numberOfLines={1}>
+                        {statusParts.join(' · ')}
+                      </Text>
                     </View>
                   </View>
-                  {managing ? (
+                  {importInProgress ? (
+                    <ChevronRight size={20} color="#D4D4D8" />
+                  ) : managing ? (
                     <View style={styles.manageActions}>
                       <TouchableOpacity
                         style={styles.manageBtn}
@@ -609,16 +603,21 @@ const ConnectionsScreen = () => {
         }}
       />
 
-      <PlatformConnectSheet
-        visible={!!consentPlatform}
-        platform={consentPlatform}
-        busy={connecting}
-        error={connectError}
-        onContinue={handleContinueConnect}
-        onCancel={() => {
-          if (connecting) return;
-          setConsentPlatform(null);
-          setConnectError(null);
+      <ConnectFlowSheet
+        visible={!!flowPlatform}
+        platform={flowPlatform}
+        orgId={currentOrg?.id}
+        onCancel={() => setFlowPlatform(null)}
+        onConnected={(connectionId) => {
+          const platformName = flowPlatform || 'Platform';
+          setFlowPlatform(null);
+          refresh?.();
+          // New store, new inbox work: refresh the shared summary too so the
+          // "needs you" counts move with the connect, not on the next focus.
+          void importStatus.refresh();
+          if (connectionId) {
+            navigation.navigate('ImportQuestionQueue', { connectionId, platformName });
+          }
         }}
       />
 
@@ -648,7 +647,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F6F7F4' },
 
   section: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginLeft: 4 },
-  resumeImport: { marginBottom: 10 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 26, marginBottom: 10 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: '#ECEBE6' },
   loadingRow: { paddingVertical: 26, alignItems: 'center' },
