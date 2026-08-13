@@ -20,6 +20,13 @@ export default function GlobalSproutChatScreen() {
     user?.username ||
     user?.primaryEmailAddress?.emailAddress?.split('@')[0] ||
     'there';
+  const close = () => {
+    if (route.params?.returnToHomeOnClose) {
+      navigation.navigate('TabNavigator', { screen: 'Clearouts' });
+      return;
+    }
+    navigation.goBack();
+  };
 
   return (
     <View style={styles.root}>
@@ -30,7 +37,7 @@ export default function GlobalSproutChatScreen() {
         suggestedQuestions={route.params?.suggestedQuestions}
         placeholder={route.params?.placeholder}
         emptyHint={route.params?.emptyHint}
-        onClose={() => navigation.goBack()}
+        onClose={close}
       />
     </View>
   );
