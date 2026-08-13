@@ -1,9 +1,9 @@
-// ResolveKit — shared primitives for the Match & Optimize v2 resolver flow.
+// ResolveKit: shared primitives for the Match & Optimize v2 resolver flow.
 //
 // Translated from the Anorha handoff lo-fi (wireframes-match-resolve / -optimize)
 // into the app's production style: white surfaces, #E5E7EB hairlines, radius 12,
 // the #93C822 green for the single primary action, and system font + weights
-// (matching PublishConfirmation / InventoryOrders / AddProduct — no Jakarta).
+// (matching PublishConfirmation / InventoryOrders / AddProduct, no Jakarta).
 //
 // Live consumers: the optimizer views and LobbyKit (RC tokens), plus the small
 // building blocks below (Thumb / Chip / Check / Row / Field / Banner).
@@ -46,7 +46,7 @@ export const RC = {
   warnSoft: '#FFFBEB',
   warnLine: '#FCD34D',
   warnInk: '#92400E',
-  // Lobby (Duolingo path) — orange is the "active step / next action" highlight.
+  // Lobby (Duolingo path): orange is the "active step / next action" highlight.
   orange: '#F5A623',
   orangeDark: '#D4831A',
   orangeSoft: '#FFF3DC',
@@ -63,7 +63,7 @@ export function toneColor(t?: Tone): string {
   return t === 'warn' ? RC.warn : t === 'danger' ? RC.danger : t === 'muted' ? RC.muted : RC.green;
 }
 
-// ── Thumb — product image / hatched placeholder ────────────────────────────
+// ── Thumb: product image / hatched placeholder ────────────────────────────
 export function Thumb({
   uri,
   size = 28,
@@ -111,7 +111,7 @@ export function Chip({
   );
 }
 
-// ── Check — square checkbox ────────────────────────────────────────────────
+// ── Check: square checkbox ────────────────────────────────────────────────
 export function Check({ on = false, size = 20 }: { on?: boolean; size?: number }) {
   return (
     <View
@@ -191,7 +191,7 @@ export function Field({
   );
 }
 
-// ── Banner — inline warn/danger note ───────────────────────────────────────
+// ── Banner: inline warn/danger note ───────────────────────────────────────
 export function Banner({ text, tone = 'warn', icon = 'alert' }: { text: string; tone?: 'warn' | 'danger'; icon?: IconName }) {
   const c = tone === 'danger' ? RC.danger : RC.warn;
   const bg = tone === 'danger' ? RC.dangerSoft : RC.warnSoft;
@@ -224,10 +224,10 @@ const s = StyleSheet.create({
   // check
   check: { borderWidth: 1.5, borderRadius: 5, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 
-  // row — form-sized list row (ListingEditorForm scale)
+  // row: form-sized list row (ListingEditorForm scale)
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 56, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12 },
 
-  // field — ListingEditorForm input scale (12/600 label · 15px value · minHeight 48 · r12)
+  // field: ListingEditorForm input scale (12/600 label · 15px value · minHeight 48 · r12)
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 5 },
   fieldLabel: { fontSize: 12, fontWeight: '600', letterSpacing: 0.5, color: RC.muted },
   fieldReq: { fontSize: 11, fontWeight: '700', color: RC.danger },

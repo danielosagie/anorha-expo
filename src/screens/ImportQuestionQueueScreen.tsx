@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { AppStackParamList } from '../navigation/AppNavigator';
 import { useResolution } from '../hooks/useResolution';
+import { supabase } from '../lib/supabase';
 import {
   fetchImportCandidateDetails,
   fetchImportIncomingItemDetails,
@@ -27,49 +29,42 @@ import {
   HeroNumeral,
   InboxHeader,
   PillButton,
-  ProgressLine,
   QueueHeader,
   SuccessCheck,
 } from '../components/importinbox/InboxKit';
 import {
-  bestGuessFooterLabel,
-  buildQuestionCards,
+  buildV7QuestionCards,
+  buildV7ReviewSections,
   buildHandoffOffer,
   candidateForItem,
   advanceHandoffStreak,
-  decisionLabelForCard,
-  generatedTitleDecisions,
-  groupDecisions,
+  fieldConflictDecision,
+  fieldConflictDecisionLabel,
+  fieldConflictItems,
   handoffKey,
-  manualTitleDecision,
   mergeCandidateDetails,
   pairDecision,
   remainingItemCount,
   retryCommitDecision,
-  selectBestGuessCards,
+  v7QuestionItemCount,
+  V7_REVIEW_SECTION_ACTIONS,
+  V7_REVIEW_SECTION_LABELS,
   whichOneDecision,
   type CardAnswer,
+  type ConnectionSyncRules,
   type HandoffStreak,
   type QuestionCardModel,
   type QueueDecision,
+  type V7ReviewLedgerEntry,
+  type V7ReviewOutcome,
 } from '../components/import/questionQueue';
 import {
-  BestGuessChecklist,
-  GuessHandoffCard,
-  type BestGuessRowModel,
-} from '../components/import/BestGuesses';
-import {
   CardLoading,
-  CommitFailedCard,
-  GroupQuestionCard,
   HandoffCard,
   PairQuestionCard,
   QuestionScroll,
-  TitleEntryCard,
-  TitleQualityCard,
   WhichOneQuestionCard,
 } from '../components/import/QuestionQueueCards';
-import SwipeCard, { SwipeLabelsContext } from '../components/import/SwipeCard';
 import type {
   BulkResolveResult,
   CanonicalRef,
@@ -82,22 +77,12 @@ const SURFACE = '#F5F5F7';
 const CARD = '#FFFFFF';
 const AMBER = '#BA7517';
 const GREY = '#9CA3AF';
-const GREEN_TINT = 'rgba(147,200,34,0.13)';
-const AMBER_TINT = 'rgba(186,117,23,0.08)';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportQuestionQueue'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportQuestionQueue'>;
-type Stage = 'loading' | 'explainer' | 'front' | 'best_guesses' | 'guess_handoff' | 'queue' | 'handoff' | 'title_entry' | 'receipt' | 'list';
-type LedgerOutcome = 'linked' | 'added' | 'skipped';
-
-interface LedgerEntry {
-  platformId: string;
-  item: SyncItem;
-  outcome: LedgerOutcome;
-  catalogTitle?: string | null;
-  decisionLabel?: string;
-  updatedAt: number;
-}
+type Stage = 'loading' | 'explainer' | 'front' | 'queue' | 'handoff' | 'receipt' | 'list';
+type LedgerEntry = V7ReviewLedgerEntry;
+type LedgerOutcome = V7ReviewOutcome;
 
 interface HandoffState {
   reason: QuestionCardModel['reason'];
@@ -134,8 +119,8 @@ function isSettled(result: BulkResolveResult): boolean {
   return result.status === 'ok' || result.status === 'alreadyResolved';
 }
 
-function displayError(error: unknown, fallback = 'That answer did not save. Try again.'): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+function displayError(_error: unknown, fallback = 'That answer did not save. Try again.'): string {
+  return fallback;
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -148,12 +133,12 @@ export default function ImportQuestionQueueScreen() {
   const insets = useSafeAreaInsets();
   const { connectionId, platformName, importId } = route.params;
   const platform = platformLabel(platformName);
-  const { result, loading, error, resolving, refresh, resolve, resolveBulk, generateTitlesBulk, unresolveBulk } = useResolution(connectionId, importId);
+  const { result, loading, error, resolving, refresh, resolve, resolveBulk, unresolveBulk } = useResolution(connectionId, importId);
 
   const [stage, setStage] = useState<Stage>('loading');
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
-  // The last saved answer, as {platformId, version-after-save} rows — exactly
+  // The last saved answer, as {platformId, version-after-save} rows, exactly
   // what POST /unresolve needs to take it back. Cleared once undone or stale.
   const [lastAnswer, setLastAnswer] = useState<Array<{ platformId: string; version: number }> | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
@@ -162,12 +147,6 @@ export default function ImportQuestionQueueScreen() {
   const [queueStartCount, setQueueStartCount] = useState(0);
   const [handoff, setHandoff] = useState<HandoffState | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
-  const [uncheckedGuessIds, setUncheckedGuessIds] = useState<ReadonlySet<string>>(new Set());
-  const [guessSummary, setGuessSummary] = useState<{ confirmed: number; remaining: number } | null>(null);
-  const [guessCandidateDetails, setGuessCandidateDetails] = useState<Record<string, CanonicalRef>>({});
-  const [manualItems, setManualItems] = useState<SyncItem[]>([]);
-  const [manualIndex, setManualIndex] = useState(0);
-  const [manualTitle, setManualTitle] = useState('');
   const [showAll, setShowAll] = useState<Record<LedgerOutcome | 'needs', boolean>>({
     needs: false,
     linked: false,
@@ -175,14 +154,42 @@ export default function ImportQuestionQueueScreen() {
     skipped: false,
   });
   const [listError, setListError] = useState<string | null>(null);
+  const [syncRules, setSyncRules] = useState<ConnectionSyncRules | null>(null);
+  const [syncRulesReady, setSyncRulesReady] = useState(false);
 
   const finishRef = useRef(false);
   const returnToListRef = useRef(false);
-  // Once the seller has confirmed (or declined) the best guesses in this
-  // session, re-entering from the front goes straight to the deck.
-  const guessesHandledRef = useRef(false);
   const streakRef = useRef<HandoffStreak | null>(null);
   const suppressedHandoffsRef = useRef<Set<string>>(new Set());
+  const attemptedConflictIdsRef = useRef<Set<string>>(new Set());
+  const autoResolvingConflictsRef = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    setSyncRulesReady(false);
+    attemptedConflictIdsRef.current.clear();
+    void (async () => {
+      try {
+        const { data, error: rulesError } = await supabase
+          .from('PlatformConnections')
+          .select('SyncRules')
+          .eq('Id', connectionId)
+          .single();
+        if (rulesError) throw rulesError;
+        if (alive) {
+          setSyncRules(((data as { SyncRules?: ConnectionSyncRules } | null)?.SyncRules) ?? null);
+        }
+      } catch (rulesError) {
+        log.warn('sync rules load failed', rulesError);
+        if (alive) setSyncRules(null);
+      } finally {
+        if (alive) setSyncRulesReady(true);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [connectionId]);
 
   useEffect(() => {
     let alive = true;
@@ -206,29 +213,20 @@ export default function ImportQuestionQueueScreen() {
     };
   }, [connectionId, route.params.startAt]);
 
-  const cards = useMemo(() => buildQuestionCards(result?.needsAttention ?? []), [result?.needsAttention]);
-  // commit_failed rides the deck as ONE batch card, after the real questions.
-  // Excluding it entirely made an all-failed import read "0 questions" with
-  // 440 workable rows behind it (run 7 P1-2).
-  const mainCards = useMemo(() => [
-    ...cards.filter((card) => card.kind !== 'commit_failed'),
-    ...cards.filter((card) => card.kind === 'commit_failed'),
-  ], [cards]);
-  // Best guesses are pre-checked ANSWERS, never retries: commit_failed now
-  // rides mainCards (batched last, above), so selectBestGuessCards must — and
-  // does — exclude it by kind rather than relying on it being pre-filtered.
-  const bestGuesses = useMemo(() => selectBestGuessCards(mainCards), [mainCards]);
+  const cards = useMemo(() => buildV7QuestionCards(result?.needsAttention ?? []), [result?.needsAttention]);
+  const mainCards = cards;
+  const conflicts = useMemo(() => fieldConflictItems(result?.needsAttention ?? []), [result?.needsAttention]);
   const targetedCard = targetCardId ? cards.find((card) => card.id === targetCardId) ?? null : null;
   const currentCard = targetedCard ?? mainCards[0] ?? null;
 
   // A killed app resumes directly in the queue. Rebuild the progress baseline
   // from the authoritative remaining cards on that first resumed render.
   useEffect(() => {
-    const attentionCount = result?.needsAttention.length ?? 0;
-    if (stage === 'queue' && queueStartCount === 0 && attentionCount > 0) {
-      setQueueStartCount(attentionCount);
+    const questionCount = remainingItemCount(mainCards);
+    if (stage === 'queue' && queueStartCount === 0 && questionCount > 0) {
+      setQueueStartCount(questionCount);
     }
-  }, [queueStartCount, result?.needsAttention.length, stage]);
+  }, [mainCards, queueStartCount, stage]);
 
   useEffect(() => {
     setSelectedCandidateId(null);
@@ -345,6 +343,7 @@ export default function ImportQuestionQueueScreen() {
           outcome: itemDecision.outcome,
           catalogTitle: candidate?.title ?? null,
           decisionLabel,
+          valueOverride: itemDecision.valueOverride,
           updatedAt: Date.now(),
         });
       }
@@ -379,74 +378,13 @@ export default function ImportQuestionQueueScreen() {
       void finishQueue();
       return;
     }
-    setQueueStartCount(
-      result?.needsAttention.length ?? mainCards.reduce((total, card) => total + card.items.length, 0),
-    );
+    setQueueStartCount(remainingItemCount(mainCards));
     setLastAnswer(null);
     void AsyncStorage.setItem(activeKey(connectionId), '1');
     setStage('queue');
-  }, [connectionId, finishQueue, mainCards, result?.needsAttention.length]);
+  }, [connectionId, finishQueue, mainCards]);
 
-  // Front → best guesses when the server has any, otherwise straight to the
-  // deck exactly as before. Zero best guesses means this stage never exists.
-  const beginQuestions = useCallback(() => {
-    if (bestGuesses.length === 0 || guessesHandledRef.current) {
-      startQueue();
-      return;
-    }
-    setUncheckedGuessIds(new Set());
-    setActionError(null);
-    setStage('best_guesses');
-  }, [bestGuesses.length, startQueue]);
-
-  const toggleGuess = useCallback((cardId: string) => {
-    setUncheckedGuessIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(cardId)) next.delete(cardId);
-      else next.add(cardId);
-      return next;
-    });
-  }, []);
-
-  // Batch-hydrate catalog titles for the "to <catalog title>" sub-lines. One
-  // request for the whole checklist; payload identities cover the rest.
-  useEffect(() => {
-    if (stage !== 'best_guesses') return;
-    let alive = true;
-    const candidateIds = Array.from(new Set(bestGuesses.flatMap(({ card }) =>
-      card.items.flatMap((item) => {
-        const candidate = candidateForItem(item);
-        return candidate ? [candidate.id] : [];
-      }),
-    )));
-    if (candidateIds.length === 0) return;
-    fetchImportCandidateDetails(candidateIds, platform).then((details) => {
-      if (alive) setGuessCandidateDetails(details);
-    }).catch((hydrateError) => {
-      log.warn('best-guess candidate hydration failed', hydrateError);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [bestGuesses, platform, stage]);
-
-  const guessRows = useMemo<BestGuessRowModel[]>(() => bestGuesses.map(({ card, action }) => {
-    const item = card.items[0];
-    const details = incomingItemDetailsFromPayload(item, platform);
-    const candidate = action === 'link' ? candidateForItem(item) : null;
-    const hydrated = candidate ? guessCandidateDetails[candidate.id] : null;
-    const catalogTitle = hydrated?.title ?? candidate?.title ?? candidate?.sku ?? null;
-    return {
-      id: card.id,
-      action,
-      title: details.title || item.title || 'Untitled item',
-      sub: action === 'link'
-        ? `to ${catalogTitle || 'your catalog item'}`
-        : card.items.length > 1 ? countLabel(card.items.length, 'item') : null,
-      imageUrl: details.imageUrl ?? item.imageUrl ?? null,
-      checked: !uncheckedGuessIds.has(card.id),
-    };
-  }), [bestGuesses, guessCandidateDetails, platform, uncheckedGuessIds]);
+  const beginQuestions = startQueue;
 
   useEffect(() => {
     if (stage !== 'queue' || !result || loading || currentCard || finishRef.current) return;
@@ -481,64 +419,33 @@ export default function ImportQuestionQueueScreen() {
     setLastAnswer(undoable.length > 0 ? undoable : null);
   }, []);
 
-  const confirmBestGuesses = useCallback(async () => {
-    const checked = bestGuesses.filter((guess) => !uncheckedGuessIds.has(guess.card.id));
-    if (checked.length === 0) return;
-    setActionError(null);
-    try {
-      const decisions = checked.flatMap((guess) => guess.decisions);
-      const response = await resolveBulk(decisions, importId ?? undefined);
-      for (const guess of checked) {
-        const memberIds = new Set(guess.decisions.map((entry) => entry.platformId));
+  useEffect(() => {
+    if (!syncRulesReady || autoResolvingConflictsRef.current) return;
+    const pending = conflicts.filter((item) => !attemptedConflictIdsRef.current.has(item.platformId));
+    if (pending.length === 0) return;
+
+    for (const item of pending) attemptedConflictIdsRef.current.add(item.platformId);
+    autoResolvingConflictsRef.current = true;
+    const decisions = pending.map((item) => fieldConflictDecision(item, syncRules));
+    void resolveBulk(decisions, importId ?? undefined).then(async (response) => {
+      for (const item of pending) {
+        const itemDecision = decisions.find((entry) => entry.platformId === item.platformId);
+        const itemResult = response.results.find((entry) => entry.platformId === item.platformId);
+        if (!itemDecision || !itemResult) continue;
         recordDecisions(
-          guess.decisions,
-          guess.card.items,
-          response.results.filter((entry) => memberIds.has(entry.platformId)),
-          decisionLabelForCard(guess.card, 'primary'),
+          [itemDecision],
+          [item],
+          [itemResult],
+          fieldConflictDecisionLabel(item, syncRules),
         );
       }
-      undoableFromResults(response.results);
-      guessesHandledRef.current = true;
-      const settled = new Set(
-        response.results.filter(isSettled).map((entry) => entry.platformId),
-      );
-      const remainingCards = mainCards.filter((card) =>
-        card.items.some((item) => !settled.has(item.platformId)));
-      const failed = response.summary.conflicts + response.summary.errors;
-      if (remainingCards.length === 0 && failed === 0) {
-        await finishQueue();
-        return;
-      }
-      if (response.summary.saved === 0) {
-        // Nothing stuck (all conflicts or errors): the notice explains, the deck
-        // still holds every card. No point celebrating zero.
-        void AsyncStorage.setItem(activeKey(connectionId), '1');
-        setQueueStartCount(remainingItemCount(remainingCards, settled));
-        setStage('queue');
-        return;
-      }
-      // ITEMS, not cards: the deck header right after this counts items
-      // (needsAttention length), so the interstitial must too (run 8 P2-3).
-      setGuessSummary({ confirmed: response.summary.saved, remaining: remainingItemCount(remainingCards, settled) });
-      setStage('guess_handoff');
-    } catch (bulkError) {
-      setActionError(displayError(bulkError, 'Those answers did not save. They are still here.'));
-    }
-  }, [bestGuesses, connectionId, finishQueue, importId, mainCards, recordDecisions, resolveBulk, uncheckedGuessIds, undoableFromResults]);
-
-  // "Show me" keeps the saved notice + Undo visible in the deck, so it must
-  // NOT go through startQueue (which clears both).
-  const showRemainingQuestions = useCallback(() => {
-    void AsyncStorage.setItem(activeKey(connectionId), '1');
-    setQueueStartCount(result?.needsAttention.length ?? 0);
-    setGuessSummary(null);
-    setStage('queue');
-  }, [connectionId, result?.needsAttention.length]);
-
-  const skipBestGuesses = useCallback(() => {
-    guessesHandledRef.current = true;
-    startQueue();
-  }, [startQueue]);
+      await refresh();
+    }).catch((conflictError) => {
+      log.warn('field conflict auto resolve failed', conflictError);
+    }).finally(() => {
+      autoResolvingConflictsRef.current = false;
+    });
+  }, [conflicts, importId, recordDecisions, refresh, resolveBulk, syncRules, syncRulesReady]);
 
   const removeLedgerEntries = useCallback((platformIds: string[]) => {
     const removed = new Set(platformIds);
@@ -644,91 +551,6 @@ export default function ImportQuestionQueueScreen() {
     }
   }, [currentCard, finishQueue, mainCards, offerHandoffAfter, resolveOne, returnAfterTarget, selectedCandidateId]);
 
-  const runBulkCardAnswer = useCallback(async (
-    card: QuestionCardModel,
-    decisions: QueueDecision[],
-    answer?: CardAnswer,
-  ) => {
-    setActionError(null);
-    try {
-      const response = await resolveBulk(decisions, importId ?? undefined);
-      const decisionLabel = answer && answer !== 'unsure'
-        ? decisionLabelForCard(card, answer)
-        : undefined;
-      recordDecisions(decisions, card.items, response.results, decisionLabel);
-      undoableFromResults(response.results);
-      const outcome = response.summary;
-      const failed = outcome.conflicts + outcome.errors;
-      if (await returnAfterTarget()) return;
-      const otherCards = mainCards.filter((entry) => entry.id !== card.id);
-      if (failed === 0 && answer && offerHandoffAfter(card, answer, otherCards)) return;
-      if (failed > 0) streakRef.current = null;
-      if (failed === 0 && otherCards.length === 0) await finishQueue();
-      else setStage('queue');
-    } catch (bulkError) {
-      setActionError(displayError(bulkError, 'Those answers did not save. They are back in the queue.'));
-    }
-  }, [finishQueue, importId, mainCards, offerHandoffAfter, recordDecisions, resolveBulk, returnAfterTarget, undoableFromResults]);
-
-  const answerGroup = useCallback((answer: CardAnswer) => {
-    if (!currentCard) return;
-    void runBulkCardAnswer(currentCard, groupDecisions(currentCard, answer), answer);
-  }, [currentCard, runBulkCardAnswer]);
-
-  const generateTitles = useCallback(async () => {
-    if (!currentCard || currentCard.kind !== 'title_quality') return;
-    setActionError(null);
-    const decisions = generatedTitleDecisions(currentCard.items);
-    try {
-      const response = await generateTitlesBulk(decisions, importId ?? undefined);
-      const titleById = new Map(response.results.map((entry) => [entry.platformId, entry.generatedTitle]));
-      const titledItems = currentCard.items.map((item) => ({
-        ...item,
-        title: titleById.get(item.platformId) || item.title,
-      }));
-      recordDecisions(decisions, titledItems, response.results, 'Title generated');
-      undoableFromResults(response.results);
-      const failed = response.summary.conflicts + response.summary.errors;
-      if (failed === 0 && mainCards.length === 1) await finishQueue();
-      else setStage('queue');
-    } catch (generationError) {
-      setActionError(displayError(generationError, 'Those titles were not generated. The rows are still in the queue.'));
-    }
-  }, [currentCard, finishQueue, generateTitlesBulk, importId, mainCards.length, recordDecisions, undoableFromResults]);
-
-  const enterManualTitles = useCallback(() => {
-    if (!currentCard || currentCard.kind !== 'title_quality') return;
-    setManualItems(currentCard.items);
-    setManualIndex(0);
-    setManualTitle('');
-    setStage('title_entry');
-  }, [currentCard]);
-
-  const answerManualTitle = useCallback(async (unsure: boolean) => {
-    const item = manualItems[manualIndex];
-    if (!item) return;
-    setActionError(null);
-    try {
-      const itemDecision = unsure
-        ? { ...manualTitleDecision(item, item.title || 'Untitled item'), choice: 'ignore' as const, outcome: 'skipped' as const, valueOverride: undefined }
-        : manualTitleDecision(item, manualTitle);
-      await resolveOne(item, itemDecision);
-      if (manualIndex + 1 < manualItems.length) {
-        setManualIndex((index) => index + 1);
-        setManualTitle('');
-        return;
-      }
-      setManualItems([]);
-      setManualIndex(0);
-      setManualTitle('');
-      const otherCards = mainCards.filter((entry) => entry.kind !== 'title_quality');
-      if (otherCards.length === 0) await finishQueue();
-      else setStage('queue');
-    } catch (resolveError) {
-      setActionError(displayError(resolveError));
-    }
-  }, [finishQueue, mainCards, manualIndex, manualItems, manualTitle, resolveOne]);
-
   const finishHandoff = useCallback(async () => {
     if (!handoff) return;
     setHandoffError(null);
@@ -756,44 +578,36 @@ export default function ImportQuestionQueueScreen() {
     setStage('queue');
   }, [handoff]);
 
-  const retryCommit = useCallback(async () => {
-    const card = currentCard;
-    if (!card || card.items.length === 0 || card.kind !== 'commit_failed') return;
-    setActionError(null);
-    try {
-      // One tap retries the whole failed pile. The retry job's end-of-run
-      // drain also sweeps any stranded pending rows on this connection.
-      if (card.items.length === 1) {
-        await resolveOne(card.items[0], retryCommitDecision(card.items[0]));
-        if (await returnAfterTarget()) return;
-        if (mainCards.filter((entry) => entry.id !== card.id).length === 0) await finishQueue();
-        return;
-      }
-      const decisions = card.items.map((item) => retryCommitDecision(item));
-      const response = await resolveBulk(decisions, importId ?? undefined);
-      recordDecisions(decisions, card.items, response.results, 'Tried again');
-      undoableFromResults(response.results);
-      if (await returnAfterTarget()) return;
-      const failed = response.summary.conflicts + response.summary.errors;
-      const otherCards = mainCards.filter((entry) => entry.id !== card.id);
-      if (failed === 0 && otherCards.length === 0) await finishQueue();
-      else setStage('queue');
-    } catch (resolveError) {
-      setActionError(displayError(resolveError, 'Those items still did not finish. Try again later.'));
-    }
-  }, [currentCard, finishQueue, importId, mainCards, recordDecisions, resolveBulk, resolveOne, returnAfterTarget, undoableFromResults]);
-
   const openNeedsItem = useCallback((item: SyncItem) => {
     const card = cards.find((entry) => entry.items.some((member) => member.platformId === item.platformId));
     if (!card) return;
     returnToListRef.current = true;
     setTargetCardId(card.id);
-    setQueueStartCount(result?.needsAttention.length ?? card.items.length);
+    setQueueStartCount(remainingItemCount(cards));
     setStage('queue');
-  }, [cards, result?.needsAttention.length]);
+  }, [cards]);
 
   const changeSettledEntry = useCallback(async (entry: LedgerEntry) => {
     setListError(null);
+    if (entry.item.attention === 'field_conflict') {
+      const itemDecision = pairDecision(entry.item, entry.valueOverride === true ? 'primary' : 'secondary');
+      try {
+        await resolve(entry.platformId, itemDecision.choice, itemDecision.canonicalId, {
+          importId: entry.item.importId ?? importId ?? undefined,
+          valueOverride: itemDecision.valueOverride,
+        });
+        recordDecisions(
+          [itemDecision],
+          [entry.item],
+          undefined,
+          itemDecision.valueOverride === true ? 'Kept your details' : 'Used store details',
+        );
+        await refresh();
+      } catch (changeError) {
+        setListError(displayError(changeError, 'That change could not be saved.'));
+      }
+      return;
+    }
     const choice: ResolveChoice = entry.outcome === 'linked' ? 'create' : entry.outcome === 'added' ? 'ignore' : 'create';
     const outcome: LedgerOutcome = choice === 'create' ? 'added' : 'skipped';
     const itemDecision: QueueDecision = {
@@ -813,21 +627,48 @@ export default function ImportQuestionQueueScreen() {
     }
   }, [importId, recordDecisions, refresh, resolve]);
 
+  const revisitNeedsItem = useCallback(async (item: SyncItem) => {
+    if (item.attention !== 'commit_failed' && item.attention !== 'field_conflict') {
+      openNeedsItem(item);
+      return;
+    }
+    setListError(null);
+    const itemDecision = item.attention === 'field_conflict'
+      ? fieldConflictDecision(item, syncRules)
+      : retryCommitDecision(item);
+    const decisionLabel = item.attention === 'field_conflict'
+      ? fieldConflictDecisionLabel(item, syncRules)
+      : 'Added from review';
+    try {
+      await resolve(item.platformId, itemDecision.choice, itemDecision.canonicalId, {
+        importId: item.importId ?? importId ?? undefined,
+        version: item.version,
+        valueOverride: itemDecision.valueOverride,
+      });
+      recordDecisions([itemDecision], [item], undefined, decisionLabel);
+      await refresh();
+    } catch (retryError) {
+      setListError(displayError(retryError, 'This item still needs a look.'));
+    }
+  }, [importId, openNeedsItem, recordDecisions, refresh, resolve, syncRules]);
+
   // Stall guard for the "Finishing your import" wait: if the pending-commit
   // count does not move across ~12s of polling, the worker is not coming
-  // (dead connection, stranded row) — show the receipt with an honest note
+  // (dead connection, stranded row). Show the receipt with an honest note
   // instead of spinning forever with no exit (run 7 P1-2 trap).
   const [commitStalled, setCommitStalled] = useState(false);
   const stallRef = useRef<{ count: number; polls: number }>({ count: -1, polls: 0 });
 
   const summary = result?.summary;
-  const questionItemCount = mainCards.reduce((total, card) => total + card.items.length, 0);
-  const remainingCount = result?.needsAttention.length ?? questionItemCount;
+  const questionItemCount = v7QuestionItemCount(result?.needsAttention ?? []);
+  const remainingCount = questionItemCount;
   const progressTotal = Math.max(queueStartCount, remainingCount, 1);
   const progressPct = ((progressTotal - remainingCount) / progressTotal) * 100;
   const busy = resolving != null;
-  const hasUnresolved = cards.length > 0 || (summary?.needsAttention ?? 0) > 0;
+  const hasQuestions = cards.length > 0;
   const pendingCommitCount = summary?.pendingCommit ?? 0;
+  const needsLookCount = result?.needsAttention.length ?? 0;
+  const goHome = () => navigation.navigate('TabNavigator' as any, { screen: 'Clearouts' });
 
   useEffect(() => {
     if (stage !== 'receipt' || pendingCommitCount === 0) {
@@ -835,7 +676,7 @@ export default function ImportQuestionQueueScreen() {
       if (commitStalled) setCommitStalled(false);
       return;
     }
-    if (commitStalled) return; // deadline hit — stop paying for polls
+    if (commitStalled) return; // deadline hit, stop paying for polls
     if (stallRef.current.count === pendingCommitCount) {
       stallRef.current.polls += 1;
       if (stallRef.current.polls >= 8) {
@@ -861,7 +702,7 @@ export default function ImportQuestionQueueScreen() {
     return (
       <View style={[styles.center, { paddingTop: insets.top }]}>
         <Text style={styles.errorTitle}>Couldn’t load this import</Text>
-        <Text style={styles.errorText}>{error}</Text>
+        <Text style={styles.errorText}>Try again.</Text>
         <PillButton label="Retry" onPress={refresh} style={styles.retryButton} />
       </View>
     );
@@ -873,14 +714,13 @@ export default function ImportQuestionQueueScreen() {
         <InboxHeader onBack={() => navigation.goBack()} />
         <ScrollView contentContainerStyle={styles.explainerScroll} showsVerticalScrollIndicator={false}>
           <View style={styles.explainerTitleBlock}>
-            <Text style={styles.screenTitle}>Let’s bring in your {platform} items.</Text>
-            <Text style={styles.screenSubtitle}>Here’s how it works.</Text>
+            <Text style={styles.screenTitle}>Let's bring in your {platform} items.</Text>
           </View>
           <View style={styles.steps}>
             {[
               ['1', 'We bring everything in', null],
-              ['2', 'We match what we’re sure of', null],
-              ['3', 'We ask you about the rest', 'usually just a few questions'],
+              ['2', "We match what we're sure of", null],
+              ['3', 'We ask you about the rest', 'Usually just a few questions'],
             ].map(([number, title, caption]) => (
               <View key={number} style={styles.stepRow}>
                 <View style={styles.stepNumber}><Text style={styles.stepNumberText}>{number}</Text></View>
@@ -897,8 +737,8 @@ export default function ImportQuestionQueueScreen() {
           </View>
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-          <Text style={styles.footerCaption}>takes a few minutes · you can leave anytime</Text>
           <PillButton label="Start" onPress={markSeen} />
+          <Text style={styles.footerCaption}>You can leave &amp; come back anytime</Text>
         </View>
       </View>
     );
@@ -914,71 +754,15 @@ export default function ImportQuestionQueueScreen() {
             <CountRow label="Linked to your catalog" count={summary?.autoLinked ?? 0} />
             <View style={styles.divider} />
             <CountRow label="Added as new" count={summary?.autoCreated ?? 0} />
-            {questionItemCount > 0 ? (
-              <>
-                <View style={styles.divider} />
-                <CountRow label="Still need some review" count={questionItemCount} tone="review" />
-              </>
-            ) : null}
           </View>
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-          {/* ITEM count, matching the "Still need some review" row above and
-              the deck's "N left" (run 8 P2-3: 77 cards vs 244 items whiplash). */}
           <PillButton
-            label={questionItemCount > 0 ? `Review ${countLabel(questionItemCount, 'item')}` : 'Start'}
+            label={`${questionItemCount} more questions`}
             onPress={beginQuestions}
           />
           <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />
         </View>
-      </View>
-    );
-  }
-
-  if (stage === 'best_guesses') {
-    const checkedRows = guessRows.filter((row) => row.checked);
-    const linkCount = checkedRows.filter((row) => row.action === 'link').length;
-    const footerLabel = bestGuessFooterLabel(linkCount, checkedRows.length - linkCount);
-    return (
-      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-        <InboxHeader onBack={() => setStage('front')} />
-        <ScrollView contentContainerStyle={styles.guessScroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.guessTitleBlock}>
-            <Text style={styles.screenTitle}>First, our best guesses</Text>
-            <Text style={styles.screenSubtitle}>
-              Step 1 of 2 · one tap says yes to everything checked
-            </Text>
-          </View>
-          <BestGuessChecklist rows={guessRows} onToggle={toggleGuess} disabled={busy} />
-          {actionError ? <Text style={styles.inlineError}>{actionError}</Text> : null}
-        </ScrollView>
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-          {footerLabel ? <Text style={styles.footerCaption}>{footerLabel}</Text> : null}
-          <PillButton
-            label={`Confirm ${checkedRows.length}`}
-            onPress={() => void confirmBestGuesses()}
-            loading={busy}
-            disabled={busy || checkedRows.length === 0}
-          />
-          <PillButton label="Ask me instead" variant="secondary" onPress={skipBestGuesses} disabled={busy} />
-        </View>
-      </View>
-    );
-  }
-
-  if (stage === 'guess_handoff' && guessSummary) {
-    return (
-      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-        <InboxHeader onBack={() => setStage('front')} />
-        <QuestionScroll>
-          <GuessHandoffCard
-            confirmed={guessSummary.confirmed}
-            remaining={guessSummary.remaining}
-            busy={busy}
-            onShow={showRemainingQuestions}
-            onLater={() => navigation.goBack()}
-          />
-        </QuestionScroll>
       </View>
     );
   }
@@ -1001,30 +785,6 @@ export default function ImportQuestionQueueScreen() {
     );
   }
 
-  if (stage === 'title_entry') {
-    const item = manualItems[manualIndex];
-    return (
-      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-        <InboxHeader onBack={() => setStage('queue')} />
-        {item ? (
-          <QuestionScroll>
-            <TitleEntryCard
-              item={item}
-              index={manualIndex}
-              total={manualItems.length}
-              value={manualTitle}
-              onChange={setManualTitle}
-              onSave={() => void answerManualTitle(false)}
-              onUnsure={() => void answerManualTitle(true)}
-              busy={busy}
-            />
-            {actionError ? <Text style={styles.inlineError}>{actionError}</Text> : null}
-          </QuestionScroll>
-        ) : <CardLoading />}
-      </View>
-    );
-  }
-
   if (stage === 'queue') {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
@@ -1040,84 +800,27 @@ export default function ImportQuestionQueueScreen() {
           <QuestionScroll>
             {detailsLoading && hydratedItems.length === 0 ? <CardLoading /> : null}
             {currentCard.kind === 'pair' && hydratedItems[0] ? (
-              <SwipeLabelsContext.Provider value={{
-                right: currentCard.reason === 'field_conflict' ? 'Keep' : 'Link',
-                left: currentCard.reason === 'field_conflict' ? 'Take' : 'New',
-                up: 'Later',
-              }}>
-                <SwipeCard
-                  key={currentCard.id}
-                  enabled={!busy && !detailsLoading}
-                  onYes={() => void answerPair('primary')}
-                  onNo={() => void answerPair('secondary')}
-                >
-                  <PairQuestionCard
-                    item={hydratedItems[0]}
-                    candidate={hydratedCandidateForFirst}
-                    platformName={platform}
-                    platformKey={route.params.platformName?.toLowerCase()}
-                    busy={busy}
-                    onAnswer={(answer) => void answerPair(answer)}
-                    onUndo={() => void undoLastAnswer()}
-                    undoDisabled={!lastAnswer?.length || undoBusy}
-                  />
-                </SwipeCard>
-              </SwipeLabelsContext.Provider>
+              <PairQuestionCard
+                item={hydratedItems[0]}
+                candidate={hydratedCandidateForFirst}
+                platformName={platform}
+                busy={busy}
+                onAnswer={(answer) => void answerPair(answer)}
+                onBack={() => void undoLastAnswer()}
+                backDisabled={!lastAnswer?.length || undoBusy}
+              />
             ) : null}
             {currentCard.kind === 'which_one' && hydratedItems[0] ? (
               <WhichOneQuestionCard
                 item={hydratedItems[0]}
                 candidates={hydratedCandidates}
                 platformName={platform}
-                platformKey={route.params.platformName?.toLowerCase()}
                 selectedId={selectedCandidateId}
                 onSelect={setSelectedCandidateId}
                 busy={busy}
                 onAnswer={(answer) => void answerWhichOne(answer)}
-                onUndo={() => void undoLastAnswer()}
-                undoDisabled={!lastAnswer?.length || undoBusy}
-              />
-            ) : null}
-            {(currentCard.kind === 'look_alike_group' || currentCard.kind === 'duplicate_target' || currentCard.kind === 'bundle') ? (
-              <GroupQuestionCard
-                card={{ ...currentCard, items: hydratedItems }}
-                busy={busy}
-                onAnswer={answerGroup}
-                onUndo={() => void undoLastAnswer()}
-                undoDisabled={!lastAnswer?.length || undoBusy}
-              />
-            ) : null}
-            {currentCard.kind === 'title_quality' ? (
-              <TitleQualityCard
-                items={hydratedItems}
-                busy={busy}
-                onGenerate={generateTitles}
-                onManual={enterManualTitles}
-                onUnsure={() => answerGroup('unsure')}
-                onUndo={() => void undoLastAnswer()}
-                undoDisabled={!lastAnswer?.length || undoBusy}
-              />
-            ) : null}
-            {currentCard.kind === 'commit_failed' && hydratedItems[0] ? (
-              <CommitFailedCard
-                items={hydratedItems}
-                busy={busy}
-                onRetry={() => void retryCommit()}
-                onLater={() => {
-                  returnToListRef.current = false;
-                  setTargetCardId(null);
-                  setStage('list');
-                }}
-                onUndo={() => void undoLastAnswer()}
-                undoDisabled={!lastAnswer?.length || undoBusy}
-              />
-            ) : null}
-            {currentCard.kind === 'fallback' && hydratedItems[0] ? (
-              <CommitFailedCard
-                items={[hydratedItems[0]]}
-                busy={busy}
-                onRetry={() => void resolveOne(hydratedItems[0], retryCommitDecision(hydratedItems[0]))}
-                onLater={() => void finishQueue()}
+                onBack={() => void undoLastAnswer()}
+                backDisabled={!lastAnswer?.length || undoBusy}
               />
             ) : null}
             {actionError ? <Text style={styles.inlineError}>{actionError}</Text> : null}
@@ -1130,7 +833,7 @@ export default function ImportQuestionQueueScreen() {
   if (stage === 'receipt' && pendingCommitCount > 0 && !commitStalled) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-        <InboxHeader onBack={() => navigation.goBack()} />
+        <InboxHeader onBack={goHome} />
         <View style={styles.center}>
           <ActivityIndicator color={IC.accent} />
           <Text style={styles.doneTitle}>Finishing your import</Text>
@@ -1138,11 +841,15 @@ export default function ImportQuestionQueueScreen() {
             {countLabel(pendingCommitCount, 'item')} still being added to your catalog.
           </Text>
         </View>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
+          <PillButton label="Home" onPress={goHome} />
+          <Text style={styles.footerCaption}>You can leave &amp; come back anytime</Text>
+        </View>
       </View>
     );
   }
 
-  if (stage === 'receipt' && !hasUnresolved) {
+  if (stage === 'receipt') {
     const catalogTotal = (summary?.autoLinked ?? 0) + (summary?.autoCreated ?? 0);
     return (
       <View style={[styles.screen, styles.receiptScreen, { paddingTop: insets.top + 34 }]}>
@@ -1157,6 +864,16 @@ export default function ImportQuestionQueueScreen() {
             <View style={styles.divider} />
             <ReceiptRow label="Skipped" count={summary?.skipped ?? 0} />
           </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Review our work"
+            onPress={() => setStage('list')}
+            style={({ pressed }) => [styles.reviewRow, pressed ? styles.pressed : null]}
+          >
+            <Text style={styles.reviewRowText}>Review our work</Text>
+            {needsLookCount > 0 ? <Text style={styles.reviewRowCount}>{needsLookCount}</Text> : null}
+            <MaterialCommunityIcons name="chevron-right" size={22} color={IC.muted} />
+          </Pressable>
           {commitStalled && pendingCommitCount > 0 ? (
             <Text style={styles.screenSubtitle}>
               {countLabel(pendingCommitCount, 'item')} will finish in the background.
@@ -1174,59 +891,57 @@ export default function ImportQuestionQueueScreen() {
     );
   }
 
-  const needsRows = result?.needsAttention ?? [];
-  const needsIds = new Set(needsRows.map((item) => item.platformId));
-  const linkedRows = ledger.filter((entry) => entry.outcome === 'linked' && !needsIds.has(entry.platformId));
-  const addedRows = ledger.filter((entry) => entry.outcome === 'added' && !needsIds.has(entry.platformId));
-  const skippedRows = ledger.filter((entry) => entry.outcome === 'skipped' && !needsIds.has(entry.platformId));
-  const ledgerById = new Map(ledger.map((entry) => [entry.platformId, entry]));
-  // Rows the machine settled without asking. The ledger only ever holds what
-  // the SELLER answered, so a section header must never claim the server's
-  // total ("See all 460" over 10 rows reads as a broken list). The automatic
-  // remainder gets its own count lane, exactly like the V2A receipt.
-  const autoHandledCount = Math.max(
-    0,
-    (summary?.total ?? 0) - (summary?.pushSide ?? 0) - ledger.length - needsRows.length,
-  );
+  const {
+    needs: needsRows,
+    linked: linkedRows,
+    added: addedRows,
+    skipped: skippedRows,
+  } = buildV7ReviewSections(result?.needsAttention ?? [], ledger);
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
       <InboxHeader
         title="What we did"
-        onBack={() => setStage(hasUnresolved ? 'front' : 'receipt')}
-        right={<Text style={styles.headerTotal}>{summary?.total ?? 0}</Text>}
+        onBack={() => setStage(hasQuestions ? 'front' : 'receipt')}
+        right={(
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Edit"
+            onPress={() => setShowAll({ needs: true, linked: true, added: true, skipped: true })}
+            hitSlop={10}
+          >
+            <Text style={styles.headerEdit}>Edit</Text>
+          </Pressable>
+        )}
       />
       <ScrollView style={styles.listScrollView} contentContainerStyle={styles.listScroll} showsVerticalScrollIndicator={false}>
         {listError ? <Text style={styles.inlineError}>{listError}</Text> : null}
         <ListSection
-          label="NEEDS A LOOK"
+          label={V7_REVIEW_SECTION_LABELS.needs}
           color={AMBER}
-          count={summary?.needsAttention ?? needsRows.length}
+          count={needsRows.length}
           expanded={showAll.needs}
           onToggle={() => setShowAll((current) => ({ ...current, needs: !current.needs }))}
         >
-          {(showAll.needs ? needsRows : needsRows.slice(0, 3)).map((item) => (
-            <Pressable
-              key={item.platformId}
-              accessibilityRole="button"
-              onPress={() => openNeedsItem(item)}
-              style={({ pressed }) => [styles.listRow, pressed ? styles.pressed : null]}
-            >
-              <View style={styles.listCopy}>
-                <Text style={styles.listTitle} numberOfLines={1}>{item.title || 'Untitled item'}</Text>
-                <Text style={styles.listSub} numberOfLines={2}>
-                  {ledgerById.get(item.platformId)?.decisionLabel
-                    ? `${ledgerById.get(item.platformId)?.decisionLabel}. ${item.reason || 'It did not finish importing.'}`
-                    : item.reason || 'Choose what to do'}
-                </Text>
-              </View>
-              <MaterialCommunityIcons name="chevron-right" size={21} color={IC.muted} />
-            </Pressable>
-          ))}
+          {(showAll.needs ? needsRows : needsRows.slice(0, 3)).map((item) => {
+            const retryable = item.attention === 'commit_failed' || item.attention === 'field_conflict';
+            const reviewable = cards.some((card) => card.items.some((member) => member.platformId === item.platformId));
+            return (
+              <OutcomeRow
+                key={item.platformId}
+                title={item.title || 'Untitled item'}
+                sub="Needs a look"
+                imageUrl={item.imageUrl}
+                action={retryable ? 'Try again' : reviewable ? 'Review' : undefined}
+                busy={resolving === item.platformId}
+                onAction={retryable || reviewable ? () => void revisitNeedsItem(item) : undefined}
+              />
+            );
+          })}
         </ListSection>
 
         <ListSection
-          label="LINKED"
+          label={V7_REVIEW_SECTION_LABELS.linked}
           color={IC.accent}
           count={linkedRows.length}
           expanded={showAll.linked}
@@ -1237,7 +952,8 @@ export default function ImportQuestionQueueScreen() {
               key={entry.platformId}
               title={entry.item.title || 'Untitled item'}
               sub={entry.decisionLabel || entry.catalogTitle || 'Your catalog item'}
-              action="Undo"
+              imageUrl={entry.item.imageUrl}
+              action={V7_REVIEW_SECTION_ACTIONS.linked}
               busy={resolving === entry.platformId}
               onAction={() => void changeSettledEntry(entry)}
             />
@@ -1245,7 +961,7 @@ export default function ImportQuestionQueueScreen() {
         </ListSection>
 
         <ListSection
-          label="ADDED"
+          label={V7_REVIEW_SECTION_LABELS.added}
           color={IC.accent}
           count={addedRows.length}
           expanded={showAll.added}
@@ -1256,7 +972,8 @@ export default function ImportQuestionQueueScreen() {
               key={entry.platformId}
               title={entry.item.title || 'Untitled item'}
               sub={entry.decisionLabel}
-              action="Undo"
+              imageUrl={entry.item.imageUrl}
+              action={V7_REVIEW_SECTION_ACTIONS.added}
               busy={resolving === entry.platformId}
               onAction={() => void changeSettledEntry(entry)}
             />
@@ -1264,7 +981,7 @@ export default function ImportQuestionQueueScreen() {
         </ListSection>
 
         <ListSection
-          label="SKIPPED"
+          label={V7_REVIEW_SECTION_LABELS.skipped}
           color={GREY}
           count={skippedRows.length}
           expanded={showAll.skipped}
@@ -1274,22 +991,16 @@ export default function ImportQuestionQueueScreen() {
             <OutcomeRow
               key={entry.platformId}
               title={entry.item.title || 'Untitled item'}
-              action="Add"
+              imageUrl={entry.item.imageUrl}
+              action={V7_REVIEW_SECTION_ACTIONS.skipped}
               busy={resolving === entry.platformId}
               onAction={() => void changeSettledEntry(entry)}
             />
           ))}
         </ListSection>
 
-        {autoHandledCount > 0 ? (
-          <View style={styles.autoHandledRow}>
-            <Text style={styles.autoHandledLabel}>Imported on their own</Text>
-            <Text style={styles.autoHandledCount}>{autoHandledCount}</Text>
-          </View>
-        ) : null}
-
         <PillButton
-          label="Close"
+          label="Done"
           onPress={() => navigation.navigate('Connections')}
           style={styles.listDone}
         />
@@ -1298,14 +1009,14 @@ export default function ImportQuestionQueueScreen() {
   );
 }
 
-function CountRow({ label, count, tone = 'good' }: { label: string; count: number; tone?: 'good' | 'review' }) {
+function CountRow({ label, count }: { label: string; count: number }) {
   return (
     <View style={styles.countRow}>
       <View style={styles.countLabelWrap}>
-        <View style={[styles.greenDot, tone === 'review' ? styles.amberDot : null]} />
+        <View style={styles.greenDot} />
         <Text style={styles.countLabel}>{label}</Text>
       </View>
-      <Text style={[styles.countValue, tone === 'review' ? styles.amberValue : null]}>{count}</Text>
+      <Text style={styles.countValue}>{count}</Text>
     </View>
   );
 }
@@ -1357,32 +1068,43 @@ function ListSection({
 function OutcomeRow({
   title,
   sub,
+  imageUrl,
   action,
   busy,
   onAction,
 }: {
   title: string;
   sub?: string | null;
-  action: string;
+  imageUrl?: string | null;
+  action?: string;
   busy?: boolean;
-  onAction: () => void;
+  onAction?: () => void;
 }) {
   return (
     <View style={styles.listRow}>
+      {imageUrl ? (
+        <Image source={{ uri: imageUrl }} resizeMode="cover" style={styles.listThumb} />
+      ) : (
+        <View style={[styles.listThumb, styles.listThumbEmpty]}>
+          <MaterialCommunityIcons name="image-outline" size={18} color={IC.muted} />
+        </View>
+      )}
       <View style={styles.listCopy}>
         <Text style={styles.listTitle} numberOfLines={1}>{title}</Text>
         {sub ? <Text style={styles.listSub} numberOfLines={1}>{sub}</Text> : null}
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${action} ${title}`}
-        disabled={busy}
-        onPress={onAction}
-        hitSlop={10}
-        style={({ pressed }) => [styles.rowAction, (pressed || busy) ? styles.pressed : null]}
-      >
-        {busy ? <ActivityIndicator size="small" color={IC.muted} /> : <Text style={styles.rowActionText}>{action}</Text>}
-      </Pressable>
+      {action && onAction ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${action} ${title}`}
+          disabled={busy}
+          onPress={onAction}
+          hitSlop={10}
+          style={({ pressed }) => [styles.rowAction, (pressed || busy) ? styles.pressed : null]}
+        >
+          {busy ? <ActivityIndicator size="small" color={IC.muted} /> : <Text style={styles.rowActionText}>{action}</Text>}
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -1412,12 +1134,8 @@ const styles = StyleSheet.create({
   reassuranceText: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15, flex: 1 },
 
   frontScroll: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 0, paddingBottom: 30 },
-  guessScroll: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 28 },
-  guessTitleBlock: { gap: 6, marginBottom: 22 },
   countCard: { backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 16 },
   countRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  amberDot: { backgroundColor: AMBER },
-  amberValue: { color: AMBER },
   countLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },
   greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: IC.accent },
   countLabel: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15 },
@@ -1433,13 +1151,13 @@ const styles = StyleSheet.create({
   receiptRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   receiptLabel: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   receiptValue: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 16 },
-
   headerTotal: { color: IC.muted, fontFamily: 'Inter_700Bold', fontSize: 15, paddingRight: 2 },
+  reviewRow: { alignSelf: 'stretch', minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: CARD, borderRadius: 16, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 16, marginTop: 14 },
+  reviewRowText: { flex: 1, color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 15 },
+  reviewRowCount: { color: IC.muted, fontFamily: 'Inter_700Bold', fontSize: 13 },
+  headerEdit: { color: '#5D7E16', fontFamily: 'Inter_700Bold', fontSize: 14, paddingRight: 2 },
   listScrollView: { flex: 1 },
   listScroll: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 40 },
-  autoHandledRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, paddingVertical: 14 },
-  autoHandledLabel: { color: IC.muted, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-  autoHandledCount: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 14, fontVariant: ['tabular-nums'] },
   listSection: { marginBottom: 24 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 9, paddingHorizontal: 3 },
   sectionDot: { width: 8, height: 8, borderRadius: 4 },
@@ -1447,6 +1165,8 @@ const styles = StyleSheet.create({
   sectionCount: { color: IC.muted, fontFamily: 'Inter_700Bold', fontSize: 12, marginLeft: 'auto' },
   sectionCard: { backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 14, overflow: 'hidden' },
   listRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#ECECEF', paddingVertical: 10 },
+  listThumb: { width: 44, height: 44, borderRadius: 11, backgroundColor: '#EEEFF1' },
+  listThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
   listCopy: { flex: 1, minWidth: 0 },
   listTitle: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 14, lineHeight: 19 },
   listSub: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 12.5, lineHeight: 17, marginTop: 2 },
