@@ -21,7 +21,7 @@ import PlaceholderImage from '../components/PlaceholderImage';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { HybridConversationDataAdapter } from '../features/liquidationConversation/HybridConversationDataAdapter';
 import { API_BASE_URL } from '../config/env';
-import { apiFetch } from '../lib/apiClient';
+import { api, apiFetch } from '../lib/apiClient';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
 import {
@@ -51,7 +51,12 @@ import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
-import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
+import {
+  reconcileCanonicalEditorPlatform,
+  reconcileMutationSuccess,
+  replaceCanonicalFields,
+  requireServerItem,
+} from '../features/products/serverItemReconciliation';
 const log = createLogger('ProductDetail');
 
 
@@ -173,20 +178,8 @@ type ProductDetailItem = ProductVariant & {
   Metadata: Record<string, any>;
 };
 
-const toProductDetailItem = (variant: any, fallback?: ProductDetailItem | null): ProductDetailItem => {
-  const product = Array.isArray(variant?.Products) ? variant.Products[0] : variant?.Products;
-  return {
-    ...variant,
-    Title: getProductVariantDisplayTitle(variant) ?? fallback?.Title,
-    Description: product?.Description ?? variant?.Description ?? fallback?.Description ?? null,
-    Tags: Array.isArray(product?.Tags)
-      ? product.Tags
-      : Array.isArray(variant?.Tags)
-        ? variant.Tags
-        : fallback?.Tags ?? [],
-    Metadata: variant?.Metadata ?? fallback?.Metadata ?? {},
-  } as ProductDetailItem;
-};
+const withProductDetailDefaults = (variant: Record<string, any>): ProductDetailItem =>
+  replaceCanonicalFields({ Description: null, Tags: [], Metadata: {} }, variant) as unknown as ProductDetailItem;
 
 interface ProductDetailRouteProps {
   params: {
@@ -340,7 +333,7 @@ function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Reco
 const ProductDetailScreen = observer(
   ({ route, navigation }: { route: ProductDetailRouteProps; navigation: ProductDetailNavigationProps }) => {
     const theme = useTheme();
-    const passedItem = route.params?.item ? toProductDetailItem(route.params.item) : undefined;
+    const passedItem = route.params?.item ? withProductDetailDefaults(route.params.item) : undefined;
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
     const fbDispatch = useFacebookJobStatus();
@@ -1443,70 +1436,18 @@ const ProductDetailScreen = observer(
 
       try {
         log.debug('[ProductDetail] Loading consolidated product details for variant:', detailedItem.Id);
+        const variant = await api.get<Record<string, any>>(
+          `/api/products/${encodeURIComponent(detailedItem.Id)}`,
+        );
+        const { data: imageRows, error: imageError } = await supabase
+          .from('ProductImages')
+          .select('ImageUrl, Position')
+          .eq('ProductVariantId', detailedItem.Id)
+          .order('Position', { ascending: true });
+        if (imageError) log.warn('[ProductDetail] Error loading product images:', imageError);
+        const sortedImages = (imageRows || []).map((image: any) => image.ImageUrl).filter(Boolean);
 
-        // Load full product with all variants, tags, and images
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        // First, load the current variant and its related product
-        const { data: variantData, error: variantError } = await supabase
-          .from('ProductVariants')
-          // Production-verified schema: Description/Tags live on Products; ProductVariants has no Metadata.
-          .select(`
-            Id,
-            ProductId,
-            Title,
-            Price,
-            CompareAtPrice,
-            Sku,
-            Barcode,
-            Weight,
-            WeightUnit,
-            Options,
-            IsTaxable,
-            RequiresShipping,
-            TaxCode,
-            OnShopify,
-            OnSquare,
-            OnClover,
-            OnAmazon,
-            OnEbay,
-            OnFacebook,
-            PrimaryImageUrl,
-            CreatedAt,
-            UpdatedAt,
-            Products (
-              Title,
-              Description,
-              Tags
-            ),
-            ProductImages!ProductImages_ProductVariantId_fkey (
-              Id,
-              ImageUrl,
-              AltText,
-              Position
-            )
-          `)
-          .eq('Id', detailedItem.Id)
-          .single();
-
-        if (variantError) {
-          log.error('[ProductDetail] Error loading variant details:', variantError);
-          return;
-        }
-
-        if (!variantData) {
-          log.warn('[ProductDetail] No variant data found');
-          return;
-        }
-
-        const variant = variantData;
-        const product = Array.isArray(variant.Products) ? variant.Products[0] : variant.Products;
-        const sortedImages = variant.ProductImages
-          ?.sort((a: any, b: any) => (a.Position || 0) - (b.Position || 0))
-          ?.map((img: any) => img.ImageUrl) || [];
-
-        log.debug('[ProductDetail] Loaded variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', product?.Tags);
+        log.debug('[ProductDetail] Loaded canonical variant with', sortedImages.length, 'images, options:', variant.Options, 'tags:', variant.Tags);
 
         // Now load ALL variants for this product
         const { data: allVariants, error: allVariantsError } = await supabase
@@ -1534,17 +1475,10 @@ const ProductDetailScreen = observer(
         log.debug('[ProductDetail] Variants loaded via loadPlatformData, not VariantPricing table');
 
         // Update detailedItem with full data
-        const enrichedItem = toProductDetailItem({
+        const enrichedItem = withProductDetailDefaults(replaceCanonicalFields({
           ...detailedItem,
-          ...variant,
           ImageUrls: sortedImages,
-          // Include all the fields we need
-          Options: variant.Options || {},
-          IsTaxable: variant.IsTaxable,
-          RequiresShipping: variant.RequiresShipping,
-          TaxCode: variant.TaxCode,
-          PrimaryImageUrl: variant.PrimaryImageUrl,
-        }, detailedItem);
+        }, variant));
 
         setDetailedItem(enrichedItem);
 
@@ -1814,6 +1748,7 @@ const ProductDetailScreen = observer(
         });
         const saveResult = await response.json().catch(() => null);
         if (!response.ok) throw new Error(saveResult?.message || `Failed to update product. Status: ${response.status}`);
+        const serverItem = requireServerItem(saveResult);
         if (!isLatest()) return true;
 
         justSavedTimestampRef.current = Date.now();
@@ -1833,12 +1768,18 @@ const ProductDetailScreen = observer(
             loadPlatformData().catch(() => {});
           }
 
+          const textStillCurrent = editVersionRef.current === saveStartEditVersion;
           setDetailedItem(prev => prev ? ({
-            ...prev,
-            ...updateData,
+            ...reconcileMutationSuccess(prev, saveResult),
             Metadata: { ...(prev as any).Metadata, platformSpecificData: cleanedPlatformData },
           } as ProductDetailItem) : prev);
-          const textStillCurrent = editVersionRef.current === saveStartEditVersion;
+          if (textStillCurrent) {
+            setDisplayedPlatforms(prev => reconcileCanonicalEditorPlatform(prev, serverItem));
+            setFormData(prev => {
+              const next = replaceCanonicalFields(prev, serverItem);
+              return { ...next, Title: next.Title ?? '', Description: next.Description ?? '', Sku: next.Sku ?? '' };
+            });
+          }
           hasUnsavedChangesRef.current = !textStillCurrent;
           setHasUnsavedChanges(!textStillCurrent);
           setLastSaveTime(Date.now());
@@ -1847,7 +1788,7 @@ const ProductDetailScreen = observer(
         } else if (savePhotos && photoVersionRef.current === saveStartPhotoVersion) {
           // Photo persistence is independent of text dirtiness. Never clear the
           // product-wide text dirty flag after a gallery-only save.
-          setDetailedItem(prev => prev ? { ...prev } : prev);
+          setDetailedItem(prev => prev ? reconcileMutationSuccess(prev, saveResult) : prev);
         }
         return true;
       } catch (error) {
@@ -2645,6 +2586,13 @@ const ProductDetailScreen = observer(
         if (!response.ok) {
           throw new Error(responseData.message || `Publish failed: ${response.status}`);
         }
+        const serverItem = requireServerItem(responseData);
+        setDetailedItem(prev => prev ? replaceCanonicalFields(prev, serverItem) : prev);
+        setDisplayedPlatforms(prev => reconcileCanonicalEditorPlatform(prev, serverItem));
+        setFormData(prev => {
+          const next = replaceCanonicalFields(prev, serverItem);
+          return { ...next, Title: next.Title ?? '', Description: next.Description ?? '', Sku: next.Sku ?? '' };
+        });
 
         // Facebook posts asynchronously through the user's computer — no blocking
         // reconcile poll here (it delayed the UI ~10s for an unrendered result).
@@ -3033,10 +2981,8 @@ const ProductDetailScreen = observer(
       try {
         const token = await ensureSupabaseJwt();
         if (!token) throw new Error('Authentication required');
-        const payload = { IsArchived: true };
-        const response = await apiFetch(`/api/products/${detailedItem.Id}`, {
-          method: 'PUT',
-          body: payload,
+        const response = await apiFetch(`/api/products/${detailedItem.Id}/archive`, {
+          method: 'POST',
         });
         const responseBody = await response.text().catch(() => '');
         if (!response.ok) {
@@ -3089,7 +3035,7 @@ const ProductDetailScreen = observer(
       const itemData = productVariants$[productId].get();
 
       if (itemData) {
-        const item = toProductDetailItem(itemData);
+        const item = withProductDetailDefaults(itemData);
         setDetailedItem(item);
         setFormData({
           Title: item.Title || '',
@@ -3126,10 +3072,9 @@ const ProductDetailScreen = observer(
         // Ignore responses that land after productId/passedItem changed, so a
         // stale lookup can't overwrite the newer product's state.
         let canceled = false;
-        // Production-verified schema: Description/Tags live on Products; ProductVariants has no Metadata.
-        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, IsArchived, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, CreatedAt, UpdatedAt, Products(Title, Description, Tags)';
+        const VARIANT_COLS = 'Id, ProductId, UserId, Sku, Barcode, Title, Price, CompareAtPrice, Options, VariantType, IsArchived, PrimaryImageUrl, Weight, WeightUnit, RequiresShipping, IsTaxable, TaxCode, CreatedAt, UpdatedAt';
         const applyVariant = (data: any) => {
-          const item = toProductDetailItem(data);
+          const item = withProductDetailDefaults(data);
           setDetailedItem(item);
           setFormData({
             Title: item.Title || '',
@@ -3160,7 +3105,6 @@ const ProductDetailScreen = observer(
             const { data, error } = await withTimeout(
               supabase
                 .from('ProductVariants')
-                // Production-verified schema: Description/Tags are embedded from Products; Metadata is absent.
                 .select(VARIANT_COLS)
                 .eq('Id', productId)
                 .maybeSingle(),  // maybeSingle avoids an error when the product doesn't exist
@@ -3178,7 +3122,6 @@ const ProductDetailScreen = observer(
             const { data: byProduct, error: byProductError } = await withTimeout(
               supabase
                 .from('ProductVariants')
-                // Production-verified schema: Description/Tags are embedded from Products; Metadata is absent.
                 .select(VARIANT_COLS)
                 .eq('ProductId', productId)
                 .order('CreatedAt', { ascending: true })
@@ -3933,7 +3876,6 @@ const ProductDetailScreen = observer(
         if (!next || !prev) return;
         if (JSON.stringify(next) === JSON.stringify(prev)) return;
 
-        const updatedProduct = toProductDetailItem(next, detailedItem);
         log.debug('[ProductDetail] REALTIME EVENT FIRED: UPDATE');
         log.debug('[ProductDetail] hasUnsavedChangesRef.current:', hasUnsavedChangesRef.current);
 
@@ -3953,147 +3895,9 @@ const ProductDetailScreen = observer(
           return;
         }
 
-        {
-          log.debug('[ProductDetail] Processing realtime update for:', updatedProduct.Title);
-
-          // ✅ CRITICAL FIX: Merge instead of replacing to preserve nested data
-          setDetailedItem((prev) => {
-                if (!prev) return prev;
-
-                // Check all user-facing scalar fields for meaningful changes.
-                const trackedFieldDefs: Array<{ model: keyof ProductVariant; marker: string }> = [
-                  { model: 'Title', marker: 'title' },
-                  { model: 'Price', marker: 'price' },
-                  { model: 'CompareAtPrice', marker: 'compareAtPrice' },
-                  { model: 'Sku', marker: 'sku' },
-                  { model: 'Barcode', marker: 'barcode' },
-                  { model: 'Weight', marker: 'weight' },
-                  { model: 'WeightUnit', marker: 'weightUnit' },
-                  { model: 'RequiresShipping', marker: 'requiresShipping' },
-                  { model: 'IsTaxable', marker: 'isTaxable' },
-                  { model: 'TaxCode', marker: 'taxCode' },
-                ];
-                const now = Date.now();
-                const fieldChanges: Record<string, { value?: any; updatedAt: number }> = {};
-                for (const { model, marker } of trackedFieldDefs) {
-                  const nextVal = (updatedProduct as any)[model];
-                  if (nextVal !== undefined && (prev as any)[model] !== nextVal) {
-                    fieldChanges[marker] = { value: nextVal, updatedAt: now };
-                  }
-                }
-                const hasRealChanges = Object.keys(fieldChanges).length > 0;
-                if (!hasRealChanges) {
-                  log.debug('[ProductDetail] No meaningful changes, skipping realtime update');
-                  return prev;
-                }
-
-                if (Object.keys(fieldChanges).length > 0) {
-                  log.debug('[ProductDetail] 🟢 External field changes detected:', Object.keys(fieldChanges));
-                  setExternalUpdates(prevUpdates => ({ ...prevUpdates, ...fieldChanges }));
-
-                  // 🔄 UPDATE displayedPlatforms to reflect external changes in fields
-                  setDisplayedPlatforms(prev => {
-                    if (!prev || Object.keys(prev).length === 0) return prev;
-                    const updated = { ...prev };
-                    const canonicalKey = Object.keys(prev).includes('shopify') ? 'shopify' : Object.keys(prev)[0];
-                    const canonical = updated[canonicalKey] || {};
-
-                    // Apply external updates to canonical platform data
-                    if (fieldChanges.title && updatedProduct.Title) {
-                      updated[canonicalKey] = { ...canonical, title: updatedProduct.Title };
-                    }
-                    if (fieldChanges.price && updatedProduct.Price !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), price: updatedProduct.Price };
-                    }
-                    if (fieldChanges.sku && updatedProduct.Sku) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), sku: updatedProduct.Sku };
-                    }
-                    if (fieldChanges.barcode && updatedProduct.Barcode) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), barcode: updatedProduct.Barcode };
-                    }
-                    if (fieldChanges.weight && updatedProduct.Weight !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), weight: updatedProduct.Weight };
-                    }
-                    if (fieldChanges.compareAtPrice && updatedProduct.CompareAtPrice !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), compareAtPrice: updatedProduct.CompareAtPrice };
-                    }
-                    if (fieldChanges.weightUnit && updatedProduct.WeightUnit !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), weightUnit: updatedProduct.WeightUnit };
-                    }
-                    if (fieldChanges.requiresShipping && updatedProduct.RequiresShipping !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), requiresShipping: updatedProduct.RequiresShipping };
-                    }
-                    if (fieldChanges.isTaxable && updatedProduct.IsTaxable !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), isTaxable: updatedProduct.IsTaxable };
-                    }
-                    if (fieldChanges.taxCode && updatedProduct.TaxCode !== undefined) {
-                      updated[canonicalKey] = { ...(updated[canonicalKey] || canonical), taxCode: updatedProduct.TaxCode };
-                    }
-
-                    return updated;
-                  });
-
-                  // Show banner only when we have actual field changes from external source
-                  showBanner('Product updated from external source', true);
-                }
-
-                log.debug('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
-                log.debug('[ProductDetail] REALTIME CHANGES:', {
-                  title: { old: prev.Title, new: updatedProduct.Title },
-                  price: { old: prev.Price, new: updatedProduct.Price },
-                  sku: { old: prev.Sku, new: updatedProduct.Sku },
-                });
-
-                // ✅ MERGE: Keep existing nested data (ImageUrls, Options, Metadata, etc.)
-                // Only take scalar fields from the realtime update, preserve complex objects from prev
-                // Cast to ProductVariant to satisfy TypeScript - we know these fields exist at runtime
-                return {
-                  ...prev,
-                  Title: updatedProduct.Title ?? prev.Title,
-                  Price: updatedProduct.Price ?? prev.Price,
-                  CompareAtPrice: updatedProduct.CompareAtPrice ?? prev.CompareAtPrice,
-                  Sku: updatedProduct.Sku ?? prev.Sku,
-                  Barcode: updatedProduct.Barcode ?? prev.Barcode,
-                  Weight: updatedProduct.Weight ?? prev.Weight,
-                  WeightUnit: updatedProduct.WeightUnit ?? prev.WeightUnit,
-                  RequiresShipping: updatedProduct.RequiresShipping ?? prev.RequiresShipping,
-                  IsTaxable: updatedProduct.IsTaxable ?? prev.IsTaxable,
-                  UpdatedAt: updatedProduct.UpdatedAt ?? prev.UpdatedAt,
-                  // PRESERVE these complex fields from prev - don't overwrite with undefined
-                  Options: prev.Options,
-                  Metadata: prev.Metadata,
-                  Tags: prev.Tags,
-                  // PlatformSpecificData is stored on the enriched item, preserve it
-                  ...((prev as any).PlatformSpecificData ? { PlatformSpecificData: (prev as any).PlatformSpecificData } : {}),
-                } as ProductDetailItem;
-              });
-
-              // ⚡ FIX: Also update displayedPlatforms to reflect realtime changes in the UI
-              // Without this, the ListingEditorForm won't show the updated values
-              setDisplayedPlatforms(prev => {
-                if (!prev || Object.keys(prev).length === 0) return prev;
-
-                const updated = { ...prev };
-                // Update ALL platforms with the new canonical values
-                for (const platformKey of Object.keys(updated)) {
-                  updated[platformKey] = {
-                    ...updated[platformKey],
-                    title: updatedProduct.Title ?? updated[platformKey].title,
-                    price: updatedProduct.Price ?? updated[platformKey].price,
-                    sku: updatedProduct.Sku ?? updated[platformKey].sku,
-                    compareAtPrice: updatedProduct.CompareAtPrice ?? updated[platformKey].compareAtPrice,
-                    barcode: updatedProduct.Barcode ?? updated[platformKey].barcode,
-                    weight: updatedProduct.Weight ?? updated[platformKey].weight,
-                    weightUnit: updatedProduct.WeightUnit ?? updated[platformKey].weightUnit,
-                    requiresShipping: updatedProduct.RequiresShipping ?? updated[platformKey].requiresShipping,
-                    isTaxable: updatedProduct.IsTaxable ?? updated[platformKey].isTaxable,
-                    taxCode: updatedProduct.TaxCode ?? updated[platformKey].taxCode,
-                  };
-                }
-                log.debug('[ProductDetail] ✅ REALTIME: Also updated displayedPlatforms for UI refresh');
-                return updated;
-              });
-            }
+        void loadProductDetails().then(() => {
+          showBanner('Product updated from external source', true);
+        });
       }));
 
       // Subscribe to inventory level changes (was UNFILTERED channel `inventory-product-${detailedItem.ProductId}`)
@@ -4307,28 +4111,7 @@ const ProductDetailScreen = observer(
 
         log.debug('[ProductDetail] Received update from teammate for current variant:', update);
 
-        // Refresh product data from Supabase (single source of truth)
-        const observables = getLegendStateObservables();
-        if (observables?.productVariants$) {
-          const refreshed = observables.productVariants$[update.variantId].get();
-          if (refreshed) {
-            const refreshedItem = toProductDetailItem(refreshed, detailedItem);
-            setDetailedItem(refreshedItem);
-            setFormData({
-              Title: refreshedItem.Title || '',
-              Description: refreshedItem.Description || '',
-              Price: refreshedItem.Price || 0,
-              CompareAtPrice: refreshedItem.CompareAtPrice || 0,
-              Sku: refreshedItem.Sku || '',
-              Barcode: refreshedItem.Barcode || '',
-              Weight: refreshedItem.Weight || 0,
-              WeightUnit: refreshedItem.WeightUnit || 'kg',
-              RequiresShipping: refreshedItem.RequiresShipping !== false,
-              IsTaxable: refreshedItem.IsTaxable !== false,
-              TaxCode: refreshedItem.TaxCode || '',
-            });
-          }
-        }
+        void loadProductDetails();
 
         // Show non-blocking banner instead of Alert
         showBanner('A teammate updated this product. View refreshed.');

@@ -180,6 +180,8 @@ export type AppStackParamList = {
   GenerateDetailsScreen: {
     jobId: string,
     status: string,
+    productId?: string,
+    variantId?: string,
     /** ID-BASED handoff (canonical): the screen resolves items/jobs from cart$ by id. */
     itemIds?: string[],
     focusItemId?: string,

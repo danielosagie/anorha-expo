@@ -30,6 +30,13 @@ import type {
 } from './types';
 import { isFolder, isItem } from './types';
 import { canTransition, STATUS_HISTORY_LIMIT } from './transitions';
+import {
+  hydrateCartStateFromDraft,
+  recoverHydratedCartState,
+  serializeCartStateToDraft,
+} from './cartDraftPersistence';
+import { api } from '../../lib/apiClient';
+import { fetchGenerateJobStatus } from '../../lib/generateJobs';
 import { createLogger } from '../../utils/logger';
 const log = createLogger('cartStore');
 
@@ -335,7 +342,13 @@ export function setItemGenerate(
   patch: Pick<Partial<CartItem>, 'generateJobId' | 'generateMatchJobId' | 'generateResult'>,
 ) {
   if (!isItem(getEntry(itemId))) return;
-  cart$.entries[itemId].assign({ ...patch, updatedAt: now() });
+  const generateResult = patch.generateResult;
+  cart$.entries[itemId].assign({
+    ...patch,
+    ...(typeof generateResult?.productId === 'string' ? { productId: generateResult.productId } : {}),
+    ...(typeof generateResult?.variantId === 'string' ? { variantId: generateResult.variantId } : {}),
+    updatedAt: now(),
+  });
 }
 
 /**
@@ -793,123 +806,55 @@ export function statusToItemStage(status: CartStatus, fromInventory?: boolean): 
 
 // --- draft (backend) bridge ------------------------------------------------
 
-const FOLDERS_KEY = '__folders'; // reserved key inside matchContext for folder grouping
-
 /** Map the cart into the legacy draft payload accepted by saveDraftToBackend. */
 export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }): CartDraftPayload {
-  const activeItemId = cart$.activeItemId.get();
-  const processed = selectProcessedSet();
-  const savedForLaterIds = cart$.savedForLaterIds.get().filter((id) => !!getEntry(id));
-  const savedSet = new Set(savedForLaterIds);
-  const savedFolderChildIds = new Set(
-    savedForLaterIds.flatMap((id) => {
-      const entry = getEntry(id);
-      return isFolder(entry) ? entry.childIds : [];
-    }),
-  );
-  const items = selectAllItems().filter(
-    (it) => !processed.has(it.id) || savedSet.has(it.id) || savedFolderChildIds.has(it.id),
-  );
-
-  const scannedItems = items.map(it => ({
-    id: it.id,
-    photos: it.photos,
-    title: it.title,
-    isActive: activeItemId === it.id,
-    preSelectedSource: it.preSelectedSource,
-    quantity: it.quantity,
-    parentId: it.parentId ?? null,
-    shelfBox: it.shelfBox,
-  }));
-
-  const matchContext: Record<string, any> = {};
-  for (const it of items) {
-    if (it.match?.response || it.match?.matchRows || it.match?.confirmed) {
-      matchContext[it.id] = {
-        matchData: it.match.response,
-        matchRows: it.match.matchRows ?? [],
-        confirmed: it.match.confirmed,
-      };
-    }
-  }
-
-  // Carry folder grouping through the opaque matchContext blob so it round-trips.
-  matchContext[FOLDERS_KEY] = selectTopLevelEntries()
-    .filter(isFolder)
-    .map(f => ({ id: f.id, label: f.label, sourcePhotoUri: f.sourcePhotoUri, childIds: f.childIds }));
-
-  return {
-    scannedItems,
-    matchContext,
-    itemStageById: { ...cart$.itemStageById.get() },
-    processedItemIds: [...cart$.processedItemIds.get()],
-    savedForLaterIds,
-    shelfPhotoUri: extra?.shelfPhotoUri ?? null,
-    activeItemId,
-  };
+  return serializeCartStateToDraft(cart$.get(), extra);
 }
 
 /** Rebuild the cart from a loaded draft payload (best-effort, folder-aware). */
 export function hydrateCartFromDraft(payload: CartDraftPayload) {
-  const scanned = Array.isArray(payload.scannedItems) ? payload.scannedItems : [];
-  const matchCtx = payload.matchContext ?? {};
-  const folders: Array<{ id: string; label?: string; sourcePhotoUri?: string; childIds: string[] }> =
-    Array.isArray((matchCtx as any)[FOLDERS_KEY]) ? (matchCtx as any)[FOLDERS_KEY] : [];
-
-  const entries: Record<string, CartEntry> = {};
-  const childIdSet = new Set<string>(folders.flatMap(f => f.childIds));
-  const ts = now();
-
-  // Only non-processed items are persisted in scannedItems; processed ones live
-  // solely in processedItemIds / itemStageById (matching the legacy draft schema).
-  for (const s of scanned) {
-    if (!s?.id) continue;
-    const ctx = matchCtx[s.id];
-    const photos: CapturedPhoto[] = Array.isArray(s.photos) ? s.photos : [];
-    entries[s.id] = {
-      kind: 'single',
-      id: s.id,
-      parentId: s.parentId ?? null,
-      photos,
-      title: s.title,
-      quantity: typeof s.quantity === 'number' ? s.quantity : 1,
-      status: ctx ? 'matched' : photos.length ? 'searching' : 'capturing',
-      match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows, confirmed: ctx.confirmed } : undefined,
-      preSelectedSource: s.preSelectedSource,
-      shelfBox: normalizeHydratedShelfBox(s.shelfBox),
-      createdAt: ts,
-      updatedAt: ts,
-    };
+  const hydrated = hydrateCartStateFromDraft(payload, now());
+  cart$.set(hydrated);
+  for (const entry of Object.values(hydrated.entries)) {
+    if (isFolder(entry)) recomputeFolderStatus(entry.id);
   }
+}
 
-  for (const f of folders) {
-    entries[f.id] = {
-      kind: 'folder',
-      id: f.id,
-      label: f.label,
-      sourcePhotoUri: f.sourcePhotoUri,
-      childIds: f.childIds.filter(cid => entries[cid]),
-      status: 'scanning',
-      createdAt: ts,
-      updatedAt: ts,
-    };
-  }
-
-  const order: string[] = [];
-  for (const f of folders) if (entries[f.id]) order.push(f.id);
-  for (const s of scanned) if (s?.id && !childIdSet.has(s.id) && entries[s.id]) order.push(s.id);
-
+/** Restore generated review data and canonical rows after backend draft hydration. */
+export async function recoverHydratedCartFromServer(): Promise<void> {
+  const recovered = await recoverHydratedCartState(cart$.get(), {
+    fetchGenerateStatus: async (jobId) => {
+      try {
+        return await fetchGenerateJobStatus(jobId);
+      } catch {
+        return null;
+      }
+    },
+    fetchMatchStatus: async (jobId) => {
+      try {
+        return await api.get(`/api/products/match/jobs/${encodeURIComponent(jobId)}/status`);
+      } catch {
+        return null;
+      }
+    },
+    fetchCanonicalItem: async (variantId) => {
+      try {
+        return await api.get<Record<string, any>>(`/api/products/${encodeURIComponent(variantId)}`);
+      } catch {
+        return null;
+      }
+    },
+  }, now());
+  const current = cart$.get();
+  const entries = Object.fromEntries(Object.entries(current.entries).map(([id, entry]) => {
+    const restored = recovered.entries[id];
+    return [id, restored && isItem(entry) && isItem(restored) ? { ...entry, ...restored } : entry];
+  }));
   cart$.set({
+    ...current,
     entries,
-    order,
-    activeItemId: payload.activeItemId ?? null,
-    processedItemIds: Array.isArray(payload.processedItemIds) ? payload.processedItemIds : [],
-    itemStageById: payload.itemStageById ?? {},
-    savedForLaterIds: Array.isArray(payload.savedForLaterIds)
-      ? payload.savedForLaterIds.filter((id) => !!entries[id])
-      : [],
+    itemStageById: { ...current.itemStageById, ...recovered.itemStageById },
   });
-  for (const f of folders) if (entries[f.id]) recomputeFolderStatus(f.id);
 }
 
 // --- local snapshot (cold-start recovery) ----------------------------------

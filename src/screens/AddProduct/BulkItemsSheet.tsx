@@ -19,6 +19,7 @@ import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import type { ShelfItemBox } from '../../features/cart/types';
 import { ShelfItemCrop } from './ShelfItemCrop';
 import { resolveImageUri } from '../../utils/resolveImageUri';
+import { buildGenerateProduct } from '../../features/generation/generateRequest';
 const log = createLogger('BulkItemsSheet');
 
 
@@ -883,17 +884,7 @@ export const BulkItemsSheet: React.FC<{
     : bottomMargin;
 
   const submitDirectGenerateJob = React.useCallback(async (
-    products: Array<{
-      productIndex: number;
-      productId: string;
-      clientItemId: string;
-      identityTitle?: string;
-      variantId?: string;
-      imageUrls: string[];
-      coverImageIndex: number;
-      selectedMatches?: any[];
-      quantity?: number;
-    }>
+    products: Array<ReturnType<typeof buildGenerateProduct> & { clientItemId: string }>
   ) => {
     const token = await ensureSupabaseJwt();
     if (!token) {
@@ -907,7 +898,7 @@ export const BulkItemsSheet: React.FC<{
     // path would be persisted onto the variant (PrimaryImageUrl) + ProductImages and then
     // never render in the gallery and never publish. Upload any local uri here first.
     const uploadResults = await Promise.all(products.map(async (p) => {
-      const urls = Array.isArray(p.imageUrls) ? p.imageUrls : [];
+      const urls = Array.isArray(p.photos) ? p.photos.map((photo) => photo.url) : [];
       const itemPhotos = bulkItems.find((item) => item.id === p.clientItemId)?.photos ?? [];
       let uploadFailed = false;
       const hosted = await Promise.all(urls.map(async (u, i) => {
@@ -931,7 +922,13 @@ export const BulkItemsSheet: React.FC<{
         return { clientItemId: p.clientItemId, product: null };
       }
       const { clientItemId: _clientItemId, ...product } = p;
-      return { clientItemId: p.clientItemId, product: { ...product, imageUrls: hosted } };
+      return {
+        clientItemId: p.clientItemId,
+        product: {
+          ...product,
+          photos: hosted.map((url, index) => ({ url, isCover: index === 0 })),
+        },
+      };
     }));
 
     const failedItemIds = uploadResults.filter((result) => !result.product).map((result) => result.clientItemId);
@@ -958,10 +955,7 @@ export const BulkItemsSheet: React.FC<{
       },
       body: JSON.stringify({
         products: successfulUploads.map((result) => result.product),
-        selectedPlatforms: connectedPlatformKeys,
-        // Matching already gathered the identity, source, and pricing context. A second web
-        // research pass is both redundant and able to replace the seller-confirmed item.
-        options: { useScraping: false },
+        platforms: connectedPlatformKeys,
       }),
     });
 
@@ -1098,15 +1092,17 @@ export const BulkItemsSheet: React.FC<{
           item,
           selectedCandidate,
           generateProduct: selectedCandidate ? {
-            productIndex: index,
-            productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
             clientItemId: item.id,
-            identityTitle,
-            variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
-            imageUrls,
-            coverImageIndex: 0,
-            selectedMatches: [selectedCandidate],
-            quantity: item.quantity,
+            ...buildGenerateProduct({
+              productIndex: index,
+              productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
+              variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
+              identityTitle,
+              candidate: selectedCandidate,
+              sellerConfirmed: true,
+              photos: imageUrls.map((url, photoIndex) => ({ url, isCover: photoIndex === 0 })),
+              quantity: item.quantity,
+            }),
           } : null,
         };
       });

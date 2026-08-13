@@ -13,6 +13,8 @@ import type { ProgressiveGenerateResult } from '../generation/progressiveEnrichm
 export interface GenerateDetailsLaunchParams {
   jobId: string;
   matchJobId: string;
+  productId?: string;
+  variantId?: string;
   status: 'processing';
   /** Latest usable draft(s), even while taxonomy/shipping enrichment is pending. */
   results?: ProgressiveGenerateResult[];
@@ -46,6 +48,8 @@ export function buildGenerateDetailsLaunch(focusItemId: string): GenerateDetails
   return {
     jobId: clicked.generateJobId || '',
     matchJobId: clicked.generateMatchJobId || '',
+    productId: clicked.productId,
+    variantId: clicked.variantId,
     status: 'processing',
     results: list.flatMap((it) => (it.generateResult ? [it.generateResult] : [])),
     itemIds: list.map((it) => it.id),

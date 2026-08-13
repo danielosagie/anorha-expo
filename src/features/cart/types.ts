@@ -85,8 +85,14 @@ export interface CartItem {
   generateJobId?: string;
   /** The originating match job (when the item generated via match→auto-generate), for GenerateDetailsScreen's matchJobId. */
   generateMatchJobId?: string;
+  /** Stable canonical parent row created by the backend generate pipeline. */
+  productId?: string;
+  /** Stable canonical variant row used by Product Detail and publish. */
+  variantId?: string;
   /** Contract-typed per-product result of the generate job (src/contracts). */
   generateResult?: ProgressiveGenerateResult;
+  /** In-memory canonical read cache. Backend draft persistence keeps only the stable IDs. */
+  canonicalItem?: Record<string, any>;
   /** Recent legal status moves (newest last, capped) — written by transitionItem. */
   statusHistory?: StatusTransition[];
   error?: string;

@@ -24,6 +24,7 @@ import {
 import { uploadProductImage } from '../../utils/uploadProductImage';
 import { API_BASE_URL } from '../../config/env';
 import { createLogger } from '../../utils/logger';
+import { requireServerItem } from '../../features/products/serverItemReconciliation';
 const log = createLogger('OptimizerPhotoModeView');
 
 // Same camera language as AddProduct: black canvas, a rounded inset viewfinder,
@@ -121,19 +122,24 @@ export function OptimizerPhotoModeView({ onBack, onComplete, queueProducts }: Op
 
             const existing = (product.ProductImages || []).map((im: any) => im.ImageUrl).filter(Boolean);
             const token = await ensureSupabaseJwt();
-            if (token) {
-                const res = await fetch(`${API_BASE_URL}/api/products/${product.Id}`, {
-                    method: 'PUT',
-                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ImageUrls: [...existing, ...uploaded] }),
-                });
-                if (!res.ok) throw new Error(`Save failed (${res.status})`);
-            }
+            if (!token) throw new Error('Authentication required');
+            const res = await fetch(`${API_BASE_URL}/api/products/${product.Id}`, {
+                method: 'PUT',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ImageUrls: [...existing, ...uploaded] }),
+            });
+            if (!res.ok) throw new Error(`Save failed (${res.status})`);
+            const responseBody = await res.json().catch(() => null);
+            const serverItem = requireServerItem(responseBody);
             // Keep local state fresh so re-visiting the item appends instead of clobbering.
             setProducts((prev) =>
                 prev.map((p) =>
                     p.Id === product.Id
-                        ? { ...p, ProductImages: [...(p.ProductImages || []), ...uploaded.map((url) => ({ ImageUrl: url }))] }
+                        ? {
+                            ...p,
+                            ...serverItem,
+                            ProductImages: [...(p.ProductImages || []), ...uploaded.map((url) => ({ ImageUrl: url }))],
+                        }
                         : p,
                 ),
             );

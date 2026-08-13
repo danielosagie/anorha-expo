@@ -511,20 +511,45 @@ const InventoryOrdersScreen = observer(() => {
     setSelectedItems(new Set(allIds));
   };
 
-  const runBulkDeleteByIds = useCallback(async (ids: string[]) => {
+  const runBulkLifecycleByIds = useCallback(async (ids: string[], actionType: 'archive' | 'delete') => {
     if (ids.length === 0) return;
     try {
-      const { error } = await supabase
-        .from('ProductVariants')
-        .update({ IsArchived: true })
-        .in('Id', ids);
-      if (error) throw error;
+      const response = await apiFetch('/api/products/bulk-actions/execute', {
+        method: 'POST',
+        body: {
+          actions: ids.map((itemId) => ({ itemId, actionType, changes: [] })),
+        },
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.message || `Bulk ${actionType} failed (${response.status})`);
+      const results = Array.isArray(body?.results) ? body.results : [];
+      if (results.length !== ids.length) throw new Error(`Bulk ${actionType} response is incomplete`);
+      const failed = results.filter((result: any) => result?.success !== true || !result?.item);
+      const succeeded = results.filter((result: any) => result?.success === true && result?.item);
+      setDirectFetchVariants((previous) => {
+        const next = { ...previous };
+        succeeded.forEach((result: any) => {
+          next[result.itemId] = { ...(next[result.itemId] || {}), ...result.item };
+        });
+        return next;
+      });
+      if (failed.length > 0) {
+        Alert.alert(
+          `Some items could not ${actionType === 'delete' ? 'delete' : 'archive'}`,
+          `${succeeded.length} of ${ids.length} items were updated. Try the remaining items again.`,
+        );
+      }
       handleExitSelectionMode();
     } catch (err) {
-      log.error('Bulk delete failed', err);
-      Alert.alert('Error', 'Failed to delete items. Please try again.');
+      log.error(`Bulk ${actionType} failed`, err);
+      Alert.alert('Error', `Failed to ${actionType} items. Please try again.`);
     }
   }, []);
+
+  const runBulkDeleteByIds = useCallback(
+    (ids: string[]) => runBulkLifecycleByIds(ids, 'delete'),
+    [runBulkLifecycleByIds],
+  );
 
   const handleBulkDelete = () => {
     const idsToDelete = Array.from(selectedItems);
@@ -538,20 +563,10 @@ const InventoryOrdersScreen = observer(() => {
     );
   };
 
-  const runBulkArchiveByIds = useCallback(async (ids: string[]) => {
-    if (ids.length === 0) return;
-    try {
-      const { error } = await supabase
-        .from('ProductVariants')
-        .update({ IsArchived: true })
-        .in('Id', ids);
-      if (error) throw error;
-      handleExitSelectionMode();
-    } catch (err) {
-      log.error('Bulk archive failed', err);
-      Alert.alert('Error', 'Failed to archive items. Please try again.');
-    }
-  }, []);
+  const runBulkArchiveByIds = useCallback(
+    (ids: string[]) => runBulkLifecycleByIds(ids, 'archive'),
+    [runBulkLifecycleByIds],
+  );
 
 
 

@@ -3,6 +3,7 @@ import { ensureSupabaseJwt, supabase } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { OPTIMIZER_THRESHOLDS } from './useOptimizerQueues';
 import { createLogger } from '../utils/logger';
+import { requireServerItem } from '../features/products/serverItemReconciliation';
 
 const log = createLogger('useBatchGenerate');
 
@@ -128,7 +129,6 @@ export function useBatchGenerate(): UseBatchGenerateResult {
       setProgressCount(0);
       setTotalCount(items.length);
 
-      const byVariant = new Map(items.map((it) => [it.variantId, it]));
       // Mark this run's items queued; leave any previously-done items untouched.
       setStatus(items.map((it) => it.variantId), 'queued');
 
@@ -271,7 +271,6 @@ export function useBatchGenerate(): UseBatchGenerateResult {
 
         for (const it of submittable) {
           const result = resultByVariant.get(it.variantId);
-          const input = byVariant.get(it.variantId);
           if (!result || result.error) {
             markFailed.push(it.variantId);
             continue;
@@ -280,11 +279,6 @@ export function useBatchGenerate(): UseBatchGenerateResult {
           const update: Record<string, string> = {};
           if (titleOk(gen.title)) update.Title = gen.title!.trim();
           if (descOk(gen.description)) update.Description = gen.description!.trim();
-
-          // "Done" must mean the queue will actually shrink: title AND
-          // description are adequate afterwards (generated or already-present).
-          const finalTitleOk = titleOk(gen.title) || titleOk(input?.existingTitle);
-          const finalDescOk = descOk(gen.description) || descOk(input?.existingDescription);
 
           if (Object.keys(update).length === 0) {
             markFailed.push(it.variantId);
@@ -310,8 +304,17 @@ export function useBatchGenerate(): UseBatchGenerateResult {
             markFailed.push(it.variantId);
             continue;
           }
+          const persistBody = await persistResponse.json().catch(() => null);
+          let storedItem: Record<string, any>;
+          try {
+            storedItem = requireServerItem(persistBody);
+          } catch (error) {
+            log.error('[BatchGenerate] canonical response missing item', it.variantId, error);
+            markFailed.push(it.variantId);
+            continue;
+          }
 
-          if (finalTitleOk && finalDescOk) markDone.push(it.variantId);
+          if (titleOk(storedItem.Title) && descOk(storedItem.Description)) markDone.push(it.variantId);
           else markFailed.push(it.variantId); // wrote a partial improvement, but gap remains
         }
 

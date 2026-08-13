@@ -32,6 +32,7 @@ import { RC } from '../resolve/ResolveKit';
 import { normalizeDisplayName } from '../../config/platforms';
 import { ClassifiedProduct, OPTIMIZER_THRESHOLDS } from '../../hooks/useOptimizerQueues';
 import { createLogger } from '../../utils/logger';
+import { requireServerItem } from '../../features/products/serverItemReconciliation';
 
 const log = createLogger('OptimizerReviewView');
 
@@ -58,7 +59,7 @@ const firstImage = (p?: ClassifiedProduct): string | null => {
 const OptimizerReviewView: React.FC<Props> = ({ products, platforms, onBack, onComplete }) => {
   const insets = useSafeAreaInsets();
   const [idx, setIdx] = useState(0);
-  const [edits, setEdits] = useState<Record<string, Partial<Record<FieldKey, string>>>>({});
+  const [edits, setEdits] = useState<Record<string, Partial<Record<FieldKey, string | null>>>>({});
   const [reviewed, setReviewed] = useState<Set<string>>(new Set());
   const [scoped, setScoped] = useState<string | null>(null);
   const [editing, setEditing] = useState<FieldDef | null>(null);
@@ -69,10 +70,13 @@ const OptimizerReviewView: React.FC<Props> = ({ products, platforms, onBack, onC
   const cur = products[Math.min(idx, Math.max(total - 1, 0))];
   const curId = cur?.Id;
 
-  const val = useCallback(
-    (key: FieldKey): string => (curId ? edits[curId]?.[key] : undefined) ?? ((cur as any)?.[key] || ''),
-    [edits, cur, curId],
-  );
+  const val = useCallback((key: FieldKey): string => {
+    const itemEdits = curId ? edits[curId] : undefined;
+    if (itemEdits && Object.prototype.hasOwnProperty.call(itemEdits, key)) {
+      return itemEdits[key] ?? '';
+    }
+    return (cur as any)?.[key] || '';
+  }, [edits, cur, curId]);
 
   const missing = useMemo(() => {
     const out: FieldKey[] = [];
@@ -104,6 +108,20 @@ const OptimizerReviewView: React.FC<Props> = ({ products, platforms, onBack, onC
           const body = await response.text().catch(() => '');
           throw new Error(body || `Save failed (${response.status})`);
         }
+        const body = await response.json().catch(() => null);
+        const serverItem = requireServerItem(body);
+        const canonicalEdits = Object.fromEntries(FIELDS.flatMap((field) => (
+          Object.prototype.hasOwnProperty.call(serverItem, field.key)
+            ? [[field.key, serverItem[field.key]]]
+            : []
+        )));
+        setEdits((prev) => ({
+          ...prev,
+          [curId]: {
+            ...prev[curId],
+            ...canonicalEdits,
+          },
+        }));
         setSaveState('saved');
         if (saveTimer.current) clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => setSaveState('idle'), 2500);

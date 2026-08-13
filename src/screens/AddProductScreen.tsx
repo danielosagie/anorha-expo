@@ -31,7 +31,7 @@ import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, recoverHydratedCartFromServer, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import { enrichmentLabel } from '../features/generation/progressiveEnrichment';
@@ -1043,7 +1043,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const savedIds = session.SavedForLaterIds ?? session.savedForLaterIds ?? [];
         if (items.length > 0 && !cancelled) {
           const retryableHydratedIds = items
-            .filter((item: any) => Array.isArray(item?.photos) && item.photos.length > 0 && !matchCtx[item.id])
+            .filter((item: any) => (
+              Array.isArray(item?.photos)
+              && item.photos.length > 0
+              && !matchCtx[item.id]
+              && !item.generateJobId
+              && !item.generateMatchJobId
+              && !item.variantId
+              && stageById?.[item.id] !== 'generated'
+              && stageById?.[item.id] !== 'generating'
+            ))
             .map((item: any) => item.id as string);
           const hydratedMatchCtx = { ...matchCtx };
           retryableHydratedIds.forEach((itemId: string) => {
@@ -1068,6 +1077,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             processedItemIds: Array.isArray(processedIds) ? processedIds : [],
             savedForLaterIds: Array.isArray(savedIds) ? savedIds : [],
           });
+          await recoverHydratedCartFromServer();
           if (retryableHydratedIds.length > 0) {
             retryableHydratedIds.forEach((itemId: string) => {
               transitionItem(itemId, 'error', { error: 'Scan stopped before completing' });

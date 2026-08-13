@@ -17,6 +17,7 @@ import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
 import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
 import { IC, InboxHeader, SuccessBlock, PillButton, SectionCaption } from '../components/importinbox/InboxKit';
+import { requireServerItem } from '../features/products/serverItemReconciliation';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PublishConfirmationScreen');
 
@@ -117,6 +118,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     mode,            // 'publishing' → this screen owns the publish POST
     publishPayload,  // the ready-to-send body for /api/products/publish
   } = params;
+  const [publishedItem, setPublishedItem] = useState<Record<string, any> | null>(null);
 
   const publishPayloadRecord = asRecord(publishPayload);
   const payloadPlatformDetails = asRecord(publishPayloadRecord?.platformDetails);
@@ -141,14 +143,18 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     : [];
   const coverImageIndex = finiteNumber(payloadMedia?.coverImageIndex) ?? 0;
   const receiptImageUrl = payloadImages[coverImageIndex] || imageUrl;
-  const receiptTitle = receiptSources
-    .map((source) => asRecord(source)?.title)
-    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    ?? title;
-  const receiptPrice = receiptSources
-    .map(priceFromPlatformDetail)
-    .find((value): value is number => value !== null)
-    ?? finiteNumber(price);
+  const receiptTitle = publishedItem && Object.prototype.hasOwnProperty.call(publishedItem, 'Title')
+    ? publishedItem.Title
+    : receiptSources
+      .map((source) => asRecord(source)?.title)
+      .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      ?? title;
+  const receiptPrice = publishedItem && Object.prototype.hasOwnProperty.call(publishedItem, 'Price')
+    ? finiteNumber(publishedItem.Price)
+    : receiptSources
+      .map(priceFromPlatformDetail)
+      .find((value): value is number => value !== null)
+      ?? finiteNumber(price);
 
   // Facebook posts asynchronously through the user's computer — show its live
   // dispatch status here instead of implying a synchronous "Published!".
@@ -282,6 +288,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
       // Capture the live-listing URLs the publish endpoint resolved (eBay item, Shopify
       // admin product, …) so the channel rows deep-link to the real page.
       const body = await res.json().catch(() => null);
+      setPublishedItem(requireServerItem(body));
       if (body?.listings && typeof body.listings === 'object') {
         setLiveUrls((prev) => ({ ...prev, ...body.listings }));
       }

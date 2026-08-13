@@ -45,6 +45,10 @@ import {
   enrichmentLabel,
   type ProgressiveEnrichment,
 } from '../features/generation/progressiveEnrichment';
+import {
+  reconcileCanonicalEditorPlatform,
+  requireServerItem,
+} from '../features/products/serverItemReconciliation';
 
 
 const ACTION_BAR_HEIGHT = 80;
@@ -164,6 +168,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [fetched, setFetched] = useState(false);
   const [jobData, setJobData] = useState<{ status?: string; currentStage?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
+  const [canonicalItems, setCanonicalItems] = useState<Record<string, Record<string, any>>>({});
   const [isInputExpanded, setIsInputExpanded] = useState(false);
   // Chat-style "wanna change something" composer text (replaces SmartCommandInput).
   const [quickFixText, setQuickFixText] = useState('');
@@ -258,6 +263,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   const status = jobData?.status ?? statusParam;
   const results = jobData?.results ?? resultsParam;
+  const canonicalVariantIds = useMemo(() => Array.from(new Set([
+    ...(Array.isArray(results) ? results.map((result: any) => result?.variantId) : []),
+    (route.params as any)?.variantId,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0))), [results, route.params]);
+  const canonicalVariantIdsKey = canonicalVariantIds.join('|');
   const first: GeneratedResult | null = useMemo(() => (Array.isArray(results) && results.length > 0 ? results[0] : null), [results]);
   const summary = jobData?.summary ?? summaryParam;
 
@@ -337,6 +347,28 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     })();
     return () => { canceled = true };
   }, [(route.params as any)?.variantId, results === null ? null : results]);
+
+  useEffect(() => {
+    const variantIds = canonicalVariantIdsKey ? canonicalVariantIdsKey.split('|') : [];
+    if (variantIds.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const rows = await Promise.all(variantIds.map(async (variantId) => {
+        try {
+          const response = await apiFetch(`/api/products/${encodeURIComponent(variantId)}`);
+          if (!response.ok) return null;
+          const item = await response.json();
+          return [variantId, item] as const;
+        } catch {
+          return null;
+        }
+      }));
+      if (!cancelled) {
+        setCanonicalItems(Object.fromEntries(rows.filter((row): row is readonly [string, Record<string, any>] => !!row)));
+      }
+    })();
+    return () => { cancelled = true };
+  }, [canonicalVariantIdsKey]);
 
   // Debug logs moved to useEffect to prevent spam on every render
   useEffect(() => {
@@ -564,12 +596,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       ? ((results as GeneratedResult[]).find((r: any) => r.productIndex === currentProductIndex) || results[0])
       : null;
     if (!res || !res.platforms) return;
+    const canonicalVariantId = res.variantId || (route.params as any)?.variantId;
+    const canonicalItem = canonicalVariantId ? canonicalItems[canonicalVariantId] : undefined;
 
     // Only hydrate if this is new data (different jobId or product index)
     const currentJobId = `${jobId || 'job'}-${currentProductIndex}-${JSON.stringify({
       platforms: res.platforms,
       draftReadyAt: res.draftReadyAt,
       enrichment: res.enrichment,
+      canonicalItem,
     })}`;
     if (lastHydratedJobRef.current === currentJobId) {
       log.debug('[GEN-DETAILS] Skipping re-hydration - same job/item');
@@ -663,9 +698,13 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       }
     }
 
+    const serverPlatforms = canonicalItem
+      ? reconcileCanonicalEditorPlatform(normalized, canonicalItem)
+      : normalized;
+
     const baselineKey = typeof res.productIndex === 'number' ? res.productIndex : currentProductIndex;
     if (!draftBaselineByProductRef.current[baselineKey]) {
-      draftBaselineByProductRef.current[baselineKey] = JSON.parse(JSON.stringify(normalized));
+      draftBaselineByProductRef.current[baselineKey] = JSON.parse(JSON.stringify(serverPlatforms));
     }
 
     // Re-hydration must MERGE UNDER the seller's saved draft. On a fresh mount platformsRef
@@ -695,12 +734,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       // If the request began against an empty editor but the seller typed while
       // AsyncStorage was in flight, merge under the CURRENT values instead of
       // replacing them with the request-time empty snapshot.
-      const draftMerged = hydratePlatformsFromBackend(normalized, existing);
+      const draftMergedFromCache = hydratePlatformsFromBackend(serverPlatforms, existing);
+      const draftMerged = canonicalItem
+        ? reconcileCanonicalEditorPlatform(draftMergedFromCache, canonicalItem)
+        : draftMergedFromCache;
       const hydrated = wasEmptyAtRequest && Object.keys(platformsRef.current || {}).length > 0
         ? hydratePlatformsFromBackend(draftMerged, platformsRef.current)
         : draftMerged;
       const enriched = applyProgressiveEnrichment(
-        draftBaselineByProductRef.current[baselineKey] || normalized,
+        draftBaselineByProductRef.current[baselineKey] || serverPlatforms,
         hydrated,
         res.enrichment,
       );
@@ -708,7 +750,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       updatePlatforms(() => enriched);
       lastHydratedJobRef.current = currentJobId;
     })();
-  }, [results, jobId, currentProductIndex, editorSessionKey]);
+  }, [results, jobId, currentProductIndex, editorSessionKey, canonicalItems, route.params]);
 
 
   // ========== AUTO-SAVE: local-first, backend when possible ==========
@@ -1879,8 +1921,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           selectedPlatformsToPublish: [],
         }
       });
+      const responseBody = await res.json().catch(() => null);
 
       if (res.ok) {
+        const serverItem = requireServerItem(responseBody);
+        updatePlatforms(prev => reconcileCanonicalEditorPlatform(prev, serverItem));
         log.debug('[doSaveToInventory] Saved to inventory successfully');
 
         // Navigate to confirmation screen
@@ -1893,9 +1938,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         navigation.navigate('PublishConfirmation', {
           productId,
           variantId,
-          title: canonical.title,
-          description: canonical.description,
-          price: canonical.price,
+          title: serverItem.Title,
+          description: serverItem.Description,
+          price: serverItem.Price,
           imageUrl: savedImages[coverIndex] || effectiveResult?.sourceImageUrl || '',
           platforms: [], // No external platforms
           quantityByPlatform: quantityByPlatformComputed,
@@ -1904,7 +1949,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         } as any);
 
       } else {
-        const errorText = await res.text();
+        const errorText = responseBody?.message || JSON.stringify(responseBody || {});
         log.error('[doSaveToInventory] Save failed:', errorText);
         showErrorModal('Couldn’t save', `We couldn’t save this to inventory.\n\n${errorText}`, 'error');
       }
@@ -3015,7 +3060,12 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               )}
             </>
           ) : (
-            <Text style={styles.meta}>No results</Text>
+            <View style={styles.emptyState}>
+              {jobId ? <ActivityIndicator /> : null}
+              <Text style={styles.meta}>
+                {jobId ? 'Restoring generated details...' : 'Generated details unavailable'}
+              </Text>
+            </View>
           )}
       </ScrollView>
 
@@ -3639,6 +3689,7 @@ const styles = StyleSheet.create({
   heading: { color: '#000', fontSize: 24, fontWeight: '700', marginBottom: 6 },
   subheading: { color: '#000', fontSize: 18, fontWeight: '600', marginBottom: 4 },
   meta: { color: '#000', marginBottom: 4 },
+  emptyState: { alignItems: 'center', gap: 8, paddingVertical: 24 },
   enrichmentNotice: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
