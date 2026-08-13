@@ -55,7 +55,7 @@ type Props = {
   visible: boolean;
   creating: boolean;
   onClose: () => void;
-  onSubmit: (input: NewClearoutInput) => void;
+  onSubmit: (input: NewClearoutInput) => void | Promise<void>;
   dark?: boolean;
 };
 
@@ -131,6 +131,8 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
   const [target, setTarget] = useState('');
   const [goalEdited, setGoalEdited] = useState(false);
   const [deadline, setDeadline] = useState<Date>(() => addCalendarDays(new Date(), 14));
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   // Inventory picker state
   const [rows, setRows] = useState<InventoryRow[]>([]);
@@ -162,6 +164,8 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
       setQuery('');
       setPricingById({});
       setLaunchPrices({});
+      setSubmitting(false);
+      submittingRef.current = false;
       pricingQueueRef.current = [];
       pricingAttemptedRef.current = new Set();
       pricingActiveRef.current = 0;
@@ -340,6 +344,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
     true;
 
   const isLast = step === STEPS.length - 1;
+  const submitBusy = creating || submitting;
 
   const toggleRow = (id: string) => {
     Haptics.selectionAsync().catch(() => undefined);
@@ -366,10 +371,12 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
   };
 
   const next = () => {
-    if (!canAdvance || creating) return;
+    if (!canAdvance || creating || submittingRef.current) return;
     tap();
     if (isLast) {
-      onSubmit({
+      submittingRef.current = true;
+      setSubmitting(true);
+      const input: NewClearoutInput = {
         title: name.trim() || undefined,
         targetRevenue: targetNum,
         timeframeDays,
@@ -378,7 +385,15 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
         launchPrices: Object.fromEntries(
           Object.entries(launchPrices).filter(([id, price]) => selected.has(id) && Number.isFinite(price) && price > 0),
         ),
-      });
+      };
+      void (async () => {
+        try {
+          await onSubmit(input);
+        } finally {
+          submittingRef.current = false;
+          setSubmitting(false);
+        }
+      })();
       return;
     }
     setStep(s => s + 1);
@@ -665,18 +680,19 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
             </Animated.View>
 
             {/* CTA */}
-            <TouchableOpacity
-              style={[styles.cta, !canAdvance && styles.ctaDisabled]}
+            <Pressable
+              style={[styles.cta, (!canAdvance || submitBusy) && styles.ctaDisabled]}
+              onPressIn={isLast ? next : undefined}
               onPress={next}
-              disabled={!canAdvance || creating}
-              activeOpacity={0.9}
+              disabled={!canAdvance || submitBusy}
+              accessibilityState={{ disabled: !canAdvance || submitBusy, busy: submitBusy && isLast }}
             >
-              {creating && isLast ? (
+              {submitBusy && isLast ? (
                 <ActivityIndicator color={theme.colors.onPrimary} size="small" />
               ) : (
                 <Text style={[styles.ctaText, { color: theme.colors.onPrimary }]}>{isLast ? 'Start clearout' : 'Next'}</Text>
               )}
-            </TouchableOpacity>
+            </Pressable>
           </View>
         </KeyboardAvoidingView>
       </View>

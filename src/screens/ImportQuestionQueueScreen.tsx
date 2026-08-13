@@ -69,6 +69,7 @@ import {
   TitleQualityCard,
   WhichOneQuestionCard,
 } from '../components/import/QuestionQueueCards';
+import SwipeCard, { SwipeLabelsContext } from '../components/import/SwipeCard';
 import type {
   BulkResolveResult,
   CanonicalRef,
@@ -1039,16 +1040,29 @@ export default function ImportQuestionQueueScreen() {
           <QuestionScroll>
             {detailsLoading && hydratedItems.length === 0 ? <CardLoading /> : null}
             {currentCard.kind === 'pair' && hydratedItems[0] ? (
-              <PairQuestionCard
-                item={hydratedItems[0]}
-                candidate={hydratedCandidateForFirst}
-                platformName={platform}
-                platformKey={route.params.platformName?.toLowerCase()}
-                busy={busy}
-                onAnswer={(answer) => void answerPair(answer)}
-                onUndo={() => void undoLastAnswer()}
-                undoDisabled={!lastAnswer?.length || undoBusy}
-              />
+              <SwipeLabelsContext.Provider value={{
+                right: currentCard.reason === 'field_conflict' ? 'Keep' : 'Link',
+                left: currentCard.reason === 'field_conflict' ? 'Take' : 'New',
+                up: 'Later',
+              }}>
+                <SwipeCard
+                  key={currentCard.id}
+                  enabled={!busy && !detailsLoading}
+                  onYes={() => void answerPair('primary')}
+                  onNo={() => void answerPair('secondary')}
+                >
+                  <PairQuestionCard
+                    item={hydratedItems[0]}
+                    candidate={hydratedCandidateForFirst}
+                    platformName={platform}
+                    platformKey={route.params.platformName?.toLowerCase()}
+                    busy={busy}
+                    onAnswer={(answer) => void answerPair(answer)}
+                    onUndo={() => void undoLastAnswer()}
+                    undoDisabled={!lastAnswer?.length || undoBusy}
+                  />
+                </SwipeCard>
+              </SwipeLabelsContext.Provider>
             ) : null}
             {currentCard.kind === 'which_one' && hydratedItems[0] ? (
               <WhichOneQuestionCard

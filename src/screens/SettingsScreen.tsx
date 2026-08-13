@@ -1,7 +1,7 @@
 // Profile tab — identity header (avatar / name / org), live Connected Platforms
 // preview, then the settings grid. Every card goes somewhere REAL.
 
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Alert, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ErrorModal from '../components/ErrorModal';
 import { useNavigation } from '@react-navigation/native';
@@ -20,9 +20,8 @@ import PlatformAvatar from '../components/PlatformAvatar';
 import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { normalizeDisplayName } from '../config/platforms';
 import { useImportStatus } from '../hooks/useImportStatus';
-import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
-import { findResumableCsvImports } from '../lib/resumableImports';
-import { PendingCsvImportRow } from '../components/import/PendingCsvImportRow';
+import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 
 type Card = {
   key: string;
@@ -31,12 +30,11 @@ type Card = {
   onPress: () => void;
 };
 
-const statusOf = (raw?: string): { label: string; color: string } => {
-  const s = (raw || '').toLowerCase();
-  if (s.includes('active') || s.includes('connect') || s === 'ok' || s === 'live') return { label: 'Connected', color: '#43631A' };
-  if (s.includes('error') || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Needs reconnect', color: '#DC2626' };
-  if (s.includes('sync')) return { label: 'Syncing…', color: '#A2611A' };
-  return { label: raw || 'Connected', color: '#71717A' };
+const statusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
+  if (uiState === 'connected') return { label: 'Connected', color: '#43631A' };
+  if (uiState === 'needs-computer') return { label: 'Finish setup', color: '#BA7517' };
+  if (uiState === 'checking') return { label: 'Checking', color: '#71717A' };
+  return { label: 'Connect', color: '#71717A' };
 };
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
@@ -50,6 +48,7 @@ const SettingsScreen = () => {
   const { user } = useUser();
   const { currentOrg } = useOrg();
   const { liveConnections, refresh } = usePlatformConnections();
+  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
   // Import inbox aggregate — feeds the passive "needs you" badge on Integrations.
   const importStatus = useImportStatus();
 
@@ -60,9 +59,9 @@ const SettingsScreen = () => {
   const displayName = user?.fullName || user?.firstName || 'Your account';
   const orgLine = currentOrg?.name || user?.primaryEmailAddress?.emailAddress || '';
   const platformPreview = (liveConnections || []).filter(isVisiblePlatformConnection).slice(0, 4);
-  const resumableCsvImports = useMemo(
-    () => findResumableCsvImports(importStatus),
-    [importStatus.connections, importStatus.recentImports],
+  const integrationAttentionCount = importStatus.lanes.matches.byConnection.reduce(
+    (total, connection) => total + connection.count,
+    0,
   );
   // Dev tools (dev builds only): the agent bundle + the raw auth token.
   const openDevTools = () => {
@@ -163,27 +162,15 @@ const SettingsScreen = () => {
           onPress={() => navigation.navigate('Connections')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
-          {importStatus.totalNeedsYou > 0 && (
+          {integrationAttentionCount > 0 && (
             <View style={styles.needsBadge}>
-              <Text style={styles.needsBadgeText}>{importStatus.totalNeedsYou}</Text>
+              <Text style={styles.needsBadgeText}>{integrationAttentionCount}</Text>
             </View>
           )}
           <View style={styles.sectionChevron}>
             <ChevronRight size={16} color="#71717A" />
           </View>
         </TouchableOpacity>
-        {resumableCsvImports.map((entry) => (
-          <PendingCsvImportRow
-            key={entry.importId || entry.connectionId}
-            pendingItems={entry.pendingItems}
-            onPress={() => navigation.navigate('ImportQuestionQueue', {
-              connectionId: entry.connectionId,
-              importId: entry.importId,
-              platformName: 'csv',
-            })}
-            style={styles.resumeImport}
-          />
-        ))}
         <View style={styles.platformCard}>
           {platformPreview.length === 0 ? (
             <TouchableOpacity
@@ -202,7 +189,11 @@ const SettingsScreen = () => {
             </TouchableOpacity>
           ) : (
             platformPreview.map((c: any, i: number) => {
-              const st = statusOf(c.Status);
+              const connectStatus = derivePlatformConnectStatus(c.PlatformType, liveConnections, {
+                computerOnline,
+                presenceLoaded,
+              });
+              const st = statusOf(connectStatus.uiState);
               return (
                 <TouchableOpacity
                   key={c.Id}
@@ -256,7 +247,6 @@ const SettingsScreen = () => {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F6F7F4' },
-  resumeImport: { marginBottom: 10 },
 
   identityRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24 },
   avatar: { width: 56, height: 56, borderRadius: 28 },

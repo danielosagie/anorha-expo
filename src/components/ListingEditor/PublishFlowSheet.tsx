@@ -140,6 +140,11 @@ export default function PublishFlowSheet({
           active={visible}
           onBack={displayedSteps.length > 0 ? () => setStepIndex(displayedSteps.length - 1) : close}
           progress={{ current: totalSteps, total: totalSteps }}
+          productSummary={{
+            ...confirmationProps.productSummary,
+            imageUrl: confirmationProps.productSummary.imageUrl
+              || editorProps.images.find((uri): uri is string => typeof uri === 'string' && uri.trim().length > 0),
+          }}
         />
       ) : (
         <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
