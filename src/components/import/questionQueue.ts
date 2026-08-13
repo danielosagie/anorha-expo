@@ -47,33 +47,59 @@ export interface QuestionHandoffOffer {
   decisionLabel: string;
 }
 
+export interface ConnectionSyncRules {
+  productDetailsSoT?: unknown;
+  inventorySoT?: unknown;
+  sourceOfTruth?: unknown;
+}
+
+export type V7ReviewOutcome = 'linked' | 'added' | 'skipped';
+
+export interface V7ReviewLedgerEntry {
+  platformId: string;
+  item: SyncItem;
+  outcome: V7ReviewOutcome;
+  catalogTitle?: string | null;
+  decisionLabel?: string;
+  valueOverride?: ResolveValueOverride;
+  updatedAt: number;
+}
+
+export const V7_REVIEW_SECTION_LABELS = {
+  needs: 'NEEDS A LOOK',
+  linked: 'LINKED',
+  added: 'ADDED',
+  skipped: 'SKIPPED',
+} as const;
+
+export const V7_REVIEW_SECTION_ACTIONS = {
+  linked: 'Undo',
+  added: 'Undo',
+  skipped: 'Add',
+} as const;
+
+export type ConflictSourceOfTruth = 'ANORHA' | 'PLATFORM';
+
 export const HANDOFF_REASONS: ReadonlySet<GroupKey> = new Set([
   'multiple_candidates',
   'weak_match',
-  'field_conflict',
   'stale_link',
-  'look_alike_group',
-  'duplicate_target',
-  'bundle',
 ]);
 
 const HANDOFF_CARD_KINDS: ReadonlySet<QuestionCardKind> = new Set([
   'pair',
-  'which_one',
+]);
+
+const GROUP_CARD_KINDS: ReadonlySet<QuestionCardKind> = new Set([
   'look_alike_group',
   'duplicate_target',
   'bundle',
 ]);
 
 function canHandoff(card: QuestionCardModel, answer: CardAnswer): boolean {
-  if (answer === 'unsure') return false;
+  if (answer !== 'primary') return false;
   if (!HANDOFF_REASONS.has(card.reason) || !HANDOFF_CARD_KINDS.has(card.kind)) return false;
-  // Candidate identities vary by card. "It's new" is reusable, but selecting
-  // a candidate is not.
-  if (card.kind === 'which_one') return answer === 'secondary';
-  // A bundle row has one real CAS identity, but its detected parts do not.
-  // Applying "Separate items" across cards would require inventing part ids.
-  return card.kind !== 'bundle' || answer === 'primary';
+  return Boolean(card.items[0] && candidateForItem(card.items[0]));
 }
 
 function cardKindFor(reason: GroupKey): QuestionCardKind {
@@ -135,7 +161,7 @@ export function buildQuestionCards(items: SyncItem[]): QuestionCardModel[] {
       continue;
     }
     // Failed commits are ONE decision ("try them again?"), not N cards. A
-    // failed import can strand hundreds of these — run 7 found a connection
+    // failed import can strand hundreds of these. Run 7 found a connection
     // that was 440 commit_failed rows showing "0 questions"; as a batch card
     // the whole pile is one tap, and the retry job's drain also sweeps any
     // stuck pending rows on the connection.
@@ -169,9 +195,25 @@ export function buildQuestionCards(items: SyncItem[]): QuestionCardModel[] {
 }
 
 /**
+ * V7 asks only pair and pick-one questions. Field conflicts are returned by the
+ * resolver but are settled from sync rules before the seller sees the queue.
+ * Failed commits and legacy question classes stay in the review list instead
+ * of mounting a blocking question surface.
+ */
+export function buildV7QuestionCards(items: SyncItem[]): QuestionCardModel[] {
+  return buildQuestionCards(items).filter((card) =>
+    card.kind === 'which_one'
+    || (card.kind === 'pair' && card.reason !== 'field_conflict'));
+}
+
+export function fieldConflictItems(items: SyncItem[]): SyncItem[] {
+  return items.filter((item) => item.attention === 'field_conflict');
+}
+
+/**
  * ITEM count left across cards once some rows have settled. Every count a
- * seller sees in one flow — front door review count, guess-handoff
- * interstitial, deck "N left" — must count ITEMS, never cards: run 8 P2-3 saw
+ * seller sees in one flow, from the front door count to deck "N left", must
+ * count ITEMS, never cards. Run 8 P2-3 saw
  * "6" (cards) then "9 left" (items) within thirty seconds of each other.
  */
 export function remainingItemCount(
@@ -185,6 +227,62 @@ export function remainingItemCount(
     }
   }
   return total;
+}
+
+/**
+ * The shared V7 question count used by the badges and the queue itself. Calling
+ * the card builder here keeps excluded reason classes from drifting back into
+ * an attention badge.
+ */
+export function v7QuestionItemCount(items: SyncItem[]): number {
+  return remainingItemCount(buildV7QuestionCards(items));
+}
+
+export function deriveV7AttentionCounts(connections: Array<{
+  connectionId: string;
+  platformName: string;
+  items: SyncItem[];
+}>): {
+  count: number;
+  byConnection: Array<{ connectionId: string; platformName: string; count: number }>;
+} {
+  const byConnection = connections.flatMap((connection) => {
+    const count = v7QuestionItemCount(connection.items);
+    return count > 0 ? [{
+      connectionId: connection.connectionId,
+      platformName: connection.platformName,
+      count,
+    }] : [];
+  });
+  return {
+    count: byConnection.reduce((total, connection) => total + connection.count, 0),
+    byConnection,
+  };
+}
+
+/**
+ * Keeps unresolved rows in NEEDS A LOOK and moves a settled ledger row into
+ * its outcome section as soon as it leaves the authoritative attention list.
+ */
+export function buildV7ReviewSections(
+  needsAttention: SyncItem[],
+  ledger: V7ReviewLedgerEntry[],
+): {
+  needs: SyncItem[];
+  linked: V7ReviewLedgerEntry[];
+  added: V7ReviewLedgerEntry[];
+  skipped: V7ReviewLedgerEntry[];
+} {
+  const needsIds = new Set(needsAttention.map((item) => item.platformId));
+  const settled = (outcome: V7ReviewOutcome) => ledger.filter(
+    (entry) => entry.outcome === outcome && !needsIds.has(entry.platformId),
+  );
+  return {
+    needs: needsAttention,
+    linked: settled('linked'),
+    added: settled('added'),
+    skipped: settled('skipped'),
+  };
 }
 
 /**
@@ -242,7 +340,7 @@ function decision(
     canonicalId,
     valueOverride,
     // SyncItems.Version starts at 1, so a fabricated 0 can NEVER match the
-    // server's CAS — every such item is a guaranteed conflict that reads to the
+    // server's CAS. Every such item is a guaranteed conflict that reads to the
     // seller as a silent no-op. Send undefined instead: the caller drops these
     // and says so, rather than shipping an answer we know cannot save.
     version: Number.isInteger(item.version) ? (item.version as number) : undefined,
@@ -260,6 +358,49 @@ export function pairDecision(item: SyncItem, answer: CardAnswer): QueueDecision 
   }
   if (answer === 'primary' && candidate) return decision(item, 'link', candidate.id);
   return decision(item, 'create');
+}
+
+function normalizeSourceOfTruth(value: unknown): ConflictSourceOfTruth | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'PLATFORM') return 'PLATFORM';
+  if (normalized === 'ANORHA' || normalized === 'SSSYNC') return 'ANORHA';
+  return null;
+}
+
+export function conflictSourceOfTruth(
+  item: SyncItem,
+  rules?: ConnectionSyncRules | null,
+): ConflictSourceOfTruth {
+  const legacyRule = normalizeSourceOfTruth(rules?.sourceOfTruth);
+  const conflicts = item.fieldConflicts?.length ? item.fieldConflicts : [{ field: '' }];
+  const sources = conflicts.map(({ field }) => {
+    const normalizedField = field?.trim().toLowerCase() ?? '';
+    const fieldRule = normalizedField === 'stock'
+      || normalizedField === 'inventory'
+      || normalizedField === 'quantity'
+      ? rules?.inventorySoT
+      : rules?.productDetailsSoT;
+    return normalizeSourceOfTruth(fieldRule) ?? legacyRule ?? 'ANORHA';
+  });
+  const first = sources[0] ?? 'ANORHA';
+  return sources.every((source) => source === first) ? first : 'ANORHA';
+}
+
+export function fieldConflictDecision(
+  item: SyncItem,
+  rules?: ConnectionSyncRules | null,
+): QueueDecision {
+  return pairDecision(item, conflictSourceOfTruth(item, rules) === 'PLATFORM' ? 'primary' : 'secondary');
+}
+
+export function fieldConflictDecisionLabel(
+  item: SyncItem,
+  rules?: ConnectionSyncRules | null,
+): string {
+  return conflictSourceOfTruth(item, rules) === 'PLATFORM'
+    ? 'Used store details'
+    : 'Kept your details';
 }
 
 export function whichOneDecision(
@@ -302,59 +443,8 @@ export function groupDecisions(card: QuestionCardModel, answer: CardAnswer): Que
 export function decisionsForCard(card: QuestionCardModel, answer: CardAnswer): QueueDecision[] {
   if (card.kind === 'pair' && card.items[0]) return [pairDecision(card.items[0], answer)];
   if (card.kind === 'which_one' && card.items[0]) return [whichOneDecision(card.items[0], answer)];
-  if (HANDOFF_CARD_KINDS.has(card.kind)) return groupDecisions(card, answer);
+  if (GROUP_CARD_KINDS.has(card.kind)) return groupDecisions(card, answer);
   return [];
-}
-
-export type BestGuessAction = 'link' | 'add';
-
-export interface BestGuessCard {
-  card: QuestionCardModel;
-  action: BestGuessAction;
-  decisions: QueueDecision[];
-}
-
-// Kinds whose primary answer needs no extra human input. which_one needs a
-// candidate selection, bundle invents part identities, title_quality needs
-// text, commit_failed is a retry, so none of those can be pre-checked.
-const BEST_GUESS_KINDS: ReadonlySet<QuestionCardKind> = new Set([
-  'pair',
-  'look_alike_group',
-  'duplicate_target',
-]);
-
-/**
- * The cards confident enough to pre-check on the "First, our best guesses"
- * screen. A best guess sends EXACTLY what tapping the primary answer in the
- * deck would send (same decisions, same versions), so a confirmed checklist
- * row and an answered card are indistinguishable server-side. The screen
- * groups rows by what the tap does, so a card whose primary decisions mix
- * outcomes (some link, some add) cannot sit truthfully in either section and
- * stays in the one-card deck instead.
- */
-export function selectBestGuessCards(cards: QuestionCardModel[]): BestGuessCard[] {
-  const guesses: BestGuessCard[] = [];
-  for (const card of cards) {
-    if (!BEST_GUESS_KINDS.has(card.kind)) continue;
-    if (card.items[0]?.recommended !== 'primary') continue;
-    const decisions = decisionsForCard(card, 'primary');
-    if (decisions.length === 0 || decisions.length !== card.items.length) continue;
-    const action: BestGuessAction | null = decisions.every((entry) => entry.outcome === 'linked')
-      ? 'link'
-      : decisions.every((entry) => entry.outcome === 'added')
-        ? 'add'
-        : null;
-    if (!action) continue;
-    guesses.push({ card, action, decisions });
-  }
-  return guesses;
-}
-
-export function bestGuessFooterLabel(linkCount: number, addCount: number): string {
-  const parts: string[] = [];
-  if (linkCount > 0) parts.push(`${linkCount} link`);
-  if (addCount > 0) parts.push(`${addCount} add as new`);
-  return parts.join(' · ');
 }
 
 export function handoffKey(

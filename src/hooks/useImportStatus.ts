@@ -6,6 +6,8 @@ import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { useOptimizerQueues } from './useOptimizerQueues';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { deriveV7AttentionCounts } from '../components/import/questionQueue';
+import type { SyncItem } from '../types/syncItem';
 
 const log = createLogger('useImportStatus');
 
@@ -18,7 +20,7 @@ export interface HubLaneConnection {
 }
 
 // Full per-connection row for the hub's "Your stores" list (every enabled
-// connection, whether or not it needs attention). Additive to the hub's output —
+// connection, whether or not it needs attention). Additive to the hub's output,
 // derived from the same aggregate/fan-out data the lanes already consume.
 export interface HubConnection {
   /** PlatformConnections.Id used to open import review or sync settings. */
@@ -43,27 +45,26 @@ export interface ImportStatusData {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  /** questions + required — the single OWED number the hero shows. Polish never counts. */
+  /** Exact number of items the V7 review queue will ask about. */
   totalNeedsYou: number;
   scanning: ImportScanning[];
   /** Every enabled connection, for the hub's "Your stores" list. */
   connections: HubConnection[];
   recentImports: InboxRecentImport[];
   lanes: {
-    /** Questions — items waiting on a human answer (the deck). */
+    /** Questions: items waiting on a human answer (the deck). */
     matches: { count: number; byConnection: HubLaneConnection[] };
-    /** Required — a connected store refuses these until fixed. OWED. */
+    /** Required: a connected store refuses these until fixed. OWED. */
     required: { count: number; platforms: string[] };
-    /** Polish — publishable but thin. Invited, never owed, never in the hero. */
+    /** Polish: publishable but thin. Invited, never owed, never in the hero. */
     polish: { count: number };
   };
 }
 
 // ---------------------------------------------------------------------------
-// Backend aggregate (GET /api/sync/inbox/summary) — one request that replaces
-// the per-connection fan-out below when the endpoint is present. Exported so a
-// future typed client can reuse the exact shape. NOT yet in prod: the hook
-// falls back to the fan-out path whenever this endpoint is absent/broken.
+// Backend aggregate (GET /api/sync/inbox/summary), verified against each
+// connection's exact V7 resolution payload before any attention count renders.
+// Exported so a future typed client can reuse the exact shape.
 // ---------------------------------------------------------------------------
 export interface InboxSummaryConnection {
   connectionId: string;
@@ -92,8 +93,38 @@ export interface InboxSummaryResponse {
   recentImports: InboxRecentImport[];
 }
 
-// Single authoritative aggregate fetch. A malformed or unavailable response is
-// an error state, never a fabricated empty inbox.
+// A malformed or unavailable aggregate payload is an error state. Resolution
+// failures preserve only that connection's server count.
+export async function reconcileInboxAttention(
+  aggregate: InboxSummaryResponse,
+  fetchResolutionItems: (connectionId: string) => Promise<SyncItem[]>,
+): Promise<InboxSummaryResponse> {
+  const connections = await Promise.all(aggregate.connections.map(async (connection) => {
+    if (connection.needsAttention === 0) return connection;
+
+    try {
+      const items = await fetchResolutionItems(connection.connectionId);
+      const derived = deriveV7AttentionCounts([{
+        connectionId: connection.connectionId,
+        platformName: connection.displayName || connection.platformType,
+        items,
+      }]);
+      return { ...connection, needsAttention: derived.count };
+    } catch {
+      return connection;
+    }
+  }));
+
+  return {
+    ...aggregate,
+    totalNeedsAttention: connections.reduce(
+      (total, connection) => total + connection.needsAttention,
+      0,
+    ),
+    connections,
+  };
+}
+
 async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
   try {
     const res = await apiFetch('/api/sync/inbox/summary');
@@ -102,7 +133,7 @@ async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
     if (!j || typeof j.totalNeedsAttention !== 'number' || !Array.isArray(j.connections)) {
       return null; // malformed body → fall back
     }
-    return {
+    const aggregate: InboxSummaryResponse = {
       totalNeedsAttention: Number(j.totalNeedsAttention) || 0,
       byReason: j.byReason && typeof j.byReason === 'object' ? j.byReason : {},
       connections: j.connections.map((c: any) => ({
@@ -126,8 +157,22 @@ async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
           }))
         : [],
     };
+
+    return reconcileInboxAttention(aggregate, async (connectionId) => {
+      const resolution = await apiFetch(
+        `/api/sync/connections/${encodeURIComponent(connectionId)}/resolution`,
+      );
+      if (!resolution.ok) {
+        throw new Error(`resolution fetch failed: ${resolution.status}`);
+      }
+      const payload = await resolution.json() as { needsAttention?: SyncItem[] };
+      if (!Array.isArray(payload?.needsAttention)) {
+        throw new Error('resolution payload missing needsAttention');
+      }
+      return payload.needsAttention;
+    });
   } catch (err: any) {
-    log.debug('inbox summary fetch failed, falling back to fan-out', err?.message);
+    log.debug('inbox status verification failed', err?.message);
     return null;
   }
 }
@@ -135,9 +180,10 @@ async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
 /**
  * Client-side aggregate for the Import Inbox (see docs/import-hub-redesign.md).
  *
- * Each refresh cycle reads ONE authoritative server aggregate:
- * GET /api/sync/inbox/summary. If it is unavailable, the screen shows an error
- * instead of manufacturing zero counts from partial per-connection responses.
+ * Each refresh cycle reads the server aggregate, then verifies connections with
+ * nonzero server counts against the same resolution payload and V7 card builder
+ * used by the queue. A failed resolution request preserves that connection's
+ * server count while successful derivations remain authoritative.
  * The optimizer gaps (photos/details lanes) are always computed client-side via
  * useOptimizerQueues (catalog-wide, unscoped) regardless of which path is used.
  *
@@ -172,7 +218,7 @@ export function useImportStatus(): ImportStatusData {
 
   const mountedRef = useRef(true);
   // Monotonic refresh id. refresh() runs from focus, the 20s poll, and
-  // pull-to-refresh, so a slow older request can resolve after a newer one —
+  // pull-to-refresh, so a slow older request can resolve after a newer one.
   // every setState below bails unless its request is still the latest.
   const refreshIdRef = useRef(0);
   const firstDoneRef = useRef(false);
@@ -250,7 +296,7 @@ export function useImportStatus(): ImportStatusData {
     return () => clearInterval(id);
   }, [focused, anyScanning, refresh]);
 
-  // When a scan finishes, pull fresh optimizer counts once — the newly-imported
+  // When a scan finishes, pull fresh optimizer counts once. The newly imported
   // items now need photos/details.
   const prevScanningRef = useRef(false);
   useEffect(() => {
@@ -267,7 +313,7 @@ export function useImportStatus(): ImportStatusData {
         count: c.needsAttention,
       }));
   }, [summary]);
-  const matchesCount = summary?.totalNeedsAttention || 0;
+  const matchesCount = matchesByConnection.reduce((total, connection) => total + connection.count, 0);
 
   const connections = useMemo<HubConnection[]>(() => {
     return (summary?.connections || []).map((c) => ({
@@ -279,9 +325,8 @@ export function useImportStatus(): ImportStatusData {
     }));
   }, [summary]);
 
-  // The hero is only ever OWED work: questions + required. Polish is shown but
-  // never added — that's what lets the number truly reach zero.
-  const totalNeedsYou = matchesCount + optCounts.required;
+  // "Needs you" has one V7 meaning everywhere: a pair or pick-one question.
+  const totalNeedsYou = matchesCount;
 
   const initialLoading =
     (loading && !firstDoneRef.current) || (!optFirstDoneRef.current && optLoading);

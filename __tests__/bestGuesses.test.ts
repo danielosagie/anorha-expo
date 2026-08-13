@@ -3,10 +3,6 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import type { AttentionReason, CanonicalRef, SyncItem } from '../src/types/syncItem.ts';
 
-// questionQueue.ts is app source, so its relative imports are extensionless
-// (Metro resolves them). Node's type stripping does not, so retry failed
-// relative resolutions with a .ts extension before importing the real module:
-// these tests must exercise the REAL decisionsForCard chain, not a stub.
 registerHooks({
   resolve(specifier, context, nextResolve) {
     try {
@@ -21,10 +17,16 @@ registerHooks({
 });
 
 const {
-  bestGuessFooterLabel,
-  buildQuestionCards,
-  decisionsForCard,
-  selectBestGuessCards,
+  advanceHandoffStreak,
+  buildHandoffOffer,
+  buildV7QuestionCards,
+  buildV7ReviewSections,
+  conflictSourceOfTruth,
+  deriveV7AttentionCounts,
+  fieldConflictDecision,
+  remainingItemCount,
+  V7_REVIEW_SECTION_ACTIONS,
+  V7_REVIEW_SECTION_LABELS,
 } = await import('../src/components/import/questionQueue.ts');
 
 function candidate(id: string): CanonicalRef {
@@ -52,160 +54,163 @@ function syncItem(
   };
 }
 
-test('a recommended pair with a candidate is a link guess with the deck\'s exact decisions', () => {
-  const item = syncItem('pair-1', 'weak_match', {
-    recommended: 'primary',
-    candidates: [candidate('cat-1')],
-    version: 7,
-  });
-  const cards = buildQuestionCards([item]);
-  const guesses = selectBestGuessCards(cards);
-
-  assert.equal(guesses.length, 1);
-  assert.equal(guesses[0].action, 'link');
-  assert.deepEqual(guesses[0].decisions, decisionsForCard(guesses[0].card, 'primary'));
-  assert.deepEqual(guesses[0].decisions, [{
-    platformId: 'pair-1',
-    choice: 'link',
-    canonicalId: 'cat-1',
-    valueOverride: undefined,
-    version: 7,
-    outcome: 'linked',
-  }]);
-});
-
-test('a recommended pair with no candidate is an add-as-new guess', () => {
-  const item = syncItem('pair-2', 'weak_match', { recommended: 'primary' });
-  const guesses = selectBestGuessCards(buildQuestionCards([item]));
-
-  assert.equal(guesses.length, 1);
-  assert.equal(guesses[0].action, 'add');
-  assert.equal(guesses[0].decisions[0].choice, 'create');
-  assert.equal(guesses[0].decisions[0].outcome, 'added');
-});
-
-test('items the server did not recommend are never guessed', () => {
-  const items = [
-    syncItem('meh', 'weak_match', { candidates: [candidate('cat-1')] }),
-    syncItem('second', 'weak_match', { recommended: 'secondary', candidates: [candidate('cat-1')] }),
-  ];
-  assert.deepEqual(selectBestGuessCards(buildQuestionCards(items)), []);
-});
-
-test('kinds that need human input never qualify, even when recommended', () => {
-  const items = [
-    syncItem('which', 'multiple_candidates', {
-      recommended: 'primary',
-      candidates: [candidate('cat-1'), candidate('cat-2')],
-    }),
-    syncItem('bundle', 'bundle', { recommended: 'primary', groupId: 'set-1' }),
-    syncItem('title', 'title_quality', { recommended: 'primary' }),
-    syncItem('failed', 'commit_failed', { recommended: 'primary' }),
-  ];
-  assert.deepEqual(selectBestGuessCards(buildQuestionCards(items)), []);
-});
-
-test('a recommended look-alike group is one add guess covering every member', () => {
-  const items = [
-    syncItem('size-s', 'look_alike_group', { recommended: 'primary', groupId: 'tee', version: 2 }),
-    syncItem('size-m', 'look_alike_group', { recommended: 'primary', groupId: 'tee', version: 5 }),
-  ];
-  const guesses = selectBestGuessCards(buildQuestionCards(items));
-
-  assert.equal(guesses.length, 1);
-  assert.equal(guesses[0].action, 'add');
-  assert.equal(guesses[0].card.kind, 'look_alike_group');
-  assert.deepEqual(guesses[0].decisions.map((entry) => [entry.platformId, entry.version]), [
-    ['size-s', 2],
-    ['size-m', 5],
+test('V7 queue emits a pair for a weak match', () => {
+  const cards = buildV7QuestionCards([
+    syncItem('pair-1', 'weak_match', { candidates: [candidate('cat-1')] }),
   ]);
-  assert.ok(guesses[0].decisions.every((entry) =>
-    entry.choice === 'create'
-    && typeof entry.valueOverride === 'object'
-    && entry.valueOverride !== null
-    && (entry.valueOverride as { groupMode?: string }).groupMode === 'combine'));
+  assert.deepEqual(cards.map((card) => card.kind), ['pair']);
 });
 
-test('a recommended duplicate-target group with candidates everywhere is a link guess', () => {
-  const items = [
-    syncItem('dupe-a', 'duplicate_target', {
-      recommended: 'primary',
-      groupId: 'dupes',
-      candidates: [candidate('cat-9')],
-    }),
-    syncItem('dupe-b', 'duplicate_target', {
-      recommended: 'primary',
-      groupId: 'dupes',
-      candidates: [candidate('cat-9')],
-    }),
-  ];
-  const guesses = selectBestGuessCards(buildQuestionCards(items));
-
-  assert.equal(guesses.length, 1);
-  assert.equal(guesses[0].action, 'link');
-  assert.ok(guesses[0].decisions.every((entry) => entry.choice === 'link' && entry.canonicalId === 'cat-9'));
-});
-
-test('a card whose primary decisions mix link and add stays in the deck', () => {
-  const items = [
-    syncItem('dupe-a', 'duplicate_target', {
-      recommended: 'primary',
-      groupId: 'dupes',
-      candidates: [candidate('cat-9')],
-    }),
-    // No candidate: its primary decision falls back to create, mixed outcomes.
-    syncItem('dupe-b', 'duplicate_target', { recommended: 'primary', groupId: 'dupes' }),
-  ];
-  assert.deepEqual(selectBestGuessCards(buildQuestionCards(items)), []);
-});
-
-test('best-guess selection only reads the recommendation from the card\'s first item', () => {
-  const items = [
-    syncItem('size-s', 'look_alike_group', { groupId: 'tee' }),
-    syncItem('size-m', 'look_alike_group', { recommended: 'primary', groupId: 'tee' }),
-  ];
-  assert.deepEqual(selectBestGuessCards(buildQuestionCards(items)), []);
-});
-
-test('mixed classes select only the guessable cards, in card order', () => {
-  const items = [
-    syncItem('pair-1', 'weak_match', { recommended: 'primary', candidates: [candidate('cat-1')] }),
-    syncItem('which', 'multiple_candidates', {
-      recommended: 'primary',
+test('V7 queue emits which-one for multiple candidates', () => {
+  const cards = buildV7QuestionCards([
+    syncItem('which-1', 'multiple_candidates', {
       candidates: [candidate('cat-1'), candidate('cat-2')],
     }),
-    syncItem('pair-2', 'stale_link', {
-      recommended: 'primary',
-      resolution: { kind: 'link', canonical: candidate('cat-3'), confidence: 0.9, via: 'sku' },
+  ]);
+  assert.deepEqual(cards.map((card) => card.kind), ['which_one']);
+});
+
+test('field conflicts and failed commits never enter the V7 question payload', () => {
+  const cards = buildV7QuestionCards([
+    syncItem('field-1', 'field_conflict', { candidates: [candidate('cat-1')] }),
+    syncItem('failed-1', 'commit_failed'),
+  ]);
+  assert.deepEqual(cards, []);
+});
+
+test('badge derivation excludes field conflicts and equals the V7 card item count', () => {
+  const payload = [
+    syncItem('field-1', 'field_conflict', { candidates: [candidate('cat-1')] }),
+    syncItem('pair-1', 'weak_match', { candidates: [candidate('cat-2')] }),
+    syncItem('which-1', 'multiple_candidates', {
+      candidates: [candidate('cat-3'), candidate('cat-4')],
     }),
+    syncItem('failed-1', 'commit_failed'),
   ];
-  const guesses = selectBestGuessCards(buildQuestionCards(items));
+  const cards = buildV7QuestionCards(payload);
+  const cardItemCount = remainingItemCount(cards);
+  const attention = deriveV7AttentionCounts([
+    { connectionId: 'square', platformName: 'Square', items: payload },
+    {
+      connectionId: 'ebay',
+      platformName: 'eBay',
+      items: [syncItem('field-only', 'field_conflict', { candidates: [candidate('cat-5')] })],
+    },
+  ]);
 
-  assert.deepEqual(
-    guesses.map((guess) => [guess.card.items[0].platformId, guess.action]),
-    [['pair-1', 'link'], ['pair-2', 'link']],
-  );
+  assert.equal(cardItemCount, 2);
+  assert.equal(attention.count, cards.length);
+  assert.equal(attention.count, cardItemCount);
+  assert.deepEqual(attention.byConnection, [
+    { connectionId: 'square', platformName: 'Square', count: cardItemCount },
+  ]);
 });
 
-test('the commit_failed batch card in the deck is a retry, never a guess', () => {
-  // Main batches commit_failed rows into ONE card that rides mainCards last,
-  // so selection sees it alongside real questions and must skip it by kind.
-  const items = [
-    syncItem('pair-1', 'weak_match', { recommended: 'primary', candidates: [candidate('cat-1')] }),
-    syncItem('failed-1', 'commit_failed', { recommended: 'primary' }),
-    syncItem('failed-2', 'commit_failed', { recommended: 'primary' }),
-  ];
-  const guesses = selectBestGuessCards(buildQuestionCards(items));
-
-  assert.deepEqual(
-    guesses.map((guess) => [guess.card.items[0].platformId, guess.action]),
-    [['pair-1', 'link']],
-  );
+test('legacy group and title surfaces never enter the V7 question payload', () => {
+  const cards = buildV7QuestionCards([
+    syncItem('group-1', 'look_alike_group', { groupId: 'group' }),
+    syncItem('bundle-1', 'bundle', { groupId: 'bundle' }),
+    syncItem('title-1', 'title_quality'),
+  ]);
+  assert.deepEqual(cards, []);
 });
 
-test('the footer names only the sections that have checked rows', () => {
-  assert.equal(bestGuessFooterLabel(2, 2), '2 link · 2 add as new');
-  assert.equal(bestGuessFooterLabel(3, 0), '3 link');
-  assert.equal(bestGuessFooterLabel(0, 1), '1 add as new');
-  assert.equal(bestGuessFooterLabel(0, 0), '');
+test('platform product rules keep the incoming field value', () => {
+  const item = syncItem('field-1', 'field_conflict', {
+    candidates: [candidate('cat-1')],
+    fieldConflicts: [{ field: 'price', incomingValue: 3, canonicalValue: 20.99 }],
+  });
+  const result = fieldConflictDecision(item, { productDetailsSoT: 'PLATFORM' });
+  assert.equal(result.choice, 'link');
+  assert.equal(result.canonicalId, 'cat-1');
+  assert.equal(result.valueOverride, false);
+});
+
+test('Anorha product rules keep the catalog field value', () => {
+  const item = syncItem('field-2', 'field_conflict', {
+    candidates: [candidate('cat-2')],
+    fieldConflicts: [{ field: 'price', incomingValue: 3, canonicalValue: 20.99 }],
+  });
+  assert.equal(fieldConflictDecision(item, { productDetailsSoT: 'ANORHA' }).valueOverride, true);
+});
+
+test('stock conflicts use inventory source of truth', () => {
+  const item = syncItem('field-3', 'field_conflict', {
+    candidates: [candidate('cat-3')],
+    fieldConflicts: [{ field: 'stock', incomingValue: 2, canonicalValue: 8 }],
+  });
+  assert.equal(conflictSourceOfTruth(item, {
+    productDetailsSoT: 'PLATFORM',
+    inventorySoT: 'ANORHA',
+  }), 'ANORHA');
+});
+
+test('legacy platform source of truth is still honored', () => {
+  const item = syncItem('field-4', 'field_conflict');
+  assert.equal(conflictSourceOfTruth(item, { sourceOfTruth: 'platform' }), 'PLATFORM');
+});
+
+test('missing sync rules default to keeping yours', () => {
+  const item = syncItem('field-5', 'field_conflict');
+  assert.equal(conflictSourceOfTruth(item, null), 'ANORHA');
+});
+
+test('a conflict without a candidate safely becomes a new item', () => {
+  const item = syncItem('field-6', 'field_conflict');
+  const result = fieldConflictDecision(item, { productDetailsSoT: 'ANORHA' });
+  assert.equal(result.choice, 'create');
+  assert.equal(result.outcome, 'added');
+});
+
+test('auto-resolved conflicts move from NEEDS A LOOK to LINKED with the standard action', () => {
+  const item = syncItem('field-ledger', 'field_conflict', {
+    candidates: [candidate('cat-ledger')],
+  });
+  const ledgerEntry = {
+    platformId: item.platformId,
+    item,
+    outcome: 'linked' as const,
+    decisionLabel: 'Kept your details',
+    valueOverride: true,
+    updatedAt: 1,
+  };
+
+  const pending = buildV7ReviewSections([item], [ledgerEntry]);
+  assert.deepEqual(pending.needs.map((entry) => entry.platformId), ['field-ledger']);
+  assert.deepEqual(pending.linked, []);
+
+  const settled = buildV7ReviewSections([], [ledgerEntry]);
+  assert.deepEqual(settled.linked.map((entry) => entry.platformId), ['field-ledger']);
+  assert.deepEqual(Object.values(V7_REVIEW_SECTION_LABELS), [
+    'NEEDS A LOOK',
+    'LINKED',
+    'ADDED',
+    'SKIPPED',
+  ]);
+  assert.equal(V7_REVIEW_SECTION_ACTIONS.linked, 'Undo');
+});
+
+test('three yes answers offer one bulk V7 handoff for the remaining pairs', () => {
+  const cards = ['a', 'b', 'c', 'd', 'e'].map((id, index) => buildV7QuestionCards([
+    syncItem(`pair-${id}`, 'weak_match', {
+      imageUrl: `https://example.com/${id}.jpg`,
+      version: index + 1,
+      candidates: [candidate(`cat-${id}`)],
+    }),
+  ])[0]);
+  let streak = null;
+  for (const card of cards.slice(0, 3)) {
+    streak = advanceHandoffStreak(streak, card, 'primary', card.items[0].imageUrl);
+  }
+  const offer = buildHandoffOffer(streak, cards.slice(3));
+  assert.ok(offer);
+  assert.deepEqual(offer.thumbnails, [
+    'https://example.com/a.jpg',
+    'https://example.com/b.jpg',
+    'https://example.com/c.jpg',
+  ]);
+  assert.deepEqual(offer.decisions.map((decision) => [decision.platformId, decision.choice, decision.canonicalId]), [
+    ['pair-d', 'link', 'cat-d'],
+    ['pair-e', 'link', 'cat-e'],
+  ]);
 });

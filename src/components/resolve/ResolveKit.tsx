@@ -1,13 +1,13 @@
-// ResolveKit — shared primitives for the Match & Optimize v2 resolver flow.
+// ResolveKit: shared primitives for the Match & Optimize v2 resolver flow.
 //
 // Translated from the Anorha handoff lo-fi (wireframes-match-resolve / -optimize)
 // into the app's production style: white surfaces, #E5E7EB hairlines, radius 12,
 // the #93C822 green for the single primary action, and system font + weights
-// (matching PublishConfirmation / InventoryOrders / AddProduct — no Jakarta).
+// (matching PublishConfirmation / InventoryOrders / AddProduct, no Jakarta).
 //
 // The shape every resolver shares: a progress header, a short title + kind tag,
 // the task body, and ONE footer decision (a single primary + a quiet alt).
-// Nothing auto-fixes — the user decides every screen.
+// Nothing auto-fixes. The user decides every screen.
 
 import React from 'react';
 import {
@@ -22,8 +22,6 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import SwipeCard from '../import/SwipeCard';
-import Animated, { useSharedValue, useAnimatedStyle, interpolate, Extrapolation } from 'react-native-reanimated';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -51,7 +49,7 @@ export const RC = {
   warnSoft: '#FFFBEB',
   warnLine: '#FCD34D',
   warnInk: '#92400E',
-  // Lobby (Duolingo path) — orange is the "active step / next action" highlight.
+  // Lobby (Duolingo path): orange is the "active step / next action" highlight.
   orange: '#F5A623',
   orangeDark: '#D4831A',
   orangeSoft: '#FFF3DC',
@@ -89,7 +87,7 @@ export function toneColor(t?: Tone): string {
   return t === 'warn' ? RC.warn : t === 'danger' ? RC.danger : t === 'muted' ? RC.muted : RC.green;
 }
 
-// ── Thumb — product image / hatched placeholder ────────────────────────────
+// ── Thumb: product image / hatched placeholder ────────────────────────────
 export function Thumb({
   uri,
   size = 28,
@@ -116,7 +114,7 @@ export function Thumb({
   );
 }
 
-// ── PlatTag — tiny uppercase platform/source tag ───────────────────────────
+// ── PlatTag: tiny uppercase platform/source tag ───────────────────────────
 export function PlatTag({ name }: { name: string }) {
   return (
     <View style={s.platTag}>
@@ -125,7 +123,7 @@ export function PlatTag({ name }: { name: string }) {
   );
 }
 
-// ── Chip — soft status pill with optional dot ──────────────────────────────
+// ── Chip: soft status pill with optional dot ──────────────────────────────
 export function Chip({
   label,
   tone = 'ok',
@@ -146,7 +144,7 @@ export function Chip({
   );
 }
 
-// ── Check — square checkbox ────────────────────────────────────────────────
+// ── Check: square checkbox ────────────────────────────────────────────────
 export function Check({ on = false, size = 20 }: { on?: boolean; size?: number }) {
   return (
     <View
@@ -160,7 +158,7 @@ export function Check({ on = false, size = 20 }: { on?: boolean; size?: number }
   );
 }
 
-// ── Radio — round selector ─────────────────────────────────────────────────
+// ── Radio: round selector ─────────────────────────────────────────────────
 export function Radio({ on = false, size = 18 }: { on?: boolean; size?: number }) {
   return (
     <View style={[s.radio, { width: size, height: size, borderColor: on ? RC.green : RC.line }]}>
@@ -169,7 +167,7 @@ export function Radio({ on = false, size = 18 }: { on?: boolean; size?: number }
   );
 }
 
-// ── Row — generic bordered selectable row ──────────────────────────────────
+// ── Row: generic bordered selectable row ──────────────────────────────────
 export function Row({
   children,
   active = false,
@@ -199,7 +197,7 @@ export function Row({
   );
 }
 
-// ── OptionRow — radio strategy option (StratOpt / RouteCard) ───────────────
+// ── OptionRow: radio strategy option (StratOpt / RouteCard) ───────────────
 export function OptionRow({
   on,
   title,
@@ -225,7 +223,7 @@ export function OptionRow({
   );
 }
 
-// ── ResultRow — a search/candidate result with a confidence hint ───────────
+// ── ResultRow: a search/candidate result with a confidence hint ───────────
 export function ResultRow({
   on,
   title,
@@ -254,7 +252,7 @@ export function ResultRow({
   );
 }
 
-// ── Field — a labeled input-looking field (manual fill) ────────────────────
+// ── Field: a labeled input-looking field (manual fill) ────────────────────
 export function Field({
   label,
   value,
@@ -290,7 +288,7 @@ export function Field({
   );
 }
 
-// ── Banner — inline warn/danger note ───────────────────────────────────────
+// ── Banner: inline warn/danger note ───────────────────────────────────────
 export function Banner({ text, tone = 'warn', icon = 'alert' }: { text: string; tone?: 'warn' | 'danger'; icon?: IconName }) {
   const c = tone === 'danger' ? RC.danger : RC.warn;
   const bg = tone === 'danger' ? RC.dangerSoft : RC.warnSoft;
@@ -303,7 +301,7 @@ export function Banner({ text, tone = 'warn', icon = 'alert' }: { text: string; 
   );
 }
 
-// ── MiniProgress — thin labeled progress bar (optimize lobby) ──────────────
+// ── MiniProgress: thin labeled progress bar (optimize lobby) ──────────────
 export function MiniProgress({ pct, left, right }: { pct: number; left?: string; right?: string }) {
   return (
     <View>
@@ -320,7 +318,7 @@ export function MiniProgress({ pct, left, right }: { pct: number; left?: string;
   );
 }
 
-// ── ResolveShell — progress · title · body · one footer decision ───────────
+// ── ResolveShell: progress · title · body · one footer decision ───────────
 export function ResolveShell({
   idx,
   total,
@@ -354,7 +352,7 @@ export function ResolveShell({
   alt?: string;
   onPrimary?: () => void;
   onAlt?: () => void;
-  /** Per-item "don't import this" — a quiet corner chip (Duolingo's report
+  /** Per-item "don't import this", a quiet corner chip (Duolingo's report
    *  flag), NEVER a third footer button. The footer is always max two. */
   onIgnore?: () => void;
   topInset?: number;
@@ -432,7 +430,7 @@ export function ResolveShell({
         {onIgnore ? (
           <TouchableOpacity onPress={onIgnore} activeOpacity={0.7} style={s.ignoreBottom}>
             <MaterialCommunityIcons name="trash-can-outline" size={14} color={RC.faint} />
-            <Text style={s.ignoreBottomText}>Ignore — don’t import</Text>
+            <Text style={s.ignoreBottomText}>Ignore, don’t import</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -442,7 +440,7 @@ export function ResolveShell({
 
 const HIT = { top: 10, bottom: 10, left: 10, right: 10 };
 
-// ── TinderShell — the Paper J/H "deck card" chrome ─────────────────────────
+// ── TinderShell: the Paper J/H "deck card" chrome ─────────────────────────
 // Light-gray screen, a peek of the cards behind, then the white decision card:
 //   ✕ · green progress · "N left"   →  badge · title · note · body  →  a single
 //   horizontal action bar: ← back · secondary · green primary · ✕ ignore.
@@ -491,16 +489,10 @@ export function TinderShell({
   const pct = total ? Math.round((idx / total) * 100) : 0;
   const left = Math.max(0, total - idx + 1);
   const ignore = chrome?.onIgnore || onIgnore;
-  const noop = () => {};
-
-  // Down-drag progress (0→1): fades the action bar out and the ignore tray in.
-  const downV = useSharedValue(0);
-  const barFade = useAnimatedStyle(() => ({ opacity: interpolate(downV.value, [0, 0.6], [1, 0], Extrapolation.CLAMP) }));
-  const trayFade = useAnimatedStyle(() => ({ opacity: interpolate(downV.value, [0.05, 0.7], [0, 1], Extrapolation.CLAMP) }));
 
   return (
     <View style={[ts.screen, { paddingTop: topInset + 10, paddingBottom: insets.bottom + 10 }]}>
-      {/* HEADER — outside the card, stays put while the card swipes */}
+      {/* HEADER */}
       <View style={ts.header}>
         <TouchableOpacity onPress={onBack} hitSlop={HIT} activeOpacity={0.7} style={ts.iconBtn}>
           <MaterialCommunityIcons name="arrow-left" size={20} color={RC.muted} />
@@ -508,7 +500,7 @@ export function TinderShell({
         <View style={ts.progTrack}>
           <View style={[ts.progFill, { width: `${pct}%` }]} />
         </View>
-        {/* "N left" — information kept, pill chrome dropped (bare muted text) */}
+        {/* "N left" keeps a bare muted treatment. */}
         <Text style={ts.leftText}>{left} left</Text>
         {chrome?.onMenu ? (
           <TouchableOpacity onPress={chrome.onMenu} hitSlop={HIT} activeOpacity={0.7} style={ts.iconBtn}>
@@ -517,12 +509,11 @@ export function TinderShell({
         ) : null}
       </View>
 
-      {/* CARD — the only thing that swipes */}
+      {/* CARD */}
       <View style={ts.cardArea}>
         <View style={ts.peek2} pointerEvents="none" />
         <View style={ts.peek1} pointerEvents="none" />
-        <SwipeCard onYes={onPrimary || noop} onNo={onAlt || noop} onIgnore={ignore} downShared={downV}>
-          <View style={ts.card}>
+        <View style={ts.card}>
             {!!badge && (
               <View style={[ts.badge, { backgroundColor: `${badge.color}14` }]}>
                 <View style={[ts.badgeDot, { backgroundColor: badge.color }]} />
@@ -556,15 +547,13 @@ export function TinderShell({
             ) : (
               <View style={[ts.body, { flex: 1 }]}>{children}</View>
             )}
-          </View>
-        </SwipeCard>
+        </View>
       </View>
 
-      {/* FOOTER — the action bar; dragging the card down swaps it for the tray */}
+      {/* FOOTER */}
       {!primaryReady && !!primaryGate && <Text style={ts.gate}>{primaryGate}</Text>}
       <View style={ts.footerWrap}>
-        <Animated.View style={barFade}>
-          <View style={ts.bar}>
+        <View style={ts.bar}>
             {chrome ? (
               <TouchableOpacity
                 onPress={chrome.canUndo ? chrome.onUndo : undefined}
@@ -600,13 +589,12 @@ export function TinderShell({
                 <MaterialCommunityIcons name="redo-variant" size={20} color={chrome.canRedo ? RC.muted : RC.faint} />
               </TouchableOpacity>
             ) : null}
-          </View>
-        </Animated.View>
+        </View>
         {ignore ? (
-          <Animated.View pointerEvents="none" style={[ts.ignoreTray, trayFade]}>
-            <MaterialCommunityIcons name="trash-can-outline" size={20} color="#B91C1C" />
-            <Text style={ts.ignoreTrayText}>Release to ignore</Text>
-          </Animated.View>
+          <TouchableOpacity onPress={ignore} activeOpacity={0.75} style={ts.ignoreButton}>
+            <MaterialCommunityIcons name="trash-can-outline" size={16} color={RC.muted} />
+            <Text style={ts.ignoreButtonText}>Don't import</Text>
+          </TouchableOpacity>
         ) : null}
       </View>
     </View>
@@ -663,8 +651,8 @@ const ts = StyleSheet.create({
   undoBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff', borderWidth: 1.5, borderColor: RC.line, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   undoBtnDim: { opacity: 0.4 },
   footerWrap: { marginTop: 12, position: 'relative' },
-  ignoreTray: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 27, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
-  ignoreTrayText: { color: '#B91C1C', fontSize: 15, fontWeight: '800' },
+  ignoreButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  ignoreButtonText: { color: RC.muted, fontSize: 13, fontWeight: '700' },
 });
 
 const s = StyleSheet.create({
@@ -680,7 +668,7 @@ const s = StyleSheet.create({
   progLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
   progLabel: { fontSize: 13, fontWeight: '500', color: RC.muted },
 
-  // title — app scale (add-product modal title is 20/700)
+  // title: app scale (add-product modal title is 20/700)
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   title: { flex: 1, fontSize: 20, fontWeight: '700', color: RC.ink, letterSpacing: -0.3 },
   kind: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, color: RC.faint },
@@ -691,7 +679,7 @@ const s = StyleSheet.create({
   actionLink: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: RC.line, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
   actionLinkText: { fontSize: 13, fontWeight: '600', color: RC.muted },
 
-  // five-card badge — the question type, shown above the title
+  // five-card badge: the question type, shown above the title
   cardBadge: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8 },
   cardBadgeDot: { width: 6, height: 6, borderRadius: 3 },
   cardBadgeText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
@@ -699,7 +687,7 @@ const s = StyleSheet.create({
   // body
   body: { paddingTop: 16, paddingBottom: 12, gap: 9 },
 
-  // footer — mirrors the shared BottomActionBar (green primary · grey alt)
+  // footer: mirrors the shared BottomActionBar (green primary · grey alt)
   footer: { paddingTop: 12, gap: 10 },
   primaryBtn: {
     width: '100%',
@@ -726,11 +714,11 @@ const s = StyleSheet.create({
   secondaryText: { fontSize: 16, fontWeight: '600', color: '#71717A' },
   gate: { fontSize: 13, fontWeight: '600', color: RC.danger, textAlign: 'center', marginBottom: 2 },
 
-  // ignore — the quiet bottom escape hatch (sits under the two decision buttons)
+  // ignore: the quiet bottom escape hatch (sits under the two decision buttons)
   ignoreBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 16, marginTop: 2 },
   ignoreBottomText: { fontSize: 13.5, fontWeight: '600', color: RC.faint },
 
-  // skip pill — quiet per-item escape hatch, floating at the title row's right
+  // skip pill: quiet per-item escape hatch, floating at the title row's right
   // (the design's "skip floats top-right, out of the decision row")
   ignoreChip: {
     flexDirection: 'row',
@@ -774,18 +762,18 @@ const s = StyleSheet.create({
   check: { borderWidth: 1.5, borderRadius: 5, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   radio: { borderWidth: 1.5, borderRadius: 999, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
 
-  // row — form-sized list row (ListingEditorForm scale)
+  // row: form-sized list row (ListingEditorForm scale)
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 56, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12 },
   rowTitle: { fontSize: 15, fontWeight: '600', color: RC.ink },
   rowMeta: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
   hint: { fontSize: 13, fontWeight: '700' },
 
-  // option — form-sized radio option
+  // option: form-sized radio option
   option: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   optionTitle: { fontSize: 15, fontWeight: '600' },
   optionSub: { fontSize: 13, fontWeight: '500', color: RC.muted, marginTop: 2 },
 
-  // field — ListingEditorForm input scale (12/600 label · 15px value · minHeight 48 · r12)
+  // field: ListingEditorForm input scale (12/600 label · 15px value · minHeight 48 · r12)
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 5 },
   fieldLabel: { fontSize: 12, fontWeight: '600', letterSpacing: 0.5, color: RC.muted },
   fieldReq: { fontSize: 11, fontWeight: '700', color: RC.danger },
