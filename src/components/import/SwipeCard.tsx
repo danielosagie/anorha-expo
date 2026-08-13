@@ -6,7 +6,7 @@
 // scroll and the up-pan can fire); the up-pan only activates on a clear
 // upward drag and bows out on any horizontal movement.
 
-import React, { createContext, useContext } from 'react';
+import React, { createContext, useContext, useEffect } from 'react';
 import { StyleSheet, Text, Dimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -46,6 +46,16 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ children, onYes, onNo, onIgnore, 
   const x = useSharedValue(0);
   const y = useSharedValue(0);
   const gone = useSharedValue(false);
+
+  // A failed save leaves the same card mounted after `enabled` cycles back to
+  // true. Bring it home so the visible buttons remain a real retry fallback.
+  useEffect(() => {
+    if (!enabled) return;
+    gone.value = false;
+    x.value = 0;
+    y.value = 0;
+    if (downShared) downShared.value = 0;
+  }, [downShared, enabled, gone, x, y]);
 
   const horiz = Gesture.Pan()
     .enabled(enabled)
