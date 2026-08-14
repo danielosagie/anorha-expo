@@ -13,6 +13,7 @@ import { ensureSupabaseJwt } from '../lib/supabase';
 import BaseModal from './BaseModal';
 import { useOrg } from '../context/OrgContext';
 import { createLogger } from '../utils/logger';
+import { deriveConnectionImportPresentation } from '../lib/connectionImportPresentation';
 const log = createLogger('ConnectedPlatformItem');
 
 // --- Types ---
@@ -71,32 +72,6 @@ const CONNECTION_STATUS = {
     ERROR: 'error',
     SYNCING: 'syncing',
     RECONCILING: 'reconciling',
-};
-
-// --- Helpers ---
-const getStatusDisplay = (status: string): { label: string, color: string, icon: string } => {
-    switch (status?.toLowerCase()) {
-        case CONNECTION_STATUS.ACTIVE:
-            return { label: 'Connected', color: BRAND_PRIMARY, icon: 'check-circle' };
-        case CONNECTION_STATUS.INACTIVE:
-            return { label: 'Inactive', color: '#8E8E93', icon: 'pause-circle' };
-        case CONNECTION_STATUS.PENDING:
-            return { label: 'Ready to Scan', color: '#FF9500', icon: 'progress-clock' };
-        case CONNECTION_STATUS.REVIEW:
-            return { label: 'Review Products', color: '#FF9500', icon: 'sync-alert' };
-        case CONNECTION_STATUS.READY_TO_SYNC:
-            return { label: 'Ready to Sync', color: BRAND_PRIMARY, icon: 'check-circle' };
-        case CONNECTION_STATUS.SCANNING:
-            return { label: 'Scanning...', color: '#5856D6', icon: 'loading' };
-        case CONNECTION_STATUS.SYNCING:
-            return { label: 'Syncing...', color: BRAND_PRIMARY, icon: 'loading' };
-        case CONNECTION_STATUS.RECONCILING:
-            return { label: 'Reconciling...', color: '#5856D6', icon: 'loading' };
-        case CONNECTION_STATUS.ERROR:
-            return { label: 'Error', color: '#FF3B30', icon: 'alert-circle' };
-        default:
-            return { label: status || 'Unknown', color: '#8E8E93', icon: 'help-circle' };
-    }
 };
 
 const getRecommendedAction = (
@@ -184,7 +159,27 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
     const effectiveStatus = progressStatus && CONNECTION_STATUS[progressStatus.toUpperCase() as keyof typeof CONNECTION_STATUS]
         ? progressStatus
         : connection.Status;
-    let statusInfo = getStatusDisplay(effectiveStatus);
+    const importPresentation = deriveConnectionImportPresentation({
+        enabled: connection.IsEnabled !== false,
+        connectionStatus: connection.Status,
+        progressStatus,
+    });
+    const presentationIcon = importPresentation.importInProgress
+        ? 'loading'
+        : importPresentation.kind === 'synced'
+            ? 'check-circle'
+            : importPresentation.kind === 'failed'
+                ? 'alert-circle'
+                : importPresentation.kind === 'disconnected'
+                    ? 'link-off'
+                    : importPresentation.kind === 'review'
+                        ? 'sync-alert'
+                        : 'help-circle';
+    let statusInfo = {
+        label: importPresentation.label,
+        color: importPresentation.color,
+        icon: presentationIcon,
+    };
     const actionConnection = { ...connection, Status: effectiveStatus };
 
     // FB-only computer-aware override. Reuses the EXISTING status vocabulary
@@ -201,10 +196,8 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
         // else leave the existing green 'Connected'.
     }
 
-    const isProgressActive = progressStatus === 'scanning' ||
-        progressStatus === 'syncing' ||
-        progressStatus === 'reconciling' ||
-        progressStatus === 'queued';
+    const importInProgress = importPresentation.importInProgress;
+    const showProgressBar = importInProgress && !!progress;
 
     const rawProgress = typeof progress?.progress === 'number' ? progress.progress : 0;
     const progressValue = rawProgress > 1 ? rawProgress / 100 : rawProgress;
@@ -287,7 +280,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
 
                     {!isEditMode && (
                         <View style={styles.statusContainer}>
-                            {isProgressActive ? (
+                            {showProgressBar ? (
                                 <View style={{ width: '100%', marginTop: 4 }}>
                                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
                                         <Text style={{ fontSize: 10, color: theme.colors.primary }}>
@@ -331,7 +324,7 @@ const ConnectedPlatformItem: React.FC<ConnectedPlatformItemProps> = React.memo((
             </View>
 
             {/* Right column: action buttons (non-edit mode only) */}
-            {!isEditMode && connection && !isProgressActive && (
+            {!isEditMode && connection && !importInProgress && (
                 <View style={styles.connectionActions}>
                     {connection.NeedsReauth && (
                         <TouchableOpacity

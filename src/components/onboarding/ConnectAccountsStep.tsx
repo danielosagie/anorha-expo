@@ -20,7 +20,8 @@ import { listPlatforms } from '../../config/platforms';
 import { type ConnectablePlatform } from '../../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
 import { useFacebookJobStatus } from '../../hooks/useFacebookJobStatus';
-import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../../lib/platformConnectStatus';
+import { derivePlatformConnectStatus } from '../../lib/platformConnectStatus';
+import { connectionImportPresentationsById } from '../../lib/connectionImportPresentation';
 
 const INK = '#1C1B17';
 const SUBTLE = '#8A887E';
@@ -51,8 +52,12 @@ export default function ConnectAccountsStep({
   email?: string;
   onDone: () => void;
 }) {
-  const { liveConnections, refresh } = usePlatformConnections();
+  const { connections, progressByConnectionId, refresh } = usePlatformConnections();
   const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const presentationByConnectionId = useMemo(
+    () => connectionImportPresentationsById({ connections, progressByConnectionId }),
+    [connections, progressByConnectionId],
+  );
 
   // The platform whose combined connect flow (OAuth + link-computer) is open.
   const [flowPlatform, setFlowPlatform] = useState<ConnectablePlatform | null>(null);
@@ -61,8 +66,13 @@ export default function ConnectAccountsStep({
   // must not fabricate an importing state.
   const isFullyConnected = useCallback(
     (key: ConnectablePlatform) =>
-      derivePlatformConnectStatus(key, liveConnections, { computerOnline, presenceLoaded }).isFullyConnected,
-    [liveConnections, computerOnline, presenceLoaded],
+      derivePlatformConnectStatus(
+        key,
+        connections,
+        { computerOnline, presenceLoaded },
+        { presentationByConnectionId },
+      ).isFullyConnected,
+    [connections, computerOnline, presenceLoaded, presentationByConnectionId],
   );
 
   const connectedCount = useMemo(
@@ -97,10 +107,14 @@ export default function ConnectAccountsStep({
         <Text style={styles.sectionLabel}>CONNECTED STORES</Text>
 
         {PLATFORMS.map((p, i) => {
-          const connected = isFullyConnected(p.key);
-          const connection = liveConnections.find((item) => item.PlatformType.toLowerCase() === p.key && isVisiblePlatformConnection(item));
-          const connectionStatus = String(connection?.Status || '').toLowerCase();
-          const importing = ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync'].includes(connectionStatus);
+          const platformStatus = derivePlatformConnectStatus(
+            p.key,
+            connections,
+            { computerOnline, presenceLoaded },
+            { presentationByConnectionId },
+          );
+          const connected = platformStatus.isFullyConnected;
+          const importing = platformStatus.importing;
           return (
             <View key={p.key} style={[styles.row, i > 0 && styles.rowBorder]}>
               <View style={styles.logoSquare}>

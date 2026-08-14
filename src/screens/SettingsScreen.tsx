@@ -1,7 +1,7 @@
 // Profile tab — identity header (avatar / name / org), live Connected Platforms
 // preview, then the settings grid. Every card goes somewhere REAL.
 
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ErrorModal from '../components/ErrorModal';
 import { useNavigation } from '@react-navigation/native';
@@ -21,7 +21,11 @@ import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { normalizeDisplayName } from '../config/platforms';
 import { useImportStatus } from '../hooks/useImportStatus';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
-import { derivePlatformConnectStatus, isVisiblePlatformConnection } from '../lib/platformConnectStatus';
+import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
+import {
+  connectionImportPresentationsById,
+  partitionSellingPlatformConnections,
+} from '../lib/connectionImportPresentation';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('SettingsScreen');
@@ -34,6 +38,7 @@ type Card = {
 };
 
 const statusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
+  if (uiState === 'importing') return { label: 'Importing inventory...', color: '#A2611A' };
   if (uiState === 'connected') return { label: 'Connected', color: '#43631A' };
   if (uiState === 'needs-computer') return { label: 'Finish setup', color: '#BA7517' };
   if (uiState === 'checking') return { label: 'Checking', color: '#71717A' };
@@ -51,7 +56,8 @@ const SettingsScreen = () => {
   const { user } = useUser();
   const { currentOrg } = useOrg();
   const {
-    liveConnections,
+    connections,
+    progressByConnectionId,
     refresh,
     hasResolvedConnections,
     error: connectionsError,
@@ -64,9 +70,26 @@ const SettingsScreen = () => {
 
   const displayName = user?.fullName || user?.firstName || 'Your account';
   const orgLine = currentOrg?.name || user?.primaryEmailAddress?.emailAddress || '';
-  const platformPreview = (liveConnections || []).filter(isVisiblePlatformConnection).slice(0, 4);
+  const presentationByConnectionId = useMemo(
+    () => connectionImportPresentationsById({
+      connections,
+      aggregateConnections: importStatus.connections,
+      recentImports: importStatus.recentImports,
+      progressByConnectionId,
+    }),
+    [connections, importStatus.connections, importStatus.recentImports, progressByConnectionId],
+  );
+  const { active: activeConnections } = useMemo(
+    () => partitionSellingPlatformConnections(connections, presentationByConnectionId),
+    [connections, presentationByConnectionId],
+  );
+  const platformPreview = activeConnections.slice(0, 4);
+  const activeConnectionIds = useMemo(
+    () => new Set(activeConnections.map((connection) => connection.Id)),
+    [activeConnections],
+  );
   const integrationAttentionCount = importStatus.lanes.matches.byConnection.reduce(
-    (total, connection) => total + connection.count,
+    (total, connection) => total + (activeConnectionIds.has(connection.connectionId) ? connection.count : 0),
     0,
   );
 
@@ -218,9 +241,11 @@ const SettingsScreen = () => {
             )
           ) : (
             platformPreview.map((c: any, i: number) => {
-              const connectStatus = derivePlatformConnectStatus(c.PlatformType, liveConnections, {
+              const connectStatus = derivePlatformConnectStatus(c.PlatformType, [c], {
                 computerOnline,
                 presenceLoaded,
+              }, {
+                presentationByConnectionId,
               });
               const st = statusOf(connectStatus.uiState);
               return (

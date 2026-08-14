@@ -7,7 +7,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, InteractionManager, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Plus, Slack, Mail, Layers, Handshake, RefreshCw, Trash2, Monitor } from 'lucide-react-native';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
@@ -25,12 +25,12 @@ import { useImportStatus } from '../hooks/useImportStatus';
 import { api } from '../lib/apiClient';
 import { pickAndParseCsv } from '../utils/csvImport';
 import ErrorModal from '../components/ErrorModal';
-import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import PartnerBadge from '../components/PartnerBadge';
 import { buildPartnerInventoryOrigins, PartnerInventoryOrigin } from '../lib/partnerInventory';
 import {
-  deriveConnectionImportPresentation,
+  connectionImportPresentationsById,
   latestImportsByConnection,
+  partitionSellingPlatformConnections,
 } from '../lib/connectionImportPresentation';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -75,7 +75,7 @@ const ConnectionsScreen = () => {
   const insets = useSafeAreaInsets();
   const {
     connections,
-    liveConnections,
+    progressByConnectionId,
     hasResolvedConnections,
     error: connectionsError,
     refresh,
@@ -84,31 +84,39 @@ const ConnectionsScreen = () => {
   const overlay = usePlatformPickerOverlay();
   const { currentOrg } = useOrg();
 
-  // Soft-disconnected rows (IsEnabled=false) stay in the API payload, but a
-  // platform the user disconnected must leave this list. Reconnecting goes
-  // through the real OAuth flow on ConnectPlatforms, not PATCH /enable.
-  const visibleConnections = useMemo(
-    () => (liveConnections || []).filter(isVisiblePlatformConnection),
-    [liveConnections]
-  );
-
   // Import attention remains on each connection row; there is no aggregate card.
   const importStatus = useImportStatus();
-  const attentionByConn = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const b of importStatus.lanes.matches.byConnection) m[b.connectionId] = b.count;
-    return m;
-  }, [importStatus.lanes.matches.byConnection]);
-  const importConnectionById = useMemo(
-    () => new Map(importStatus.connections.map((connection) => [connection.connectionId, connection])),
-    [importStatus.connections],
-  );
   const recentImportByConnection = useMemo(() => {
     return latestImportsByConnection(importStatus.recentImports);
   }, [importStatus.recentImports]);
+  const presentationByConnectionId = useMemo(
+    () => connectionImportPresentationsById({
+      connections,
+      aggregateConnections: importStatus.connections,
+      recentImports: importStatus.recentImports,
+      progressByConnectionId,
+    }),
+    [connections, importStatus.connections, importStatus.recentImports, progressByConnectionId],
+  );
+  const { active: activeConnections, inactive: inactiveConnections } = useMemo(
+    () => partitionSellingPlatformConnections(connections, presentationByConnectionId),
+    [connections, presentationByConnectionId],
+  );
+  const activeConnectionIds = useMemo(
+    () => new Set(activeConnections.map((connection) => connection.Id)),
+    [activeConnections],
+  );
+  const attentionByConn = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const b of importStatus.lanes.matches.byConnection) {
+      if (activeConnectionIds.has(b.connectionId)) m[b.connectionId] = b.count;
+    }
+    return m;
+  }, [activeConnectionIds, importStatus.lanes.matches.byConnection]);
   const [pools, setPools] = useState<Pool[]>([]);
   const [partners, setPartners] = useState<PartnerInventoryOrigin[]>([]);
   const [managing, setManaging] = useState(false);
+  const [inactiveExpanded, setInactiveExpanded] = useState(false);
   // CSV pick/parse failures surface in an ErrorModal (native Alert stays for the
   // pre-existing platform flows).
   const [importError, setImportError] = useState<{ title: string; message: string } | null>(null);
@@ -298,7 +306,7 @@ const ConnectionsScreen = () => {
         {/* Selling platforms — Manage flips rows into refresh/remove */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Selling platforms</Text>
-          {visibleConnections.length > 0 && (
+          {activeConnections.length > 0 && (
             <TouchableOpacity
               style={[styles.managePill, managing && styles.managePillOn]}
               activeOpacity={0.8}
@@ -311,31 +319,23 @@ const ConnectionsScreen = () => {
           )}
         </View>
         <View style={styles.card}>
-          {!hasResolvedConnections && visibleConnections.length === 0 && !connectionsError ? (
+          {!hasResolvedConnections && activeConnections.length === 0 && !connectionsError ? (
             <View style={styles.loadingRow}><ActivityIndicator color="#93C822" /></View>
-          ) : connectionsError && visibleConnections.length === 0 ? (
+          ) : connectionsError && activeConnections.length === 0 ? (
             <TouchableOpacity style={styles.loadingRow} onPress={() => refresh?.()}>
               <Text style={styles.empty}>Couldn’t load your connections. Tap to retry.</Text>
             </TouchableOpacity>
-          ) : visibleConnections.length === 0 ? (
-            <Text style={styles.empty}>No platforms connected yet.</Text>
+          ) : activeConnections.length === 0 ? (
+            <Text style={styles.empty}>No active platforms connected.</Text>
           ) : (
-            visibleConnections.map((c: any, i: number) => {
-              const importConnection = importConnectionById.get(c.Id);
+            activeConnections.map((c: any, i: number) => {
               const recentImport = recentImportByConnection.get(c.Id);
-              const aggregateState = String(importConnection?.state || '').toLowerCase();
-              const st = deriveConnectionImportPresentation({
-                enabled: c.IsEnabled !== false,
-                connectionStatus: c.Status,
-                aggregateState,
-                latestImport: recentImport,
-              });
+              const st = presentationByConnectionId.get(c.Id)!;
               const importInProgress = st.importInProgress;
               const attn = attentionByConn[c.Id] || 0;
               const title = shopLabel(c);
-              const isCsv = String(c.PlatformType || '').toLowerCase() === 'csv';
               const started = importDateLabel(st.occurredAt || undefined);
-              const statusParts = [isCsv && importInProgress && title !== 'CSV import' ? 'CSV import' : st.label];
+              const statusParts = [st.label];
               if (importInProgress && attn > 0) statusParts.push(`${attn} pending`);
               if (started) {
                 statusParts.push(started);
@@ -347,10 +347,6 @@ const ConnectionsScreen = () => {
                   activeOpacity={0.7}
                   onLongPress={importInProgress ? () => cancelImport(c) : undefined}
                   onPress={() => {
-                    if (c.IsEnabled === false || String(c.Status).toLowerCase() === 'inactive') {
-                      void retryImport(c);
-                      return;
-                    }
                     if (importInProgress || st.kind === 'failed') {
                       navigation.navigate('ImportQuestionQueue', {
                         connectionId: c.Id,
@@ -424,6 +420,47 @@ const ConnectionsScreen = () => {
           <Plus size={18} color="#FFFFFF" />
           <Text style={styles.connectText}>Connect a platform</Text>
         </TouchableOpacity>
+
+        {inactiveConnections.length > 0 ? (
+          <View style={styles.inactiveGroup}>
+            <TouchableOpacity
+              style={styles.inactiveHeader}
+              activeOpacity={0.75}
+              onPress={() => setInactiveExpanded((expanded) => !expanded)}
+            >
+              <Text style={styles.inactiveTitle}>Inactive</Text>
+              <View style={styles.inactiveCount}>
+                <Text style={styles.inactiveCountText}>{inactiveConnections.length}</Text>
+              </View>
+              <View style={{ flex: 1 }} />
+              {inactiveExpanded
+                ? <ChevronDown size={19} color="#9CA3AF" />
+                : <ChevronRight size={19} color="#9CA3AF" />}
+            </TouchableOpacity>
+            {inactiveExpanded ? (
+              <View style={[styles.card, styles.inactiveCard]}>
+                {inactiveConnections.map((connection: any, index: number) => (
+                  <TouchableOpacity
+                    key={connection.Id}
+                    style={[styles.row, styles.inactiveRow, index > 0 && styles.rowBorder]}
+                    activeOpacity={0.7}
+                    onPress={() => handleStartConnect(connection.PlatformType)}
+                  >
+                    <PlatformAvatar platformType={(connection.PlatformType || '').toLowerCase()} size="medium" />
+                    <View style={styles.rowInfo}>
+                      <Text style={styles.inactiveRowTitle} numberOfLines={1}>{shopLabel(connection)}</Text>
+                      <Text style={styles.inactiveStatus}>
+                        {presentationByConnectionId.get(connection.Id)?.label || 'Disconnected'}
+                      </Text>
+                    </View>
+                    <Text style={styles.reconnectText}>Reconnect</Text>
+                    <ChevronRight size={18} color="#D4D4D8" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         {partners.length > 0 ? (
           <>
@@ -652,6 +689,17 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   dot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+
+  inactiveGroup: { marginTop: 14 },
+  inactiveHeader: { flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingHorizontal: 4, gap: 8 },
+  inactiveTitle: { color: '#71717A', fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  inactiveCount: { minWidth: 22, height: 22, borderRadius: 11, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ECEBE6' },
+  inactiveCountText: { color: '#71717A', fontSize: 12, fontFamily: 'Inter_600SemiBold' },
+  inactiveCard: { marginHorizontal: 0 },
+  inactiveRow: { opacity: 0.72 },
+  inactiveRowTitle: { fontSize: 15, color: '#52525B', fontFamily: 'Inter_600SemiBold' },
+  inactiveStatus: { fontSize: 12.5, color: '#9CA3AF', fontFamily: 'Inter_500Medium', marginTop: 2 },
+  reconnectText: { color: '#71717A', fontSize: 12.5, fontFamily: 'Inter_600SemiBold' },
 
   poolIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(147,200,34,0.14)' },
   poolIconPartner: { backgroundColor: 'rgba(162,97,26,0.12)' },
