@@ -41,14 +41,14 @@ const ChatJobCard = ({ card, onOpen, dark = false }: { card: ChatJobCardMeta; on
       <Image source={{ uri: card.coverImageUrl }} style={styles.jobCardImage} />
     ) : (
       <View style={[styles.jobCardImage, styles.jobCardImageFallback]}>
-        <Icon name="image-multiple-outline" size={20} color={dark ? theme.colors.primary : '#5D7E16'} />
+        <Icon name="image-multiple-outline" size={20} color={dark ? theme.colors.primary : '#93C822'} />
       </View>
     )}
     <View style={styles.jobCardBody}>
       <Text style={[styles.jobCardTitle, dark && { color: theme.chat.text }]} numberOfLines={1}>
         {card.title || (card.itemCount === 1 ? 'New item' : `${card.itemCount} items`)}
       </Text>
-      <Text style={[styles.jobCardSub, { color: dark ? theme.colors.primary : '#5D7E16' }]} numberOfLines={1}>
+      <Text style={[styles.jobCardSub, { color: dark ? theme.colors.primary : '#93C822' }]} numberOfLines={1}>
         {card.itemCount} item{card.itemCount === 1 ? '' : 's'} · tap to review and publish
       </Text>
     </View>
@@ -416,12 +416,12 @@ const StreamingMessageBubbleBase = ({
             onPress={() => setDigestOpen(o => !o)}
           >
             <AnorhaFace size={15} />
-            <Text style={{ flex: 1, fontSize: 13, color: dark ? theme.colors.primary : '#3B6D11', fontFamily: 'Inter_600SemiBold' }}>Sprout check-in</Text>
-            <Icon name={digestOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark ? theme.colors.primary : '#7A9B3C'} />
+            <Text style={{ flex: 1, fontSize: 13, color: dark ? theme.colors.primary : '#93C822', fontFamily: 'Inter_600SemiBold' }}>Sprout check-in</Text>
+            <Icon name={digestOpen ? 'chevron-up' : 'chevron-down'} size={18} color={dark ? theme.colors.primary : '#93C822'} />
           </TouchableOpacity>
           <Text
             numberOfLines={digestOpen ? undefined : 1}
-            style={{ marginTop: digestOpen ? 8 : 4, fontSize: digestOpen ? 14 : 13, color: dark ? theme.chat.text : digestOpen ? '#3B5314' : '#5F7A2E', fontFamily: 'Inter_400Regular', lineHeight: 20 }}
+            style={{ marginTop: digestOpen ? 8 : 4, fontSize: digestOpen ? 14 : 13, color: dark ? theme.chat.text : '#93C822', fontFamily: dark ? 'Inter_400Regular' : 'Inter_600SemiBold', lineHeight: 20 }}
           >
             {content}
           </Text>
@@ -441,7 +441,7 @@ const StreamingMessageBubbleBase = ({
       ]}>
         {message.kind === 'action' ? (
           <View style={styles.actionMetaRow}>
-            <Icon name="flash-outline" size={13} color={dark ? theme.colors.primary : '#5D7E16'} />
+            <Icon name="flash-outline" size={13} color={dark ? theme.colors.primary : '#93C822'} />
             <Text style={[styles.actionMetaText, dark && { color: theme.colors.primary }]}>
               {message.actionMeta?.actionType?.replace(/_/g, ' ') || 'Action'}
             </Text>
@@ -692,8 +692,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   jobCardSub: {
-    color: '#5D7E16',
-    fontFamily: 'Inter_500Medium',
+    color: '#93C822',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     marginTop: 2,
   },
@@ -731,7 +731,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   actionMetaText: {
-    color: '#5D7E16',
+    color: '#93C822',
     fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
     textTransform: 'capitalize',
@@ -960,7 +960,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(147,200,34,0.12)',
   },
   decisionPrimaryText: {
-    color: '#5D7E16',
+    color: '#93C822',
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
   },

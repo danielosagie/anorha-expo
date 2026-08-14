@@ -518,7 +518,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                         return null;
                                     })()}
                                 </View>
-                                <Text style={[styles.metricSub, { color: '#84CC16' }]}>Recoverable</Text>
+                                <Text style={[styles.metricSub, { color: '#93C822', fontWeight: '600' }]}>Recoverable</Text>
                             </View>
                         </Animated.View>
                     )
@@ -574,7 +574,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                             {/* Feedback Actions */}
                             <View style={styles.leftActions}>
                                 <TouchableOpacity style={styles.iconBtn} onPress={handleCopy}>
-                                    <Icon name={copied ? "check" : "content-copy"} size={18} color={copied ? "#22C55E" : "#9CA3AF"} />
+                                    <Icon name={copied ? "check" : "content-copy"} size={18} color={copied ? "#93C822" : "#9CA3AF"} />
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                     style={styles.iconBtn}
@@ -584,7 +584,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                     <Icon
                                         name={feedbackGiven === 'up' ? "thumb-up" : "thumb-up-outline"}
                                         size={18}
-                                        color={feedbackGiven === 'up' ? "#22C55E" : "#9CA3AF"}
+                                        color={feedbackGiven === 'up' ? "#93C822" : "#9CA3AF"}
                                     />
                                 </TouchableOpacity>
                                 <TouchableOpacity
@@ -743,7 +743,7 @@ const InsightCard: React.FC<InsightCardProps> = ({ insight, loading, error, onAc
                                                 <View style={{ alignItems: 'flex-end' }}>
                                                     <Text style={styles.productQty}>x{prod.quantity} @ ${prod.price?.toLocaleString() || '—'}</Text>
                                                     {prod.estimatedValue && (
-                                                        <Text style={{ fontSize: 11, color: '#65A30D' }}>
+                                                        <Text style={{ fontSize: 11, color: '#93C822', fontWeight: '600' }}>
                                                             ${prod.estimatedValue.toLocaleString()} value
                                                             {prod.discountPercent ? ` → ${prod.discountPercent}% off` : ''}
                                                         </Text>
@@ -1048,7 +1048,7 @@ const styles = StyleSheet.create({
     metricGainText: {
         fontSize: 12,
         fontWeight: '700',
-        color: '#65A30D', // lime-600
+        color: '#93C822', // lime-600
     },
     metricSub: {
         fontSize: 12,
@@ -1093,7 +1093,7 @@ const styles = StyleSheet.create({
     actionLinkText: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#4D7C0F', // lime-700
+        color: '#93C822', // lime-700
         marginRight: 4,
     },
 

@@ -10,7 +10,7 @@ import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from '../components/PlatformLogo';
-import { getPlatform } from '../config/platforms';
+import { getPlatform, normalizeDisplayName } from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import FieldRow from '../components/ListingEditor/FieldRow';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
@@ -58,6 +58,26 @@ const log = createLogger('ProductDetail');
 
 const ACTION_BAR_HEIGHT = 80;
 const ACTION_BAR_BOTTOM_OFFSET = 24;
+
+const channelDisplayName = (connection?: PlatformConnection): { platformType: string; platformLabel: string; rowLabel: string } => {
+  const platformType = connection?.PlatformType?.trim().toLowerCase() || '';
+  const platformLabel = getPlatform(platformType)?.label
+    || (platformType ? platformType.charAt(0).toUpperCase() + platformType.slice(1) : 'Channel');
+  const accountName = normalizeDisplayName(connection?.DisplayName).trim();
+  const genericNames = new Set([
+    '',
+    'account',
+    'unknown',
+    'unknown account',
+    platformLabel.toLowerCase(),
+    `${platformLabel.toLowerCase()} account`,
+  ]);
+  return {
+    platformType: platformType || 'channel',
+    platformLabel,
+    rowLabel: genericNames.has(accountName.toLowerCase()) ? platformLabel : `${platformLabel} · ${accountName}`,
+  };
+};
 
 // Compact relative time for the Active Listings status rows ("2h ago", "3d ago").
 const relTime = (ms: number): string => {
@@ -942,7 +962,7 @@ const ProductDetailScreen = observer(
           return;
         }
 
-        const platformConnections = connectionsData as PlatformConnection[];
+        let platformConnections = connectionsData as PlatformConnection[];
         log.debug('[ProductDetail] Loaded platform connections:', platformConnections.length);
 
         setConnections(platformConnections);
@@ -1067,6 +1087,29 @@ const ProductDetailScreen = observer(
           log.error('Error loading platform mappings:', mappingsError);
         } else {
           log.debug('[ProductDetail] Loaded platform mappings:', mappingsData?.length || 0);
+        }
+
+        // Active Channels is mapping-backed, so resolve every connection referenced by
+        // those mappings even when the connection is inactive or disabled. The editor
+        // still treats the original active query as the connect/publish action set.
+        const knownConnectionIds = new Set(platformConnections.map((connection) => connection.Id));
+        const missingMappedConnectionIds = Array.from(new Set(
+          (mappingsData || [])
+            .map((mapping) => mapping.PlatformConnectionId)
+            .filter((connectionId): connectionId is string => Boolean(connectionId) && !knownConnectionIds.has(connectionId)),
+        ));
+        if (missingMappedConnectionIds.length > 0) {
+          const { data: mappedConnections, error: mappedConnectionsError } = await supabase
+            .from('PlatformConnections')
+            .select('Id, UserId, OrgId, PlatformType, DisplayName, Status, IsEnabled, LastSyncAttemptAt, LastSyncSuccessAt, CreatedAt, UpdatedAt')
+            .eq('OrgId', currentOrg.id)
+            .in('Id', missingMappedConnectionIds);
+          if (mappedConnectionsError) {
+            log.warn('[ProductDetail] Could not resolve mapped channel names:', mappedConnectionsError);
+          } else if (mappedConnections?.length) {
+            platformConnections = [...platformConnections, ...(mappedConnections as PlatformConnection[])];
+            setConnections(platformConnections);
+          }
         }
 
         setMappings(mappingsData as PlatformProductMapping[] || []);
@@ -2817,8 +2860,9 @@ const ProductDetailScreen = observer(
 
     // Update inventory quantity with auto-save using the correct API endpoint
     const updateInventoryQuantity = useCallback(async (
+      variantId: string,
       platformConnectionId: string,
-      locationId: string,
+      platformLocationId: string,
       quantity: number
     ) => {
       try {
@@ -2830,12 +2874,12 @@ const ProductDetailScreen = observer(
         const updateData = {
           updates: [{
             platformConnectionId,
-            locationId,
+            locationId: platformLocationId,
             quantity,
           }]
         };
 
-        const response = await apiFetch(`/api/products/${detailedItem.Id}/inventory`, {
+        const response = await apiFetch(`/api/products/${variantId}/inventory`, {
           method: 'PUT',
           body: updateData,
         });
@@ -2850,13 +2894,23 @@ const ProductDetailScreen = observer(
           Object.keys(updated).forEach(platformName => {
             const platform = updated[platformName];
             if (platform.platformConnectionId === platformConnectionId) {
-              platform.locations = platform.locations.map(loc =>
-                loc.locationId === locationId ? { ...loc, quantity } : loc
-              );
+              updated[platformName] = {
+                ...platform,
+                locations: platform.locations.map(loc =>
+                  loc.locationId === platformLocationId ? { ...loc, quantity } : loc
+                ),
+              };
             }
           });
           return updated;
         });
+        setRawInventoryLevels(prev => prev.map(level => (
+          level.ProductVariantId === variantId
+          && level.PlatformConnectionId === platformConnectionId
+          && level.PlatformLocationId === platformLocationId
+            ? { ...level, Quantity: quantity, UpdatedAt: new Date().toISOString() }
+            : level
+        )));
 
         log.debug('Inventory updated successfully');
         capture(AnalyticsEvents.INVENTORY_UPDATED, { product_id: detailedItem?.ProductId });
@@ -4581,6 +4635,8 @@ const ProductDetailScreen = observer(
               platforms={displayedPlatforms}
               images={editorImages}
               platformLocations={buildPlatformLocations()}
+              canonicalVariantId={detailedItem.Id}
+              onUpdateInventoryQuantity={updateInventoryQuantity}
               onChangePlatforms={(next) => {
                 log.debug('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
                 // A patch that changes nothing is a normalization, not an edit. Arming
@@ -4726,9 +4782,10 @@ const ProductDetailScreen = observer(
                 <View style={styles.channelsInner}>
                   {mappings.map((mapping) => {
                     const connection = connections.find(c => c.Id === mapping.PlatformConnectionId);
-                    const rawType = connection?.PlatformType || 'unknown';
-                    const typeLabel = rawType.charAt(0).toUpperCase() + rawType.slice(1);
-                    const platformName = connection?.DisplayName || `${typeLabel} Account`;
+                    const channelName = channelDisplayName(connection);
+                    const rawType = channelName.platformType;
+                    const typeLabel = channelName.platformLabel;
+                    const platformName = channelName.rowLabel;
                     const hasRealPlatformProductId = (value: unknown): boolean => {
                       const platformProductId = String(value || '').trim();
                       return Boolean(platformProductId) && !platformProductId.startsWith('facebook-personal-job:');
@@ -4758,7 +4815,7 @@ const ProductDetailScreen = observer(
                       statusColor = '#9CA3AF';
                       statusText = 'Syncing\u2026';
                     } else {
-                      statusColor = isStale ? '#BA7517' : '#16A34A';
+                      statusColor = isStale ? '#BA7517' : '#93C822';
                       statusText = isStale
                         ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
                         : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
@@ -4864,8 +4921,8 @@ const ProductDetailScreen = observer(
                         <View style={styles.alInfo}>
                           <Text style={styles.alName} numberOfLines={1}>{partnership.partnerOrgName}</Text>
                           <View style={styles.alStatusLine}>
-                            <View style={[styles.alDot, { backgroundColor: partnership.isShared ? '#16A34A' : '#9CA3AF' }]} />
-                            <Text style={[styles.alStatusText, { color: partnership.isShared ? '#16A34A' : '#71717A' }]} numberOfLines={1}>{partnership.isShared ? 'Shared' : 'Not shared'} · {partnership.poolName}</Text>
+                            <View style={[styles.alDot, { backgroundColor: partnership.isShared ? '#93C822' : '#9CA3AF' }]} />
+                            <Text style={[styles.alStatusText, { color: partnership.isShared ? '#93C822' : '#71717A' }]} numberOfLines={1}>{partnership.isShared ? 'Shared' : 'Not shared'} · {partnership.poolName}</Text>
                           </View>
                         </View>
                         {isLoading ? (
@@ -4893,12 +4950,12 @@ const ProductDetailScreen = observer(
                       : 'Active';
                     return (
                       <TouchableOpacity key={c.id} style={styles.alRow} activeOpacity={0.7} onPress={() => (navigation as any).navigate('LiquidationCampaignScreen', { campaignId: c.id, entryPoint: 'detail' })}>
-                        <View style={[styles.alLogo, styles.channelCampaignLogo]}><Icon name="sprout-outline" size={20} color="#5D7E16" /></View>
+                        <View style={[styles.alLogo, styles.channelCampaignLogo]}><Icon name="sprout-outline" size={20} color="#93C822" /></View>
                         <View style={styles.alInfo}>
                           <Text style={styles.channelCampaignLabel}>IN A CAMPAIGN</Text>
                           <Text style={styles.alName} numberOfLines={1}>{c.title}</Text>
                           <View style={styles.alStatusLine}>
-                            <View style={[styles.alDot, { backgroundColor: '#5D7E16' }]} />
+                            <View style={[styles.alDot, { backgroundColor: '#93C822' }]} />
                             <Text style={[styles.alStatusText, { color: '#71717A' }]} numberOfLines={1}>{soldText}</Text>
                           </View>
                         </View>
@@ -5001,8 +5058,8 @@ const ProductDetailScreen = observer(
               style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
               onPress={openClearout}
             >
-              <Icon name="sprout-outline" size={20} color="#5D7E16" style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 16, fontWeight: '600', color: '#5D7E16' }}>Add to clearout</Text>
+              <Icon name="sprout-outline" size={20} color="#93C822" style={{ marginRight: 10 }} />
+              <Text style={{ fontSize: 16, fontWeight: '600', color: '#93C822' }}>Add to clearout</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -5090,7 +5147,7 @@ const ProductDetailScreen = observer(
                     disabled={!!clearoutBusy}
                   >
                     <View style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                      <Icon name="leaf" size={18} color="#5D7E16" />
+                      <Icon name="leaf" size={18} color="#93C822" />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }} numberOfLines={1}>{c.title}</Text>
@@ -5150,7 +5207,7 @@ const ProductDetailScreen = observer(
                     style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}
                   >
                     <View style={{ width: 36, height: 36, borderRadius: 11, backgroundColor: 'rgba(147,200,34,0.14)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                      <Icon name="history" size={18} color="#5D7E16" />
+                      <Icon name="history" size={18} color="#93C822" />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }} numberOfLines={1}>
@@ -5167,9 +5224,9 @@ const ProductDetailScreen = observer(
                       style={{ paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, backgroundColor: restoringVersionId ? '#E5E7EB' : 'rgba(147,200,34,0.16)' }}
                     >
                       {restoringVersionId === v.id ? (
-                        <ActivityIndicator size="small" color="#5D7E16" />
+                        <ActivityIndicator size="small" color="#93C822" />
                       ) : (
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#5D7E16' }}>Restore</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#93C822' }}>Restore</Text>
                       )}
                     </TouchableOpacity>
                   </View>
@@ -5584,7 +5641,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: 'rgba(147,200,34,0.12)',
   },
-  alActionGhostText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#4A7C00' },
+  alActionGhostText: { fontSize: 13, fontFamily: CHAT_FONT.bold, fontWeight: '700', color: '#93C822' },
   alAddRow: {
     flexDirection: 'row',
     alignItems: 'center',

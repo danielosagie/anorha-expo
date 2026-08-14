@@ -213,7 +213,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
               {available.map((d) => renderRow(d, true))}
               <View style={styles.row}>
                 <View style={styles.logoWrap}>
-                  <Icon name="file-delimited-outline" size={24} color="#43631A" />
+                  <Icon name="file-delimited-outline" size={24} color="#93C822" />
                 </View>
                 <View style={{ flex: 1, gap: 2 }}>
                   <Text style={styles.name}>CSV file</Text>

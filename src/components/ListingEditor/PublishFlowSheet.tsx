@@ -13,6 +13,7 @@ import { BRAND_PRIMARY } from '../../design/tokens';
 import { CHAT_FONT } from '../../design/chatGlass';
 import { getPlatform } from '../../config/platforms';
 import type { QualityRow } from '../../utils/listingQuality';
+import { hasPlatformPrice } from '../../utils/platformRequirements';
 import ListingEditorForm, { type ListingEditorFormProps } from '../ListingEditorForm';
 import {
   PublishConfirmationContent,
@@ -74,6 +75,14 @@ const sortNeeds = (rows: PublishNeed[]): PublishNeed[] => (
   })
 );
 
+const satisfiesField = (field: string, data: Record<string, any>): boolean => {
+  switch (field) {
+    case 'price': return hasPlatformPrice(data);
+    case 'sku': return typeof data.sku === 'string' && data.sku.trim().length > 0;
+    default: return true;
+  }
+};
+
 export interface PublishFlowSheetProps
   extends Omit<PublishConfirmationContentProps, 'active' | 'onBack' | 'progress'> {
   visible: boolean;
@@ -125,6 +134,12 @@ export default function PublishFlowSheet({
   const platformLabel = inlinePlatform === 'all'
     ? 'All channels'
     : (inlinePlatform ? getPlatform(inlinePlatform)?.label || inlinePlatform : undefined);
+  const relevantPlatformEntries = Object.entries(editorProps.platforms || {}).filter(([, data]) => (
+    data && typeof data === 'object'
+  ));
+  const continueEnabled = currentField === 'category' && missingPlatform
+    ? satisfiesField(currentField, editorProps.platforms[missingPlatform] || {})
+    : relevantPlatformEntries.every(([, data]) => satisfiesField(currentField, data));
 
   return (
     <Modal
@@ -195,12 +210,12 @@ export default function PublishFlowSheet({
           <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 18) }]}>
             <Pressable
               onPress={goNext}
-              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+              disabled={!continueEnabled}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !continueEnabled }}
+              style={({ pressed }) => [styles.primaryButton, !continueEnabled && styles.primaryButtonDisabled, pressed && continueEnabled && styles.pressed]}
             >
               <Text style={styles.primaryLabel}>Continue</Text>
-            </Pressable>
-            <Pressable onPress={goNext} style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}>
-              <Text style={styles.skipLabel}>Skip</Text>
             </Pressable>
           </View>
         </View>
@@ -224,10 +239,9 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 },
   editorCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 18, padding: 16 },
-  footer: { gap: 4, paddingHorizontal: 16, paddingTop: 12 },
+  footer: { paddingHorizontal: 16, paddingTop: 12 },
   primaryButton: { alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 54, borderRadius: 16, backgroundColor: BRAND_PRIMARY },
+  primaryButtonDisabled: { backgroundColor: '#D6D6D1' },
   primaryLabel: { color: '#FFFFFF', fontSize: 16, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
-  skipButton: { alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 42 },
-  skipLabel: { color: '#71717A', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
   pressed: { opacity: 0.72 },
 });

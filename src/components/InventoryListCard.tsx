@@ -81,7 +81,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   const theme = useTheme();
 
   const getRandomColor = (seed: string | number): string => {
-    const colors = ['#4B0082', '#1E90FF', '#32CD32', '#FF8C00', '#8A2BE2', '#20B2AA'];
+    const colors = ['#4B0082', '#1E90FF', '#93C822', '#FF8C00', '#8A2BE2', '#20B2AA'];
     const numId = typeof seed === 'string'
       ? seed.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
       : seed;
@@ -145,7 +145,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
           styles.cardContent,
           {
             backgroundColor: isSelected ? 'rgba(132, 204, 22, 0.1)' : 'rgba(228, 228, 228, 0.01)',
-            borderColor: isSelected ? '#84CC16' : 'transparent',
+            borderColor: isSelected ? '#93C822' : 'transparent',
             borderWidth: 1,
           },
         ]}
@@ -168,7 +168,7 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
               <Icon
                 name={isSelected ? "check-circle" : "circle-outline"}
                 size={24}
-                color={isSelected ? "#84CC16" : "#C7C7CC"}
+                color={isSelected ? "#93C822" : "#C7C7CC"}
               />
             </Animated.View>
           </Animated.View>

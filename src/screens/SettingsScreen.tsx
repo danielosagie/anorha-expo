@@ -39,7 +39,7 @@ type Card = {
 
 const statusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
   if (uiState === 'importing') return { label: 'Importing inventory...', color: '#A2611A' };
-  if (uiState === 'connected') return { label: 'Connected', color: '#43631A' };
+  if (uiState === 'connected') return { label: 'Connected', color: '#93C822' };
   if (uiState === 'needs-computer') return { label: 'Finish setup', color: '#BA7517' };
   if (uiState === 'checking') return { label: 'Checking', color: '#71717A' };
   return { label: 'Connect', color: '#71717A' };
@@ -221,7 +221,7 @@ const SettingsScreen = () => {
                 onPress={() => navigation.navigate('ConnectPlatforms')}
               >
                 <View style={styles.platformEmptyIcon}>
-                  <Plus size={18} color="#43631A" />
+                  <Plus size={18} color="#93C822" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.platformName}>Connect your first platform</Text>
@@ -235,7 +235,7 @@ const SettingsScreen = () => {
               </TouchableOpacity>
             ) : (
               <View style={styles.platformLoadingRow}>
-                <ActivityIndicator size="small" color="#5D7E16" />
+                <ActivityIndicator size="small" color="#93C822" />
                 <Text style={styles.platformLoadingText}>Loading connections</Text>
               </View>
             )

@@ -139,7 +139,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
             <TouchableOpacity key={o.value} style={[styles.optionRow, i > 0 && styles.rowBorder]} activeOpacity={0.7}
               onPress={() => { onPick(o.value); setPage('main'); }}>
               <Text style={[styles.optionText, isActive && styles.optionActive]}>{o.label}</Text>
-              {isActive ? <Check size={18} color="#5A8F12" /> : null}
+              {isActive ? <Check size={18} color="#93C822" /> : null}
             </TouchableOpacity>
           );
         })}
@@ -166,15 +166,15 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
                 </TouchableOpacity>
               </View>
 
-              <DrillRow icon={<ArrowUpDown size={18} color="#43631A" />} title="Order"
+              <DrillRow icon={<ArrowUpDown size={18} color="#93C822" />} title="Order"
                 sub={labelFor(sortOptions, sortBy, 'Default')} onPress={() => setPage('sort')} />
-              <DrillRow icon={<MapPin size={18} color="#43631A" />} title="Location"
+              <DrillRow icon={<MapPin size={18} color="#93C822" />} title="Location"
                 sub={locCount > 0 ? `${locCount} selected` : 'All locations'} onPress={() => setPage('location')} />
               {partnerOptions.length > 0 ? (
-                <DrillRow icon={<Handshake size={18} color="#43631A" />} title="Partner"
+                <DrillRow icon={<Handshake size={18} color="#93C822" />} title="Partner"
                   sub={selectedPartnerName || 'All partners'} onPress={() => setPage('partner')} />
               ) : null}
-              <DrillRow icon={<Tag size={18} color="#43631A" />} title="Status"
+              <DrillRow icon={<Tag size={18} color="#93C822" />} title="Status"
                 sub={labelFor(statusOptions, filterStatus, 'All')} onPress={() => setPage('status')} />
             </>
           ) : page === 'sort' ? (
@@ -187,7 +187,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
               <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
                 <TouchableOpacity style={styles.optionRow} activeOpacity={0.7} onPress={() => onLocationChange([])}>
                   <Text style={[styles.optionText, locCount === 0 && styles.optionActive]}>All locations</Text>
-                  {locCount === 0 ? <Check size={18} color="#5A8F12" /> : null}
+                  {locCount === 0 ? <Check size={18} color="#93C822" /> : null}
                 </TouchableOpacity>
                 {locationsLoading && locationOptions.length === 0 ? (
                   <View style={{ paddingVertical: 24, alignItems: 'center' }}><ActivityIndicator color="#93C822" /></View>
@@ -199,7 +199,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
                         <Text style={[styles.optionText, checked && styles.optionActive]}>{o.name}</Text>
                         {o.sub ? <Text style={styles.optionSub} numberOfLines={1}>{o.sub}</Text> : null}
                       </View>
-                      {checked ? <Check size={18} color="#5A8F12" /> : null}
+                      {checked ? <Check size={18} color="#93C822" /> : null}
                     </TouchableOpacity>
                   );
                 })}
@@ -214,7 +214,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
               <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
                 <TouchableOpacity style={styles.optionRow} activeOpacity={0.7} onPress={() => onPartnerChange(null)}>
                   <Text style={[styles.optionText, selectedPartnerId === null && styles.optionActive]}>All partners</Text>
-                  {selectedPartnerId === null ? <Check size={18} color="#5A8F12" /> : null}
+                  {selectedPartnerId === null ? <Check size={18} color="#93C822" /> : null}
                 </TouchableOpacity>
                 {partnerOptions.map((option) => {
                   const checked = option.value === selectedPartnerId;
@@ -237,7 +237,7 @@ export const InventoryFilterSheet: React.FC<InventoryFilterSheetProps> = ({
                           <Text style={styles.optionSub}>{option.count} {option.count === 1 ? 'item' : 'items'}</Text>
                         </View>
                       </View>
-                      {checked ? <Check size={18} color="#5A8F12" /> : null}
+                      {checked ? <Check size={18} color="#93C822" /> : null}
                     </TouchableOpacity>
                   );
                 })}
@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   titleLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { fontSize: 18, color: '#18181B', fontFamily: 'Inter_700Bold' },
-  reset: { fontSize: 15, color: '#5A8F12', fontFamily: 'Inter_600SemiBold' },
+  reset: { fontSize: 15, color: '#93C822', fontFamily: 'Inter_600SemiBold' },
 
   drillRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FAFAF8', borderWidth: 1, borderColor: '#ECEBE6', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 8 },
   drillIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(147,200,34,0.16)', alignItems: 'center', justifyContent: 'center' },
@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
   optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 15, gap: 12 },
   rowBorder: { borderTopWidth: 1, borderTopColor: '#F1F1EE' },
   optionText: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_500Medium' },
-  optionActive: { color: '#5A8F12', fontFamily: 'Inter_700Bold' },
+  optionActive: { color: '#93C822', fontFamily: 'Inter_700Bold' },
   optionSub: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_400Regular', marginTop: 1 },
   partnerOption: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   empty: { paddingVertical: 24, textAlign: 'center', color: '#9CA3AF', fontFamily: 'Inter_400Regular', fontSize: 14 },

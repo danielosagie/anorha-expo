@@ -243,7 +243,7 @@ export default function CreateLocationPoolModal({
                                   <Icon
                                     name={isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
                                     size={20}
-                                    color={isSelected ? '#4CAF50' : '#999'}
+                                    color={isSelected ? '#93C822' : '#999'}
                                   />
                                 </View>
                                 {getPlatform(platform.platformType) && (
@@ -398,7 +398,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   locationOptionSelected: {
-    backgroundColor: '#4CAF50' + '15',
+    backgroundColor: '#93C822' + '15',
   },
   checkboxContainer: {
     marginRight: 12,

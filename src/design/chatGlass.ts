@@ -8,7 +8,7 @@ export const CHAT_COLORS = {
   brand: '#93C822',
   brandSoft: 'rgba(147,200,34,0.12)',
   brandBorder: 'rgba(147,200,34,0.3)',
-  brandDeep: '#5D7E16',
+  brandDeep: '#93C822',
 
   // Surfaces
   white: '#FFFFFF',

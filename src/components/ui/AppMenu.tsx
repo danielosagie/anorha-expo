@@ -90,7 +90,7 @@ export const AppMenu: React.FC<Props> = ({ visible, onClose, sections, anchor, w
                   {item.label}
                 </Text>
                 {item.active ? (
-                  <Icon name="check" size={20} color="#5C9A1B" style={{ marginLeft: 8 }} />
+                  <Icon name="check" size={20} color="#93C822" style={{ marginLeft: 8 }} />
                 ) : null}
               </Pressable>
             ))}

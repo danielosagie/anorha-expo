@@ -68,6 +68,7 @@ import {
   PartnerInventoryOrigin,
   resolvePartnerInventoryOrigin,
 } from '../lib/partnerInventory';
+import { mergeInventoryLevelsByNewest } from '../lib/inventorySync';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
@@ -620,7 +621,6 @@ const InventoryOrdersScreen = observer(() => {
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
-  const [directBackfillActive, setDirectBackfillActive] = useState(false);
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
   const productVariantSyncPhase = legendState?.syncProgress$?.get()?.ProductVariants.phase ?? 'idle';
@@ -751,7 +751,6 @@ const InventoryOrdersScreen = observer(() => {
               page.forEach((variant) => { next[variant.Id] = variant; });
               return next;
             });
-            setDirectBackfillActive(progress.hasMore);
             if (page.length > 0) setShelfLoadError(false);
           });
           if (cancelled) return;
@@ -820,8 +819,6 @@ const InventoryOrdersScreen = observer(() => {
           if (cancelled) return;
           log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
           setShelfLoadError(true);
-        } finally {
-          if (!cancelled) setDirectBackfillActive(false);
         }
       }
     };
@@ -903,7 +900,7 @@ const InventoryOrdersScreen = observer(() => {
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
   const legendSyncProgress = legendObservables?.syncProgress$?.get();
 
-  // Union of the Legend mirror and the direct fetch, direct winning per key.
+  // Union the two sources, choosing the newest version when they share a row.
   // The old rule ("whichever map is bigger wins") was a landmine: right after
   // a big import the stale-but-larger Legend mirror beat the fresh direct
   // fetch, and none of the new items appeared until an app restart.
@@ -912,17 +909,13 @@ const InventoryOrdersScreen = observer(() => {
     [legendProductVariants, directFetchVariants],
   );
   const activeInventoryLevels = useMemo(
-    () => ({ ...legendInventoryLevels, ...directFetchLevels }),
+    () => mergeInventoryLevelsByNewest(legendInventoryLevels, directFetchLevels),
     [legendInventoryLevels, directFetchLevels],
-  );
-  const legendBackfillActive = Object.values(legendSyncProgress || {}).some(
-    (progress) => progress.phase === 'background',
   );
   const initialShelfLoading =
     Object.keys(activeProductVariants).length === 0 &&
     !shelfLoadError &&
     (!legendSyncProgress || legendSyncProgress.ProductVariants.phase === 'idle' || legendSyncProgress.ProductVariants.phase === 'initial');
-  const backgroundShelfLoading = directBackfillActive || legendBackfillActive;
 
   const inventoryLevelsWithShared = useMemo(() => {
     const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
@@ -1871,12 +1864,6 @@ const InventoryOrdersScreen = observer(() => {
                 }
                 ListHeaderComponent={
                   <View>
-                    {backgroundShelfLoading ? (
-                      <View style={styles.backgroundSyncRow}>
-                        <ActivityIndicator size="small" color="#5D7E16" />
-                        <Text style={styles.backgroundSyncText}>Refreshing older inventory in the background</Text>
-                      </View>
-                    ) : null}
                     {isSelectionMode ? (
                       <Animated.View entering={FadeInDown} style={styles.selectionHeader}>
                         <View style={styles.selectionHeaderLeft}>
@@ -2593,23 +2580,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flex: 1,
   },
-  backgroundSyncRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 8,
-    marginBottom: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 12,
-    backgroundColor: 'rgba(147,200,34,0.12)',
-  },
-  backgroundSyncText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#5D7E16',
-    fontFamily: 'Inter_600SemiBold',
-  },
   emptyText: {
     textAlign: 'center',
     fontSize: 16,
@@ -2823,7 +2793,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   selectAllButton: {
-    backgroundColor: '#84CC16', // Lime green
+    backgroundColor: '#93C822', // Lime green
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 8,
@@ -2938,7 +2908,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginBottom: 8,
   },
-  durationPillText: { color: '#5D7E16', fontSize: 13, fontWeight: '600' },
+  durationPillText: { color: '#93C822', fontSize: 13, fontWeight: '600' },
 });
 
 export default InventoryOrdersScreen;

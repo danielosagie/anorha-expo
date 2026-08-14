@@ -58,7 +58,7 @@ const API_BASE = API_BASE_URL;
 const ONBOARDING = {
   bg: '#FFFFFF',           // v2 white background
   green: '#93C822',        // Primary green (active buttons, dots, selected cards)
-  greenDeep: '#4A7C00',    // Deep-green links
+  greenDeep: '#93C822',    // Deep-green links
   title: '#1C1B17',        // Primary text (warm ink)
   subtitle: '#6B6A63',     // Secondary text (warm gray)
   dotInactive: '#ECE9DF',  // Inactive pagination dots
@@ -218,7 +218,7 @@ const PhoneTaskRow = ({ active }: { active: boolean }) => {
     borderColor: interpolateColor(a.value, [0, 1], ['#EEEADE', 'rgba(147,200,34,0.65)']),
   }));
   const barStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(a.value, [0, 1], ['#E7E3D6', 'rgba(60,90,20,0.35)']),
+    backgroundColor: interpolateColor(a.value, [0, 1], ['#E7E3D6', 'rgba(147,200,34,0.35)']),
   }));
   const dotStyle = useAnimatedStyle(() => ({ opacity: 1 - a.value, transform: [{ scale: 1 - a.value * 0.5 }] }));
   const checkStyle = useAnimatedStyle(() => ({ opacity: a.value, transform: [{ scale: 0.5 + a.value * 0.5 }] }));
@@ -251,12 +251,12 @@ const FeatureRow = ({ icon, label, active, showBorder, pinned, onPress }: { icon
     <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
       <Animated.View style={[styles.featureRow, showBorder && styles.featureRowBorder, rowStyle]}>
         <Animated.View style={[styles.featureIconCircle, circleStyle]}>
-          <Icon name={icon} size={20} color="#3C5A14" />
+          <Icon name={icon} size={20} color="#93C822" />
         </Animated.View>
         <Text style={styles.featureLabel}>{label}</Text>
         {active && (
           <View style={styles.featurePlayBtn}>
-            <Icon name={pinned ? 'play' : 'pause'} size={13} color="#5D7E16" />
+            <Icon name={pinned ? 'play' : 'pause'} size={13} color="#93C822" />
           </View>
         )}
       </Animated.View>
@@ -615,7 +615,7 @@ const RoleStep = memo(({
 const SelectRow = memo(({ icon, label, selected, multi, onPress }: { icon: string; label: string; selected: boolean; multi?: boolean; onPress: () => void }) => (
   <TouchableOpacity style={[styles.selectRow, selected && styles.selectRowActive]} onPress={onPress} activeOpacity={0.85}>
     <View style={styles.selectIconCircle}>
-      <Icon name={icon} size={20} color="#3C5A14" />
+      <Icon name={icon} size={20} color="#93C822" />
     </View>
     <Text style={styles.selectLabel}>{label}</Text>
     <View style={[styles.selectorBox, selected ? styles.selectorSelected : styles.selectorUnselected]}>
@@ -827,12 +827,12 @@ const PermissionsAndLegalStep = memo(({
     <View style={{ marginTop: 32, gap: 16 }}>
       {/* Location */}
       <TouchableOpacity
-        style={[styles.permCard, locPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        style={[styles.permCard, locPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(147,200,34,0.12)' }]}
         onPress={onRequestLoc}
         activeOpacity={0.8}
         disabled={isRequestingLoc || locPerm}
       >
-        <View style={[styles.iconCircle, { backgroundColor: locPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+        <View style={[styles.iconCircle, { backgroundColor: locPerm ? 'rgba(147,200,34,0.25)' : 'rgba(0,0,0,0.15)' }]}>
           {isRequestingLoc ? (
             <ActivityIndicator size="small" color={ONBOARDING.title} />
           ) : (
@@ -848,12 +848,12 @@ const PermissionsAndLegalStep = memo(({
 
       {/* Notification */}
       <TouchableOpacity
-        style={[styles.permCard, notifPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        style={[styles.permCard, notifPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(147,200,34,0.12)' }]}
         onPress={onRequestNotif}
         activeOpacity={0.8}
         disabled={isRequestingNotif || notifPerm}
       >
-        <View style={[styles.iconCircle, { backgroundColor: notifPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+        <View style={[styles.iconCircle, { backgroundColor: notifPerm ? 'rgba(147,200,34,0.25)' : 'rgba(0,0,0,0.15)' }]}>
           {isRequestingNotif ? (
             <ActivityIndicator size="small" color={ONBOARDING.title} />
           ) : (
@@ -869,12 +869,12 @@ const PermissionsAndLegalStep = memo(({
 
       {/* Microphone */}
       <TouchableOpacity
-        style={[styles.permCard, micPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        style={[styles.permCard, micPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(147,200,34,0.12)' }]}
         onPress={onRequestMic}
         activeOpacity={0.8}
         disabled={isRequestingMic || micPerm}
       >
-        <View style={[styles.iconCircle, { backgroundColor: micPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+        <View style={[styles.iconCircle, { backgroundColor: micPerm ? 'rgba(147,200,34,0.25)' : 'rgba(0,0,0,0.15)' }]}>
           {isRequestingMic ? (
             <ActivityIndicator size="small" color={ONBOARDING.title} />
           ) : (
@@ -890,12 +890,12 @@ const PermissionsAndLegalStep = memo(({
 
       {/* Camera */}
       <TouchableOpacity
-        style={[styles.permCard, cameraPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(92,156,0,0.12)' }]}
+        style={[styles.permCard, cameraPerm && { borderWidth: 2, borderColor: ONBOARDING.green, backgroundColor: 'rgba(147,200,34,0.12)' }]}
         onPress={onRequestCamera}
         activeOpacity={0.8}
         disabled={isRequestingCamera || cameraPerm}
       >
-        <View style={[styles.iconCircle, { backgroundColor: cameraPerm ? 'rgba(92,156,0,0.25)' : 'rgba(0,0,0,0.15)' }]}>
+        <View style={[styles.iconCircle, { backgroundColor: cameraPerm ? 'rgba(147,200,34,0.25)' : 'rgba(0,0,0,0.15)' }]}>
           {isRequestingCamera ? (
             <ActivityIndicator size="small" color={ONBOARDING.title} />
           ) : (
@@ -1968,10 +1968,10 @@ const styles = StyleSheet.create({
   },
   welcomeThumb: { width: 22, height: 22, borderRadius: 7, backgroundColor: '#F1EFE6' },
   welcomeBar: { flex: 1, height: 7, marginLeft: 8, borderRadius: 3, backgroundColor: '#E7E3D6' },
-  welcomeDot: { width: 6, height: 6, borderRadius: 3, marginLeft: 8, backgroundColor: '#16A34A' },
+  welcomeDot: { width: 6, height: 6, borderRadius: 3, marginLeft: 8, backgroundColor: '#93C822' },
   welcomeSelSlot: { width: 14, height: 14, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },
-  welcomeDotAbs: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: '#16A34A' },
-  welcomeCheckAbs: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#16A34A', alignItems: 'center', justifyContent: 'center' },
+  welcomeDotAbs: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: '#93C822' },
+  welcomeCheckAbs: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center' },
   welcomeTitle: {
     marginTop: 20,
     fontSize: 24,

@@ -7304,7 +7304,7 @@ const styles = StyleSheet.create({
   scanLine: {
     width: '100%',
     height: 3,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     opacity: 0.8,
   },
 
@@ -7807,7 +7807,7 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   searchSubmitButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     borderRadius: 20,
     width: 32,
     height: 32,
@@ -8213,7 +8213,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   selectedMatchLabelLocalInventory: {
-    color: '#15803D',
+    color: '#93C822',
   },
   selectedMatchTitle: {
     fontSize: 13,
@@ -8282,7 +8282,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#DCFCE7',
   },
   matchActionPillLocalInventoryText: {
-    color: '#166534',
+    color: '#93C822',
   },
   matchActionPillDisabled: {
     opacity: 0.55,

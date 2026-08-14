@@ -7,7 +7,7 @@ export const UnicodeSpinner: React.FC<{
   color?: string;
   size?: number;
   style?: any;
-}> = ({ spinner, color = '#4CAF50', size = 18, style }) => {
+}> = ({ spinner, color = '#93C822', size = 18, style }) => {
   const [frameIndex, setFrameIndex] = useState(0);
 
   useEffect(() => {

@@ -1803,7 +1803,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 10,
-    backgroundColor: '#B7E344',
+    backgroundColor: '#93C822',
     borderWidth: 3,
     borderColor: '#FFFFFF',
     alignItems: 'center',
@@ -1975,7 +1975,7 @@ const styles = StyleSheet.create({
   },
   usageLimitPrimaryText: { fontSize: 15, fontWeight: '700', color: '#0A0A0B' },
   usageLimitSecondary: { marginTop: 10, paddingVertical: 6, paddingHorizontal: 12 },
-  usageLimitSecondaryText: { fontSize: 14, fontWeight: '600', color: '#5A8F12' },
+  usageLimitSecondaryText: { fontSize: 14, fontWeight: '600', color: '#93C822' },
   // Empty cart
   emptyState: { alignItems: 'center', paddingTop: 48 },
   emptyStateIconCircle: {
@@ -1996,7 +1996,7 @@ const styles = StyleSheet.create({
   },
   emptyStateTitle: { fontSize: 17, fontWeight: '700', color: '#18181B'},
   emptyStateSub: { fontSize: 13, color: '#71717A', marginTop: 4, textAlign: 'center' },
-  emptyStateUploadLink: { fontSize: 14, fontWeight: '600', color: '#5A8F12', marginTop: 14 },
+  emptyStateUploadLink: { fontSize: 14, fontWeight: '600', color: '#93C822', marginTop: 14 },
   listToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2248,7 +2248,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   selectedMatchLabelLocalInventory: {
-    color: '#15803D',
+    color: '#93C822',
   },
   selectedMatchTitle: {
     fontSize: 13,
@@ -2317,7 +2317,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#DCFCE7',
   },
   matchActionPillLocalInventoryText: {
-    color: '#166534',
+    color: '#93C822',
   },
   matchActionPillDisabled: {
     opacity: 0.55,

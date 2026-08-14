@@ -497,7 +497,7 @@ export default function PartnersScreen() {
         <TouchableOpacity key={p.id} style={styles.card} activeOpacity={0.7} onPress={() => handlePressPartnership(p)}>
             <View style={styles.cardHeader}>
                 <View style={styles.iconCircleGreen}>
-                    <Store size={20} color="#43631A" />
+                    <Store size={20} color="#93C822" />
                 </View>
                 <View style={styles.rowInfo}>
                     <Text style={styles.rowTitle} numberOfLines={1}>{p.partnerOrgName || p.partnerEmail}</Text>
@@ -676,7 +676,7 @@ export default function PartnersScreen() {
                         {partnerships.length === 0 && !loading ? (
                             <View style={styles.emptyState}>
                                 <View style={styles.emptyIconGreen}>
-                                    <Store size={32} color="#43631A" />
+                                    <Store size={32} color="#93C822" />
                                 </View>
                                 <Text style={styles.emptyText}>No active partnerships</Text>
                                 <Text style={styles.emptySubtext}>Invite a partner to start sharing inventory</Text>
@@ -992,7 +992,7 @@ const styles = StyleSheet.create({
     revokeBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#F1F1EE', alignItems: 'center', justifyContent: 'center' },
     sentInviteFooter: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F1F1EE', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     expiresText: { fontSize: 12, color: '#9CA3AF', fontFamily: 'Inter_400Regular' },
-    copyLinkText: { color: '#43631A', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+    copyLinkText: { color: '#93C822', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 
     // Empty states
     emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 56 },
@@ -1018,7 +1018,7 @@ const styles = StyleSheet.create({
     poolChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, backgroundColor: '#FAFAF8', marginRight: 8, borderWidth: 1, borderColor: '#ECEBE6' },
     activePoolChip: { backgroundColor: 'rgba(147,200,34,0.14)', borderColor: '#93C822' },
     poolChipText: { color: '#71717A', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-    activePoolChipText: { color: '#43631A' },
+    activePoolChipText: { color: '#93C822' },
     consignmentRow: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12,
         paddingVertical: 12, paddingHorizontal: 14, backgroundColor: '#FAFAF8', borderRadius: 14, borderWidth: 1, borderColor: '#ECEBE6',
@@ -1042,7 +1042,7 @@ const styles = StyleSheet.create({
     modalCancelButton: { backgroundColor: '#F1F1EE' },
     modalCancelText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#18181B' },
     inviteLinkText: {
-        fontSize: 13, color: '#43631A', fontFamily: 'Inter_500Medium', textAlign: 'center', lineHeight: 19,
+        fontSize: 13, color: '#93C822', fontFamily: 'Inter_600SemiBold', textAlign: 'center', lineHeight: 19,
         borderWidth: 1, borderColor: '#ECEBE6', backgroundColor: '#FAFAF8', borderRadius: 14,
         paddingHorizontal: 14, paddingVertical: 12, marginBottom: 18, width: '100%',
     },

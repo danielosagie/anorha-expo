@@ -142,7 +142,7 @@ const ManifestReviewSheet: React.FC<ManifestReviewSheetProps> = ({
     // Get confidence badge color
     const getConfidenceColor = (confidence: 'high' | 'medium' | 'low') => {
         switch (confidence) {
-            case 'high': return '#4CAF50';
+            case 'high': return '#93C822';
             case 'medium': return '#FF9800';
             case 'low': return '#f44336';
         }

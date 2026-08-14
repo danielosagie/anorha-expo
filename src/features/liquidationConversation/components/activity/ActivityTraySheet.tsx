@@ -1345,7 +1345,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
   },
-  reasonText: { flex: 1, fontSize: 13, lineHeight: 19, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.brandDeep },
+  reasonText: { flex: 1, fontSize: 13, lineHeight: 19, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
 
   // drill row
   drillRow: {
@@ -1450,7 +1450,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   statusNotePaused: { backgroundColor: CHAT_COLORS.surface },
-  statusNoteText: { fontSize: 13, fontFamily: CHAT_FONT.medium, color: CHAT_COLORS.brandDeep },
+  statusNoteText: { fontSize: 13, fontFamily: CHAT_FONT.semibold, color: CHAT_COLORS.brandDeep },
 
   emptyNote: { paddingVertical: 28, alignItems: 'center' },
   emptyNoteText: { fontSize: 13.5, fontFamily: CHAT_FONT.regular, color: CHAT_COLORS.dim, textAlign: 'center' },

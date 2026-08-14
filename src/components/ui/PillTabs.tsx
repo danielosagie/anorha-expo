@@ -89,9 +89,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   tabTextActive: {
-    color: '#4A7C00',
+    color: '#93C822',
   },
-  textSuccess: { color: '#4A7C00' },
+  textSuccess: { color: '#93C822' },
   textWarning: { color: '#92400E' },
   textDanger: { color: '#B91C1C' },
 });

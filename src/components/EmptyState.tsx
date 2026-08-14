@@ -24,7 +24,7 @@ export default function EmptyState({
   tone?: 'neutral' | 'success';
   style?: StyleProp<ViewStyle>;
 }) {
-  const accent = tone === 'success' ? '#4A7C00' : '#9CA3AF';
+  const accent = tone === 'success' ? '#93C822' : '#9CA3AF';
   const iconBg = tone === 'success' ? '#EEFCE0' : '#F3F4F6';
   return (
     <View style={[styles.wrap, style]}>

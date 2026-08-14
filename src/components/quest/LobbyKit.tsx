@@ -363,13 +363,13 @@ export function UpNextRow({
     ? (whiteCard || !night ? RC.greenSoft : 'rgba(147,200,34,0.16)')
     : (night ? 'rgba(255,255,255,0.06)' : RC.surface2);
   const iconColor = (active || done)
-    ? (contentDark ? RC.greenDark : '#B7E34F')
+    ? '#93C822'
     : (night ? 'rgba(244,244,238,0.45)' : RC.muted);
   const titleColor = done
     ? (contentDark ? RC.muted : 'rgba(244,244,238,0.5)')
     : (contentDark ? RC.ink : '#F4F4EE');
   const subColor = contentDark ? RC.muted : 'rgba(244,244,238,0.55)';
-  const arrowColor = contentDark ? RC.greenDark : '#B7E34F';
+  const arrowColor = '#93C822';
 
   return (
     <TouchableOpacity
@@ -625,7 +625,7 @@ export function InventoryRow({
           <MaterialCommunityIcons
             name={item.selected ? 'check-circle' : 'circle-outline'}
             size={24}
-            color={item.selected ? '#84CC16' : '#C7C7CC'}
+            color={item.selected ? '#93C822' : '#C7C7CC'}
           />
         </View>
       )}

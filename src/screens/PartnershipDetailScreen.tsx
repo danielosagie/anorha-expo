@@ -142,7 +142,7 @@ export default function PartnershipDetailScreen() {
                 <Switch
                     value={item.status === 'active'}
                     onValueChange={() => handleToggleSync(item)}
-                    trackColor={{ false: '#D1D5DB', true: '#10B981' }}
+                    trackColor={{ false: '#D1D5DB', true: '#93C822' }}
                     thumbColor="#FFF"
                     ios_backgroundColor="#D1D5DB"
                 />
@@ -250,7 +250,7 @@ const styles = StyleSheet.create({
     statusActive: { backgroundColor: '#DCFCE7' },
     statusPaused: { backgroundColor: '#FEF3C7' },
     statusText: { fontSize: 11, fontWeight: '600' },
-    statusTextActive: { color: '#166534' },
+    statusTextActive: { color: '#93C822' },
     statusTextPaused: { color: '#D97706' },
     actionsContainer: {
         flexDirection: 'row',

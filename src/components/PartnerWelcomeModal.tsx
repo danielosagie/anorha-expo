@@ -32,7 +32,7 @@ export const PartnerWelcomeModal: React.FC<PartnerWelcomeModalProps> = ({
     return (
         <BaseModal visible={visible} onClose={onDismiss}>
             <View style={styles.iconContainer}>
-                <Icon name="handshake" size={40} color="#647653" />
+                <Icon name="handshake" size={40} color="#93C822" />
             </View>
 
             <Text style={styles.title}>

@@ -296,7 +296,7 @@ const PartnerWelcomeOverlay: React.FC<{
             justifyContent: 'center',
             marginBottom: 24,
           }}>
-            <Icon name="handshake" size={40} color="#647653" />
+            <Icon name="handshake" size={40} color="#93C822" />
           </View>
 
           <Text style={{
@@ -2558,7 +2558,7 @@ const styles = StyleSheet.create({
   confirmBtn: {
     width: '100%',
     marginTop: 12,
-    backgroundColor: '#8BC34A',
+    backgroundColor: '#93C822',
     borderRadius: 8,
     paddingVertical: 16,
     alignItems: 'center',
@@ -2639,7 +2639,7 @@ const styles = StyleSheet.create({
   },
   selectedLocationRowActive: {
     backgroundColor: '#ecfdf5',
-    borderLeftColor: '#34d399',
+    borderLeftColor: '#93C822',
   },
   selectedLocationLeft: {
     flexDirection: 'row',
@@ -2873,7 +2873,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
   },
   chipSelected: {
-    borderColor: '#10b981',
+    borderColor: '#93C822',
     backgroundColor: '#ecfdf5',
   },
   chipText: {
@@ -2882,7 +2882,8 @@ const styles = StyleSheet.create({
     color: '#4b5563',
   },
   chipTextSelected: {
-    color: '#059669',
+    color: '#93C822',
+    fontWeight: '600',
   },
   addAnotherRow: {
     marginTop: 16,
@@ -2915,7 +2916,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ecfdf5',
     borderWidth: 2,
     borderStyle: 'dashed',
-    borderColor: '#34d399',
+    borderColor: '#93C822',
     borderRadius: 12,
     padding: 20,
     marginTop: 12,
@@ -2924,7 +2925,7 @@ const styles = StyleSheet.create({
   dropZoneText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#059669',
+    color: '#93C822',
   },
   reauthButton: {
     flexDirection: 'row',
@@ -2940,7 +2941,7 @@ const styles = StyleSheet.create({
   reauthButtonText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#059669',
+    color: '#93C822',
   },
   emptyState: {
     alignItems: 'stretch',
@@ -2976,7 +2977,7 @@ const styles = StyleSheet.create({
     color: '#1f2937',
   },
   primaryBtn: {
-    backgroundColor: '#10b981',
+    backgroundColor: '#93C822',
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: 'center',

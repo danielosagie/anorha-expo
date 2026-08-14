@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
-// ─── Tokens (extend existing — Anorha green #8cc63f/#70a826) ───────────────
+// Tokens extending the existing Anorha brand green.
 export const QUEST = {
   bg: '#FAF7EE',
   surface: '#FFFFFF',
@@ -25,8 +25,8 @@ export const QUEST = {
   muted: '#9B9D9F',
   border: '#ECE5CC',
   borderDark: '#D8D2BD',
-  green: '#7AB93D',
-  greenD: '#5A8420',
+  green: '#93C822',
+  greenD: '#93C822',
   greenSoft: '#F2F8E5',
   greenBorder: '#D4E3A8',
   yellow: '#F5B82E',
@@ -55,7 +55,7 @@ export const QUEST = {
 // Deterministic image-placeholder swatches (the colored squares in the
 // inventory list when a product has no photo yet).
 export const SWATCHES = [
-  '#2F80ED', '#27AE60', '#F2994A', '#9B51E0',
+  '#2F80ED', '#93C822', '#F2994A', '#9B51E0',
   '#EB5757', '#2D9CDB', '#BB6BD9', '#F2C94C',
 ] as const;
 

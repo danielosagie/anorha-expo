@@ -63,12 +63,12 @@ export default function RoutineCard({
           <Text style={[styles.statePillText, paused && styles.statePillTextPaused]}>{paused ? 'Paused' : 'On'}</Text>
         </View>
       ) : null}
-      <Icon name="chevron-right" size={20} color={paused ? CHAT_COLORS.faint : 'rgba(93,126,22,0.6)'} />
+      <Icon name="chevron-right" size={20} color={paused ? CHAT_COLORS.faint : 'rgba(147,200,34,0.6)'} />
     </TouchableOpacity>
   );
 }
 
-const MUTED_BRAND = '#6E8A2E';
+const MUTED_BRAND = '#93C822';
 
 const styles = StyleSheet.create({
   card: {
@@ -108,7 +108,7 @@ const styles = StyleSheet.create({
   cadenceRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   cadence: {
     fontSize: 12,
-    fontFamily: CHAT_FONT.medium,
+    fontFamily: CHAT_FONT.semibold,
     color: MUTED_BRAND,
     flexShrink: 1,
   },

@@ -107,7 +107,7 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
   const [correctionText, setCorrectionText] = useState('');
   const p = data.pricing ?? {};
   const confidenceColor = data.confidence === 'high'
-    ? '#5D7E16'
+    ? '#93C822'
     : data.confidence === 'medium'
       ? '#BA7517'
       : '#DC2626';

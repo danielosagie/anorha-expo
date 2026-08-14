@@ -539,7 +539,7 @@ const styles = StyleSheet.create({
     tagText: {
         fontSize: 10,
         fontWeight: '700',
-        color: '#4d7c0f',
+        color: '#93C822',
     },
     footer: {
         position: 'absolute',

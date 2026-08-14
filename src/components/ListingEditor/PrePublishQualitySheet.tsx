@@ -5,7 +5,7 @@ import FieldSheet from './FieldSheet';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import type { QualityRow } from '../../utils/listingQuality';
 
-const OK_GREEN = '#4A7C00';
+const OK_GREEN = '#93C822';
 
 export interface PrePublishQualitySheetProps {
   visible: boolean;

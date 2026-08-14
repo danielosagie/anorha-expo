@@ -31,6 +31,9 @@ import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
 import { apiFetch } from '../lib/apiClient';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
+import { getFreshPricing, pricingCacheKey, putPricing } from '../lib/pricingResearchCache';
+import { buildInventoryQuantityUpdate } from '../lib/inventorySync';
+import { formatStoredPricingSummary } from '../lib/storedPricingResearch';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -46,14 +49,8 @@ export type PlatformsData = Record<string, any>;
 
 const API_BASE_URL = ENV_API_BASE_URL;
 
-// Module-level pricing-research cache. Keyed by the request inputs so reopening
-// the sheet for the same item serves the previous result instantly instead of
-// clearing to a loading state and re-hitting the network every time. Survives
-// modal close/reopen and component remounts within the session.
-const PRICING_RESEARCH_CACHE = new Map<string, { data: any; ts: number }>();
-const PRICING_RESEARCH_TTL = 30 * 60 * 1000; // 30 min — refetch only if older
-const pricingCacheKey = (input: { title: string; categoryId?: string; condition?: string }) =>
-  `${input.title}|${input.categoryId ?? ''}|${input.condition ?? ''}`.trim().toLowerCase();
+// Pricing research uses the shared 24-hour cache so every price surface sees the
+// same recent comps across sheet and wizard remounts.
 
 // Coerce any saved price (which may be a non-numeric string, '', or 'NaN') to a finite
 // number, defaulting to 0. Prevents the "$NaN" the inventory editor showed for base products.
@@ -156,6 +153,16 @@ const rowStyles = StyleSheet.create({
     color: CHAT_COLORS.ink,
     padding: 0,
   },
+  channelPricesToggle: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, paddingHorizontal: 2 },
+  channelPricesToggleText: { color: '#3F3F46', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+  channelPricesList: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, overflow: 'hidden', backgroundColor: '#FFFFFF' },
+  channelPriceRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12 },
+  channelPriceDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  channelPriceName: { flex: 1, color: '#18181B', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+  channelPriceInputWrap: { width: 104, height: 38, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingHorizontal: 10, backgroundColor: '#F9FAFB' },
+  channelPriceCurrency: { color: '#71717A', fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', marginRight: 3 },
+  channelPriceInput: { flex: 1, color: '#18181B', fontSize: 15, fontFamily: CHAT_FONT.semibold, fontWeight: '600', paddingVertical: 0, textAlign: 'right' },
+  storedResearchLine: { marginTop: 12, color: CHAT_COLORS.dim, fontSize: 13, fontFamily: CHAT_FONT.medium, fontWeight: '500' },
   researchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -242,7 +249,7 @@ export type ListingEditorFormProps = {
   updateCounter?: number; // Signal when platforms ref content changes
   isGenerationMode?: boolean; // Control whether to show generation-specific UI (overrides etc)
   images: string[];
-  platformLocations?: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>>;
+  platformLocations?: Record<string, Array<{ id: string; locationId?: string; name: string; connectionId: string; connectionName: string; platformType: string }>>;
   onChangePlatforms: (next: PlatformsData) => void;
   onChangeImages?: (next: string[]) => void;
   onOpenBarcodeScanner?: (onResult: (code: string) => void) => void;
@@ -272,6 +279,17 @@ export type ListingEditorFormProps = {
   inlineField?: string;
   /** Platform context for an inline field. Use `all` for shared canonical edits. */
   inlinePlatform?: string;
+  /** Canonical ProductVariant ID for the editor's virtual base row. */
+  canonicalVariantId?: string;
+  /** Persist quantity directly without arming the generic product autosave. */
+  onUpdateInventoryQuantity?: (
+    variantId: string,
+    platformConnectionId: string,
+    platformLocationId: string,
+    quantity: number,
+  ) => void | Promise<void>;
+  /** Pricing evidence frozen during Match or loaded from its stored job result. */
+  storedPricingResearch?: unknown;
 };
 
 export type ListingEditorFormRef = {
@@ -412,7 +430,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish, inlineField, inlinePlatform }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, onRequestPublish, inlineField, inlinePlatform, canonicalVariantId, onUpdateInventoryQuantity, storedPricingResearch }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
   const latestPlatformsRef = useRef(platforms);
   latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
@@ -434,6 +452,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // Default to 'all' tab instead of first platform
   const [variantSearchQuery, setVariantSearchQuery] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>(inlinePlatform || 'all');
+  const [showChannelPrices, setShowChannelPrices] = useState(false);
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
@@ -645,6 +664,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return null;
   }, [platformKeys, platforms]);
   const titleForPricingResearch = pricingResearchInput?.title ?? '';
+  const storedPricingSummary = useMemo(
+    () => formatStoredPricingSummary(storedPricingResearch),
+    [storedPricingResearch],
+  );
   const supportsTaxonomy = activeTab !== 'all' && ['shopify', 'ebay'].includes(activePlatformKeyLower);
   const activeTaxonomyQuery = taxonomyQueries[activePlatformKeyLower] ?? '';
 
@@ -991,9 +1014,9 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     // Serve a recent cached result instantly — open the sheet with the previous
     // result and skip the network round-trip / loading flash entirely.
     const key = pricingCacheKey(input);
-    const cached = PRICING_RESEARCH_CACHE.get(key);
-    if (cached && Date.now() - cached.ts < PRICING_RESEARCH_TTL) {
-      setPricingResearchResult(cached.data);
+    const cached = getFreshPricing<NonNullable<typeof pricingResearchResult>>(key);
+    if (cached) {
+      setPricingResearchResult(cached);
       setPricingResearchModalVisible(true);
       return;
     }
@@ -1011,7 +1034,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         },
       });
       const data = await res.json();
-      if (data && !data.error) PRICING_RESEARCH_CACHE.set(key, { data, ts: Date.now() });
+      if (data && !data.error) putPricing(key, data);
       setPricingResearchResult(data);
       setPricingResearchModalVisible(true);
     } catch (e) {
@@ -1022,17 +1045,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       setPricingResearchLoading(false);
     }
   }, [pricingResearchInput]);
-
-  // Auto-load sold-comps pricing research the moment the Price step appears — in the
-  // bottom sheet (openField) AND the full-screen wizard — so the going-rate bar + recent
-  // comps are there waiting, instead of hiding behind a "See what it sells for" tap.
-  useEffect(() => {
-    const onPriceStep = openField === 'price' || (wizardOpen && wizardSteps[wizardIdx] === 'price');
-    if (onPriceStep && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
-      fetchPricingResearch();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField, wizardOpen, wizardIdx, wizardSteps, titleForPricingResearch]);
 
   // The Category editor only renders on a taxonomy platform tab (Shopify/eBay), never on
   // 'all'. When the wizard reaches the Category step from the 'all' tab, switch to the
@@ -1280,6 +1292,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       };
       onChangePlatforms({ [keyToEdit]: { [key]: value } });
     }
+  };
+
+  const patchPlatformField = (platformKey: string, key: string, value: any) => {
+    const current = latestPlatformsRef.current;
+    latestPlatformsRef.current = {
+      ...current,
+      [platformKey]: { ...(current[platformKey] || {}), [key]: value },
+    };
+    onChangePlatforms({ [platformKey]: { [key]: value } });
   };
 
   // Like patchField but writes several keys in ONE onChangePlatforms call. Calling
@@ -2279,32 +2300,66 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         );
       }
       case 'price': {
-        const currentPrice = Number(d.price) || 0;
+        const showBreakout = (
+          inlineField === 'price'
+          || (wizardOpen && wizardSteps[wizardIdx] === 'price')
+        ) && platformKeys.length > 1;
         return (
           <View>
             <View style={rowStyles.priceInputWrap}>
               <Text style={rowStyles.priceCurrency}>$</Text>
               <TextInput style={rowStyles.priceInput} value={String(d.price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
             </View>
-            {pricingResearchResult && typeof pricingResearchResult.low === 'number' ? (
-              <View style={{ marginTop: 16 }}>
-                <PricingGuidanceCard
-                  headers="none"
-                  pricing={pricingResearchResult}
-                  currentPrice={currentPrice}
-                  onApplyPrice={(price) => {
-                    const low = pricingResearchResult.low ?? 0;
-                    const recommended = pricingResearchResult.recommended ?? pricingResearchResult.median ?? 0;
-                    const high = pricingResearchResult.high ?? 0;
-                    patchFields({ price: price.toFixed(2), aiPriceRecommendation: { low, recommended, high } });
-                  }}
-                />
-              </View>
-            ) : titleForPricingResearch ? (
-              <TouchableOpacity onPress={fetchPricingResearch} disabled={pricingResearchLoading} style={rowStyles.researchBtn}>
-                {pricingResearchLoading ? <ActivityIndicator size="small" color={BRAND_PRIMARY} /> : <Package size={15} color={BRAND_PRIMARY} />}
-                <Text style={rowStyles.researchBtnText}>{pricingResearchLoading ? 'Researching…' : 'See what it sells for'}</Text>
-              </TouchableOpacity>
+            {showBreakout ? (
+              <>
+                <TouchableOpacity
+                  style={rowStyles.channelPricesToggle}
+                  onPress={() => setShowChannelPrices((shown) => !shown)}
+                  activeOpacity={0.72}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: showChannelPrices }}
+                >
+                  <Text style={rowStyles.channelPricesToggleText}>Set prices by channel</Text>
+                  <ChevronDown
+                    size={17}
+                    color={CHAT_COLORS.dim}
+                    style={{ transform: [{ rotate: showChannelPrices ? '180deg' : '0deg' }] }}
+                  />
+                </TouchableOpacity>
+                {showChannelPrices ? (
+                  <View style={rowStyles.channelPricesList}>
+                    {platformKeys.map((platformKey, index) => {
+                      const platformPrice = (platforms[platformKey] as PlatformState | undefined)?.price;
+                      return (
+                        <View
+                          key={platformKey}
+                          style={[rowStyles.channelPriceRow, index < platformKeys.length - 1 && rowStyles.channelPriceDivider]}
+                        >
+                          <PlatformLogo type={platformKey} size={20} />
+                          <Text style={rowStyles.channelPriceName} numberOfLines={1}>
+                            {getPlatform(platformKey)?.label || platformKey}
+                          </Text>
+                          <View style={rowStyles.channelPriceInputWrap}>
+                            <Text style={rowStyles.channelPriceCurrency}>$</Text>
+                            <TextInput
+                              style={rowStyles.channelPriceInput}
+                              value={String(platformPrice ?? '')}
+                              onChangeText={(text) => patchPlatformField(platformKey, 'price', text)}
+                              keyboardType="decimal-pad"
+                              placeholder="0.00"
+                              placeholderTextColor={CHAT_COLORS.faint}
+                              selectTextOnFocus
+                            />
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+            {storedPricingSummary ? (
+              <Text style={rowStyles.storedResearchLine}>{storedPricingSummary}</Text>
             ) : null}
           </View>
         );
@@ -2364,6 +2419,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     const close = () => { setWizardOpen(false); setPricingResearchModalVisible(false); };
     const goBack = () => setWizardIdx((i) => Math.max(0, i - 1));
     const goNext = () => { if (isLast) close(); else setWizardIdx((i) => Math.min(total - 1, i + 1)); };
+    const wizardPlatformData = platformKeys.map((platformKey) => platforms[platformKey] || {});
+    const canContinue = field === 'price'
+      ? wizardPlatformData.every((data) => hasPlatformPrice(data))
+      : field === 'sku'
+        ? wizardPlatformData.every((data) => typeof data.sku === 'string' && data.sku.trim().length > 0)
+        : true;
     // The last field step's button publishes: close the wizard, then (after it slides away)
     // hand off to the parent's publish settings (which platforms + publish).
     const goPublish = () => { close(); setTimeout(() => onRequestPublish?.(), 320); };
@@ -2391,7 +2452,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             {renderStepEditor(field)}
           </ScrollView>
           <View style={[wizStyles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <TouchableOpacity onPress={isLast ? goPublish : goNext} style={wizStyles.nextBtn} activeOpacity={0.9}>
+            <TouchableOpacity
+              onPress={isLast ? goPublish : goNext}
+              disabled={!canContinue}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canContinue }}
+              style={[wizStyles.nextBtn, !canContinue && { backgroundColor: '#D6D6D1' }]}
+              activeOpacity={0.9}
+            >
               <Text style={wizStyles.nextText}>{isLast ? 'Publish' : 'Next'}</Text>
               {!isLast && <ArrowRight size={18} color="#FFFFFF" />}
             </TouchableOpacity>
@@ -2707,7 +2775,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 {/* Use these photos for all sizes */}
                 {hasVariants && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F9FAFB', borderRadius: 13, paddingVertical: 13, paddingHorizontal: 14, marginTop: 16 }}>
-                    <Icon name="content-copy" size={15} color="#5D7E16" />
+                    <Icon name="content-copy" size={15} color="#93C822" />
                     <Text style={{ flex: 1, fontSize: 13.5, fontWeight: '600', color: '#374151' }}>Use these photos for all sizes</Text>
                     <TouchableOpacity
                       onPress={() => patchPlatform((prev) => ({ ...prev, useImagesForAllVariants: !useForAll }))}
@@ -2959,8 +3027,12 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       {renderStepsWizard()}
 
       {/* Pricing Research Modal - stocks-style with chart, sources, accuracy.
-          Suppressed while the Price sheet is open — that sheet inlines the same card. */}
-      <Modal visible={pricingResearchModalVisible && openField !== 'price' && !wizardOpen} transparent animationType="slide">
+          Suppressed while any Price editor is open because that surface inlines the same card. */}
+      <Modal
+        visible={pricingResearchModalVisible && openField !== 'price' && inlineField !== 'price' && !wizardOpen}
+        transparent
+        animationType="slide"
+      >
         <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} onPress={() => setPricingResearchModalVisible(false)}>
           <Pressable style={{ backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%', paddingHorizontal: 16, paddingBottom: 8 }} onPress={e => e.stopPropagation()}>
             <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 999, backgroundColor: '#E5E7EB', marginTop: 8, marginBottom: 4 }} />
@@ -3182,7 +3254,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.btnPrimary, { backgroundColor: '#84cc16', paddingHorizontal: 24, borderRadius: 8 }]}
+                      style={[styles.btnPrimary, { backgroundColor: '#93C822', paddingHorizontal: 24, borderRadius: 8 }]}
                       onPress={() => {
                         handleDoneOption();
                         setOptionEditorOpen(false);
@@ -3254,7 +3326,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             }}
           >
             <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(147,200,34,0.10)', alignItems: 'center', justifyContent: 'center' }}>
-              <Truck size={20} color="#5C9A1B" />
+              <Truck size={20} color="#93C822" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }} numberOfLines={1}>
@@ -3728,6 +3800,37 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 const rawLocationId = resolvedLoc?.locationId || locationId;
                 const resolvedConnectionId = resolvedLoc?.connectionId;
 
+                let targetPlatform = activeTab;
+                if (activeTab === 'all' && resolvedLoc) targetPlatform = resolvedLoc.platformKey;
+
+                if (field === 'quantity' && onUpdateInventoryQuantity) {
+                  const inventoryUpdate = buildInventoryQuantityUpdate({
+                    editorVariantId: variantId,
+                    canonicalVariantId,
+                    activeTab,
+                    platformVariants: (platforms[targetPlatform]?.variants || []) as any[],
+                    location: resolvedLoc,
+                    quantity: value,
+                  });
+                  if (!inventoryUpdate) {
+                    log.warn('[ListingEditorForm] Inventory quantity update is missing a canonical target');
+                    return;
+                  }
+                  void (async () => {
+                    try {
+                      await onUpdateInventoryQuantity(
+                        inventoryUpdate.variantId,
+                        inventoryUpdate.platformConnectionId,
+                        inventoryUpdate.platformLocationId,
+                        inventoryUpdate.quantity,
+                      );
+                    } catch (error) {
+                      log.error('[ListingEditorForm] Inventory quantity update failed:', error);
+                    }
+                  })();
+                  return;
+                }
+
                 // HANDLE BASE PRODUCT (non-variant product)
                 if (variantId === '_base') {
                   if (field === 'quantity') {
@@ -3741,11 +3844,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 }
 
                 const nextPlatforms = { ...platforms };
-
-                let targetPlatform = activeTab;
-                if (activeTab === 'all') {
-                  if (resolvedLoc) targetPlatform = resolvedLoc.platformKey;
-                }
 
                 // If the seller edits inventory for an enabled platform that has no data yet
                 // (e.g. Amazon enabled but never hydrated), seed it from the canonical platform
@@ -3972,6 +4070,33 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
               const resolvedLoc = allLocs.find(l => l.id === locationId);
               const rawLocationId = resolvedLoc?.locationId || locationId;
+              if (field === 'quantity' && onUpdateInventoryQuantity) {
+                const inventoryUpdate = buildInventoryQuantityUpdate({
+                  editorVariantId: variantId,
+                  canonicalVariantId,
+                  activeTab,
+                  platformVariants: [],
+                  location: resolvedLoc,
+                  quantity: value,
+                });
+                if (!inventoryUpdate) {
+                  log.warn('[ListingEditorForm] Base inventory quantity update is missing a canonical target');
+                  return;
+                }
+                void (async () => {
+                  try {
+                    await onUpdateInventoryQuantity(
+                      inventoryUpdate.variantId,
+                      inventoryUpdate.platformConnectionId,
+                      inventoryUpdate.platformLocationId,
+                      inventoryUpdate.quantity,
+                    );
+                  } catch (error) {
+                    log.error('[ListingEditorForm] Base inventory quantity update failed:', error);
+                  }
+                })();
+                return;
+              }
               if (field === 'quantity') {
                 // Store per-location quantity in locationQuantities
                 setLocationQuantity(rawLocationId, value);
@@ -4028,7 +4153,7 @@ const styles = StyleSheet.create({
   priceAllChannels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
   priceAllChannelsLabel: { fontSize: 10.5, fontWeight: '700', color: '#71717A', letterSpacing: 0.5 },
   priceAllChannelsValue: { fontSize: 18, fontWeight: '700', color: '#18181B', marginTop: 2 },
-  priceAllChannelsChange: { fontSize: 13, fontWeight: '600', color: '#5D7E16' },
+  priceAllChannelsChange: { fontSize: 13, fontWeight: '600', color: '#93C822' },
   // --- STYLES REFACTOR ---
   fieldLabel: {
     fontSize: 12,

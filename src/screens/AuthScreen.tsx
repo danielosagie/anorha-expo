@@ -32,7 +32,7 @@ const INK = '#1C1B17';
 const LABEL = '#6B6A63';
 const FIELD_BG = '#F6F5F1';
 const FIELD_BORDER = '#EAE6DA';
-const GREEN_DEEP = '#4A7C00';
+const GREEN_DEEP = '#93C822';
 const MUTED = '#8A887E';
 const OR_GRAY = '#A8A69C';
 const SOCIAL_BORDER = '#E0DCCF';
@@ -61,7 +61,7 @@ const ChevronLeft = () => (
 const GoogleMark = () => (
   <Svg width={19} height={19} viewBox="0 0 24 24">
     <Path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z" fill="#4285F4" />
-    <Path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z" fill="#34A853" />
+    <Path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z" fill="#93C822" />
     <Path d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z" fill="#FBBC05" />
     <Path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z" fill="#EA4335" />
   </Svg>
@@ -680,7 +680,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   notificationError: { backgroundColor: '#EF4444' },
-  notificationSuccess: { backgroundColor: '#10B981' },
+  notificationSuccess: { backgroundColor: '#93C822' },
   notificationText: { color: '#fff', fontSize: 14, fontFamily: 'Inter_600SemiBold', flex: 1 },
 });
 

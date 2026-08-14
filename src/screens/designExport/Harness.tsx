@@ -93,7 +93,7 @@ class ScreenErrorBoundary extends React.Component<
 function Loading() {
   return (
     <View style={styles.loading}>
-      <ActivityIndicator size="large" color="#8BB04F" />
+      <ActivityIndicator size="large" color="#93C822" />
     </View>
   );
 }

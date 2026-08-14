@@ -43,7 +43,7 @@ const CONVEX_TEMPLATE =
 const STATUS_STYLE: Record<ItemStatus, { bg: string; fg: string }> = {
   negotiating: { bg: '#faeeda', fg: '#854F0B' },
   listed:      { bg: '#F3F4F6', fg: '#6B7280' },
-  sold:        { bg: '#eaf3de', fg: '#3B6D11' },
+  sold:        { bg: '#eaf3de', fg: '#93C822' },
   at_floor:    { bg: '#fcebeb', fg: '#A32D2D' },
   paused:      { bg: '#F3F4F6', fg: '#9CA3AF' },
 };
@@ -457,7 +457,7 @@ const LiquidationCampaignScreen = () => {
           ) : null}
           {controller.notice ? (
             <View style={s.noticeBanner}>
-              <CheckCircle2 size={18} color="#7BB304" />
+              <CheckCircle2 size={18} color="#93C822" />
               <Text style={s.noticeText}>{controller.notice}</Text>
               <TouchableOpacity onPress={() => controller.setNotice(null)}>
                 <X size={18} color="#18181B" />
@@ -533,7 +533,7 @@ const LiquidationCampaignScreen = () => {
             <View style={s.chooserHandle} />
             <Text style={s.chooserTitle}>Add items to this clearout</Text>
             <TouchableOpacity style={s.chooserOption} onPress={addFromInventory} activeOpacity={0.8}>
-              <View style={s.chooserIcon}><Box size={22} color="#43631A" /></View>
+              <View style={s.chooserIcon}><Box size={22} color="#93C822" /></View>
               <View style={{ flex: 1 }}>
                 <Text style={s.chooserOptTitle}>Select from inventory</Text>
                 <Text style={s.chooserOptSub}>Pick from products you already have</Text>
@@ -542,7 +542,7 @@ const LiquidationCampaignScreen = () => {
             </TouchableOpacity>
             <View style={s.chooserDivider} />
             <TouchableOpacity style={s.chooserOption} onPress={addNewProduct} activeOpacity={0.8}>
-              <View style={s.chooserIcon}><PlusCircle size={22} color="#43631A" /></View>
+              <View style={s.chooserIcon}><PlusCircle size={22} color="#93C822" /></View>
               <View style={{ flex: 1 }}>
                 <Text style={s.chooserOptTitle}>Add a new product</Text>
                 <Text style={s.chooserOptSub}>Scan or create one, then add it here</Text>
@@ -682,7 +682,7 @@ const s = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
   },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { fontSize: 12, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
+  trayText: { fontSize: 12, color: '#93C822', fontFamily: 'Inter_600SemiBold' },
   trayAction: { fontSize: 12, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Loading
@@ -693,7 +693,7 @@ const s = StyleSheet.create({
   controlsRow: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 8 },
   ctrlBtn: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5', backgroundColor: '#F9FAFB' },
   ctrlBtnText: { fontSize: 11, color: '#71717A', fontFamily: 'Inter_500Medium' },
-  selCount: { fontSize: 11, color: '#3B6D11', fontWeight: '500' },
+  selCount: { fontSize: 11, color: '#93C822', fontWeight: '600' },
 
   // Search + add row
   searchRow: { paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -736,10 +736,10 @@ const s = StyleSheet.create({
   emptyStateText: { color: '#9CA3AF', fontSize: 13, fontFamily: 'Inter_500Medium' },
   emptyAddBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#93C822', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12 },
   emptyAddBtnText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 13 },
-  addItemsBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#eaf3de', borderWidth: 0.5, borderColor: '#97C459', paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10 },
-  addItemsBtnText: { fontSize: 11, color: '#3B6D11', fontFamily: 'Inter_600SemiBold' },
+  addItemsBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#eaf3de', borderWidth: 0.5, borderColor: '#93C822', paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10 },
+  addItemsBtnText: { fontSize: 11, color: '#93C822', fontFamily: 'Inter_600SemiBold' },
   cb: { width: 18, height: 18, borderRadius: 4, borderWidth: 1, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
-  cbChecked: { backgroundColor: '#639922', borderColor: '#639922' },
+  cbChecked: { backgroundColor: '#93C822', borderColor: '#93C822' },
 
   // Clean Shop-style item rows
   itemSep: { height: 1, backgroundColor: '#F1F1EE', marginLeft: 76 },
@@ -756,7 +756,7 @@ const s = StyleSheet.create({
   // Bulk action bar
   bulkBar: { position: 'absolute', bottom: 12, left: 12, right: 12, backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#D1D5DB', borderRadius: 14, padding: 10, flexDirection: 'row', gap: 6, flexWrap: 'wrap', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 12, zIndex: 1000 },
   baBtn: { flex: 1, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 10, borderWidth: 0.5, alignItems: 'center' },
-  baPrimary: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
+  baPrimary: { borderColor: '#93C822', backgroundColor: '#eaf3de' },
   baDefault: { borderColor: '#D1D5DB', backgroundColor: '#F9FAFB' },
   baDanger: { borderColor: '#F7C1C1', backgroundColor: '#fcebeb' },
   baBtnText: { fontSize: 11, fontWeight: '500', color: '#111827' },
@@ -767,7 +767,7 @@ const s = StyleSheet.create({
   errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 14, borderCurve: 'continuous', borderWidth: 1, borderColor: '#EFB6BB', backgroundColor: '#FFFFFF', paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10, boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)' },
   errorText: { flex: 1, color: '#18181B', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   errorRetry: { color: '#18181B', fontFamily: 'Inter_700Bold', fontSize: 12 },
-  noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 14, borderCurve: 'continuous', borderWidth: 1, borderColor: '#7BB304', backgroundColor: '#FFFFFF', paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10, boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)' },
+  noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 14, borderCurve: 'continuous', borderWidth: 1, borderColor: '#93C822', backgroundColor: '#FFFFFF', paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10, boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)' },
   noticeText: { flex: 1, color: '#18181B', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
 
   // Sheet common
@@ -796,9 +796,9 @@ const s = StyleSheet.create({
   // Reprice pct
   pctRow: { flexDirection: 'row', gap: 7, marginTop: 6, marginBottom: 10 },
   pctOpt: { flex: 1, borderWidth: 0.5, borderColor: '#E5E5E5', borderRadius: 10, paddingVertical: 9, alignItems: 'center' },
-  pctOptSel: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
+  pctOptSel: { borderColor: '#93C822', backgroundColor: '#eaf3de' },
   pctOptText: { fontSize: 12, color: '#71717A' },
-  pctOptTextSel: { color: '#3B6D11', fontWeight: '500' },
+  pctOptTextSel: { color: '#93C822', fontWeight: '600' },
 
   // Detail sheet
   detailTopRow: { flexDirection: 'row', gap: 12, alignItems: 'center', marginBottom: 12 },
@@ -812,11 +812,11 @@ const s = StyleSheet.create({
   phReason: { fontSize: 12, color: '#71717A' },
   chStatus: { flexDirection: 'row', gap: 7, flexWrap: 'wrap', marginBottom: 12 },
   chPill: { paddingHorizontal: 11, paddingVertical: 4, borderRadius: 10, borderWidth: 0.5, borderColor: '#E5E5E5' },
-  chPillLive: { borderColor: '#97C459', backgroundColor: '#eaf3de' },
+  chPillLive: { borderColor: '#93C822', backgroundColor: '#eaf3de' },
   chPillText: { fontSize: 11, color: '#71717A' },
   detailActions: { flexDirection: 'row', gap: 7 },
   daBtn: { flex: 1, paddingVertical: 10, borderRadius: 11, borderWidth: 0.5, borderColor: '#E5E5E5', alignItems: 'center' },
-  daBtnPrimary: { backgroundColor: '#eaf3de', borderColor: '#97C459' },
+  daBtnPrimary: { backgroundColor: '#eaf3de', borderColor: '#93C822' },
   daBtnText: { fontSize: 12, fontWeight: '500', color: '#111827' },
 });
 

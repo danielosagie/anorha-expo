@@ -75,7 +75,7 @@ function isFailed(status: string): boolean {
 function fallbackPresentation(rawStatus: string): Omit<ConnectionImportPresentation, 'occurredAt'> {
   const status = normalizedStatus(rawStatus);
   if (status === 'active' || status === 'live') {
-    return { kind: 'synced', label: 'Synced', color: '#43631A', importInProgress: false };
+    return { kind: 'synced', label: 'Synced', color: '#93C822', importInProgress: false };
   }
   if (status === 'review' || status === 'needs-attention') {
     return { kind: 'review', label: 'Needs review', color: '#BA7517', importInProgress: false };
@@ -141,7 +141,7 @@ export function deriveConnectionImportPresentation({
     return {
       kind: 'synced',
       label: 'Synced',
-      color: '#43631A',
+      color: '#93C822',
       occurredAt,
       importInProgress: false,
     };

@@ -123,7 +123,7 @@ export const DateRangeSheet: React.FC<DateRangeSheetProps> = ({ visible, current
 
               <TouchableOpacity style={styles.customRow} activeOpacity={0.7} onPress={() => setPage('custom')}>
                 <View style={styles.customIcon}>
-                  <CalendarIcon size={18} color="#43631A" />
+                  <CalendarIcon size={18} color="#93C822" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.customTitle}>Custom Dates</Text>
@@ -145,7 +145,7 @@ export const DateRangeSheet: React.FC<DateRangeSheetProps> = ({ visible, current
                         close();
                       }}
                     >
-                      <Text style={[styles.presetText, active && { color: '#5A8F12', fontFamily: 'Inter_700Bold' }]}>
+                      <Text style={[styles.presetText, active && { color: '#93C822', fontFamily: 'Inter_700Bold' }]}>
                         {p.label}
                       </Text>
                     </TouchableOpacity>
@@ -185,7 +185,7 @@ export const DateRangeSheet: React.FC<DateRangeSheetProps> = ({ visible, current
                   monthTextColor: '#18181B',
                   textSectionTitleColor: '#9CA3AF',
                   arrowColor: '#18181B',
-                  todayTextColor: '#5A8F12',
+                  todayTextColor: '#93C822',
                   textDayFontWeight: '600',
                 }}
               />
