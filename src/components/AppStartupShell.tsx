@@ -1,5 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 
 type AppStartupShellProps = {
   title: string;
@@ -12,6 +13,12 @@ const AppStartupShell: React.FC<AppStartupShellProps> = ({
   message,
   accent = '#0F766E',
 }) => {
+  // The native splash is only hidden by AppNavigator. This shell renders in every
+  // pre-navigator boot state, so it must drop the splash itself or a stalled boot
+  // shows the splash forever with this screen invisible beneath it.
+  React.useEffect(() => {
+    SplashScreen.hideAsync().catch(() => { });
+  }, []);
   return (
     <View
       style={{

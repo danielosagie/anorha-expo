@@ -2,6 +2,7 @@ import React, { useCallback, useContext, useEffect, useRef, useState } from 'rea
 import { NavigationContainer, NavigationContainerRef, CommonActions, DefaultTheme } from '@react-navigation/native';
 import { AppState, AppStateStatus, StatusBar, Linking, Alert, ActivityIndicator, View, Pressable } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as SplashScreen from 'expo-splash-screen';
 import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
@@ -81,6 +82,17 @@ const APP_NAVIGATION_THEME = {
 };
 
 const App: React.FC = () => {
+  // Splash tripwire: AppNavigator hides the splash 2s after it mounts, and the boot
+  // shells hide it on their own mount. If NOTHING has hidden it by 6s, some boot state
+  // stalled without a surface — force the splash down so whatever rendered is visible.
+  // A healthy boot never feels this timer.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => { });
+    }, 6000);
+    return () => clearTimeout(t);
+  }, []);
+
   // One-time cleanup of any existing cache conflicts
   useEffect(() => {
     const cleanupCache = async () => {
