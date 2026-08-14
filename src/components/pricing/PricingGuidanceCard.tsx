@@ -430,7 +430,7 @@ const styles = StyleSheet.create({
   },
   applyChipHighlight: { borderColor: GREEN, backgroundColor: 'rgba(147,200,34,0.12)' },
   applyLabel: { fontSize: 10.5, color: COLORS.label, fontFamily: FONT.semibold },
-  applyLabelHighlight: { color: '#3F6212' },
+  applyLabelHighlight: { color: '#93C822' },
   applyPrice: { fontSize: 13.5, fontFamily: FONT.bold, color: COLORS.text, marginTop: 2 },
   applyDays: { fontSize: 9.5, color: COLORS.label, fontFamily: FONT.regular, marginTop: 2 },
 

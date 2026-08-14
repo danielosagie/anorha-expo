@@ -37,9 +37,9 @@ export function MessageActions({
   narrationState,
   onToggleNarration,
   tintColor = '#9CA3AF',
-  upActiveColor = '#5D7E16',
+  upActiveColor = '#93C822',
   downActiveColor = '#52525B',
-  narrationActiveColor = '#5D7E16',
+  narrationActiveColor = '#93C822',
   activeBackgroundColor = 'rgba(147,200,34,0.12)',
   style,
 }: MessageActionsProps) {

@@ -52,7 +52,7 @@ export interface VariantDispatchStatus {
 }
 
 // Color vocabulary (matches ProductDetail alDot/alStatusText + the connection row).
-const GREEN = '#16A34A';
+const GREEN = '#93C822';
 const AMBER = '#BA7517'; // "needs a check" / "couldn't post"
 const AMBER_GENTLE = '#FF9500'; // "will post when your computer's on"
 const QUIET_TEXT = '#71717A';

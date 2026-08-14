@@ -1789,7 +1789,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 10,
-    backgroundColor: '#B7E344',
+    backgroundColor: '#93C822',
     borderWidth: 3,
     borderColor: '#FFFFFF',
     alignItems: 'center',
@@ -1956,7 +1956,7 @@ const styles = StyleSheet.create({
   },
   usageLimitPrimaryText: { fontSize: 15, fontWeight: '700', color: '#0A0A0B' },
   usageLimitSecondary: { marginTop: 10, paddingVertical: 6, paddingHorizontal: 12 },
-  usageLimitSecondaryText: { fontSize: 14, fontWeight: '600', color: '#5A8F12' },
+  usageLimitSecondaryText: { fontSize: 14, fontWeight: '600', color: '#93C822' },
   // Empty cart
   emptyState: { alignItems: 'center', paddingTop: 48 },
   emptyStateIconCircle: {

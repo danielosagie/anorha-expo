@@ -191,7 +191,7 @@ type BriefingChip = 'SOLD' | 'OFFER' | 'REPRICE' | 'ASK' | 'LISTED';
 type BriefingRowData = { id: string; label: string; chip: BriefingChip; status: string };
 
 const CHIP_STYLE: Record<BriefingChip, { bg: string; fg: string; text: string }> = {
-  SOLD: { bg: '#EAF7CF', fg: '#4E6B12', text: 'SOLD' },
+  SOLD: { bg: '#EAF7CF', fg: '#93C822', text: 'SOLD' },
   OFFER: { bg: '#FBEAD2', fg: '#A2611A', text: 'OFFER' },
   REPRICE: { bg: '#E7E7EA', fg: '#3F3F46', text: 'REPRICE' },
   ASK: { bg: '#DCEBFB', fg: '#1F5FA8', text: 'NEEDS YOU' },
@@ -1759,7 +1759,7 @@ const SproutHomeScreen: React.FC = () => {
               disabled={selectedIds.size === 0}
               activeOpacity={0.8}
             >
-              <Icon name="check" size={16} color={isDark ? THEME.colors.onPrimary : '#3B6300'} />
+              <Icon name="check" size={16} color={isDark ? THEME.colors.onPrimary : '#93C822'} />
               <Text style={[
                 styles.selectActionText,
                 styles.selectActionDoneText,
@@ -1842,8 +1842,8 @@ const CampaignCard: React.FC<{
   // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
   // surface; the ticks are a separate gray strip to its right (no track behind).
   // At 0% the pill reads gray (nothing raised yet) rather than a misleading green.
-  const goalBorder = goalPct === 0 ? '#666' : isCompleted ? '#6BA03A' : '#3A5A24';
-  const goalFillBg = goalPct === 0 ? '#999' : isCompleted ? '#95BF46' : '#7BB304';
+  const goalBorder = goalPct === 0 ? '#666' : isCompleted ? '#93C822' : '#93C822';
+  const goalFillBg = goalPct === 0 ? '#999' : isCompleted ? '#93C822' : '#93C822';
   const tickColor = theme.campaign.tick;
 
   return (
@@ -2013,7 +2013,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(147,200,34,0.18)',
   },
   selectActionDoneText: {
-    color: '#3B6300',
+    color: '#93C822',
   },
   selectActionDisabled: {
     opacity: 0.45,

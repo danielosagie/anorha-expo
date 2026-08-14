@@ -196,6 +196,6 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: '#3F6212',
+    color: '#93C822',
   },
 });

@@ -63,7 +63,7 @@ const styles = StyleSheet.create({
     maxWidth: 320,
     height: 52,
     borderRadius: 14,
-    backgroundColor: '#4CA827',
+    backgroundColor: '#93C822',
     alignItems: 'center',
     justifyContent: 'center',
   },

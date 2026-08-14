@@ -95,6 +95,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: CHAT_FONT.bold,
     fontWeight: '700',
-    color: '#5D7E16',
+    color: '#93C822',
   },
 });

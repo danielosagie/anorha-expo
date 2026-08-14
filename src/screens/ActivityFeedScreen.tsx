@@ -497,7 +497,7 @@ const ActivityFeedScreen = observer(() => {
 
   const getEventColor = (eventType: string) => {
     if (eventType.includes('ERROR') || eventType.includes('FAILED')) return '#ef4444';
-    if (eventType.includes('ORDER')) return '#10b981';
+    if (eventType.includes('ORDER')) return '#93C822';
     if (eventType.includes('INVENTORY_CHANGE')) return '#3b82f6';
     if (eventType.includes('PRICE_CHANGE')) return '#f59e0b';
     if (eventType.includes('SYNC')) return '#8b5cf6';

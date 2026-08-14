@@ -509,7 +509,7 @@ const ConnectionsScreen = () => {
             <Text style={styles.empty}>No computers linked yet.</Text>
           ) : (
             computers.map((comp, i) => {
-              const color = comp.online ? '#43631A' : '#BA7517';
+              const color = comp.online ? '#93C822' : '#BA7517';
               return (
                 <TouchableOpacity
                   key={comp.id}
@@ -518,7 +518,7 @@ const ConnectionsScreen = () => {
                   onPress={() => setLinkComputerOpen(true)}
                 >
                   <View style={styles.poolIcon}>
-                    <Monitor size={20} color="#43631A" />
+                    <Monitor size={20} color="#93C822" />
                   </View>
                   <View style={styles.rowInfo}>
                     <Text style={styles.rowTitle} numberOfLines={1}>
@@ -579,7 +579,7 @@ const ConnectionsScreen = () => {
                 <View style={[styles.poolIcon, p.isPartnerPool && styles.poolIconPartner]}>
                   {p.isPartnerPool
                     ? <Handshake size={20} color="#A2611A" />
-                    : <Layers size={20} color="#43631A" />}
+                    : <Layers size={20} color="#93C822" />}
                 </View>
                 <View style={styles.rowInfo}>
                   <Text style={styles.rowTitle} numberOfLines={1}>{p.name}</Text>

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, forwardRef, useImperativeHandle, useRef, useCallback } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Pressable, FlatList, SectionList, Alert, ActivityIndicator, Dimensions, Linking, Platform } from 'react-native';
-import { isPlatformReady, getMissingPlatformFields, hasPlatformPrice } from '../utils/platformRequirements';
+import { isPlatformReady, getMissingPlatformFields } from '../utils/platformRequirements';
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import VariantInventoryEditor, { InventoryItemData, VariantInventoryEditorProps } from './VariantInventoryEditor';
@@ -31,6 +31,8 @@ import { apiFetch } from '../lib/apiClient';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
 import { pricingCacheKey, getFreshPricing, putPricing } from '../lib/pricingResearchCache';
+import { buildInventoryQuantityUpdate } from '../lib/inventorySync';
+import { formatStoredPricingSummary } from '../lib/storedPricingResearch';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -118,6 +120,16 @@ const rowStyles = StyleSheet.create({
     color: CHAT_COLORS.ink,
     padding: 0,
   },
+  channelPricesToggle: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, paddingHorizontal: 2 },
+  channelPricesToggleText: { color: '#3F3F46', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+  channelPricesList: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 14, overflow: 'hidden', backgroundColor: '#FFFFFF' },
+  channelPriceRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12 },
+  channelPriceDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F1F2F4' },
+  channelPriceName: { flex: 1, color: '#18181B', fontSize: 14, fontFamily: CHAT_FONT.semibold, fontWeight: '600' },
+  channelPriceInputWrap: { width: 104, height: 38, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingHorizontal: 10, backgroundColor: '#F9FAFB' },
+  channelPriceCurrency: { color: '#71717A', fontSize: 14, fontFamily: CHAT_FONT.medium, fontWeight: '500', marginRight: 3 },
+  channelPriceInput: { flex: 1, color: '#18181B', fontSize: 15, fontFamily: CHAT_FONT.semibold, fontWeight: '600', paddingVertical: 0, textAlign: 'right' },
+  storedResearchLine: { marginTop: 12, color: CHAT_COLORS.dim, fontSize: 13, fontFamily: CHAT_FONT.medium, fontWeight: '500' },
   researchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -217,7 +229,7 @@ export type ListingEditorFormProps = {
   updateCounter?: number; // Signal when platforms ref content changes
   isGenerationMode?: boolean; // Control whether to show generation-specific UI (overrides etc)
   images: string[];
-  platformLocations?: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>>;
+  platformLocations?: Record<string, Array<{ id: string; locationId?: string; name: string; connectionId: string; connectionName: string; platformType: string }>>;
   onChangePlatforms: (next: PlatformsData) => void;
   onChangeImages?: (next: string[]) => void;
   onOpenBarcodeScanner?: (onResult: (code: string) => void) => void;
@@ -244,6 +256,17 @@ export type ListingEditorFormProps = {
   inlineField?: string;
   /** Platform context for an inline field. Use `all` for shared canonical edits. */
   inlinePlatform?: string;
+  /** Canonical ProductVariant ID for the editor's virtual base row. */
+  canonicalVariantId?: string;
+  /** Persist quantity directly without arming the generic product autosave. */
+  onUpdateInventoryQuantity?: (
+    variantId: string,
+    platformConnectionId: string,
+    platformLocationId: string,
+    quantity: number,
+  ) => void | Promise<void>;
+  /** Pricing evidence frozen during Match or loaded from its stored job result. */
+  storedPricingResearch?: unknown;
 };
 
 export type ListingEditorFormRef = {
@@ -378,7 +401,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform, canonicalVariantId, onUpdateInventoryQuantity, storedPricingResearch }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
   const latestPlatformsRef = useRef(platforms);
   latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
@@ -400,6 +423,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // Default to 'all' tab instead of first platform
   const [variantSearchQuery, setVariantSearchQuery] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>(inlinePlatform || 'all');
+  const [showChannelPrices, setShowChannelPrices] = useState(false);
   const [showAdditionalFields, setShowAdditionalFields] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [optionEditorOpen, setOptionEditorOpen] = useState<boolean>(false);
@@ -600,6 +624,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return null;
   }, [platformKeys, platforms]);
   const titleForPricingResearch = pricingResearchInput?.title ?? '';
+  const storedPricingSummary = useMemo(
+    () => formatStoredPricingSummary(storedPricingResearch),
+    [storedPricingResearch],
+  );
   const supportsTaxonomy = activeTab !== 'all' && ['shopify', 'ebay'].includes(activePlatformKeyLower);
   const activeTaxonomyQuery = taxonomyQueries[activePlatformKeyLower] ?? '';
 
@@ -977,17 +1005,14 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     }
   }, [pricingResearchInput]);
 
-  // Auto-load sold-comps pricing research the moment a Price surface appears — the
-  // field sheet (openField) AND the publish wizard's inline price step — so the
-  // going-rate band + recent comps are there waiting, never behind a manual tap.
-  // Fire-and-forget: the request never blocks typing a price.
+  // The standalone price field can refresh sold comps from the network. The
+  // publish flow passes stored scan-time research and never starts a request.
   useEffect(() => {
-    const onPriceStep = openField === 'price' || inlineField === 'price';
-    if (onPriceStep && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
+    if (openField === 'price' && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
       void fetchPricingResearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openField, inlineField, titleForPricingResearch]);
+  }, [openField, titleForPricingResearch]);
 
   const fetchShippingEstimate = useCallback(
     async (override?: { weight: string; weightUnit: string; estimatedDimensions?: { length: number; width: number; height: number } }) => {
@@ -1167,6 +1192,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
       };
       onChangePlatforms({ [keyToEdit]: { [key]: value } });
     }
+  };
+
+  const patchPlatformField = (platformKey: string, key: string, value: any) => {
+    const current = latestPlatformsRef.current;
+    latestPlatformsRef.current = {
+      ...current,
+      [platformKey]: { ...(current[platformKey] || {}), [key]: value },
+    };
+    onChangePlatforms({ [platformKey]: { [key]: value } });
   };
 
   // Like patchField but writes several keys in ONE onChangePlatforms call. Calling
@@ -2168,14 +2202,64 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         );
       }
       case 'price': {
-        const currentPrice = Number(d.price) || 0;
+        const showBreakout = inlineField === 'price' && platformKeys.length > 1;
         return (
           <View>
             <View style={rowStyles.priceInputWrap}>
               <Text style={rowStyles.priceCurrency}>$</Text>
               <TextInput style={rowStyles.priceInput} value={String(d.price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
             </View>
-            {renderPricingGuidance(currentPrice)}
+            {showBreakout ? (
+              <>
+                <TouchableOpacity
+                  style={rowStyles.channelPricesToggle}
+                  onPress={() => setShowChannelPrices((shown) => !shown)}
+                  activeOpacity={0.72}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: showChannelPrices }}
+                >
+                  <Text style={rowStyles.channelPricesToggleText}>Set prices by channel</Text>
+                  <ChevronDown
+                    size={17}
+                    color={CHAT_COLORS.dim}
+                    style={{ transform: [{ rotate: showChannelPrices ? '180deg' : '0deg' }] }}
+                  />
+                </TouchableOpacity>
+                {showChannelPrices ? (
+                  <View style={rowStyles.channelPricesList}>
+                    {platformKeys.map((platformKey, index) => {
+                      const platformPrice = (platforms[platformKey] as PlatformState | undefined)?.price;
+                      return (
+                        <View
+                          key={platformKey}
+                          style={[rowStyles.channelPriceRow, index < platformKeys.length - 1 && rowStyles.channelPriceDivider]}
+                        >
+                          <PlatformLogo type={platformKey} size={20} />
+                          <Text style={rowStyles.channelPriceName} numberOfLines={1}>
+                            {getPlatform(platformKey)?.label || platformKey}
+                          </Text>
+                          <View style={rowStyles.channelPriceInputWrap}>
+                            <Text style={rowStyles.channelPriceCurrency}>$</Text>
+                            <TextInput
+                              style={rowStyles.channelPriceInput}
+                              value={String(platformPrice ?? '')}
+                              onChangeText={(text) => patchPlatformField(platformKey, 'price', text)}
+                              keyboardType="decimal-pad"
+                              placeholder="0.00"
+                              placeholderTextColor={CHAT_COLORS.faint}
+                              selectTextOnFocus
+                            />
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+            {storedPricingSummary ? (
+              <Text style={rowStyles.storedResearchLine}>{storedPricingSummary}</Text>
+            ) : null}
           </View>
         );
       }
@@ -2508,7 +2592,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 {/* Use these photos for all sizes */}
                 {hasVariants && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F9FAFB', borderRadius: 13, paddingVertical: 13, paddingHorizontal: 14, marginTop: 16 }}>
-                    <Icon name="content-copy" size={15} color="#5D7E16" />
+                    <Icon name="content-copy" size={15} color="#93C822" />
                     <Text style={{ flex: 1, fontSize: 13.5, fontWeight: '600', color: '#374151' }}>Use these photos for all sizes</Text>
                     <TouchableOpacity
                       onPress={() => patchPlatform((prev) => ({ ...prev, useImagesForAllVariants: !useForAll }))}
@@ -2941,7 +3025,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.btnPrimary, { backgroundColor: '#84cc16', paddingHorizontal: 24, borderRadius: 8 }]}
+                      style={[styles.btnPrimary, { backgroundColor: '#93C822', paddingHorizontal: 24, borderRadius: 8 }]}
                       onPress={() => {
                         handleDoneOption();
                         setOptionEditorOpen(false);
@@ -3013,7 +3097,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             }}
           >
             <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(147,200,34,0.10)', alignItems: 'center', justifyContent: 'center' }}>
-              <Truck size={20} color="#5C9A1B" />
+              <Truck size={20} color="#93C822" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }} numberOfLines={1}>
@@ -3487,6 +3571,37 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 const rawLocationId = resolvedLoc?.locationId || locationId;
                 const resolvedConnectionId = resolvedLoc?.connectionId;
 
+                let targetPlatform = activeTab;
+                if (activeTab === 'all' && resolvedLoc) targetPlatform = resolvedLoc.platformKey;
+
+                if (field === 'quantity' && onUpdateInventoryQuantity) {
+                  const inventoryUpdate = buildInventoryQuantityUpdate({
+                    editorVariantId: variantId,
+                    canonicalVariantId,
+                    activeTab,
+                    platformVariants: (platforms[targetPlatform]?.variants || []) as any[],
+                    location: resolvedLoc,
+                    quantity: value,
+                  });
+                  if (!inventoryUpdate) {
+                    log.warn('[ListingEditorForm] Inventory quantity update is missing a canonical target');
+                    return;
+                  }
+                  void (async () => {
+                    try {
+                      await onUpdateInventoryQuantity(
+                        inventoryUpdate.variantId,
+                        inventoryUpdate.platformConnectionId,
+                        inventoryUpdate.platformLocationId,
+                        inventoryUpdate.quantity,
+                      );
+                    } catch (error) {
+                      log.error('[ListingEditorForm] Inventory quantity update failed:', error);
+                    }
+                  })();
+                  return;
+                }
+
                 // HANDLE BASE PRODUCT (non-variant product)
                 if (variantId === '_base') {
                   if (field === 'quantity') {
@@ -3500,11 +3615,6 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 }
 
                 const nextPlatforms = { ...platforms };
-
-                let targetPlatform = activeTab;
-                if (activeTab === 'all') {
-                  if (resolvedLoc) targetPlatform = resolvedLoc.platformKey;
-                }
 
                 // If the seller edits inventory for an enabled platform that has no data yet
                 // (e.g. Amazon enabled but never hydrated), seed it from the canonical platform
@@ -3731,6 +3841,33 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
               const resolvedLoc = allLocs.find(l => l.id === locationId);
               const rawLocationId = resolvedLoc?.locationId || locationId;
+              if (field === 'quantity' && onUpdateInventoryQuantity) {
+                const inventoryUpdate = buildInventoryQuantityUpdate({
+                  editorVariantId: variantId,
+                  canonicalVariantId,
+                  activeTab,
+                  platformVariants: [],
+                  location: resolvedLoc,
+                  quantity: value,
+                });
+                if (!inventoryUpdate) {
+                  log.warn('[ListingEditorForm] Base inventory quantity update is missing a canonical target');
+                  return;
+                }
+                void (async () => {
+                  try {
+                    await onUpdateInventoryQuantity(
+                      inventoryUpdate.variantId,
+                      inventoryUpdate.platformConnectionId,
+                      inventoryUpdate.platformLocationId,
+                      inventoryUpdate.quantity,
+                    );
+                  } catch (error) {
+                    log.error('[ListingEditorForm] Base inventory quantity update failed:', error);
+                  }
+                })();
+                return;
+              }
               if (field === 'quantity') {
                 // Store per-location quantity in locationQuantities
                 setLocationQuantity(rawLocationId, value);
@@ -3783,6 +3920,10 @@ const styles = StyleSheet.create({
   // Flattened: sections are borderless now (stripped-down look).
   card: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', padding: 14 },
   darkerCard: { marginTop: 16, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: '#F1F2F4', padding: 12 },
+  priceAllChannels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  priceAllChannelsLabel: { fontSize: 10.5, fontWeight: '700', color: '#71717A', letterSpacing: 0.5 },
+  priceAllChannelsValue: { fontSize: 18, fontWeight: '700', color: '#18181B', marginTop: 2 },
+  priceAllChannelsChange: { fontSize: 13, fontWeight: '600', color: '#93C822' },
   // --- STYLES REFACTOR ---
   fieldLabel: {
     fontSize: 12,

@@ -203,7 +203,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   refilledChipText: {
-    color: '#3f6212',
+    color: '#93C822',
     fontSize: 10,
     fontFamily: CHAT_FONT.semibold,
     fontWeight: '600',

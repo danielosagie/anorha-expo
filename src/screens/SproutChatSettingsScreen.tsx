@@ -73,7 +73,7 @@ const SproutChatSettingsScreen = () => {
             description="Carry saved decisions and preferences into new chats."
             value={preferences.sharedMemory}
             onChange={value => update('sharedMemory', value)}
-            icon={<Brain size={21} color="#314E0E" />}
+            icon={<Brain size={21} color="#93C822" />}
           />
         </View>
 
@@ -84,7 +84,7 @@ const SproutChatSettingsScreen = () => {
             description="Open Sprout's activity details automatically."
             value={preferences.expandedActivity}
             onChange={value => update('expandedActivity', value)}
-            icon={<ListTree size={21} color="#314E0E" />}
+            icon={<ListTree size={21} color="#93C822" />}
           />
           <ToggleRow
             divided
@@ -92,12 +92,12 @@ const SproutChatSettingsScreen = () => {
             description="Show useful next questions after the latest response."
             value={preferences.suggestedFollowUps}
             onChange={value => update('suggestedFollowUps', value)}
-            icon={<Sparkles size={21} color="#314E0E" />}
+            icon={<Sparkles size={21} color="#93C822" />}
           />
         </View>
 
         <View style={styles.explainer}>
-          <MessagesSquare size={20} color="#5C6B4B" />
+          <MessagesSquare size={20} color="#93C822" />
           <Text style={styles.explainerText}>
             Each chat keeps its own history. Shared memory carries only durable campaign decisions and preferences between chats.
           </Text>
@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     marginLeft: 4,
     marginBottom: 9,
-    color: '#6F7568',
+    color: '#93C822',
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     letterSpacing: 0.45,
@@ -160,8 +160,8 @@ const styles = StyleSheet.create({
   },
   explainerText: {
     flex: 1,
-    color: '#697061',
-    fontFamily: 'Inter_400Regular',
+    color: '#93C822',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     lineHeight: 19,
   },

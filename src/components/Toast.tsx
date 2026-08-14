@@ -15,7 +15,7 @@ import { getToastDuration, type ToastRecord, type ToastTone } from '../context/t
 
 const TONE: Record<ToastTone, { icon: string; border: string }> = {
   neutral: { icon: '#18181B', border: '#E5E7EB' },
-  success: { icon: '#7BB304', border: '#7BB304' },
+  success: { icon: '#93C822', border: '#93C822' },
   warn: { icon: '#D39329', border: '#E8C88A' },
   danger: { icon: '#D8434F', border: '#EFB6BB' },
 };

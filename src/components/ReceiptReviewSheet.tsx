@@ -136,7 +136,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
     // Get confidence badge color
     const getConfidenceColor = (confidence: 'high' | 'medium' | 'low' | 'none') => {
         switch (confidence) {
-            case 'high': return '#4CAF50';
+            case 'high': return '#93C822';
             case 'medium': return '#FF9800';
             case 'low': return '#f44336';
             case 'none': return '#9E9E9E';
@@ -271,7 +271,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                         <Icon
                                             name={item.isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
                                             size={24}
-                                            color={item.isSelected ? '#4CAF50' : theme.colors.textSecondary}
+                                            color={item.isSelected ? '#93C822' : theme.colors.textSecondary}
                                         />
                                     </TouchableOpacity>
 
@@ -287,7 +287,7 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                             <Text style={[styles.qtyLabel, { color: theme.colors.textSecondary }]}>
                                                 Current: {item.matchedProduct?.currentQuantity || 0}
                                             </Text>
-                                            <Text style={[styles.qtyPlus, { color: '#4CAF50' }]}>+</Text>
+                                            <Text style={[styles.qtyPlus, { color: '#93C822' }]}>+</Text>
                                             <TextInput
                                                 style={[styles.qtyInput, { color: theme.colors.text, borderColor: theme.colors.border }]}
                                                 value={String(item.quantity)}
@@ -344,8 +344,8 @@ const ReceiptReviewSheet: React.FC<ReceiptReviewSheetProps> = ({
                                                 style={styles.createButton}
                                                 onPress={() => onCreateNew?.(item.parsedName)}
                                             >
-                                                <Icon name="plus" size={16} color="#4CAF50" />
-                                                <Text style={[styles.createButtonText, { color: '#4CAF50' }]}>Add New</Text>
+                                                <Icon name="plus" size={16} color="#93C822" />
+                                                <Text style={[styles.createButtonText, { color: '#93C822' }]}>Add New</Text>
                                             </TouchableOpacity>
                                         </View>
                                     </View>
@@ -427,7 +427,7 @@ const styles = StyleSheet.create({
         borderRadius: 2,
         overflow: 'hidden',
     },
-    progressFill: { height: '100%', backgroundColor: '#4CAF50' },
+    progressFill: { height: '100%', backgroundColor: '#93C822' },
     progressText: { fontSize: 12, marginTop: 4, textAlign: 'center' },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     loadingText: { marginTop: 12, fontSize: 14 },
@@ -437,7 +437,7 @@ const styles = StyleSheet.create({
         marginTop: 16,
         paddingHorizontal: 20,
         paddingVertical: 10,
-        backgroundColor: '#4CAF50',
+        backgroundColor: '#93C822',
         borderRadius: 8,
     },
     retryButtonText: { color: '#fff', fontWeight: '600' },
@@ -451,7 +451,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'transparent',
     },
-    itemCardSelected: { borderColor: '#4CAF50' },
+    itemCardSelected: { borderColor: '#93C822' },
     checkbox: { marginRight: 12, justifyContent: 'flex-start', paddingTop: 2 },
     itemContent: { flex: 1 },
     itemName: { fontSize: 15, fontWeight: '500', marginBottom: 4 },
@@ -496,7 +496,7 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#4CAF50',
+        borderColor: '#93C822',
         gap: 6,
     },
     createButtonText: { fontSize: 13, fontWeight: '500' },
@@ -519,7 +519,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#4CAF50',
+        backgroundColor: '#93C822',
         paddingVertical: 14,
         borderRadius: 12,
         gap: 8,

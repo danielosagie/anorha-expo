@@ -296,7 +296,7 @@ const PartnerWelcomeOverlay: React.FC<{
             justifyContent: 'center',
             marginBottom: 24,
           }}>
-            <Icon name="handshake" size={40} color="#647653" />
+            <Icon name="handshake" size={40} color="#93C822" />
           </View>
 
           <Text style={{
@@ -2525,7 +2525,7 @@ const styles = StyleSheet.create({
   confirmBtn: {
     width: '100%',
     marginTop: 12,
-    backgroundColor: '#8BC34A',
+    backgroundColor: '#93C822',
     borderRadius: 8,
     paddingVertical: 16,
     alignItems: 'center',
@@ -2779,7 +2779,7 @@ const styles = StyleSheet.create({
     color: '#1f2937',
   },
   primaryBtn: {
-    backgroundColor: '#10b981',
+    backgroundColor: '#93C822',
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: 'center',

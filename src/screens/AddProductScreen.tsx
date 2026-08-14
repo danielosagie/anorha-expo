@@ -7274,7 +7274,7 @@ const styles = StyleSheet.create({
   scanLine: {
     width: '100%',
     height: 3,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#93C822',
     opacity: 0.8,
   },
   // Sheet Styles

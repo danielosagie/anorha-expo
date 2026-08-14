@@ -120,7 +120,7 @@ export const ShelfScanProgressCard: React.FC<ShelfScanProgressCardProps> = ({
                 damping: 0.35,
                 displacementStrength: 0.05,
                 highlightStrength: 0.10,
-                color: '#4ADE80',
+                color: '#93C822',
               }}
               style={styles.shader}
             >
@@ -136,7 +136,7 @@ export const ShelfScanProgressCard: React.FC<ShelfScanProgressCardProps> = ({
             <AuroraOverlay
               parameters={{
                 intensity: 0.55,
-                color: '#4ADE80',
+                color: '#93C822',
                 direction: [0.15, 1.0],
                 borderFade: 0.35,
               }}
@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
     height: 340,
     borderRadius: 28,
     overflow: 'hidden',
-    backgroundColor: '#03130B',
+    backgroundColor: '#09090B',
   },
   shader: {
     width: '100%',
@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
   },
   scrim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(2, 14, 8, 0.45)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
@@ -236,7 +236,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     marginBottom: 12,
     borderRadius: 22,
-    backgroundColor: '#07170F',
+    backgroundColor: '#18181B',
     borderWidth: 1,
     borderColor: 'rgba(134, 239, 172, 0.12)',
     paddingHorizontal: 16,
@@ -247,7 +247,7 @@ const styles = StyleSheet.create({
   },
   placeholderRowResolved: {
     borderColor: 'rgba(74, 222, 128, 0.28)',
-    backgroundColor: '#0A1C12',
+    backgroundColor: '#27272A',
   },
   placeholderDot: {
     width: 10,
@@ -257,7 +257,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   placeholderDotResolved: {
-    backgroundColor: '#4ADE80',
+    backgroundColor: '#93C822',
   },
   placeholderTextWrap: {
     flex: 1,
@@ -281,6 +281,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   placeholderBarResolved: {
-    backgroundColor: '#4ADE80',
+    backgroundColor: '#93C822',
   },
 });

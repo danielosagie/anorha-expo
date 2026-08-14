@@ -1,8 +1,8 @@
-// In-memory pricing-research cache, shared by every price surface (field sheet,
-// publish-wizard price step). Keyed by the item identity that deterministically
-// produced the research (title + categoryId + condition), so reopening a sheet
-// for the same item renders the previous comps instantly instead of clearing to
-// a loading state and re-hitting the network.
+// In-memory cache for network-backed pricing-research surfaces. Publish-flow
+// price steps intentionally use persisted scan-time research instead, so opening
+// that step never starts a request. This cache remains keyed by the item identity
+// that produced live research (title + categoryId + condition), so reopening a
+// standalone price sheet paints the previous comps instantly.
 //
 // Staleness: comps move slowly — a 24h window keeps the app instant for a whole
 // listing session while the backend's own 3-day sold-comps cache stays the source

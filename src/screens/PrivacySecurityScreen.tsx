@@ -89,7 +89,7 @@ const PrivacySecurityScreen = () => {
         <View style={styles.card}>
           <View style={styles.infoRow}>
             <View style={[styles.iconWrap, { backgroundColor: 'rgba(147,200,34,0.16)' }]}>
-              <ShieldCheck size={20} color="#43631A" />
+              <ShieldCheck size={20} color="#93C822" />
             </View>
             <Text style={styles.infoText}>
               Your listings, connections and usage data belong to your org. Deleting your

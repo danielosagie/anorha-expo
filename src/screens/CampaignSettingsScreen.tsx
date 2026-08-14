@@ -163,7 +163,7 @@ const CampaignSettingsScreen = () => {
           </View>
         ) : (
           <>
-            <Section title="Clearout details" icon={<Pencil size={18} color="#43631A" />} open={open.details} onToggle={() => toggleSec('details')}>
+            <Section title="Clearout details" icon={<Pencil size={18} color="#93C822" />} open={open.details} onToggle={() => toggleSec('details')}>
               <View style={s.field}>
                 <Text style={s.fieldLabel}>Clearout name</Text>
                 <View style={s.fieldInputWrap}>
@@ -180,11 +180,11 @@ const CampaignSettingsScreen = () => {
               </View>
             </Section>
 
-            <Section title="Goal" icon={<Target size={18} color="#43631A" />} open={open.goal} onToggle={() => toggleSec('goal')}>
+            <Section title="Goal" icon={<Target size={18} color="#93C822" />} open={open.goal} onToggle={() => toggleSec('goal')}>
               <Field label="Target revenue" prefix="$" value={cfg.targetRevenue} onChange={(v: number) =>setField({ targetRevenue: v })} />
               <View style={s.deadlineHeader}>
                 <View style={s.deadlineTitleRow}>
-                  <CalendarDays size={17} color="#43631A" />
+                  <CalendarDays size={17} color="#93C822" />
                   <Text style={s.fieldLabel}>Sell by</Text>
                 </View>
                 <Text style={s.deadlineDate}>{formatSellByDate(deadline)}</Text>
@@ -195,7 +195,7 @@ const CampaignSettingsScreen = () => {
               <ClearoutCalendar selectedDate={deadline} onSelect={selectDeadline} minDate={today} />
             </Section>
 
-            <Section title="Negotiation guardrails" icon={<ShieldCheck size={18} color="#43631A" />} open={open.guard} onToggle={() => toggleSec('guard')}>
+            <Section title="Negotiation guardrails" icon={<ShieldCheck size={18} color="#93C822" />} open={open.guard} onToggle={() => toggleSec('guard')}>
               <Field label="Minimum acceptable offer" suffix="%" value={cfg.guardrails.minAcceptableOfferPercent} onChange={(v: number) =>setGuard({ minAcceptableOfferPercent: v })} />
               <Field label="Max automatic price drop" suffix="%" value={cfg.guardrails.maxAutoPriceDropPercent} onChange={(v: number) =>setGuard({ maxAutoPriceDropPercent: v })} />
               <Field label="Max counters per day" value={cfg.guardrails.maxAutoCounterCountPerDay} onChange={(v: number) =>setGuard({ maxAutoCounterCountPerDay: v })} />
@@ -213,7 +213,7 @@ const CampaignSettingsScreen = () => {
               </View>
             </Section>
 
-            <Section title="Chat" icon={<MessageCircleMore size={18} color="#43631A" />} open={open.chat} onToggle={() => toggleSec('chat')}>
+            <Section title="Chat" icon={<MessageCircleMore size={18} color="#93C822" />} open={open.chat} onToggle={() => toggleSec('chat')}>
               <TouchableOpacity style={s.linkRow} onPress={() => navigation.navigate('SproutChatSettings')} activeOpacity={0.75}>
                 <View style={s.linkCopy}>
                   <Text style={s.linkLabel}>Chat settings</Text>
@@ -223,9 +223,9 @@ const CampaignSettingsScreen = () => {
               </TouchableOpacity>
             </Section>
 
-            <Section title="End clearout" icon={<CheckCircle2 size={18} color="#3B6300" />} open={open.danger} onToggle={() => toggleSec('danger')}>
+            <Section title="End clearout" icon={<CheckCircle2 size={18} color="#93C822" />} open={open.danger} onToggle={() => toggleSec('danger')}>
               <TouchableOpacity style={s.deleteBtn} onPress={close} activeOpacity={0.85}>
-                <CheckCircle2 size={18} color="#3B6300" />
+                <CheckCircle2 size={18} color="#93C822" />
                 <Text style={s.deleteText}>Close clearout</Text>
               </TouchableOpacity>
             </Section>
@@ -347,7 +347,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  durationText: { color: '#5D7E16', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  durationText: { color: '#93C822', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
 
   switchRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 2 },
   switchLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 2 },
@@ -359,7 +359,7 @@ const s = StyleSheet.create({
   linkSub: { fontSize: 12, lineHeight: 17, color: '#71717A', fontFamily: 'Inter_400Regular', marginTop: 2 },
 
   deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13, borderRadius: 14, backgroundColor: 'rgba(147,200,34,0.12)', borderWidth: 1, borderColor: 'rgba(147,200,34,0.35)' },
-  deleteText: { fontSize: 15, color: '#3B6300', fontFamily: 'Inter_600SemiBold' },
+  deleteText: { fontSize: 15, color: '#93C822', fontFamily: 'Inter_600SemiBold' },
 
   // Sticky save bar
   saveBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 8, backgroundColor: '#FFFFFF' },

@@ -137,7 +137,7 @@ const PlanCard = ({ prompt, onDecision, submitting, items, dark = false }: Props
         <Icon
           name={isUnsupported ? 'alert-circle-outline' : 'clipboard-check-outline'}
           size={16}
-          color={dark ? theme.colors.primary : '#5D7E16'}
+          color={dark ? theme.colors.primary : '#93C822'}
         />
         <Text style={[s.kicker, dark && { color: theme.colors.primary }]}>{kicker}</Text>
       </View>
@@ -256,7 +256,7 @@ const s = StyleSheet.create({
   itemThumb: { width: '100%', height: 76, borderRadius: 10, backgroundColor: '#EFF1EA' },
   itemThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
   itemName: { fontSize: 12, lineHeight: 16, color: '#27272A', fontFamily: 'Inter_600SemiBold' },
-  itemPrice: { fontSize: 12, color: '#5D7E16', fontFamily: 'Inter_700Bold' },
+  itemPrice: { fontSize: 12, color: '#93C822', fontFamily: 'Inter_700Bold' },
   unresolved: {
     marginTop: 8,
     fontSize: 13,
@@ -265,7 +265,7 @@ const s = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
   },
   kicker: {
-    fontSize: 12, color: '#5D7E16', fontFamily: 'Inter_700Bold',
+    fontSize: 12, color: '#93C822', fontFamily: 'Inter_700Bold',
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   title: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 4 },
@@ -280,13 +280,13 @@ const s = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#EFF7E0',
   },
-  inventoryAction: { fontSize: 12, color: '#4E7012', fontFamily: 'Inter_700Bold' },
-  inventoryCount: { fontSize: 12, color: '#5D6B48', fontFamily: 'Inter_600SemiBold' },
+  inventoryAction: { fontSize: 12, color: '#93C822', fontFamily: 'Inter_700Bold' },
+  inventoryCount: { fontSize: 12, color: '#93C822', fontFamily: 'Inter_600SemiBold' },
   summary: { fontSize: 14, color: '#52525B', fontFamily: 'Inter_400Regular', lineHeight: 20, marginBottom: 10 },
   steps: { gap: 8, marginBottom: 12 },
   stepRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   stepNum: {
-    width: 20, height: 20, borderRadius: 10, backgroundColor: '#EFF7E0', color: '#5C8A0E',
+    width: 20, height: 20, borderRadius: 10, backgroundColor: '#EFF7E0', color: '#93C822',
     fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'center', lineHeight: 20, overflow: 'hidden',
   },
   stepTitle: { fontSize: 14, color: '#27272A', fontFamily: 'Inter_600SemiBold' },

@@ -115,7 +115,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
                 <Text style={[
                   s.optLabel,
                   dark && { color: theme.chat.text },
-                  (on || opt.recommended) && { color: dark ? theme.colors.primary : '#3B6D11' },
+                  (on || opt.recommended) && { color: dark ? theme.colors.primary : '#93C822', fontFamily: 'Inter_600SemiBold' },
                 ]}>{opt.label}</Text>
                 {opt.recommended && <Text style={[s.recPill, dark && { color: theme.colors.primary }]}>Recommended</Text>}
               </View>
@@ -124,7 +124,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ prompt, submitting, onSubmi
                   style={[
                     s.optDesc,
                     dark && { color: theme.chat.textSecondary },
-                    (on || opt.recommended) && { color: dark ? theme.colors.primary : '#3B6D11' },
+                    (on || opt.recommended) && { color: dark ? theme.colors.primary : '#93C822', fontFamily: 'Inter_600SemiBold' },
                   ]}
                   numberOfLines={2}
                 >
@@ -183,8 +183,8 @@ const s = StyleSheet.create({
   optLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   optLabel: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   recPill: {
-    fontSize: 12, color: '#3B6D11', borderWidth: 0.5, borderColor: '#93C822',
-    paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, overflow: 'hidden', fontFamily: 'Inter_500Medium',
+    fontSize: 12, color: '#93C822', borderWidth: 0.5, borderColor: '#93C822',
+    paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, overflow: 'hidden', fontFamily: 'Inter_600SemiBold',
   },
   optDesc: { marginTop: 3, fontSize: 14, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 19 },
   other: {

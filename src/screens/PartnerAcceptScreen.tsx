@@ -181,7 +181,7 @@ const PartnerAcceptScreen: React.FC = () => {
       return (
         <View style={styles.centerContent}>
           <View style={styles.successIcon}>
-            <Icon name="check-circle" size={48} color="#166534" />
+            <Icon name="check-circle" size={48} color="#93C822" />
           </View>
           <Text style={styles.title}>Partner Connected!</Text>
           <Text style={styles.description}>
@@ -218,7 +218,7 @@ const PartnerAcceptScreen: React.FC = () => {
     return (
       <View style={styles.content}>
         <View style={styles.iconContainer}>
-          <Icon name="storefront-check" size={40} color="#3F6212" />
+          <Icon name="storefront-check" size={40} color="#93C822" />
         </View>
 
         <Text style={styles.title}>Connect Partner</Text>

@@ -64,7 +64,7 @@ const pickAmount = (details: Record<string, any>): number | undefined => {
 
 const statusStyle = (status: string): { bg: string; fg: string; label: string } => {
   const s = String(status || '').toLowerCase();
-  if (/paid|complete|fulfil|success|sold/.test(s)) return { bg: '#E7F6D7', fg: '#4E6B12', label: status || 'Paid' };
+  if (/paid|complete|fulfil|success|sold/.test(s)) return { bg: '#E7F6D7', fg: '#93C822', label: status || 'Paid' };
   if (/pend|process|open|unfulfil/.test(s)) return { bg: '#FBEAD2', fg: '#A2611A', label: status || 'Pending' };
   if (/refund|cancel|fail|void/.test(s)) return { bg: '#FEE2E2', fg: '#B91C1C', label: status || 'Refunded' };
   return { bg: '#F3F4F6', fg: '#4B5563', label: status || 'Order' };

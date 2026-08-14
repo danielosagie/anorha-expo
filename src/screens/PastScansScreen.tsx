@@ -545,7 +545,7 @@ const styles = StyleSheet.create({
   rowSub: { fontSize: 12, color: CHAT_COLORS.dim, fontFamily: CHAT_FONT.medium, marginTop: 6 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { fontSize: 12, fontFamily: CHAT_FONT.medium },
+  statusText: { fontSize: 12, fontFamily: CHAT_FONT.semibold },
 
   thumbWrap: { width: 64, height: 64, marginRight: 12 },
   thumb: { width: 64, height: 64, borderRadius: 14, backgroundColor: CHAT_COLORS.bubble },

@@ -253,9 +253,9 @@ const ItemCard: React.FC<{
       return `Scan ${toLabel(props.getStepStatus('scan'))} • Match ${toLabel(props.getStepStatus('match'))} • Generate ${toLabel(props.getStepStatus('generate'))} • Details ${toLabel(props.getStepStatus('details'))}`;
     }
 
-    const matchDone = props.matchColor === ANORHA_GREEN || props.matchColor === '#10B981';
+    const matchDone = props.matchColor === ANORHA_GREEN;
     const matchWorking = props.matchColor === '#FFD700' || props.matchColor === '#F59E0B';
-    const detailsDone = props.detailsColor === ANORHA_GREEN || props.detailsColor === '#10B981';
+    const detailsDone = props.detailsColor === ANORHA_GREEN;
     const detailsWorking = props.detailsColor === '#FFD700' || props.detailsColor === '#F59E0B';
     const detailsFailed = props.detailsColor === '#e11d48' || props.detailsColor === '#EF4444';
 
@@ -329,9 +329,9 @@ const ItemCard: React.FC<{
             if (st === 'completed') {
               return (
                 <TouchableOpacity style={[styles.statusActionBtn, styles.statusActionReady]} onPress={props.onPickDetails}>
-                  <Icon name="check-circle" size={16} color="#3F6212" />
-                  <Text style={[styles.statusActionText, { color: '#3F6212' }]}>Ready · Review listing</Text>
-                  <Icon name="chevron-right" size={16} color="#3F6212" />
+                  <Icon name="check-circle" size={16} color="#93C822" />
+                  <Text style={[styles.statusActionText, { color: '#93C822' }]}>Ready · Review listing</Text>
+                  <Icon name="chevron-right" size={16} color="#93C822" />
                 </TouchableOpacity>
               );
             }
@@ -515,9 +515,9 @@ export default function ItemJobsModal(props: Props) {
     items.forEach(item => {
       const idx = item.index;
       const title = (item as LegacyItem).title || `Item ${idx + 1}`;
-      const matchGreen = legacyProps.matchColor(idx) === ANORHA_GREEN || legacyProps.matchColor(idx) === '#10B981';
+      const matchGreen = legacyProps.matchColor(idx) === ANORHA_GREEN;
       const detailsColor = legacyProps.detailsColor(idx);
-      const detailsGreen = detailsColor === ANORHA_GREEN || detailsColor === '#10B981';
+      const detailsGreen = detailsColor === ANORHA_GREEN;
       const detailsYellow = detailsColor === '#FFD700' || detailsColor === '#F59E0B';
       const detailsRed = detailsColor === '#e11d48' || detailsColor === '#EF4444';
       if (matchGreen) matchDone++;
@@ -1238,7 +1238,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   assistGhostBtnText: {
-    color: '#365314',
+    color: '#93C822',
     fontSize: 11,
     fontWeight: '700',
   },
@@ -1473,8 +1473,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   queueComplete: {
-    color: '#10B981',
-    fontWeight: '500',
+    color: '#93C822',
+    fontWeight: '600',
   },
   queueFailed: {
     color: '#EF4444',

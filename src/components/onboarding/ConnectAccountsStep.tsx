@@ -27,7 +27,7 @@ const INK = '#1C1B17';
 const SUBTLE = '#8A887E';
 const DIM = '#71717A';
 const GREEN = '#93C822';
-const GREEN_DEEP = '#4A7C00';
+const GREEN_DEEP = '#93C822';
 const BORDER = '#EAE6DA';
 const DIVIDER = '#F1F2F4';
 
@@ -230,7 +230,7 @@ const styles = StyleSheet.create({
 
   connectedWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   checkCircle: { width: 18, height: 18, borderRadius: 9, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center' },
-  connectedText: { color: '#4A7C01', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  connectedText: { color: '#93C822', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
 
   hint: {
     fontSize: 12,
