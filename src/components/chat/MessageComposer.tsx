@@ -5,7 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { AudioModule, RecordingPresets, useAudioRecorder } from 'expo-audio';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { Plus, ArrowRight, Mic, X, Check, Clock, Pencil, Camera, Images, Paperclip } from 'lucide-react-native';
+import { Plus, ArrowRight, Mic, X, Check, Clock, Pencil, Camera, Images, Paperclip, CircleAlert } from 'lucide-react-native';
 import { API_BASE_URL } from '../../config/env';
 import { persistPendingVoice, getPendingVoice, clearPendingVoice, fileExists } from '../../features/liquidationConversation/pendingVoice';
 import { getSproutTheme } from '../../design/sproutTheme';
@@ -442,14 +442,12 @@ export const MessageComposer = ({
       ) : null}
 
       {voiceError ? (
-        <View style={[
-          styles.voiceErrorBanner,
-          { backgroundColor: theme.colors.errorBackground, borderColor: theme.colors.errorBorder },
-        ]}>
-          <Text style={[styles.voiceErrorText, { color: theme.colors.errorText }]}>{voiceError}</Text>
+        <View style={styles.voiceErrorBanner}>
+          <CircleAlert size={18} color="#D8434F" />
+          <Text style={styles.voiceErrorText}>{voiceError}</Text>
           {voiceErrorSettings ? (
             <TouchableOpacity onPress={() => Linking.openSettings().catch(() => undefined)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-              <Text style={[styles.voiceErrorAction, { color: theme.colors.errorText }]}>Settings</Text>
+              <Text style={styles.voiceErrorAction}>Settings</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -656,19 +654,21 @@ const styles = StyleSheet.create({
 
   voiceErrorBanner: {
     marginBottom: 8,
-    borderRadius: 12,
-    backgroundColor: '#FEF2F2',
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#FECACA',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderColor: '#EFB6BB',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+    boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)',
   },
-  voiceErrorText: { flex: 1, color: '#B91C1C', fontFamily: FONT.medium, fontSize: 13 },
-  voiceErrorAction: { color: '#B91C1C', fontFamily: FONT.semibold, fontSize: 13, textDecorationLine: 'underline' },
+  voiceErrorText: { flex: 1, color: '#18181B', fontFamily: FONT.semibold, fontSize: 13 },
+  voiceErrorAction: { color: '#18181B', fontFamily: FONT.semibold, fontSize: 13 },
 
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: 9 },
   attachMenu: {

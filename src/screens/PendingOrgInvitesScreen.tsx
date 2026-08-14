@@ -10,7 +10,7 @@ import {
     ScrollView,
 } from 'react-native';
 import { useOrganizationList } from '@clerk/expo';
-import { showMessage } from 'react-native-flash-message';
+import { useToast } from '../context/ToastContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { createLogger } from '../utils/logger';
 const log = createLogger('PendingOrgInvitesScreen');
@@ -21,6 +21,7 @@ const BG_COLOR = '#FFFCF5';
 const CARD_BG = '#FFFFFF';
 
 const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
+    const { showToast } = useToast();
     const { userInvitations, userMemberships, isLoaded, setActive } = useOrganizationList({
         userInvitations: {
             infinite: true,
@@ -44,11 +45,7 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
                 });
             }
 
-            showMessage({
-                message: "Invite Accepted",
-                description: `You are now a member of ${invitation.publicOrganizationData.name}`,
-                type: "success",
-            });
+            showToast({ title: `Joined ${invitation.publicOrganizationData.name}`, tone: 'success' });
 
             navigation.reset({
                 index: 0,
@@ -56,11 +53,7 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
             });
         } catch (err: any) {
             log.error('Error accepting invitation:', err);
-            showMessage({
-                message: "Error",
-                description: err.message || "Failed to accept invitation",
-                type: "danger",
-            });
+            showToast({ title: 'Accept invite failed', tone: 'danger' });
         } finally {
             setProcessingId(null);
         }
@@ -70,17 +63,10 @@ const PendingOrgInvitesScreen = ({ navigation }: { navigation: any }) => {
         setProcessingId(invitation.id);
         try {
             await invitation.reject();
-            showMessage({
-                message: "Invite Declined",
-                type: "info",
-            });
+            showToast({ title: 'Invite declined', tone: 'neutral' });
         } catch (err: any) {
             log.error('Error declining invitation:', err);
-            showMessage({
-                message: "Error",
-                description: "Failed to decline invitation",
-                type: "danger",
-            });
+            showToast({ title: 'Decline invite failed', tone: 'danger' });
         } finally {
             setProcessingId(null);
         }
