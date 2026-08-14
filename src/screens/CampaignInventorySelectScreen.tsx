@@ -477,7 +477,7 @@ const s = StyleSheet.create({
   runBtn: { backgroundColor: '#18181B', borderRadius: 22, paddingHorizontal: 18, height: 46, alignItems: 'center', justifyContent: 'center' },
   runBtnText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 14 },
   commandHint: { color: '#9CA3AF', fontFamily: 'Inter_400Regular', fontSize: 12, marginBottom: 12, paddingHorizontal: 4 },
-  commandNote: { color: '#5D7E16', fontFamily: 'Inter_600SemiBold', fontSize: 12.5, marginBottom: 12, paddingHorizontal: 4 },
+  commandNote: { color: '#93C822', fontFamily: 'Inter_600SemiBold', fontSize: 12.5, marginBottom: 12, paddingHorizontal: 4 },
 
   // Search
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F4F4F1', borderRadius: 24, paddingHorizontal: 16, height: 48, marginBottom: 4 },

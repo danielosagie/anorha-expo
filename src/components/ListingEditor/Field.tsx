@@ -39,11 +39,11 @@ export function Field({ label, value, onChangeText, multiline, keyboardType, onI
           <Text style={styles.fieldLabel}>{label}{required ? <Text style={{ color: '#ef4444' }}> *</Text> : null}</Text>
           {externalUpdate ? (
             <View style={{ backgroundColor: 'rgba(52,199,89,0.15)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#059669', fontSize: 10, fontWeight: '600' }}>Updated</Text>
+              <Text style={{ color: '#93C822', fontSize: 10, fontWeight: '600' }}>Updated</Text>
             </View>
           ) : refilled ? (
             <View style={{ backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ color: '#3f6212', fontSize: 10 }}>Refilled</Text>
+              <Text style={{ color: '#93C822', fontSize: 10, fontWeight: '600' }}>Refilled</Text>
             </View>
           ) : null}
           {!!onRegenerate && (

@@ -240,7 +240,7 @@ const BusinessTemplateModal: React.FC<BusinessTemplateModalProps> = ({
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Business Templates</Text>
           <TouchableOpacity onPress={() => setShowCreateForm(true)}>
-            <Icon name="plus" size={24} color="#4CAF50" />
+            <Icon name="plus" size={24} color="#93C822" />
           </TouchableOpacity>
         </View>
 
@@ -263,7 +263,7 @@ const BusinessTemplateModal: React.FC<BusinessTemplateModalProps> = ({
             <Icon 
               name="star" 
               size={18} 
-              color={activeTab === 'favorites' ? '#4CAF50' : '#666'} 
+              color={activeTab === 'favorites' ? '#93C822' : '#666'}
             />
             <Text style={[
               styles.tabText, 
@@ -280,7 +280,7 @@ const BusinessTemplateModal: React.FC<BusinessTemplateModalProps> = ({
             <Icon 
               name="clock-outline" 
               size={18} 
-              color={activeTab === 'recent' ? '#4CAF50' : '#666'} 
+              color={activeTab === 'recent' ? '#93C822' : '#666'}
             />
             <Text style={[
               styles.tabText, 
@@ -297,7 +297,7 @@ const BusinessTemplateModal: React.FC<BusinessTemplateModalProps> = ({
             <Icon 
               name="view-grid-outline" 
               size={18} 
-              color={activeTab === 'all' ? '#4CAF50' : '#666'} 
+              color={activeTab === 'all' ? '#93C822' : '#666'}
             />
             <Text style={[
               styles.tabText, 
@@ -342,7 +342,7 @@ const styles = StyleSheet.create({
   saveButton: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#4CAF50',
+    color: '#93C822',
   },
   searchContainer: {
     flexDirection: 'row',
@@ -383,7 +383,8 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   activeTabText: {
-    color: '#4CAF50',
+    color: '#93C822',
+    fontWeight: '600',
   },
   templatesList: {
     paddingHorizontal: 20,
@@ -397,7 +398,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   selectedTemplate: {
-    borderColor: '#4CAF50',
+    borderColor: '#93C822',
     backgroundColor: '#f0f9f0',
   },
   templateHeader: {
@@ -428,8 +429,8 @@ const styles = StyleSheet.create({
   },
   websiteCount: {
     fontSize: 12,
-    color: '#4CAF50',
-    fontWeight: '500',
+    color: '#93C822',
+    fontWeight: '600',
   },
   createForm: {
     padding: 20,
@@ -466,4 +467,4 @@ const styles = StyleSheet.create({
 });
 
 export default BusinessTemplateModal;
-export type { BusinessTemplateModalProps }; 
+export type { BusinessTemplateModalProps };

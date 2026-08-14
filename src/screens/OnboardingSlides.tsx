@@ -295,17 +295,17 @@ const HeroPartner = memo(() => {
       <View style={styles.orbitWrap} pointerEvents="none">
         <OrbitNode radius={86} duration={9000} startAngle={0}>
           <View style={styles.partnerNode}>
-            <Icon name="account" size={20} color="#43631A" />
+            <Icon name="account" size={20} color="#93C822" />
           </View>
         </OrbitNode>
         <OrbitNode radius={86} duration={9000} startAngle={2.1}>
           <View style={styles.partnerNode}>
-            <Icon name="store" size={20} color="#43631A" />
+            <Icon name="store" size={20} color="#93C822" />
           </View>
         </OrbitNode>
         <OrbitNode radius={86} duration={9000} startAngle={4.2}>
           <View style={styles.partnerNode}>
-            <Icon name="handshake-outline" size={20} color="#43631A" />
+            <Icon name="handshake-outline" size={20} color="#93C822" />
           </View>
         </OrbitNode>
 

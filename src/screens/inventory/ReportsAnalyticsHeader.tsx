@@ -17,7 +17,7 @@ import { createLogger } from '../../utils/logger';
 const log = createLogger('ReportsAnalyticsHeader');
 const FETCH_TIMEOUT_MS = 15000;
 const DAY_MS = 86400000;
-const DELTA_GREEN = '#4A7C00';
+const DELTA_GREEN = '#93C822';
 const DELTA_RED = '#D8434F';
 const PREVIOUS_LINE = '#C4C8CE';
 

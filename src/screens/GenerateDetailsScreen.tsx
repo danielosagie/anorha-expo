@@ -40,7 +40,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { useToastAnchor } from '../context/ToastContext';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
+import { selectItem } from '../features/cart/cartStore';
 import { fetchGenerateJobStatus } from '../lib/generateJobs';
+import { selectStoredPricingResearch } from '../lib/storedPricingResearch';
 import {
   applyProgressiveEnrichment,
   enrichmentLabel,
@@ -1160,6 +1162,64 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     [results, currentProductIndex]
   );
   const effectiveResult = hasMultipleResults ? currentResult : first;
+  const currentItemId = useMemo(() => {
+    const currentRow = items.find((item) => item.index === currentProductIndex) as { itemId?: string } | undefined;
+    if (currentRow?.itemId) return currentRow.itemId;
+    const ids = (route.params as any)?.itemIds as string[] | undefined;
+    return ids?.[currentProductIndex];
+  }, [currentProductIndex, items, route.params]);
+  const currentCartItem = useMemo(
+    () => (currentItemId ? selectItem(currentItemId) : undefined),
+    [currentItemId],
+  );
+  const carriedPricingResearch = useMemo(() => {
+    const selectedCandidateIndex = currentCartItem?.match?.jobResult?.selectedCandidateIndex
+      ?? currentCartItem?.match?.confirmed?.preSelectedIndices?.[0]
+      ?? 0;
+    return selectStoredPricingResearch([
+      (effectiveResult as any)?.pricingSnapshot,
+      (effectiveResult as any)?.pricingResearch,
+      currentCartItem?.pricing,
+      currentCartItem?.match?.jobResult?.pricingSnapshot,
+      currentCartItem?.match?.response?.rankedCandidates?.[selectedCandidateIndex],
+      currentCartItem?.match?.matchRows?.[selectedCandidateIndex],
+    ]);
+  }, [currentCartItem, effectiveResult]);
+  const [fetchedPricingResearch, setFetchedPricingResearch] = useState<unknown | null>(null);
+  const storedMatchJobId = currentCartItem?.generateMatchJobId
+    || items.find((item) => item.index === currentProductIndex)?.matchJobId
+    || matchJobId;
+
+  useEffect(() => {
+    let active = true;
+    setFetchedPricingResearch(null);
+    if (carriedPricingResearch || !storedMatchJobId) return () => { active = false; };
+
+    const productIndex = (effectiveResult?.productIndex as number | undefined) ?? currentProductIndex;
+    void (async () => {
+      try {
+        const response = await apiFetch(`/api/products/match/jobs/${storedMatchJobId}/results`);
+        if (!response.ok) return;
+        const payload = await response.json();
+        const result = Array.isArray(payload?.results)
+          ? payload.results.find((row: any) => row?.productIndex === productIndex)
+          : null;
+        const selectedCandidateIndex = result?.selectedCandidateIndex ?? 0;
+        const research = selectStoredPricingResearch([
+          result?.pricingSnapshot,
+          result?.rerankedResults?.[selectedCandidateIndex],
+          result?.matchRows?.[selectedCandidateIndex],
+        ]);
+        if (active && research) setFetchedPricingResearch(research);
+      } catch (error) {
+        log.debug('[GenerateDetails] Stored pricing research was unavailable:', error);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [carriedPricingResearch, currentProductIndex, effectiveResult?.productIndex, storedMatchJobId]);
+
+  const storedPricingResearch = carriedPricingResearch || fetchedPricingResearch;
   const enrichmentStatus = effectiveResult?.enrichment?.status
     ?? (effectiveResult?.draftReady && status !== 'completed' ? 'pending' : undefined);
   const enrichmentStateLabel = enrichmentLabel(enrichmentStatus);
@@ -1497,9 +1557,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     [allMissingRequiredFields],
   );
 
-  // Per-platform "how well set up to rank" status for the publish sheet. Required fields
-  // gate publishing; these are the OPTIONAL boosts (SEO, specifics, condition…) that lift a
-  // listing's ranking. All present → "Ready to rank"; otherwise "N boosts" + what's missing.
+  // Per-platform optional listing details for the publish sheet. Required fields still gate
+  // publishing; this only supplies plain-language guidance for details that can improve reach.
   const channelOptimization = useMemo(() => {
     const has = {
       seo: (d: any) => !!(d.seoTitle || d.seo?.title || d.seoDescription || d.metaDescription),
@@ -1512,7 +1571,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       tags: (d: any) => Array.isArray(d.tags) && d.tags.length > 0,
       brand: (d: any) => !!(d.brand || d.vendor || d.manufacturer),
     };
-    const BOOSTS: Record<string, Array<{ label: string; ok: (d: any) => boolean }>> = {
+    const GUIDANCE_FIELDS: Record<string, Array<{ label: string; ok: (d: any) => boolean }>> = {
       shopify: [{ label: 'SEO', ok: has.seo }, { label: 'Collection', ok: has.category }, { label: 'Tags', ok: has.tags }],
       ebay: [{ label: 'Item specifics', ok: has.specifics }, { label: 'Condition', ok: has.condition }, { label: 'Category', ok: has.category }],
       facebook: [{ label: 'Category', ok: has.category }, { label: 'Condition', ok: has.condition }, { label: 'Brand', ok: has.brand }],
@@ -1523,14 +1582,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     const out: Record<string, { tone: 'good' | 'warn'; label: string; detail: string }> = {};
     for (const pk of platformKeys) {
       const data = (displayedPlatforms as any)?.[pk] || {};
-      const list = BOOSTS[pk] || [{ label: 'Category', ok: has.category }, { label: 'Condition', ok: has.condition }];
+      const list = GUIDANCE_FIELDS[pk] || [{ label: 'Category', ok: has.category }, { label: 'Condition', ok: has.condition }];
       const missing = list.filter((b) => !b.ok(data));
       if (missing.length === 0) {
-        out[pk] = { tone: 'good', label: 'Ready to rank', detail: list.slice(0, 2).map((b) => b.label).join(' · ') };
+        out[pk] = { tone: 'good', label: 'Ready', detail: list.slice(0, 2).map((b) => b.label).join(' · ') };
       } else {
         out[pk] = {
           tone: 'warn',
-          label: `${missing.length} boost${missing.length !== 1 ? 's' : ''}`,
+          label: 'Needs details',
           detail: missing.slice(0, 2).map((b) => b.label).join(' · '),
         };
       }
@@ -3088,8 +3147,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                 style={[styles.savePill, { opacity: saveState === 'saved' && saveStatusVisible ? 1 : 0 }]}
                 pointerEvents="none"
               >
-                <Icon name="check" size={14} color="#4A7C00" />
-                <Text style={[styles.savePillText, { color: '#4A7C00' }]}>Saved</Text>
+                <Icon name="check" size={14} color="#93C822" />
+                <Text style={[styles.savePillText, { color: '#93C822' }]}>Saved</Text>
               </Animated.View>
             )}
           </View>
@@ -3439,6 +3498,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           onRemovePlatform: removeTargetPlatform,
           generatingPlatformKeys,
           isGenerationMode: true,
+          storedPricingResearch,
         }}
         onClose={() => {
           if (!isPublishing) setPublishModalOpen(false);
@@ -3493,7 +3553,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       >
         {!!quickFixDiff?.userQuery && (
           <View style={{ alignSelf: 'flex-end', maxWidth: '85%', backgroundColor: 'rgba(147,200,34,0.12)', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 16 }}>
-            <Text style={{ fontSize: 14, color: '#3B6300' }}>{quickFixDiff.userQuery}</Text>
+            <Text style={{ fontSize: 14, color: '#93C822', fontWeight: '600' }}>{quickFixDiff.userQuery}</Text>
           </View>
         )}
         <Text style={{ fontSize: 11, fontWeight: '700', color: '#71717A', letterSpacing: 0.6, marginBottom: 10 }}>HERE'S THE CHANGE</Text>
@@ -3506,7 +3566,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
               </Text>
               <Text style={{ fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, marginBottom: 2 }}>BEFORE</Text>
               <Text style={{ fontSize: 14, color: '#9CA3AF', textDecorationLine: 'line-through', marginBottom: 10 }}>{formatDiffValue(c.before)}</Text>
-              <Text style={{ fontSize: 10, fontWeight: '700', color: '#4A7C00', letterSpacing: 0.5, marginBottom: 2 }}>AFTER</Text>
+              <Text style={{ fontSize: 10, fontWeight: '700', color: '#93C822', letterSpacing: 0.5, marginBottom: 2 }}>AFTER</Text>
               <Text style={{ fontSize: 15, fontWeight: '600', color: '#18181B' }}>{formatDiffValue(c.after)}</Text>
             </View>
           );

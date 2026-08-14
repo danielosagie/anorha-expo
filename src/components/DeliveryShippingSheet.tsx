@@ -555,7 +555,7 @@ export default function DeliveryShippingSheet({
                                     </View>
                                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                                         <Text style={s.rateBarLabel}>${r.estimatedMin.toFixed(0)} low</Text>
-                                        <Text style={[s.rateBarLabel, { color: '#5D7E16', fontWeight: '700' }]}>${estimate.toFixed(2)} your cost</Text>
+                                        <Text style={[s.rateBarLabel, { color: '#93C822', fontWeight: '700' }]}>${estimate.toFixed(2)} your cost</Text>
                                         <Text style={s.rateBarLabel}>${r.estimatedMax.toFixed(0)} high</Text>
                                     </View>
                                 </View>
@@ -803,7 +803,7 @@ const s = StyleSheet.create({
         backgroundColor: 'rgba(147,200,34,0.08)',
     },
     tabText: { fontSize: 13, fontWeight: '600', color: '#6B7280' },
-    tabTextActive: { color: '#3f6212', fontWeight: '700' },
+    tabTextActive: { color: '#93C822', fontWeight: '700' },
 
     /* Section label */
     sectionLabel: {
@@ -854,7 +854,7 @@ const s = StyleSheet.create({
         fontSize: 14,
         fontWeight: '600',
     },
-    shippingOptionNameActive: { color: '#3f6212' },
+    shippingOptionNameActive: { color: '#93C822' },
     shippingOptionDetail: {
         color: '#6B7280',
         fontSize: 12,

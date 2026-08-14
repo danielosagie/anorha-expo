@@ -571,7 +571,7 @@ export const NewClearoutSheet: React.FC<Props> = ({ visible, creating, onClose, 
                   <Text style={[styles.question, { color: theme.colors.text }]}>Sell everything by</Text>
                   <Text style={[styles.hint, { color: theme.colors.textSecondary }]}>{formatSellByDate(deadline)}</Text>
                   <View style={styles.durationPill}>
-                    <Icon name="calendar-clock" size={17} color={dark ? theme.colors.primary : '#5D7E16'} />
+                    <Icon name="calendar-clock" size={17} color={dark ? theme.colors.primary : '#93C822'} />
                     <Text style={[styles.durationText, dark && { color: theme.colors.primary }]}>{durationLabel}</Text>
                   </View>
                   <ClearoutCalendar selectedDate={deadline} onSelect={setDeadline} minDate={today} dark={dark} />
@@ -717,7 +717,7 @@ const styles = StyleSheet.create({
   dots: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#E4E4E7' },
   dotActive: { width: 22, backgroundColor: BRAND },
-  dotDone: { backgroundColor: '#C2DE8C' },
+  dotDone: { backgroundColor: '#93C822' },
 
   stepBody: { minHeight: 184, paddingTop: 6 },
   question: { color: '#18181B', fontFamily: FONT.bold, fontSize: 22, marginBottom: 6 },
@@ -734,7 +734,7 @@ const styles = StyleSheet.create({
   prefix: { color: '#71717A', fontFamily: FONT.semibold, fontSize: 18, marginRight: 4 },
   input: { flex: 1, color: '#18181B', fontFamily: FONT.semibold, fontSize: 18, paddingVertical: 15 },
   resetChip: { backgroundColor: 'rgba(147,200,34,0.14)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  resetChipText: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 12.5 },
+  resetChipText: { color: '#93C822', fontFamily: FONT.semibold, fontSize: 12.5 },
 
   // Inventory picker
   searchRow: {
@@ -748,7 +748,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   searchInput: { flex: 1, fontSize: 15, color: '#18181B', fontFamily: FONT.medium, paddingVertical: 0 },
-  selectAll: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13 },
+  selectAll: { color: '#93C822', fontFamily: FONT.semibold, fontSize: 13 },
   pickerList: { maxHeight: 260 },
   pickerLoading: { height: 200, alignItems: 'center', justifyContent: 'center', gap: 10 },
   pickerLoadingText: { color: '#71717A', fontFamily: FONT.medium, fontSize: 13 },
@@ -760,7 +760,7 @@ const styles = StyleSheet.create({
   pickThumbImg: { width: '100%', height: '100%' },
   pickTitle: { fontSize: 15, color: '#18181B', fontFamily: FONT.semibold, marginLeft: 12, marginBottom: 2 },
   pickSub: { fontSize: 12.5, color: '#71717A', fontFamily: FONT.regular, marginLeft: 12 },
-  selSummary: { marginTop: 10, color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13 },
+  selSummary: { marginTop: 10, color: '#93C822', fontFamily: FONT.semibold, fontSize: 13 },
 
   durationPill: {
     alignSelf: 'flex-start',
@@ -774,7 +774,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginBottom: 12,
   },
-  durationText: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13 },
+  durationText: { color: '#93C822', fontFamily: FONT.semibold, fontSize: 13 },
 
   pricingList: { maxHeight: 310 },
   pricingCard: {
@@ -812,7 +812,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F5F9',
   },
   pricingStateText: { color: '#6B7280', fontFamily: FONT.medium, fontSize: 13 },
-  retryText: { color: '#5D7E16', fontFamily: FONT.bold, fontSize: 13 },
+  retryText: { color: '#93C822', fontFamily: FONT.bold, fontSize: 13 },
   marketRange: { color: '#4B5563', fontFamily: FONT.medium, fontSize: 12 },
   priceChoices: { flexDirection: 'row', gap: 8 },
   priceChoice: {
@@ -829,9 +829,9 @@ const styles = StyleSheet.create({
   },
   priceChoiceActive: { borderColor: BRAND, backgroundColor: 'rgba(147,200,34,0.12)' },
   priceChoiceLabel: { color: '#6B7280', fontFamily: FONT.medium, fontSize: 10.5 },
-  priceChoiceLabelActive: { color: '#5D7E16', fontFamily: FONT.semibold },
+  priceChoiceLabelActive: { color: '#93C822', fontFamily: FONT.semibold },
   priceChoiceValue: { color: '#111827', fontFamily: FONT.semibold, fontSize: 13 },
-  priceChoiceValueActive: { color: '#43631A', fontFamily: FONT.bold },
+  priceChoiceValueActive: { color: '#93C822', fontFamily: FONT.bold },
 
   cta: { marginTop: 14, alignItems: 'center', borderRadius: 14, paddingVertical: 16, backgroundColor: BRAND },
   ctaDisabled: { opacity: 0.45 },

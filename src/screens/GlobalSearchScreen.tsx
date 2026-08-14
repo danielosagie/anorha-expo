@@ -384,7 +384,7 @@ const GlobalSearchScreen: React.FC = () => {
       <View style={styles.body}>
         {loading ? (
           <View style={styles.center}>
-            <ActivityIndicator color="#84CC16" />
+            <ActivityIndicator color="#93C822" />
           </View>
         ) : showEmpty ? (
           <View style={styles.center}>
@@ -536,7 +536,7 @@ const styles = StyleSheet.create({
   badgeArchived: { backgroundColor: '#F3F4F6' },
   badgeNeutral: { backgroundColor: '#FEF3C7' },
   badgeText: { fontSize: 12, fontWeight: '500' },
-  badgeActiveText: { color: '#15803D' },
+  badgeActiveText: { color: '#93C822', fontWeight: '600' },
   badgeArchivedText: { color: '#6B7280' },
   badgeNeutralText: { color: '#92400E' },
   separator: {

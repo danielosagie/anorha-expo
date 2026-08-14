@@ -25,13 +25,13 @@ const TAB_ICON: Record<string, string> = {
   Profile: 'account-outline',
 };
 
-const ACTIVE_GREEN = '#84CC16';
+const ACTIVE_GREEN = '#93C822';
 const ACTIVE_BG = 'rgba(132, 204, 22, 0.18)';
-const ADD_GREEN = '#84CC16';
+const ADD_GREEN = '#93C822';
 const INACTIVE_GRAY = '#9CA3AF';
 const SIDE_BUTTON_SIZE = 56;
 const ADD_BUTTON_SIZE = 60;
-const SPROUT_GLYPH_SIZE = 18;
+const SPROUT_GLYPH_SIZE = 20;
 
 type TabBarProps = {
   state: any;
@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 48,
+    paddingHorizontal: 36,
   },
   sideButton: {
     height: SIDE_BUTTON_SIZE,

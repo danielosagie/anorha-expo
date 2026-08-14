@@ -268,13 +268,13 @@ export default function ShopifyStorePicker({
                 accessibilityRole="button"
                 accessibilityLabel="Paste"
               >
-                <Icon name="content-paste" size={19} color="#5D7E16" />
+                <Icon name="content-paste" size={19} color="#93C822" />
               </Pressable>
             </View>
 
             {resolvedHandle ? (
               <View style={styles.resolvedRow}>
-                <Icon name="check-circle" size={18} color="#5D7E16" />
+                <Icon name="check-circle" size={18} color="#93C822" />
                 <Text style={styles.resolvedText}>{resolvedHandle}</Text>
               </View>
             ) : input.length > 0 ? (
@@ -327,7 +327,7 @@ const styles = StyleSheet.create({
     color: "#18181B",
   },
   manualButton: { minHeight: 44, justifyContent: "center", paddingLeft: 14 },
-  manualButtonText: { fontSize: 14, fontWeight: "700", color: "#5D7E16" },
+  manualButtonText: { fontSize: 14, fontWeight: "700", color: "#93C822" },
   webView: { flex: 1, backgroundColor: "#FFFFFF" },
   loading: {
     ...StyleSheet.absoluteFillObject,

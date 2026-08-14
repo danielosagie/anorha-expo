@@ -20,7 +20,7 @@ import { AnorhaFace } from '../brand/AnorhaFace';
 
 // anorha green family (no more muddy dark green)
 const BRAND = '#93C822';
-const DEEP = '#5D7E16';
+const DEEP = '#93C822';
 const INK = '#1C1B17';
 const SUB = '#8A887E';
 const CARD = '#FFFFFF';
@@ -311,7 +311,7 @@ const styles = StyleSheet.create({
 
   // feed (right column)
   feed: { flex: 1, justifyContent: 'center' },
-  feedCap: { fontSize: 8.5, fontFamily: 'Inter_700Bold', color: 'rgba(58,76,30,0.6)', letterSpacing: 0.6, marginBottom: 7, marginLeft: 2 },
+  feedCap: { fontSize: 8.5, fontFamily: 'Inter_700Bold', color: '#93C822', letterSpacing: 0.6, marginBottom: 7, marginLeft: 2 },
   feedCard: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 34, paddingHorizontal: 7, marginBottom: 6, borderRadius: 11, backgroundColor: '#F4F3ED', borderWidth: 1, borderColor: '#DDD9CC' },
   feedIcon: { width: 22, height: 22, borderRadius: 7, backgroundColor: TINT_STRONG, alignItems: 'center', justifyContent: 'center' },
   feedLogo: { width: 14, height: 14 },

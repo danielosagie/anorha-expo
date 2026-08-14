@@ -19,7 +19,7 @@ const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 const StaticGradient = () => (
   <LinearGradient
     style={StyleSheet.absoluteFill}
-    colors={['#5c9c00', '#8cc63f', '#5c9c00']}
+    colors={['#93C822', '#93C822', '#93C822']}
     start={{ x: 0, y: 0 }}
     end={{ x: 1, y: 1 }}
   />
@@ -72,7 +72,7 @@ const AnimatedGradientBackground = React.memo((props: any) => {
     <View style={[styles.container, props.style]}>
       <AnimatedLinearGradient
         style={[styles.gradient, animatedStyles]}
-        colors={['#5c9c00', '#8cc63f', '#5c9c00']}
+        colors={['#93C822', '#93C822', '#93C822']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         locations={[0, 0.5, 1]}

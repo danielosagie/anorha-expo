@@ -9,9 +9,9 @@ const getFontSize = (baseSize: number): number => Math.round(baseSize * fontScal
 // Colors based on your dashboard screenshot
 const theme = {
   colors: {
-    primary: BRAND_PRIMARY, // Canonical brand green (was #8BB04F; unified to the de-facto value used across the app)
+    primary: BRAND_PRIMARY,
     secondary: '#F17F5F', // The orange/salmon from Amazon bar
-    accent: '#3CAD46', // Green from Clover
+    accent: '#93C822', // Green from Clover
     accent2: "#FF9900",
     background: '#FFFFFF',
     surface: '#F8F9FB',
@@ -19,7 +19,7 @@ const theme = {
     border: '#E5E7EB', // subtle hairline border / divider
     text: '#333333',
     textSecondary: '#777777',
-    success: '#28a745',
+    success: '#93C822',
     error: '#dc3545',
     warning: '#ffc107',
     info: '#17a2b8',
@@ -92,4 +92,4 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
       {children}
     </ThemeContext.Provider>
   );
-}; 
+};

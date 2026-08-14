@@ -504,7 +504,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   reviewPillText: {
-    color: '#5C8A0E',
+    color: '#93C822',
     fontSize: 12,
     fontWeight: '700',
   },

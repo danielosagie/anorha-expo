@@ -36,7 +36,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({
     const getStatusColor = () => {
         switch (status) {
             case 'executing': return BRAND_PRIMARY;
-            case 'completed': return '#4CAF50';
+            case 'completed': return '#93C822';
             case 'paused': return '#FF9800';
             case 'failed': return '#F44336';
             default: return colors.textSecondary;

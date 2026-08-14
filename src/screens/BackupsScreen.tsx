@@ -44,7 +44,7 @@ interface SnapshotMeta {
 }
 
 const API_BASE = API_BASE_URL;
-const ANORHA_GREEN = '#647653';
+const ANORHA_GREEN = '#93C822';
 
 const FREQUENCY_OPTIONS: { value: 'daily' | 'weekly' | 'off'; label: string }[] = [
   { value: 'daily', label: 'Daily' },

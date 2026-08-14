@@ -1068,7 +1068,7 @@ function NewChatHero({
               accessibilityRole="button"
             >
               <View style={styles.suggestionIcon}>
-                <Icon name={suggestion.icon} size={18} color="#5D7E16" />
+                <Icon name={suggestion.icon} size={18} color="#93C822" />
               </View>
               <View style={styles.suggestionCopy}>
                 <Text style={styles.suggestionTitle} numberOfLines={1}>

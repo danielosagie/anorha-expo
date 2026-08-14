@@ -187,5 +187,5 @@ const styles = StyleSheet.create({
   tipPrice: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   tipMeta: { color: '#E5E5EA', fontSize: 11, fontWeight: '600', marginTop: 1 },
   fastestCallout: { position: 'absolute', top: 0, zIndex: 4, backgroundColor: '#F1FAE2', borderColor: '#CFE7A4', borderWidth: 1, borderRadius: 999, paddingVertical: 3, paddingHorizontal: 9 },
-  fastestText: { color: '#3B6300', fontSize: 11, fontWeight: '700' },
+  fastestText: { color: '#93C822', fontSize: 11, fontWeight: '700' },
 });

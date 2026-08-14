@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
   rangeChip: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8, marginLeft: 6 },
   rangeChipOn: { backgroundColor: 'rgba(147,200,34,0.14)' },
   rangeText: { fontSize: 11, fontWeight: '700', color: LABEL },
-  rangeTextOn: { color: '#3F6212' },
+  rangeTextOn: { color: '#93C822' },
   labels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
   label: { color: LABEL, fontSize: 13 },
   labelNow: { color: TEXT, fontSize: 13, fontWeight: '700' },

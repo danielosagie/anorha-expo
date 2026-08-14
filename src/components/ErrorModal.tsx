@@ -59,7 +59,7 @@ const getTypeConfig = (type: ModalType) => {
         case 'success':
             return {
                 icon: 'check-circle',
-                color: '#10B981',
+                color: '#93C822',
                 backgroundColor: '#ECFDF5',
             };
         default:

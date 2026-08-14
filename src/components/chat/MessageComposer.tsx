@@ -435,7 +435,7 @@ export const MessageComposer = ({
       {queuedCount > 1 ? (
         <View style={[styles.queueBanner, dark && { borderColor: theme.chat.border }]}>
           <Clock size={13} color={theme.colors.primary} />
-          <Text style={[styles.queueText, { color: dark ? theme.colors.primary : '#5D7E16' }]}>
+          <Text style={[styles.queueText, { color: dark ? theme.colors.primary : '#93C822' }]}>
             {queuedCount - 1} message{queuedCount - 1 === 1 ? '' : 's'} queued.
           </Text>
         </View>
@@ -551,7 +551,7 @@ export const MessageComposer = ({
               <View style={styles.contextRow}>
                 <View style={styles.contextChip}>
                   <Pencil size={13} color={theme.colors.primary} />
-                  <Text style={[styles.contextText, { color: dark ? theme.colors.primary : '#5D7E16' }]}>{contextAttachment.label}</Text>
+                  <Text style={[styles.contextText, { color: dark ? theme.colors.primary : '#93C822' }]}>{contextAttachment.label}</Text>
                   {onRemoveContextAttachment ? (
                     <TouchableOpacity
                       style={styles.contextRemove}
@@ -650,7 +650,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  queueText: { color: '#5D7E16', fontFamily: FONT.medium, fontSize: 13 },
+  queueText: { color: '#93C822', fontFamily: FONT.semibold, fontSize: 13 },
 
   voiceErrorBanner: {
     marginBottom: 8,
@@ -759,7 +759,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(147,200,34,0.28)',
   },
-  contextText: { color: '#5D7E16', fontFamily: FONT.semibold, fontSize: 13.5 },
+  contextText: { color: '#93C822', fontFamily: FONT.semibold, fontSize: 13.5 },
   contextRemove: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   input: {

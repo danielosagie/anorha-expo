@@ -782,7 +782,7 @@ const s = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
   },
   trayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#BA7517' },
-  trayText: { fontSize: 13, color: '#3B6D11', fontFamily: 'Inter_500Medium' },
+  trayText: { fontSize: 13, color: '#93C822', fontFamily: 'Inter_600SemiBold' },
   trayAction: { fontSize: 13, color: '#BA7517', fontFamily: 'Inter_600SemiBold' },
 
   // Threads drawer

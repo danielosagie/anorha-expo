@@ -21,7 +21,7 @@ export const ProgressBarOverlay: React.FC<{
         <Animated.View style={[styles.progressBarFill, progressBarStyle]} />
       </View>
       <Animated.View style={[styles.progressSpinner, spinnerStyle]}>
-        <Icon name="loading" size={20} color="#4CAF50" />
+        <Icon name="loading" size={20} color="#93C822" />
       </Animated.View>
     </View>
   );

@@ -10,8 +10,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 const INK = '#1C1B17';
 const SUB = '#6B6A63';
 const GREEN = '#93C822';
-const GREEN_DEEP = '#4A7C00';
-const DEEP_ICON = '#3C5A14';
+const GREEN_DEEP = '#93C822';
+const DEEP_ICON = '#93C822';
 const FIELD = '#F6F5F1';
 const BORDER = '#EAE6DA';
 const PLACEHOLDER = '#A8A69C';
@@ -278,8 +278,8 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           )}
           {successMessage && (
             <View style={[styles.errorContainer, styles.successContainer]}>
-              <Icon name="check-circle-outline" size={17} color="#059669" />
-              <Text style={[styles.errorText, { color: '#059669' }]}>{successMessage}</Text>
+              <Icon name="check-circle-outline" size={17} color="#93C822" />
+              <Text style={[styles.errorText, { color: '#93C822', fontFamily: 'Inter_600SemiBold' }]}>{successMessage}</Text>
             </View>
           )}
 

@@ -208,7 +208,7 @@ export function ChatComposerFooter({
 
       {notice ? (
         <View style={styles.noticeBanner}>
-          <CheckCircle2 size={18} color="#7BB304" />
+          <CheckCircle2 size={18} color="#93C822" />
           <Text style={styles.noticeText}>{notice}</Text>
           {onDismissNotice ? (
             <TouchableOpacity
@@ -361,7 +361,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderCurve: 'continuous',
     borderWidth: 1,
-    borderColor: '#7BB304',
+    borderColor: '#93C822',
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 14,
     paddingVertical: 11,

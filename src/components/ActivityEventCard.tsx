@@ -134,7 +134,7 @@ const ActivityEventCard: React.FC<ActivityEventCardProps> = ({
               )}
               {canUndo && onUndo && !undone && (
                 <TouchableOpacity style={styles.undoButton} onPress={onUndo} activeOpacity={0.7}>
-                  <Icon name="undo" size={16} color="#647653" />
+                  <Icon name="undo" size={16} color="#93C822" />
                   <Text style={styles.undoButtonText}>Undo</Text>
                 </TouchableOpacity>
               )}
@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
   undoButtonText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#647653',
+    color: '#93C822',
   },
   productTitle: {
     fontSize: 13,
