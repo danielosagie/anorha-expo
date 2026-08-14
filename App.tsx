@@ -11,7 +11,6 @@ import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
 import { Session, AuthChangeEvent } from '@supabase/supabase-js';
-import FlashMessage from 'react-native-flash-message';
 import { PlatformConnectionsProvider, usePlatformConnections } from './src/context/PlatformConnectionsContext';
 import { PlatformPickerOverlayProvider, usePlatformPickerOverlay } from './src/context/PlatformPickerOverlayContext';
 import BottomNav from './src/components/BottomNav';
@@ -24,8 +23,9 @@ import { SessionContext } from './src/context/SessionContext';
 import SafeErrorBoundary from './src/utils/SafeErrorBoundary';
 import { OrgProvider } from './src/context/OrgContext';
 import { JobsProvider } from './src/context/JobsContext';
-import { SystemNotificationProvider } from './src/context/SystemNotificationContext';
 import { NarrationProvider } from './src/context/NarrationContext';
+import { ToastProvider } from './src/context/ToastContext';
+import { ToastHost } from './src/components/Toast';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import { ConvexProvider } from './src/providers/ConvexProvider';
@@ -630,7 +630,6 @@ const App: React.FC = () => {
                 <AppNavigator dataReady={!!legendStateModules} />
               </SafeErrorBoundary>
             )}
-            <FlashMessage position="top" />
             <GlobalPlatformPickerOverlay />
           </ThemeProvider>
         </LegendStateContext.Provider>
@@ -640,13 +639,6 @@ const App: React.FC = () => {
 
   const WithSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { getToken, isSignedIn } = useAuth();
-    const template = process.env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE || 'mobile';
-    // Native third-party auth (CLERK_NATIVE_AUTH=true): Supabase validates the
-    // Clerk token directly and requires the SESSION token (which carries the
-    // `role: authenticated` claim added by the Clerk↔Supabase integration). The
-    // legacy custom "mobile" template lacks that claim, so Supabase 401s it.
-    // Mint-bridge mode still uses the "mobile" template that /api/auth/exchange expects.
-    const clerkNativeAuth = process.env.EXPO_PUBLIC_CLERK_NATIVE_AUTH === 'true';
     // Keep getClerkToken's IDENTITY STABLE across renders. Clerk's getToken can be a
     // fresh reference each render; if it leaks into this callback's deps, getClerkToken
     // changes → EnhancedSessionProvider's validateAuthIfNeeded/init effect re-runs every
@@ -654,17 +646,10 @@ const App: React.FC = () => {
     // Read getToken through a ref so the callback never changes (deps are stable values).
     const getTokenRef = useRef(getToken);
     getTokenRef.current = getToken;
-    const getClerkToken = useCallback(
-      () =>
-        clerkNativeAuth
-          ? getTokenRef.current()
-          : getTokenRef.current({ template }).catch(async () => getTokenRef.current()),
-      [clerkNativeAuth, template],
-    );
+    const getClerkToken = useCallback(() => getTokenRef.current(), []);
 
     return (
       <EnhancedSessionProvider getClerkToken={getClerkToken} isSignedIn={isSignedIn}>
-        <PostHogIdentify />
         {children}
       </EnhancedSessionProvider>
     );
@@ -719,9 +704,14 @@ const App: React.FC = () => {
                   Session/Org/AppData must always be mounted or those screens crash
                   ("useAppData must be used within an AppDataProvider"). AuthedAppContent already
                   handles the signed-out / not-ready states internally (and supplies its own
-                  ThemeProvider, StatusBar and FlashMessage). */}
+                  ThemeProvider, StatusBar and global overlays). */}
               <WithSessionProvider>
                 <OrgProvider>
+                  {/* Binds the PostHog identity to the signed-in user AND their
+                      active org, so it must sit inside OrgProvider (it reads
+                      OrgContext) and inside the session provider (it reads the
+                      Supabase user id the backend also captures under). */}
+                  <PostHogIdentify />
                   {/* 2nd Convex client (browserJobs deployment). Pure context
                       carrier — does NOT wrap a ConvexProvider, so it never
                       hijacks chat's useQuery (the top-level agent-chat
@@ -753,7 +743,7 @@ const App: React.FC = () => {
           <ConvexProvider>
             <PostHogProvider>
               <SafeAreaProvider style={{ flex: 1, backgroundColor: APP_LIGHT_BACKGROUND }}>
-                <SystemNotificationProvider>
+                <ToastProvider>
                   <NarrationProvider>
                     {/* Backstop boundary around the WHOLE provider stack (PlatformConnections,
                         Session, Org, AppData, LiveActivity, Jobs, the navigator). The inner
@@ -764,7 +754,8 @@ const App: React.FC = () => {
                       <DebugClerkState />
                     </SafeErrorBoundary>
                   </NarrationProvider>
-                </SystemNotificationProvider>
+                  <ToastHost />
+                </ToastProvider>
               </SafeAreaProvider>
           </PostHogProvider>
         </ConvexProvider>

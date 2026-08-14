@@ -2,7 +2,7 @@ import React, { createContext, ReactNode, useCallback, useContext, useEffect, us
 import { setAudioModeAsync } from 'expo-audio';
 import * as Speech from 'expo-speech';
 import { NarrationPlayer } from '../components/NarrationPlayer';
-import { useSystemNotifications } from './SystemNotificationContext';
+import { useToast } from './ToastContext';
 
 type ToggleNarrationInput = {
   messageId: string;
@@ -65,7 +65,7 @@ function snapToWordStart(text: string, index: number) {
 }
 
 export const NarrationProvider = ({ children }: { children: ReactNode }) => {
-  const { showToast } = useSystemNotifications();
+  const { showToast } = useToast();
   const [session, setSession] = useState<Session | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const generationRef = useRef(0);
@@ -141,7 +141,7 @@ export const NarrationProvider = ({ children }: { children: ReactNode }) => {
       onError: () => {
         if (generationRef.current !== generation) return;
         void clear();
-        showToast({ title: 'Could not read this response', type: 'error', duration: 1900 });
+        showToast({ title: 'Could not read response', tone: 'danger' });
       },
     });
   }, [clear, commitSession, showToast]);
@@ -179,7 +179,7 @@ export const NarrationProvider = ({ children }: { children: ReactNode }) => {
 
     const cleaned = narrationText(text);
     if (!cleaned) {
-      showToast({ title: 'Nothing to read', type: 'error', duration: 1700 });
+      showToast({ title: 'Nothing to read', tone: 'danger' });
       return;
     }
     await startAt(messageId, cleaned, 0, 0, 1);

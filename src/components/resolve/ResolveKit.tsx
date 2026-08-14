@@ -288,19 +288,6 @@ export function Field({
   );
 }
 
-// ── Banner: inline warn/danger note ───────────────────────────────────────
-export function Banner({ text, tone = 'warn', icon = 'alert' }: { text: string; tone?: 'warn' | 'danger'; icon?: IconName }) {
-  const c = tone === 'danger' ? RC.danger : RC.warn;
-  const bg = tone === 'danger' ? RC.dangerSoft : RC.warnSoft;
-  const ink = tone === 'danger' ? RC.dangerInk : RC.warnInk;
-  return (
-    <View style={[s.banner, { backgroundColor: bg, borderColor: c }]}>
-      <MaterialCommunityIcons name={icon} size={14} color={c} />
-      <Text style={[s.bannerText, { color: ink }]}>{text}</Text>
-    </View>
-  );
-}
-
 // ── MiniProgress: thin labeled progress bar (optimize lobby) ──────────────
 export function MiniProgress({ pct, left, right }: { pct: number; left?: string; right?: string }) {
   return (
@@ -780,9 +767,6 @@ const s = StyleSheet.create({
   field: { borderWidth: 1.5, borderRadius: 12, minHeight: 48, justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 12 },
   fieldValue: { fontSize: 15, fontWeight: '500' },
 
-  // banner
-  banner: { flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9 },
-  bannerText: { flex: 1, fontSize: 13, fontWeight: '600' },
 });
 
 export { s as resolveStyles };

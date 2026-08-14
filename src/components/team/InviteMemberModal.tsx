@@ -16,7 +16,8 @@ import { useTheme } from '../../context/ThemeContext';
 import { supabase, ensureSupabaseJwt } from '../../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../../config/env';
 import { capture, AnalyticsEvents } from '../../lib/analytics';
-import { showMessage } from 'react-native-flash-message';
+import { useToast } from '../../context/ToastContext';
+import { ToastHost } from '../Toast';
 import { createLogger } from '../../utils/logger';
 const log = createLogger('InviteMemberModal');
 
@@ -45,6 +46,7 @@ interface Props {
 
 export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }: Props) {
   const theme = useTheme();
+  const { showToast } = useToast();
 
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'admin' | 'member'>('member');
@@ -94,20 +96,12 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
 
   const handleSendInvite = async () => {
     if (!email.trim()) {
-      showMessage({
-        message: 'Error',
-        description: 'Please enter an email address',
-        type: 'danger',
-      });
+      showToast({ title: 'Email address required', tone: 'warn' });
       return;
     }
 
     if (role === 'member' && selectedPoolIds.size === 0) {
-      showMessage({
-        message: 'Error',
-        description: 'Please select at least one pool for this member',
-        type: 'danger',
-      });
+      showToast({ title: 'Select a member pool', tone: 'warn' });
       return;
     }
 
@@ -140,11 +134,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
 
       capture(AnalyticsEvents.TEAM_INVITE_SENT);
 
-      showMessage({
-        message: 'Success',
-        description: `Invitation sent to ${email}`,
-        type: 'success',
-      });
+      showToast({ title: `Invite sent to ${email}`, tone: 'success' });
 
       // Reset form
       setEmail('');
@@ -153,11 +143,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
 
       onSuccess();
     } catch (error: any) {
-      showMessage({
-        message: 'Error',
-        description: error.message || 'Failed to send invitation',
-        type: 'danger',
-      });
+      showToast({ title: 'Send invitation failed', tone: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -317,6 +303,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
             </TouchableOpacity>
           </View>
         </View>
+        <ToastHost enabled={visible} priority={1} ignoreAnchors />
       </KeyboardAvoidingView>
     </Modal>
   );

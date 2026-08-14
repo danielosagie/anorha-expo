@@ -19,7 +19,6 @@ import { UnicodeSpinner } from './AddProduct/UnicodeSpinner';
 import { CenterOverlay, IDLE_CAPTURE_INSTRUCTION } from './AddProduct/CenterOverlay';
 import { BottomControls } from './AddProduct/BottomControls';
 import { ProgressBarOverlay } from './AddProduct/ProgressBarOverlay';
-import { NotificationBar } from './AddProduct/NotificationBar';
 import { BulkItemsSheet } from './AddProduct/BulkItemsSheet';
 import ListingStatusCard from './AddProduct/ListingStatusCard';
 import { useBulkItems } from './AddProduct/hooks/useBulkItems';
@@ -407,6 +406,8 @@ import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../li
 import { ShelfScanPlaceholderRow } from '../components/camera/ShelfScanProgressCard';
 import BottomActionBar from '../components/BottomActionBar';
 import { BillingGateResponse, normalizeBillingGateResponse } from '../types/billingGate';
+import { ToastHost } from '../components/Toast';
+import { useToast, useToastAnchor } from '../context/ToastContext';
 import {
   clearPendingBillingAction,
   loadPendingBillingAction,
@@ -847,6 +848,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const theme = useTheme();
+  const { showToast } = useToast();
 
   // Left-edge swipe → go back to wherever we came from. AddProduct is a hidden TAB
   // screen, so it has no native back gesture; a thin left-edge strip gives one
@@ -1654,7 +1656,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           // Identity is settled now — this is when the paid sold-comps pass is earned.
           researchSoldCompsOnConfirm([id]);
         }
-        showNotificationMessage('Added to cart');
+        showToast({ title: 'Added to cart', tone: 'success' });
       }}
     />
   );
@@ -1724,7 +1726,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           setOpenFolderId(null);
           cancelQuickScansForItems(folder.children.map((child) => child.id));
           removeEntry(folder.id); // removeEntry deletes a folder's children with it
-          showNotificationMessage('Shelf deleted');
+          showToast({ title: 'Shelf deleted', tone: 'success' });
         }}
         onBack={() => setOpenFolderId(null)}
         onUngroup={() => {
@@ -1763,7 +1765,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (openFolderId) ungroupFolder(openFolderId); // dissolve the folder → items become top-level cart singles
           // Add-all is a bulk confirm — the deferred sold-comps passes fire here.
           researchSoldCompsOnConfirm(adding.map((child) => child.id));
-          showNotificationMessage(`${adding.length} item${adding.length === 1 ? '' : 's'} added to cart`);
+          showToast({ title: `${adding.length} item${adding.length === 1 ? '' : 's'} added`, tone: 'success' });
         }}
       />
     ) : null;
@@ -1828,6 +1830,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // Same late-binding pattern for OPENING: handleCapture (declared earlier) opens
   // the cart when the free tier is exhausted — the cart is the upgrade surface.
   const openBulkItemsSheetRef = useRef<() => void>(() => {});
+  const toastReviewRef = useRef<() => void>(() => {});
   const runAfterCartDismissalRef = useRef<(action: () => void) => void>((action) => action());
   // Pending deferred cart-present (the dismiss-then-present staggers). MUST be cleared
   // on blur: the tab keeps this screen mounted, so a stray reopen after navigating away
@@ -2261,9 +2264,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     });
   }, [bulkItems]);
 
-  // Notification and progress state
-  const [showNotification, setShowNotification] = useState(false);
-  const [notificationMessage, setNotificationMessage] = useState('');
+  // Progress state
   const [showProgressBar, setShowProgressBar] = useState(() => __ds === 'loading');
 
   // Freemium / Paywall state
@@ -2294,6 +2295,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // cold start isn't the dark/unfocused capture that made first scans misfire.
   const cameraReadyAtRef = useRef(0);
   const isFocused = useIsFocused();
+  const [cameraControlsHeight, setCameraControlsHeight] = useState(160);
+  useToastAnchor(
+    'add-product-controls',
+    isFocused && !showDeepSearchSheet,
+    cameraControlsHeight + 16,
+  );
 
   // "Creating your listings" → "Ready to review" card flow (post-checkout).
   const [creatingListings, setCreatingListings] = useState<{ photoUri?: string | null; count: number; itemIds?: string[] } | null>(null);
@@ -2442,11 +2449,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const flashOpacity = useSharedValue(0);
   const overlayOpacity = useSharedValue(0.3);
 
-  // Progress and notification animations
+  // Progress animations
   const progressWidth = useSharedValue(0);
   const spinRotation = useSharedValue(0);
-  const notificationOpacity = useSharedValue(0);
-  const notificationTranslateY = useSharedValue(-100);
 
   // Request camera permission on mount
   useEffect(() => {
@@ -2464,24 +2469,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       log.warn('[AddProduct] Failed to hydrate pending billing action:', error);
     });
   }, []);
-
-  // Show notification function
-  const showNotificationMessage = useCallback((message: string, duration: number = 3000) => {
-    setNotificationMessage(message);
-    setShowNotification(true);
-
-    // Animate in
-    notificationOpacity.value = withTiming(1, { duration: 300 });
-    notificationTranslateY.value = withTiming(0, { duration: 300 });
-
-    // Auto hide
-    setTimeout(() => {
-      notificationOpacity.value = withTiming(0, { duration: 300 });
-      notificationTranslateY.value = withTiming(-100, { duration: 300 }, () => {
-        runOnJS(setShowNotification)(false);
-      });
-    }, duration);
-  }, [notificationOpacity, notificationTranslateY]);
 
   const closeBillingGateSheet = useCallback((decision: BillingGateDecision) => {
     setBillingGateVisible(false);
@@ -2650,9 +2637,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
   const canAddAnotherItem = useCallback((currentCount: number) => {
     if (currentCount < MAX_BATCH_ITEMS) return true;
-    showNotificationMessage(`Batch limit reached (${MAX_BATCH_ITEMS}/${MAX_BATCH_ITEMS}).`, 2500);
+    showToast({ title: 'Batch limit reached', tone: 'warn' });
     return false;
-  }, [showNotificationMessage]);
+  }, [showToast]);
 
   // Start progress bar animation
   const startProgressAnimation = useCallback(() => {
@@ -3932,7 +3919,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setCameraMode('camera');
       setCurrentInstruction('capturing');
       dismissMatchSheetThenOpenCart();
-      showNotificationMessage('Moved to listing flow', 1800);
+      showToast({ title: 'Moved to listing flow', tone: 'neutral' });
       return;
     }
 
@@ -3956,7 +3943,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
       log.debug('[CONTINUE] Manifest mode - parsing', allPhotos.length, 'pages');
-      showNotificationMessage('Parsing manifest...', 10000);
+      showToast({ title: 'Parsing manifest', tone: 'neutral' });
 
       try {
         const validImages = await encodeDocumentPhotosSequentially(allPhotos, 'page');
@@ -4023,7 +4010,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       }
 
       log.debug('[CONTINUE] Receipt mode - processing', allPhotos.length, 'receipts');
-      showNotificationMessage('Processing receipt...', 10000);
+      showToast({ title: 'Processing receipt', tone: 'neutral' });
 
       try {
         const validImages = await encodeDocumentPhotosSequentially(allPhotos, 'receipt');
@@ -4079,7 +4066,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     // Always open sheet - it will show empty state if no photos
     dismissMatchSheetThenOpenCart();
-  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showNotificationMessage, showMatchSheet]);
+  }, [sheetTranslateY, matchSheetTranslateY, capturedPhotos.length, isBulkMode, bulkItems, activeItemId, cameraMode, barcodeSearchResult, showToast, showMatchSheet]);
 
   // Handle image picker - SIMPLIFIED: Always add to bulkItems
   const handleImageUpload = useCallback(async (targetItemId?: string) => {
@@ -4133,7 +4120,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         isDocumentImport ? remainingDocumentSlots : remainingItemSlots || MAX_PHOTOS_PER_ITEM,
       );
       if (assets.length === 0) {
-        showNotificationMessage('Those photos are already attached to this item.', 1800);
+        showToast({ title: 'Photos already attached', tone: 'neutral' });
         return;
       }
       if (isDocumentImport && assets.length > remainingDocumentSlots) {
@@ -4504,7 +4491,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       if (!tokenMaybe) {
         log.warn('[QUICK SCAN] No Supabase JWT available. Are you signed in and the Clerk bridge configured?');
         if (activeItemIdRef.current === itemId) {
-          showNotificationMessage('Sign in required to scan. Please log in and try again.', 3000);
+          showToast({ title: 'Sign in to scan', tone: 'warn' });
         }
         scanErrorMessage = 'Sign in required';
         return;
@@ -4898,7 +4885,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (dupMatch) {
           if (activeItemIdRef.current === itemId) {
             setCurrentInstruction('inventory_dedup');
-            showNotificationMessage(`You already have "${String(dupMatch.title || 'this item').slice(0, 40)}" - tap to update it or add as new.`, 4500);
+            showToast({
+              title: 'Already in inventory',
+              tone: 'warn',
+              action: { label: 'Review', onPress: () => toastReviewRef.current() },
+            });
           }
         } else if (activeItemIdRef.current === itemId) {
           setCurrentInstruction(realInstruction);
@@ -4906,14 +4897,15 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (activeItemIdRef.current === itemId && !dupMatch && (looksUnidentified || needsReview)) {
           const retakeState = backendState === 'NOT_RUN' || backendState === 'NO_PHOTO' || backendState === 'NO_CANDIDATES';
           const identity = String(nextMatchData.rankedCandidates?.[0]?.title || '').trim();
-          showNotificationMessage(
-            retakeState
-              ? 'Couldn’t identify this clearly. Tap to add a clearer photo of the label.'
+          showToast({
+            title: retakeState
+              ? 'Add clearer label photo'
               : identity
-                ? `Likely a ${identity.slice(0, 40)}. Tap to add a detail to confirm.`
-                : 'Add more detail to confirm. Tap to add a photo or note.',
-            3800,
-          );
+                ? 'Likely match needs review'
+                : 'Add detail to confirm',
+            tone: 'warn',
+            action: { label: 'Review', onPress: () => toastReviewRef.current() },
+          });
         }
 
         // Pricing enrichment: Use eBay pricing research (actual sold listings) in background
@@ -5016,12 +5008,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // sharper one.
         const providerHiccup = streamResult.reasonCode === 'provider_error';
         if (activeItemIdRef.current === itemId) {
-          showNotificationMessage(
-            providerHiccup
-              ? 'Image service hiccup. Try again.'
-              : 'No matches found.',
-            3000,
-          );
+          showToast({
+            title: providerHiccup ? 'Image service unavailable' : 'No matches found',
+            tone: providerHiccup ? 'danger' : 'neutral',
+            action: { label: 'Retry', onPress: () => toastReviewRef.current() },
+          });
         }
         setConfirmedQuickMatchByItemId(prev => {
           if (!prev[itemId]) return prev;
@@ -5040,7 +5031,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Reality: there is no background retry — the item drops to an error state below
       // (its card shows the failure) and the seller retries it by hand. Say so honestly.
       if (activeItemIdRef.current === itemId && !isRunCancelled()) {
-        showNotificationMessage('Scan failed. Tap to retry.', 3000);
+        showToast({
+          title: 'Scan failed',
+          tone: 'danger',
+          action: { label: 'Retry', onPress: () => toastReviewRef.current() },
+        });
       }
       scanErrorMessage = error instanceof Error ? error.message : 'Quick scan failed';
     } finally {
@@ -5076,7 +5071,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     uploadImageToSupabase,
     candidatesToMatchRows,
     quickScanStore,
-    showNotificationMessage,
+    showToast,
     incrementLocalUsage,
     freemiumStatus,
     buildFreemiumBlockedGate,
@@ -5141,7 +5136,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const attachPhotoToItem = useCallback((itemId: string, photo: CapturedPhoto, opts?: { rescan?: boolean; skipPreflight?: boolean }) => {
     const liveItem = bulkItemsRef.current.find((item) => item.id === itemId);
     if ((liveItem?.photos.length ?? 0) >= MAX_PHOTOS_PER_ITEM) {
-      showNotificationMessage(`${MAX_PHOTOS_PER_ITEM} photos per item`, 1800);
+      showToast({ title: 'Photo limit reached', tone: 'warn' });
       return;
     }
     if (liveItem?.photos.some((existing) => existing.uri === photo.uri)) return;
@@ -5166,7 +5161,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         () => performQuickScan(photo, itemId, opts?.skipPreflight ? { skipPreflight: true } : undefined),
       );
     }
-  }, [performQuickScan, confirmedQuickMatchByItemId, scheduleDelayedScan, setBulkItems, showNotificationMessage]);
+  }, [performQuickScan, confirmedQuickMatchByItemId, scheduleDelayedScan, setBulkItems, showToast]);
 
   // Open / close the inline capture overlay for a target item. `rescan` marks an explicit
   // correction (wrong-item / add-details tag) so the captured shot re-runs the full match;
@@ -5187,7 +5182,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Denied access used to return silently, so "add photo" was a dead tap with no
       // explanation. requestQuickScanAccess surfaces its own upgrade prompt when it has
       // one; this covers the cases where it just says no.
-      showNotificationMessage('Scans are paused. Check your plan to continue.');
+      showToast({ title: 'Scans paused by plan', tone: 'warn' });
       return;
     }
 
@@ -5196,7 +5191,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setOverlayFacing('back');
     setOverlayFlash('off');
     runAfterCartDismissalRef.current(() => setPhotoCaptureTargetId(itemId));
-  }, [photoCaptureTargetId, requestQuickScanAccess, confirmedQuickMatchByItemId, showNotificationMessage]);
+  }, [photoCaptureTargetId, requestQuickScanAccess, confirmedQuickMatchByItemId, showToast]);
   const closePhotoCaptureOverlay = useCallback(() => {
     photoCapturePreflightGrantedRef.current = false;
     setPhotoCaptureTargetId(null);
@@ -5263,8 +5258,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // stable. With live deps (performQuickScan changes on every quickScanStore write) the
   // effect re-fired on state churn WHILE focused, and each re-fire re-attempted the
   // pending resume — the respawning "Searching…" scan from QA 2026-08-02 pilot-02.
-  const maybeResumeDepsRef = useRef({ preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage, performQuickScan });
-  maybeResumeDepsRef.current = { preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showNotificationMessage, performQuickScan };
+  const maybeResumeDepsRef = useRef({ preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showToast, performQuickScan });
+  maybeResumeDepsRef.current = { preflightAIGate, clearPendingQuickScan, refreshFreemiumStatus, showToast, performQuickScan };
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -5315,7 +5310,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
         isResumingPendingBillingRef.current = true;
         await deps.clearPendingQuickScan(pending.itemId);
-        deps.showNotificationMessage('Resuming pending scan...', 1800);
+        deps.showToast({ title: 'Resuming pending scan', tone: 'neutral' });
 
         try {
           await deps.performQuickScan(pending.photo as CapturedPhoto, pending.itemId, {
@@ -5345,19 +5340,19 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const openQuickMatchesForItem = useCallback((itemId: string) => {
     const store = quickScanStore[itemId];
     if (!store) {
-      showNotificationMessage('No quick matches for this item yet.', 2000);
+      showToast({ title: 'No matches yet', tone: 'neutral' });
       return;
     }
     // Don't allow closing while processing shelf scan
     if (isProcessingShelfScan) {
-      showNotificationMessage('Please wait for shelf scan to complete', 2000);
+      showToast({ title: 'Shelf scan still running', tone: 'neutral' });
       return;
     }
     const hasRenderableMatchData = !!store.matchData
       && Array.isArray(store.matchData.rankedCandidates)
       && store.matchData.rankedCandidates.length > 0;
     if (!hasRenderableMatchData) {
-      showNotificationMessage('Quick matches are still loading for this item.', 2000);
+      showToast({ title: 'Matches still loading', tone: 'neutral' });
       if (cartCloseTimerRef.current) { clearTimeout(cartCloseTimerRef.current); cartCloseTimerRef.current = null; }
       setShowDeepSearchSheet(true);
       sheetTranslateY.value = withSpring(0, CART_SPRING);
@@ -5368,7 +5363,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Show the full-screen MatchPreview overlay inside the already-open cart Modal.
     // (Replaces the retired half-height MatchResultsSheet.)
     setPreviewItemId(itemId);
-  }, [quickScanStore, showNotificationMessage, isProcessingShelfScan]);
+  }, [quickScanStore, showToast, isProcessingShelfScan]);
 
   // Open the EXISTING inventory item in the quick editor (the Update path) — reuses the barcode-mode
   // QuickProductDetailSheet. Shared by the single-scan prompt and the shelf/cart "Already in Inventory"
@@ -5376,7 +5371,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const openInventoryEditor = useCallback((itemId: string, match: any) => {
     const variantId = String(match?.ProductVariantId || match?.variantId || match?.id || '');
     const productId = String(match?.productId || match?.ProductId || '');
-    if (!variantId && !productId) { showNotificationMessage('Inventory item is missing its id.', 2000); return; }
+    if (!variantId && !productId) { showToast({ title: 'Inventory item unavailable', tone: 'danger' }); return; }
     setBarcodeSearchResult({
       product: { Id: productId || variantId, id: productId || variantId },
       variant: {
@@ -5395,7 +5390,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setShowBarcodeResultModal(true);
       markItemsProcessed([{ id: itemId }], 'existing_inventory');
     }, 520);
-  }, [markItemsProcessed, showNotificationMessage]);
+  }, [markItemsProcessed, showToast]);
 
   // INVENTORY DEDUP prompt — the scan matched an item the user already owns. Ask: Update the existing
   // item or add this as a new product. Outcome-only copy — never names how the match was found.
@@ -5421,7 +5416,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const openExistingInventoryMatch = useCallback((itemId: string) => {
     const stored = inventoryDedupByItemId[itemId]?.match;
     const local = stored || (getLocalInventoryCandidateForItem(itemId, confirmedQuickMatchByItemId, quickScanStore) as any);
-    if (!local) { showNotificationMessage('No inventory match is ready for this item yet.', 2000); return; }
+    if (!local) { showToast({ title: 'Inventory match not ready', tone: 'neutral' }); return; }
     const match = stored ? stored : {
       ProductVariantId: local.variantId || local.ProductVariantId || local.id,
       productId: local.productId || local.ProductId,
@@ -5441,10 +5436,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           const filtered = cur.matchData.rankedCandidates.filter(keep);
           return { ...prev, [itemId]: { ...cur, matchData: { ...cur.matchData, rankedCandidates: filtered, totalMatches: filtered.length }, matchRows: (cur.matchRows || []).filter(keep) } };
         });
-        showNotificationMessage('Will add as a new product.', 1800);
+        showToast({ title: 'Adding new product', tone: 'neutral' });
       },
     });
-  }, [inventoryDedupByItemId, confirmedQuickMatchByItemId, quickScanStore, promptInventoryDedup, showNotificationMessage]);
+  }, [inventoryDedupByItemId, confirmedQuickMatchByItemId, quickScanStore, promptInventoryDedup, showToast]);
 
   // Send payload of first photos for analysis/matching
   const performAnalyze = useCallback(async (
@@ -5543,10 +5538,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         error: error instanceof Error ? error.message : String(error),
       });
       log.error('[ANALYZE] Analyze failed:', error);
-      showNotificationMessage('Analysis failed. Please try again in a second or two.', 3000);
+      showToast({ title: 'Analysis failed', tone: 'danger' });
       throw error;
     }
-  }, [uploadImageToSupabase, showNotificationMessage]);
+  }, [uploadImageToSupabase, showToast]);
 
   // Add new bulk item
   const addNewBulkItem = useCallback(() => {
@@ -5640,7 +5635,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           && Array.isArray(itemMatches.matchData.rankedCandidates)
           && itemMatches.matchData.rankedCandidates.length > 0;
         if (!hasRenderableMatchData) {
-          showNotificationMessage('Quick matches are still loading for this item.', 2000);
+          showToast({ title: 'Matches still loading', tone: 'neutral' });
           return;
         }
         setMatchData(itemMatches.matchData);
@@ -5658,22 +5653,23 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       } else {
         // Retry: re-trigger quick scan for this item if no matches yet
         if (currentInstruction === 'processing') {
-          showNotificationMessage('Scanning in progress...', 1500);
+          showToast({ title: 'Scanning in progress', tone: 'neutral' });
         } else {
           // Find the photo for this item and re-scan
           const item = bulkItems.find(b => b.id === activeItemId);
           if (item && item.photos.length > 0) {
-            showNotificationMessage('Retrying scan...', 1500);
+            showToast({ title: 'Retrying scan', tone: 'neutral' });
             performQuickScan(item.photos[0], activeItemId);
           } else {
-            showNotificationMessage('No photo available to scan', 1500);
+            showToast({ title: 'No photo to scan', tone: 'warn' });
           }
         }
       }
     } else {
-      showNotificationMessage('Select an item first', 1500);
+      showToast({ title: 'Select an item first', tone: 'warn' });
     }
-  }, [activeItemId, quickScanStore, currentInstruction, showNotificationMessage, bulkItems, performQuickScan, inventoryDedupByItemId, promptInventoryDedup]);
+  }, [activeItemId, quickScanStore, currentInstruction, showToast, bulkItems, performQuickScan, inventoryDedupByItemId, promptInventoryDedup]);
+  toastReviewRef.current = handleMatchIndicatorPress;
 
   // Select item as active
   const selectActiveItem = useCallback((itemId: string) => {
@@ -5689,8 +5685,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     // Show notification of which item is now active
     const itemIndex = bulkItems.findIndex(item => item.id === itemId) + 1;
-    showNotificationMessage(`Switched to Item ${itemIndex}`, 1500);
-  }, [bulkItems, showNotificationMessage, quickScanStore]);
+    showToast({ title: `Item ${itemIndex} selected`, tone: 'neutral' });
+  }, [bulkItems, showToast, quickScanStore]);
 
   // Delete bulk item
   const deleteBulkItem = useCallback((itemId: string) => {
@@ -6008,7 +6004,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       setActiveItemId(bulkItems[0].id);
       setCurrentInstruction('capturing');
       closeBulkItemsSheet();
-      showNotificationMessage(`Take photos for ${bulkItems[0].title || 'Item 1'}`, 2500);
+      showToast({ title: `Photograph ${bulkItems[0].title || 'this item'}`, tone: 'neutral' });
       return;
     }
 
@@ -6027,7 +6023,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     setCameraMode,
     setActiveItemId,
     closeBulkItemsSheet,
-    showNotificationMessage,
+    showToast,
   ]);
 
   // Keep the blur save callback stable. useFocusEffect runs a callback's cleanup both
@@ -6555,16 +6551,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         />
       )}
 
-      {/* Notification Bar */}
-      {showNotification && (
-        <NotificationBar
-          message={notificationMessage}
-          opacity={notificationOpacity}
-          translateY={notificationTranslateY}
-          onPress={handleMatchIndicatorPress}
-        />
-      )}
-
       {/* Bottom controls — fade out as the cart rises so the strip between the
           camera card and the sheet reads as clean black, not stranded buttons.
           (When the cart Modal is up it owns all touches, so opacity alone is safe.)
@@ -6572,6 +6558,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           so a collapsed (auto-height) wrapper would strand it off-screen. */}
       <Animated.View style={[StyleSheet.absoluteFill, controlsFadeStyle]} pointerEvents="box-none">
       <BottomControls
+        onLayout={event => setCameraControlsHeight(event.nativeEvent.layout.height)}
         onCapture={handleCapture}
         isCapturing={isCapturing}
         captureButtonScale={captureButtonScale}
@@ -6738,6 +6725,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             ) : openFolder ? (
               <View style={StyleSheet.absoluteFill}>{renderShelfFolderPage()}</View>
             ) : null}
+            <ToastHost
+              enabled={nativeModalVisible('cart', !!showDeepSearchSheet)}
+              priority={1}
+              ignoreAnchors
+            />
           </View>
         )}
       </Modal>
@@ -6850,20 +6842,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                         log.warn(`[BARCODE SAVE] No connectionId found for location ${u.location}`);
                         return null;
                       }
-                      // Only include fields the user actually changed; never send an
-                      // absent quantity (would zero the location) or a non-finite price.
-                      const payload: { platformConnectionId: string; locationId: string; quantity?: number; price?: number } = {
+                      // Inventory endpoint invariant: only a finite, supplied quantity is accepted.
+                      const payload: { platformConnectionId: string; locationId: string; quantity?: number } = {
                         platformConnectionId: locInfo.connectionId,
                         locationId: u.location,
                       };
                       if (u.quantity !== undefined && Number.isFinite(u.quantity)) {
                         payload.quantity = u.quantity;
                       }
-                      if (u.price !== undefined && Number.isFinite(u.price)) {
-                        payload.price = u.price;
-                      }
                       // Skip rows with nothing valid to apply
-                      if (payload.quantity === undefined && payload.price === undefined) {
+                      if (payload.quantity === undefined) {
                         return null;
                       }
                       return payload;

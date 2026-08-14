@@ -18,7 +18,8 @@ import { SessionContext } from '../../context/SessionContext';
 import { OrgContext } from '../../context/OrgContext';
 import { LegendStateContext } from '../../context/LegendStateContext';
 import { LegendStateControlContext } from '../../context/LegendStateControlContext';
-import { SystemNotificationProvider } from '../../context/SystemNotificationContext';
+import { ToastProvider } from '../../context/ToastContext';
+import { ToastHost } from '../../components/Toast';
 import { PlatformConnectionsProvider } from '../../context/PlatformConnectionsContext';
 import { PlatformPickerOverlayProvider } from '../../context/PlatformPickerOverlayContext';
 import { AppDataProvider } from '../../context/AppDataContext';
@@ -107,7 +108,7 @@ export default function Harness({ route }: { route: ExportRoute }) {
           <OrgContext.Provider value={MOCK_ORG}>
             <LegendStateControlContext.Provider value={MOCK_LEGEND_CONTROL}>
               <LegendStateContext.Provider value={MOCK_LEGEND}>
-                <SystemNotificationProvider>
+                <ToastProvider>
                   <PlatformConnectionsProvider>
                     <PlatformPickerOverlayProvider>
                       <AppDataProvider>
@@ -129,7 +130,8 @@ export default function Harness({ route }: { route: ExportRoute }) {
                       </AppDataProvider>
                     </PlatformPickerOverlayProvider>
                   </PlatformConnectionsProvider>
-                </SystemNotificationProvider>
+                  <ToastHost />
+                </ToastProvider>
               </LegendStateContext.Provider>
             </LegendStateControlContext.Provider>
           </OrgContext.Provider>

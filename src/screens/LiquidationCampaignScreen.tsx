@@ -450,17 +450,17 @@ const LiquidationCampaignScreen = () => {
         <View style={s.footerStack}>
           {controller.error ? (
             <View style={s.errorBanner}>
-              <AlertCircle size={14} color="#EF4444" />
+              <AlertCircle size={18} color="#D8434F" />
               <Text style={s.errorText}>{controller.error}</Text>
               <TouchableOpacity onPress={controller.onRefresh}><Text style={s.errorRetry}>Retry</Text></TouchableOpacity>
             </View>
           ) : null}
           {controller.notice ? (
             <View style={s.noticeBanner}>
-              <CheckCircle2 size={14} color="#5D7E16" />
+              <CheckCircle2 size={18} color="#7BB304" />
               <Text style={s.noticeText}>{controller.notice}</Text>
               <TouchableOpacity onPress={() => controller.setNotice(null)}>
-                <X size={14} color="#5D7E16" />
+                <X size={18} color="#18181B" />
               </TouchableOpacity>
             </View>
           ) : null}
@@ -764,11 +764,11 @@ const s = StyleSheet.create({
   // Footer
   footerStack: { backgroundColor: '#FFFFFF', paddingTop: 4 },
   footerStackLifted: { paddingBottom: 68 },
-  errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  errorText: { flex: 1, color: '#B91C1C', fontFamily: 'Inter_500Medium', fontSize: 12 },
-  errorRetry: { color: '#DC2626', fontFamily: 'Inter_700Bold', fontSize: 12 },
-  noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(147,200,34,0.3)', backgroundColor: 'rgba(147,200,34,0.12)', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noticeText: { flex: 1, color: '#5D7E16', fontFamily: 'Inter_500Medium', fontSize: 12 },
+  errorBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 14, borderCurve: 'continuous', borderWidth: 1, borderColor: '#EFB6BB', backgroundColor: '#FFFFFF', paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10, boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)' },
+  errorText: { flex: 1, color: '#18181B', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  errorRetry: { color: '#18181B', fontFamily: 'Inter_700Bold', fontSize: 12 },
+  noticeBanner: { marginHorizontal: 12, marginTop: 8, borderRadius: 14, borderCurve: 'continuous', borderWidth: 1, borderColor: '#7BB304', backgroundColor: '#FFFFFF', paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10, boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)' },
+  noticeText: { flex: 1, color: '#18181B', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
 
   // Sheet common
   sheetBackdrop: { flex: 1, justifyContent: 'flex-end' },

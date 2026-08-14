@@ -10,7 +10,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Check, Copy, Pause, ThumbsDown, ThumbsUp, Volume2 } from 'lucide-react-native';
-import { useSystemNotifications } from '../../../context/SystemNotificationContext';
+import { useToast } from '../../../context/ToastContext';
 
 export type NarrationState = 'idle' | 'loading' | 'playing' | 'paused';
 
@@ -43,7 +43,7 @@ export function MessageActions({
   activeBackgroundColor = 'rgba(147,200,34,0.12)',
   style,
 }: MessageActionsProps) {
-  const { showToast } = useSystemNotifications();
+  const { showToast } = useToast();
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<null | 'up' | 'down'>(null);
 
@@ -60,17 +60,13 @@ export function MessageActions({
       tap();
       showToast({
         title: 'Response copied',
-        type: 'success',
-        icon: 'check-circle-outline',
-        duration: 1600,
+        tone: 'success',
       });
       setTimeout(() => setCopied(false), 1400);
     } catch {
       showToast({
         title: 'Could not copy response',
-        type: 'error',
-        icon: 'alert-circle-outline',
-        duration: 2000,
+        tone: 'danger',
       });
     }
   };
@@ -80,11 +76,12 @@ export function MessageActions({
     setVote(resolved);
     onFeedback?.(messageId, resolved);
     showToast({
-      title: resolved ? 'Feedback saved' : 'Feedback cleared',
-      message: resolved === 'down' ? 'Thanks, this helps Sprout improve.' : undefined,
-      type: 'success',
-      icon: resolved ? 'check-circle-outline' : 'close-circle-outline',
-      duration: 1700,
+      title: resolved === 'down'
+        ? 'Feedback saved, thank you'
+        : resolved
+          ? 'Feedback saved'
+          : 'Feedback cleared',
+      tone: 'success',
     });
   };
 

@@ -11,7 +11,7 @@ const PHOTO = 188;
  * Shown right after the seller taps "Sell these N items". The listings are created in the
  * background; this card sets the expectation ("we'll let you know") and lets them carry on.
  * Tapping Done dismisses the card — creation keeps running, and a notification + the
- * ListingsReadyCard surface when it finishes.
+ * ready-to-review surface when it finishes.
  */
 export default function ListingProcessingCard({
   visible,

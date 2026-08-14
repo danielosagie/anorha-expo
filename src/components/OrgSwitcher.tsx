@@ -13,7 +13,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
-import { showMessage } from 'react-native-flash-message';
+import { useToast } from '../context/ToastContext';
+import { ToastHost } from './Toast';
 import Button from './Button';
 import Card from './Card';
 import { createLogger } from '../utils/logger';
@@ -35,6 +36,7 @@ interface OrgSwitcherProps {
 
 export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherProps) {
   const theme = useTheme();
+  const { showToast } = useToast();
   
   const [isDropdownVisible, setIsDropdownVisible] = useState(false);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -129,30 +131,18 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
       setCurrentOrg(org);
       setIsDropdownVisible(false);
       
-      showMessage({
-        message: 'Success',
-        description: `Switched to ${org.Name}`,
-        type: 'success',
-      });
+      showToast({ title: `Switched to ${org.Name}`, tone: 'success' });
 
       onOrgChanged?.(org.Id, org.Name);
     } catch (error) {
       log.error('[OrgSwitcher] Error switching org:', error);
-      showMessage({
-        message: 'Error',
-        description: 'Failed to switch organization',
-        type: 'danger',
-      });
+      showToast({ title: 'Organization switch failed', tone: 'danger' });
     }
   };
 
   const handleCreateOrg = async () => {
     if (!newOrgName.trim()) {
-      showMessage({
-        message: 'Error',
-        description: 'Organization name is required',
-        type: 'warning',
-      });
+      showToast({ title: 'Organization name required', tone: 'warn' });
       return;
     }
 
@@ -172,22 +162,14 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
 
       if (!response.ok) throw new Error('Failed to create org');
 
-      showMessage({
-        message: 'Success',
-        description: `${newOrgName} created!`,
-        type: 'success',
-      });
+      showToast({ title: `${newOrgName} created`, tone: 'success' });
 
       setNewOrgName('');
       setIsCreateModalVisible(false);
       await loadOrganizations();
     } catch (error) {
       log.error('[OrgSwitcher] Error creating org:', error);
-      showMessage({
-        message: 'Error',
-        description: 'Failed to create organization',
-        type: 'danger',
-      });
+      showToast({ title: 'Create organization failed', tone: 'danger' });
     } finally {
       setIsCreatingOrg(false);
     }
@@ -289,6 +271,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
             </TouchableOpacity>
           </Card>
         </TouchableOpacity>
+        <ToastHost enabled={isDropdownVisible} priority={1} ignoreAnchors />
       </Modal>
 
       <Modal
@@ -348,6 +331,7 @@ export default function OrgSwitcher({ currentOrgId, onOrgChanged }: OrgSwitcherP
             </Card>
           </TouchableOpacity>
         </TouchableOpacity>
+        <ToastHost enabled={isCreateModalVisible} priority={1} ignoreAnchors />
       </Modal>
     </>
   );

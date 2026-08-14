@@ -18,7 +18,7 @@ import { useTheme } from '../context/ThemeContext';
 import { ChevronDown, RefreshCw, X } from 'lucide-react-native';
 import PageHeader from '../components/ui/PageHeader';
 import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { showMessage } from 'react-native-flash-message';
+import { useToast } from '../context/ToastContext';
 import InviteMemberModal from '../components/team/InviteMemberModal';
 import { useAuth } from '@clerk/expo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -66,6 +66,7 @@ export default function TeamScreen() {
   const theme = useTheme();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { showToast } = useToast();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -188,12 +189,12 @@ export default function TeamScreen() {
 
     } catch (error) {
       log.error('[TeamScreen] Error loading team data:', error);
-      showMessage({ message: 'Error', description: 'Failed to load team data', type: 'danger' });
+      showToast({ title: 'Team data unavailable', tone: 'danger' });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     loadTeamData();
@@ -280,7 +281,7 @@ export default function TeamScreen() {
         });
 
         if (res.ok) {
-          showMessage({ message: 'Role Updated', type: 'success' });
+          showToast({ title: 'Role updated', tone: 'success' });
           // Optimistic update - match by UserId (Clerk user ID) or fallback to Id
           setMembers(prev => prev.map(m => 
             (m.ClerkUserId === userId || m.UserId === userId) ? { ...m, Role: newRole } : m
@@ -290,11 +291,11 @@ export default function TeamScreen() {
         } else {
           const errorText = await res.text();
           log.error('[TeamScreen] Role update failed:', errorText);
-          showMessage({ message: 'Error', description: 'Failed to update role', type: 'danger' });
+          showToast({ title: 'Role update failed', tone: 'danger' });
         }
       } catch (e) {
         log.error('[TeamScreen] Role update error:', e);
-        showMessage({ message: 'Error', description: 'Failed to update role', type: 'danger' });
+        showToast({ title: 'Role update failed', tone: 'danger' });
       }
     };
 
@@ -345,21 +346,13 @@ export default function TeamScreen() {
               );
 
               if (response.ok) {
-                showMessage({
-                  message: 'Success',
-                  description: 'Team member removed',
-                  type: 'success',
-                });
+                showToast({ title: 'Team member removed', tone: 'success' });
                 loadTeamData();
               } else {
                 throw new Error('Failed to remove member');
               }
             } catch (error) {
-              showMessage({
-                message: 'Error',
-                description: 'Failed to remove team member',
-                type: 'danger',
-              });
+              showToast({ title: 'Remove member failed', tone: 'danger' });
             }
           },
         },
@@ -377,10 +370,10 @@ export default function TeamScreen() {
         `${API_BASE}/organizations/${currentOrg.Id}/invitations/${inviteId}/resend`,
         { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }
       );
-      if (response.ok) showMessage({ message: 'Success', description: 'Invitation resent', type: 'success' });
+      if (response.ok) showToast({ title: 'Invitation resent', tone: 'success' });
       else throw new Error('Failed to resend');
     } catch (error) {
-      showMessage({ message: 'Error', description: 'Failed to resend invitation', type: 'danger' });
+      showToast({ title: 'Resend invitation failed', tone: 'danger' });
     }
   };
 
@@ -393,11 +386,11 @@ export default function TeamScreen() {
         { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }
       );
       if (response.ok) {
-        showMessage({ message: 'Success', description: 'Invitation revoked', type: 'success' });
+        showToast({ title: 'Invitation revoked', tone: 'success' });
         loadTeamData();
       } else throw new Error('Failed to revoke');
     } catch (error) {
-      showMessage({ message: 'Error', description: 'Failed to revoke invitation', type: 'danger' });
+      showToast({ title: 'Revoke invitation failed', tone: 'danger' });
     }
   };
 

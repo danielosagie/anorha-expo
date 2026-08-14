@@ -52,6 +52,7 @@ import { capture, AnalyticsEvents } from '../lib/analytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
+import { useToast } from '../context/ToastContext';
 const log = createLogger('ProductDetail');
 
 
@@ -345,6 +346,7 @@ const ProductDetailScreen = observer(
     const { currentOrg } = useOrg();
     const fbDispatch = useFacebookJobStatus();
     const insets = useSafeAreaInsets();
+    const { showToast } = useToast();
     // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
     // Saved/Saving…/Unsaved/Retry chip is the only save model now, so the scroll
     // content no longer needs to clear an 80px action bar.
@@ -534,42 +536,6 @@ const ProductDetailScreen = observer(
     const listingEditorRef = useRef<ListingEditorFormRef | null>(null);
     const scrollViewRef = useRef<ScrollView | null>(null);
 
-    // Non-blocking notification banner
-    const [bannerMessage, setBannerMessage] = useState<string | null>(null);
-    const bannerOpacity = useRef(new Animated.Value(0)).current;
-    const bannerTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [bannerClickable, setBannerClickable] = useState(false);
-
-    // Show banner notification (auto-hides after 3 seconds, or 5 seconds if clickable)
-    const showBanner = useCallback((message: string, clickable: boolean = false) => {
-      // Clear any existing timeout
-      if (bannerTimeout.current) {
-        clearTimeout(bannerTimeout.current);
-      }
-
-      setBannerMessage(message);
-      setBannerClickable(clickable);
-
-      // Fade in
-      Animated.timing(bannerOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
-
-      // Auto-hide after 3 seconds (or 5 seconds for clickable banners)
-      bannerTimeout.current = setTimeout(() => {
-        Animated.timing(bannerOpacity, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }).start(() => {
-          setBannerMessage(null);
-          setBannerClickable(false);
-        });
-      }, clickable ? 5000 : 3000);
-    }, [bannerOpacity]);
-
 
     // Add state after existing states (around line 160, after const [isUploadingImages, setIsUploadingImages] = useState(false);)
     const [variantPricing, setVariantPricing] = useState<any[]>([]);
@@ -624,6 +590,15 @@ const ProductDetailScreen = observer(
       log.debug(`[ProductDetail] 📍 Scrolled to field: ${firstField} at y: ${targetY}`);
     }, [externalUpdates]);
 
+    const viewChangedFields = useCallback(() => {
+      if (mode !== 'edit') {
+        setMode('edit');
+        setTimeout(scrollToFirstChangedField, 80);
+        return;
+      }
+      scrollToFirstChangedField();
+    }, [mode, scrollToFirstChangedField]);
+
     // Auto-clear external update highlights after 5 seconds
     useEffect(() => {
       if (Object.keys(externalUpdates).length === 0) return;
@@ -672,6 +647,9 @@ const ProductDetailScreen = observer(
         if (hasCanonical) return;
         try {
             const canonical = createCanonicalBase(detailedItem as any);
+            // Tags invariant: known parent tags seed the form, while unknown tags remain absent.
+            if (Array.isArray((detailedItem as any).Tags)) canonical.tags = (detailedItem as any).Tags;
+            else delete canonical.tags;
             setDisplayedPlatforms(prev => ({ ...prev, shopify: { ...canonical, ...(prev.shopify || {}) } }));
         } catch (e) {
             log.warn('[ProductDetail] canonical seed failed', e);
@@ -679,7 +657,6 @@ const ProductDetailScreen = observer(
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [detailedItem?.Id]);
     const lastHydratedItemRef = useRef<string | null>(null);
-    const lastSavedRef = useRef<string>('');
 
     // Get displayedPlatforms from ref (for render)
     // const displayedPlatforms = platformsRef.current; // This line is removed
@@ -1797,7 +1774,8 @@ const ProductDetailScreen = observer(
           IsTaxable: currentForm.IsTaxable,
           TaxCode: currentForm.TaxCode,
           PlatformSpecificData: cleanedPlatformData,
-          Tags: canonical.tags || [],
+          // Tags invariant: omit an unknown value, while [] remains an intentional clear.
+          ...(Array.isArray(canonical.tags) ? { Tags: canonical.tags } : {}),
           Vendor: canonical.vendor,
           ProductType: canonical.productType,
         });
@@ -1829,14 +1807,27 @@ const ProductDetailScreen = observer(
               return name ? name.charAt(0).toUpperCase() + name.slice(1) : 'a channel';
             }).filter((v: string, i: number, arr: string[]) => arr.indexOf(v) === i);
             const label = names.length <= 1 ? (names[0] || 'a channel') : `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
-            showBanner(`Saved — didn’t reach ${label}`, true);
+            showToast({
+              title: 'Saved, channel not synced',
+              tone: 'warn',
+              action: { label: 'View', onPress: viewChangedFields },
+            });
             loadPlatformData().catch(() => {});
           }
 
+          const serverItem = saveResult?.item && typeof saveResult.item === 'object'
+            ? saveResult.item
+            : null;
+          // Version-skew invariant: old backends omit item, so the sent payload remains the compatibility fallback.
+          const confirmedFields = serverItem || updateData;
           setDetailedItem(prev => prev ? ({
             ...prev,
-            ...updateData,
-            Metadata: { ...(prev as any).Metadata, platformSpecificData: cleanedPlatformData },
+            ...confirmedFields,
+            Metadata: {
+              ...(prev as any).Metadata,
+              ...(serverItem?.Metadata && typeof serverItem.Metadata === 'object' ? serverItem.Metadata : {}),
+              platformSpecificData: cleanedPlatformData,
+            },
           } as ProductDetailItem) : prev);
           const textStillCurrent = editVersionRef.current === saveStartEditVersion;
           hasUnsavedChangesRef.current = !textStillCurrent;
@@ -1864,7 +1855,7 @@ const ProductDetailScreen = observer(
       } finally {
         if (isLatest()) setIsSaving(false);
       }
-    }, [showBanner, loadPlatformData]);
+    }, [showToast, viewChangedFields, loadPlatformData]);
 
     const requestProductSave = useLatestSaveSerializer(sendSerializedProductSave);
 
@@ -2025,7 +2016,7 @@ const ProductDetailScreen = observer(
             const newer = pendingOverridesRef.current.get(connectionId) || {};
             pendingOverridesRef.current.set(connectionId, { ...fields, ...newer });
             allSucceeded = false;
-            if (isLatest()) showBanner(`Couldn’t save custom ${label} details`, false);
+            if (isLatest()) showToast({ title: `${label} details not saved`, tone: 'danger' });
             continue;
           }
           if (isLatest()) {
@@ -2037,14 +2028,18 @@ const ProductDetailScreen = observer(
           // pushed:false = the override SAVED but the live push failed. Calm notice, and the
           // refresh below repaints the Active Channels dot from the new SyncStatus.
           if (data.pushed === false && isLatest()) {
-            showBanner(`Saved for ${label} — didn’t reach ${label}`, true);
+            showToast({
+              title: 'Saved, channel not synced',
+              tone: 'warn',
+              action: { label: 'View', onPress: viewChangedFields },
+            });
           }
           anyRefresh = true;
         } catch {
           const newer = pendingOverridesRef.current.get(connectionId) || {};
           pendingOverridesRef.current.set(connectionId, { ...fields, ...newer });
           allSucceeded = false;
-          if (isLatest()) showBanner(`Couldn’t save custom ${label} details`, false);
+          if (isLatest()) showToast({ title: `${label} details not saved`, tone: 'danger' });
         }
       }
       if (anyRefresh) {
@@ -2052,7 +2047,7 @@ const ProductDetailScreen = observer(
         refreshOverridesFnRef.current();
       }
       return allSucceeded;
-    }, [detailedItem, platformLabelForConnection, showBanner, loadPlatformData, mergeConfirmedOverride]);
+    }, [detailedItem, platformLabelForConnection, showToast, viewChangedFields, loadPlatformData, mergeConfirmedOverride]);
 
     const requestOverrideFlush = useLatestSaveSerializer(sendSerializedOverrides);
     const flushPendingOverrides = useCallback(async (): Promise<boolean> => {
@@ -2118,7 +2113,7 @@ const ProductDetailScreen = observer(
             clearFields,
           );
           if (!ok || !data?.success) {
-            showBanner(`Couldn’t reset ${label}`, false);
+            showToast({ title: `${label} reset failed`, tone: 'danger' });
             return;
           }
           setSessionOverrides((prev) => ({ ...prev, [connectionId]: { ...(prev[connectionId] || {}), ...clearFields } }));
@@ -2132,13 +2127,19 @@ const ProductDetailScreen = observer(
             if ('price' in clearFields) reverted.price = detailedItem.Price != null ? Number(detailedItem.Price) : reverted.price;
             return { ...prev, [platformKey]: reverted };
           });
-          if (data.pushed === false) showBanner(`Reset ${label} — didn’t reach ${label}`, true);
+          if (data.pushed === false) {
+            showToast({
+              title: 'Reset, channel not synced',
+              tone: 'warn',
+              action: { label: 'View', onPress: viewChangedFields },
+            });
+          }
           loadPlatformData().catch(() => {});
         } catch {
-          showBanner(`Couldn’t reset custom ${label} details`, false);
+          showToast({ title: `${label} reset failed`, tone: 'danger' });
         }
       },
-      [detailedItem, overridesByConnection, platformLabelForConnection, showBanner, loadPlatformData],
+      [detailedItem, overridesByConnection, platformLabelForConnection, showToast, viewChangedFields, loadPlatformData],
     );
 
     useEffect(() => {
@@ -2351,7 +2352,7 @@ const ProductDetailScreen = observer(
                 setExternalUpdates(prev => ({ ...prev, ...aiFieldChanges }));
               }
               setHasUnsavedChanges(true);
-              showBanner(`✨ Generated ${platformKey} listing data`);
+              showToast({ title: `${platformKey} details generated`, tone: 'success' });
             }
           } catch (err) {
             log.error(`[ProductDetail] Error processing completion for ${platformKey}:`, err);
@@ -2378,7 +2379,7 @@ const ProductDetailScreen = observer(
       });
 
       return () => unsubscribe();
-    }, [onJobProgress, showBanner]);
+    }, [onJobProgress, showToast]);
 
     // Generate platform-specific data when adding a new platform tab
     const handleGeneratePlatform = useCallback(async (platformKey: string) => {
@@ -2554,7 +2555,7 @@ const ProductDetailScreen = observer(
 
         if ((isShopify || isEbay) && !hasCategory) {
           log.debug('[ProductDetail] Missing category for publish, attempting auto-detect...');
-          showBanner(`Detecting ${platformKey} category...`);
+          showToast({ title: `Detecting ${platformKey} category`, tone: 'neutral' });
 
           try {
             const query = canonicalData.title;
@@ -2610,7 +2611,7 @@ const ProductDetailScreen = observer(
               }));
               setHasUnsavedChanges(true);
 
-              showBanner(`Auto-assigned category: ${best.path || best.name}`);
+              showToast({ title: 'Category auto-assigned', tone: 'success' });
             }
           } catch (e) {
             log.error('[ProductDetail] Auto-detect taxonomy failed:', e);
@@ -2702,7 +2703,7 @@ const ProductDetailScreen = observer(
           return;
         }
 
-        showBanner(`🚀 Published to ${platformKey}!`);
+        showToast({ title: `Published to ${platformKey}`, tone: 'success' });
 
         capture(AnalyticsEvents.PUBLISH_COMPLETED, {
           origin: 'edit',
@@ -2752,9 +2753,9 @@ const ProductDetailScreen = observer(
                         method: 'POST',
                         body: { connectionId: targetConnection.Id, variantId: detailedItem.Id },
                       });
-                      showBanner('Facebook sync requested.');
+                      showToast({ title: 'Facebook sync requested', tone: 'neutral' });
                     } catch (syncErr: any) {
-                      showBanner('Sync failed. Please try again.');
+                      showToast({ title: 'Facebook sync failed', tone: 'danger' });
                     }
                   }
                 },
@@ -2772,7 +2773,7 @@ const ProductDetailScreen = observer(
       } finally {
         setIsPublishing(null);
       }
-    }, [detailedItem, connections, displayedPlatforms, isPublishing, showBanner, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation]);
+    }, [detailedItem, connections, displayedPlatforms, isPublishing, showToast, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation]);
     // Handle Delist / Remove Mapping
     const handleDelist = useCallback(async (connectionId: string, mappingId: string, platformName: string) => {
       Alert.alert('Delist', `Remove listing from ${platformName}?`, [
@@ -2790,7 +2791,7 @@ const ProductDetailScreen = observer(
                 throw new Error('Failed to delist');
               }
 
-              showBanner(`Deleted listing from ${platformName}`);
+              showToast({ title: `${platformName} listing deleted`, tone: 'success' });
               // Refresh data to remove it from the list
               await loadPlatformData();
             } catch (e: any) {
@@ -2800,7 +2801,7 @@ const ProductDetailScreen = observer(
           }
         }
       ]);
-    }, [loadPlatformData, showBanner]);
+    }, [loadPlatformData, showToast]);
 
     // Auto-save function with proper API call
     const handleFormChange = useCallback((field: keyof EditFormData, value: any) => {
@@ -3948,7 +3949,7 @@ const ProductDetailScreen = observer(
         // CRITICAL: Never update if user has unsaved changes
         if (hasUnsavedChangesRef.current) {
           log.debug('[ProductDetail] ⚠️ BLOCKING REALTIME - user has unsaved changes');
-          showBanner('External update available. Save your changes first.', false);
+          showToast({ title: 'Save before external update', tone: 'warn' });
           scheduleDeferredExternalReload('product_update_unsaved');
           return;
         }
@@ -4034,7 +4035,11 @@ const ProductDetailScreen = observer(
                   });
 
                   // Show banner only when we have actual field changes from external source
-                  showBanner('Product updated from external source', true);
+                  showToast({
+                    title: 'External product update',
+                    tone: 'neutral',
+                    action: { label: 'View', onPress: viewChangedFields },
+                  });
                 }
 
                 log.debug('[ProductDetail] ✅ Applying realtime update (merging to preserve nested data)');
@@ -4129,7 +4134,7 @@ const ProductDetailScreen = observer(
             // CRITICAL: Don't reload if user has unsaved changes - it will overwrite their edits
             if (hasUnsavedChangesRef.current) {
               log.debug('[ProductDetail] ⚠️ Skipping inventory reload - user has unsaved changes');
-              showBanner('Inventory changed externally. Save your changes first.');
+              showToast({ title: 'Save before inventory refresh', tone: 'warn' });
               scheduleDeferredExternalReload('inventory_unsaved');
               continue;
             }
@@ -4226,7 +4231,7 @@ const ProductDetailScreen = observer(
 
               log.debug('[ProductDetail] ✅ Inventory updated in place for variant', affectedVariantId);
               if (!isInSaveBlockingWindow()) {
-                showBanner('Inventory updated from external source');
+                showToast({ title: 'External inventory update', tone: 'neutral' });
               }
             } else {
               // For INSERT/DELETE, do a full reload only if not in blocking window
@@ -4266,7 +4271,7 @@ const ProductDetailScreen = observer(
         if (!hasUnsavedChangesRef.current) {
           loadPlatformData();
         } else {
-          showBanner('Platform mapping changed. Save your changes first.');
+          showToast({ title: 'Save before channel refresh', tone: 'warn' });
           scheduleDeferredExternalReload('mapping_unsaved');
         }
       }));
@@ -4277,7 +4282,7 @@ const ProductDetailScreen = observer(
           try { d(); } catch {}
         });
       };
-    }, [detailedItem?.Id, detailedItem?.ProductId, loadPlatformData, showBanner, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
+    }, [detailedItem?.Id, detailedItem?.ProductId, loadPlatformData, showToast, viewChangedFields, isInSaveBlockingWindow, scheduleDeferredExternalReload]);
 
     // Collaboration: Request edit lock and listen for team updates
     useEffect(() => {
@@ -4288,7 +4293,7 @@ const ProductDetailScreen = observer(
         // Advisory presence only — editing is never blocked. If a teammate also
         // has this open, give a quiet heads-up instead of the old blocking alert.
         if (!response.success && response.lockedBy) {
-          showBanner(`${response.lockedBy} is also editing — your changes will still save.`);
+          showToast({ title: `Editing with ${response.lockedBy}`, tone: 'warn' });
         }
       });
 
@@ -4331,13 +4336,13 @@ const ProductDetailScreen = observer(
         }
 
         // Show non-blocking banner instead of Alert
-        showBanner('A teammate updated this product. View refreshed.');
+        showToast({ title: 'Teammate update refreshed', tone: 'neutral' });
       });
 
       // Listen for edit started events
       const unsubscribeEditStart = collaboration.onEditStarted((event) => {
         if (event.productId === detailedItem.ProductId) {
-          showBanner(`${event.userName} is also editing this product.`);
+          showToast({ title: `Editing with ${event.userName}`, tone: 'warn' });
         }
       });
 
@@ -4561,33 +4566,6 @@ const ProductDetailScreen = observer(
 
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        {/* Non-blocking notification banner */}
-        {bannerMessage && (
-          <TouchableOpacity
-            activeOpacity={bannerClickable ? 0.7 : 1}
-            onPress={bannerClickable ? () => { if (mode !== 'edit') { setMode('edit'); setTimeout(() => scrollToFirstChangedField(), 80); } else { scrollToFirstChangedField(); } } : undefined}
-            disabled={!bannerClickable}
-          >
-            <Animated.View
-              style={[
-                styles.notificationBanner,
-                {
-                  opacity: bannerOpacity,
-                  borderColor: bannerClickable ? '#93C822' : '#E5E7EB',
-                }
-              ]}
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: bannerClickable ? '#93C822' : '#71717A' }} />
-                <Text style={styles.notificationBannerText} numberOfLines={2}>{bannerMessage}</Text>
-                {bannerClickable && (
-                  <Text style={styles.notificationBannerReview}>Review</Text>
-                )}
-              </View>
-            </Animated.View>
-          </TouchableOpacity>
-        )}
-
         <ScrollView
           ref={scrollViewRef}
           contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 56, paddingBottom: bottomSafePadding }]}
@@ -5241,36 +5219,6 @@ const ProductDetailScreen = observer(
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  notificationBanner: {
-    position: 'absolute',
-    top: 50,
-    left: 16,
-    right: 16,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    zIndex: 9999,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  notificationBannerText: {
-    color: '#3F3F46',
-    fontSize: 14,
-    fontWeight: '500',
-    flexShrink: 1,
-  },
-  notificationBannerReview: {
-    color: '#4A7C00',
-    fontSize: 13,
-    fontWeight: '700',
-    marginLeft: 'auto',
   },
   scannerDock: { position: 'absolute', top: 6, left: 56, right: 56, zIndex: 5000 },
   scannerCard: { backgroundColor: '#000', borderRadius: 18, borderWidth: 2, borderColor: '#111', overflow: 'hidden' },
