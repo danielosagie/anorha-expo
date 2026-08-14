@@ -140,7 +140,13 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     log.debug('[EnhancedSessionProvider] Performing auth validation, attempt:', retryCount + 1);
     
     try {
-      const token = await getClerkToken();
+      // getClerkToken has no internal timeout; a stalled Clerk SDK left boot stuck at
+      // 'initializing' forever (splash-hang). Bound it: after 10s treat the token as
+      // null, which enters the existing quiet-retry → degrade path below.
+      const token = await Promise.race<string | null>([
+        getClerkToken(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 10000)),
+      ]);
 
       if (!token) {
         // A null Clerk token is almost always TRANSIENT — the token is mid-rotation, a

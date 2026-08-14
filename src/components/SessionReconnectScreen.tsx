@@ -1,5 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 
 type SessionReconnectScreenProps = {
   /** Human-readable reason the live session couldn't be established. */
@@ -23,6 +24,11 @@ const SessionReconnectScreen: React.FC<SessionReconnectScreenProps> = ({
   onRetry,
   onSignOut,
 }) => {
+  // This screen renders before AppNavigator (the only other splash-hide site), so it
+  // must drop the native splash itself or it is invisible under the splash forever.
+  React.useEffect(() => {
+    SplashScreen.hideAsync().catch(() => { });
+  }, []);
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
