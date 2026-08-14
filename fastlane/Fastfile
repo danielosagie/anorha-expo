@@ -115,7 +115,7 @@ platform :ios do
       if options[:group]
         grp = app.get_beta_groups.find { |g| g.name == options[:group] }
         UI.user_error!("Group '#{options[:group]}' not found") unless grp
-        grp.get_beta_testers
+        Spaceship::ConnectAPI::BetaTester.all(filter: { betaGroups: grp.id }, limit: 200)
       else
         Spaceship::ConnectAPI::BetaTester.all(filter: { apps: app.id }, limit: 200)
       end
@@ -189,6 +189,41 @@ platform :ios do
     grp = app.get_beta_groups.find { |g| g.name == options[:group] } or UI.user_error!("Group '#{options[:group]}' not found")
     grp.post_bulk_beta_tester_assignments(beta_testers: [{ email: email, firstName: options[:first], lastName: options[:last] }])
     UI.success("Added #{email} → '#{options[:group]}' ✅")
+  end
+
+  desc "Add a build to a beta group (external groups trigger beta review on first assignment). Usage: fastlane distribute_build group:\"Anorha Testers\" [build:79]"
+  lane :distribute_build do |options|
+    asc_login!
+    app = find_app
+    group_name = options[:group] or UI.user_error!("group: required")
+    grp = app.get_beta_groups.find { |g| g.name == group_name } or UI.user_error!("Group '#{group_name}' not found")
+    build = pick_build(app, options[:build]) or UI.user_error!("Build not found (build:#{options[:build]})")
+    UI.user_error!("Build #{build.version} is still processing (#{build.processing_state}) — wait for VALID") unless build.processing_state == "VALID"
+    Spaceship::ConnectAPI.add_beta_groups_to_build(build_id: build.id, beta_group_ids: [grp.id])
+    UI.success("Build #{build.version} → group '#{group_name}' ✅#{grp.is_internal_group ? '' : ' (external: Apple beta review runs before testers see it)'}")
+  end
+
+  desc "Enable/print the public TestFlight link for a group. Usage: fastlane public_link group:\"Anorha Testers\" [limit:100]"
+  lane :public_link do |options|
+    asc_login!
+    app = find_app
+    group_name = options[:group] or UI.user_error!("group: required")
+    grp = app.get_beta_groups.find { |g| g.name == group_name } or UI.user_error!("Group '#{group_name}' not found")
+    UI.user_error!("'#{group_name}' is an internal group — public links need an external group") if grp.is_internal_group
+    if grp.public_link_enabled && grp.public_link
+      UI.success("Public link (already enabled): #{grp.public_link}")
+    else
+      attrs = { publicLinkEnabled: true }
+      if options[:limit]
+        attrs[:publicLinkLimitEnabled] = true
+        attrs[:publicLinkLimit] = options[:limit].to_i
+      end
+      updated = Spaceship::ConnectAPI.patch_beta_group(group_id: grp.id, attributes: attrs)
+      link = updated.public_link rescue nil
+      link ||= (app.get_beta_groups.find { |g| g.id == grp.id }&.public_link)
+      UI.user_error!("Enabled public link but ASC returned no URL — check the group in App Store Connect") unless link
+      UI.success("Public link enabled: #{link}")
+    end
   end
 
   desc "Expire build(s). Usage: fastlane expire_build build:54  |  fastlane expire_build keep_latest:true"
