@@ -68,3 +68,25 @@ test('a current aggregate scan wins over a historical completed import', () => {
   assert.equal(presentation.kind, 'scanning');
   assert.equal(presentation.importInProgress, true);
 });
+
+test('an active first import wins over a stale disconnected connection snapshot', () => {
+  const presentation = deriveConnectionImportPresentation({
+    enabled: false,
+    connectionStatus: 'disconnected',
+    latestImport: importRun('processing', '2026-08-13T12:00:00.000Z', null),
+  });
+
+  assert.equal(presentation.kind, 'importing');
+  assert.equal(presentation.label, 'Importing inventory...');
+  assert.equal(presentation.importInProgress, true);
+});
+
+test('a raw pending first-import status is importing before the run map arrives', () => {
+  const presentation = deriveConnectionImportPresentation({
+    enabled: false,
+    connectionStatus: 'pending',
+  });
+
+  assert.equal(presentation.kind, 'scanning');
+  assert.equal(presentation.importInProgress, true);
+});
