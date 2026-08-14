@@ -16,6 +16,7 @@ import ShadowSurface from './ui/ShadowSurface';
 import { AnorhaFace } from './brand/AnorhaFace';
 import { openQuickChat, setQuickChatDarkMode, useQuickChatStore } from './sprout/quickChatStore';
 import { sproutDarkTheme } from '../design/sproutTheme';
+import { useToastAnchor } from '../context/ToastContext';
 
 // Order here only gates which routes render; display order follows the navigator.
 const TAB_ICON: Record<string, string> = {
@@ -55,6 +56,7 @@ const TabBar: React.FC<TabBarProps> = ({
   // reads as a bug, so the tab row stands down while the composer is up — same slot, one
   // thing in it. The composer's own close button puts the tabs back.
   const sproutDocked = useQuickChatStore().visible;
+  useToastAnchor('main-tab-bar', !sproutDocked, rowHeight + bottomInset);
 
   const addRotateAnim = useRef(new Animated.Value(0)).current;
   const addRotate = addRotateAnim.interpolate({

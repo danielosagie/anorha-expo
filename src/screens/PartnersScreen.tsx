@@ -38,7 +38,7 @@ import {
     X
 } from 'lucide-react-native';
 import { ensureSupabaseJwt } from '../lib/supabase';
-import { showMessage } from 'react-native-flash-message';
+import { useToast } from '../context/ToastContext';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import * as Clipboard from 'expo-clipboard';
 import { useOrg } from '../context/OrgContext';
@@ -96,6 +96,7 @@ export default function PartnersScreen() {
     const { currentOrg } = useOrg();
     const currentOrgId = currentOrg?.id;
     const insets = useSafeAreaInsets();
+    const { showToast } = useToast();
 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -218,7 +219,7 @@ export default function PartnersScreen() {
             } catch (error: any) {
                 if (generation !== orgGenerationRef.current || request !== getRequestRef.current) return;
                 log.error('[PartnersScreen] Error loading data:', error);
-                showMessage({ message: 'Error', description: 'Failed to load partners data', type: 'danger' });
+                showToast({ title: 'Partners unavailable', tone: 'danger' });
             } finally {
                 if (generation === orgGenerationRef.current) {
                     setLoading(false);
@@ -331,6 +332,12 @@ export default function PartnersScreen() {
 
             if (res.ok) {
                 const data = await res.json();
+                // No invitee email in the properties: that is another person's PII
+                // and PostHog is not where it belongs.
+                capture(AnalyticsEvents.PARTNER_INVITE_SENT, {
+                    share_type: inviteCanRevoke ? 'consignment' : 'sync',
+                    can_revoke: inviteCanRevoke,
+                });
                 setInviteModalVisible(false);
                 setInviteEmail('');
                 setInvitePoolId('');
@@ -366,7 +373,7 @@ export default function PartnersScreen() {
                     });
                     await requireOk(response, 'Could not revoke invite');
                     await refreshData();
-                    showMessage({ message: 'Invite revoked', type: 'info' });
+                    showToast({ title: 'Invite revoked', tone: 'neutral' });
                 } catch (e: any) { showAlertModal('Couldn’t revoke invite', e?.message || 'Please try again.', 'error'); }
             }
         });
@@ -408,7 +415,7 @@ export default function PartnersScreen() {
                     });
                     await requireOk(response, 'Could not end partnership');
                     await refreshData();
-                    showMessage({ message: 'Partnership ended', type: 'info' });
+                    showToast({ title: 'Partnership ended', tone: 'neutral' });
                 } catch (e: any) { showAlertModal('Couldn’t end partnership', e?.message || 'Please try again.', 'error'); }
             }
         });
@@ -428,13 +435,7 @@ export default function PartnersScreen() {
         setAcceptModalVisible(false); // Close immediately for non-blocking UI
 
         // Show immediate feedback
-        showMessage({
-            message: 'Accepting Invitation...',
-            description: 'Setting up partnership and syncing products.',
-            type: 'info',
-            backgroundColor: theme.colors.primary, // Green
-            duration: 3000,
-        });
+        showToast({ title: 'Setting up partnership', tone: 'neutral' });
 
         try {
             const token = await ensureSupabaseJwt();
@@ -459,13 +460,7 @@ export default function PartnersScreen() {
                         message: 'To start syncing products, you need to connect a selling platform (Shopify, Square, etc).'
                     });
                 } else {
-                    showMessage({
-                        message: 'Partnership Established!',
-                        description: `Connected with ${invite.sourceOrgName}. ${result.linkedCount || 0} products syncing.`,
-                        type: 'success',
-                        backgroundColor: theme.colors.primary,
-                        duration: 4000,
-                    });
+                    showToast({ title: 'Partnership connected, products syncing', tone: 'success' });
                     refreshData();
                 }
             } else {
@@ -504,7 +499,7 @@ export default function PartnersScreen() {
                     });
                     await requireOk(response, 'Could not decline invite');
                     setReceivedInvites(prev => prev.filter(i => i.id !== invite.id));
-                    showMessage({ message: 'Invite declined', type: 'info' });
+                    showToast({ title: 'Invite declined', tone: 'neutral' });
                 } catch (e: any) { showAlertModal('Couldn’t decline invite', e?.message || 'Please try again.', 'error'); }
             }
         });
@@ -641,7 +636,7 @@ export default function PartnersScreen() {
             </View>
             <View style={styles.sentInviteFooter}>
                 <Text style={styles.expiresText}>Expires: {new Date(inv.expiresAt).toLocaleDateString()}</Text>
-                <TouchableOpacity onPress={() => { Clipboard.setStringAsync(inv.inviteLink); showMessage({ message: 'Link copied!', type: 'success', backgroundColor: theme.colors.primary }); }}>
+                <TouchableOpacity onPress={() => { Clipboard.setStringAsync(inv.inviteLink); showToast({ title: 'Link copied', tone: 'success' }); }}>
                     <Text style={styles.copyLinkText}>Copy Link</Text>
                 </TouchableOpacity>
             </View>
@@ -910,7 +905,7 @@ export default function PartnersScreen() {
                         activeOpacity={0.8}
                         onPress={() => {
                             Clipboard.setStringAsync(inviteSentModal.inviteLink);
-                            showMessage({ message: 'Link Copied!', type: 'success', backgroundColor: theme.colors.primary });
+                            showToast({ title: 'Link copied', tone: 'success' });
                             setInviteSentModal({ visible: false, inviteLink: '' });
                         }}
                     >

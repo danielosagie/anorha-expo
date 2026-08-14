@@ -38,6 +38,7 @@ import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
+import { useToastAnchor } from '../context/ToastContext';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
 import { fetchGenerateJobStatus } from '../lib/generateJobs';
 import {
@@ -165,6 +166,25 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [jobData, setJobData] = useState<{ status?: string; currentStage?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
   const [isInputExpanded, setIsInputExpanded] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(120);
+  const [composerKeyboardHeight, setComposerKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, event => {
+      setComposerKeyboardHeight(Math.max(event.endCoordinates?.height ?? 0, 0));
+    });
+    const hide = Keyboard.addListener(hideEvent, () => setComposerKeyboardHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  useToastAnchor(
+    'generate-details-composer',
+    isFocused && mode === 'edit' && isInputExpanded,
+    composerHeight + Math.max(composerKeyboardHeight - insets.bottom, 0),
+  );
   // Chat-style "wanna change something" composer text (replaces SmartCommandInput).
   const [quickFixText, setQuickFixText] = useState('');
   useEffect(() => {
@@ -1883,6 +1903,15 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (res.ok) {
         log.debug('[doSaveToInventory] Saved to inventory successfully');
 
+        // Saved to inventory with no external platforms selected. The backend's
+        // publish_completed only fires per platform connection, so this
+        // inventory-only path would otherwise be invisible.
+        capture(AnalyticsEvents.LISTING_CREATED, {
+          product_id: productId,
+          destination: 'inventory',
+          image_count: Array.isArray(payload.media?.imageUris) ? payload.media.imageUris.length : 0,
+        });
+
         // Navigate to confirmation screen
         // We construct the params similar to doPublish
         const canonicalKey = platformKeys.includes('shopify') ? 'shopify' : platformKeys[0];
@@ -3147,7 +3176,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             pointerEvents="none"
           />
 
-          <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}>
+          <View
+            onLayout={event => setComposerHeight(event.nativeEvent.layout.height)}
+            style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}
+          >
             {mode === 'edit' ? (isInputExpanded ? (
             <View style={{ flexDirection: 'column', justifyContent: "center", alignItems: 'flex-start', gap: 8, marginBottom: 4, minWidth: "100%" }}>
               <TouchableOpacity

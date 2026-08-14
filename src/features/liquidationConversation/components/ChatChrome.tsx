@@ -195,15 +195,12 @@ export function ChatComposerFooter({
       </View>
 
       {error ? (
-        <View style={[
-          styles.errorBanner,
-          { backgroundColor: theme.colors.errorBackground, borderColor: theme.colors.errorBorder },
-        ]}>
-          <AlertCircle size={14} color="#EF4444" />
-          <Text style={[styles.errorText, { color: theme.colors.errorText }]}>{error}</Text>
+        <View style={styles.errorBanner}>
+          <AlertCircle size={18} color="#D8434F" />
+          <Text style={styles.errorText}>{error}</Text>
           {onRetry ? (
             <TouchableOpacity onPress={onRetry}>
-              <Text style={[styles.errorRetry, { color: theme.colors.errorText }]}>Retry</Text>
+              <Text style={styles.errorRetry}>Retry</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -211,7 +208,7 @@ export function ChatComposerFooter({
 
       {notice ? (
         <View style={styles.noticeBanner}>
-          <CheckCircle2 size={14} color="#5D7E16" />
+          <CheckCircle2 size={18} color="#7BB304" />
           <Text style={styles.noticeText}>{notice}</Text>
           {onDismissNotice ? (
             <TouchableOpacity
@@ -219,7 +216,7 @@ export function ChatComposerFooter({
               accessibilityRole="button"
               accessibilityLabel="Dismiss notice"
             >
-              <X size={14} color="#5D7E16" />
+              <X size={18} color="#18181B" />
             </TouchableOpacity>
           ) : null}
         </View>
@@ -335,44 +332,48 @@ const styles = StyleSheet.create({
   errorBanner: {
     marginHorizontal: 12,
     marginBottom: 6,
-    borderRadius: 12,
+    borderRadius: 14,
+    borderCurve: 'continuous',
     borderWidth: 1,
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: '#EFB6BB',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)',
   },
   errorText: {
     flex: 1,
-    color: '#B91C1C',
-    fontFamily: 'Inter_500Medium',
+    color: '#18181B',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
   },
   errorRetry: {
-    color: '#DC2626',
+    color: '#18181B',
     fontFamily: 'Inter_700Bold',
     fontSize: 13,
   },
   noticeBanner: {
     marginHorizontal: 12,
     marginBottom: 6,
-    borderRadius: 12,
+    borderRadius: 14,
+    borderCurve: 'continuous',
     borderWidth: 1,
-    borderColor: 'rgba(147,200,34,0.3)',
-    backgroundColor: 'rgba(147,200,34,0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: '#7BB304',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    boxShadow: '0 8px 24px rgba(15, 17, 22, 0.10)',
   },
   noticeText: {
     flex: 1,
-    color: '#5D7E16',
-    fontFamily: 'Inter_500Medium',
+    color: '#18181B',
+    fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
   },
 });
