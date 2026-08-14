@@ -16,6 +16,10 @@ import {
 } from '../config/platforms';
 import type { PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import { NOT_CONNECTED_STATUSES } from './platformConnectionVisibility';
+import {
+  isActiveConnectionImportStatus,
+  type ConnectionImportPresentation,
+} from './connectionImportPresentation';
 
 // The row-visibility predicates are pure and live in their own dependency-free
 // module (platformConnectionVisibility) so node:test can import them without
@@ -54,24 +58,42 @@ export interface PlatformConnectStatus {
   nextStep?: ConnectStepKind;
   /**
    * What the row/pill should show:
+   *   'importing'      → an active import is running for this platform.
    *   'connected'      → every required step done (OAuth, and computer online when required).
    *   'needs-computer' → OAuth done, computer required and KNOWN offline.
    *   'checking'       → OAuth done, computer required, presence still loading (do NOT claim green).
    *   'not-connected'  → no OAuth marker yet.
    */
-  uiState: 'connected' | 'needs-computer' | 'checking' | 'not-connected';
+  uiState: 'importing' | 'connected' | 'needs-computer' | 'checking' | 'not-connected';
+  importing: boolean;
+}
+
+export interface PlatformConnectStatusOptions {
+  presentationByConnectionId?: ReadonlyMap<string, ConnectionImportPresentation>;
 }
 
 export function derivePlatformConnectStatus(
   platform: string,
   liveConnections: PlatformConnectionRow[] | null | undefined,
   presence: ComputerPresence,
+  options: PlatformConnectStatusOptions = {},
 ): PlatformConnectStatus {
   const key = resolvePlatformKey(platform);
   const steps = connectStepsFor(platform);
+  const matchingConnections = key
+    ? (liveConnections || []).filter((connection) => resolvePlatformKey(connection.PlatformType) === key)
+    : [];
+  const importing = matchingConnections.some((connection) => {
+    const presentation = options.presentationByConnectionId?.get(connection.Id);
+    return presentation?.importInProgress || isActiveConnectionImportStatus(connection.Status);
+  });
   const oauthConnected =
     !!key &&
-    (liveConnections || []).some((c) => {
+    matchingConnections.some((c) => {
+      if (
+        options.presentationByConnectionId?.get(c.Id)?.importInProgress
+        || isActiveConnectionImportStatus(c.Status)
+      ) return true;
       const status = (c.Status || '').toLowerCase();
       if (NOT_CONNECTED_STATUSES.has(status) || c.IsEnabled === false) return false;
       return resolvePlatformKey(c.PlatformType) === key;
@@ -90,7 +112,8 @@ export function derivePlatformConnectStatus(
   // When the computer is required but its status is unknown (presence loading),
   // report 'checking' (a quiet, honest middle state) instead of green or amber.
   let uiState: PlatformConnectStatus['uiState'];
-  if (!oauthConnected) uiState = 'not-connected';
+  if (importing) uiState = 'importing';
+  else if (!oauthConnected) uiState = 'not-connected';
   else if (!requiresComputer || computerOnline) uiState = 'connected';
   else if (computerKnown) uiState = 'needs-computer';
   else uiState = 'checking';
@@ -101,11 +124,11 @@ export function derivePlatformConnectStatus(
     requiresComputer,
     computerOnline,
     computerKnown,
-    // Green pill ONLY when truly connected (all steps satisfied). 'checking' and
-    // 'needs-computer' are NOT fully connected.
-    isFullyConnected: uiState === 'connected' && steps.length > 0,
+    // Connection completeness stays separate from the visible import state.
+    isFullyConnected: pendingSteps.length === 0 && steps.length > 0,
     pendingSteps,
     nextStep: pendingSteps[0],
     uiState,
+    importing,
   };
 }

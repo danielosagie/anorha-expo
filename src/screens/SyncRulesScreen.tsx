@@ -9,7 +9,7 @@
 // loaded rules so a calm edit here never clobbers what the engine had. Payload
 // shape stays identical to the engine contract.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, ActivityIndicator, StatusBar, Alert,
 } from 'react-native';
@@ -31,6 +31,10 @@ import PlatformAvatar from '../components/PlatformAvatar';
 import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import {
+  deriveConnectionImportPresentation,
+  latestImportsByConnection,
+} from '../lib/connectionImportPresentation';
 
 const log = createLogger('SyncRulesScreen');
 
@@ -77,13 +81,6 @@ const DIRECTION_OPTIONS: { value: SyncDirection; title: string; sub: string; Ico
   { value: 'pull_only', title: 'Pull from platform', sub: 'Your store updates Anorha only', Icon: ArrowDownToLine },
 ];
 
-const statusOf = (raw?: string): { label: string; color: string } => {
-  const s = (raw || '').toLowerCase();
-  if (s.includes('error') || s.includes('expired') || s.includes('revoked') || s.includes('fail')) return { label: 'Needs reconnect', color: RED };
-  if (s.includes('scan') || s.includes('sync')) return { label: 'Syncing', color: AMBER };
-  return { label: 'Connected', color: GREEN_DARK };
-};
-
 type RouteType = RouteProp<AppStackParamList, 'SyncRules'>;
 type NavType = StackNavigationProp<AppStackParamList, 'SyncRules'>;
 
@@ -93,7 +90,7 @@ const SyncRulesScreen = () => {
   const insets = useSafeAreaInsets();
   const { connectionId } = route.params;
   const routeParams = route.params as any;
-  const { refresh, updateConnectionLocally } = usePlatformConnections();
+  const { connections, progressByConnectionId, refresh, updateConnectionLocally } = usePlatformConnections();
 
   const [platformType, setPlatformType] = useState<string>(routeParams?.platformName || '');
   const [displayName, setDisplayName] = useState<string>('');
@@ -121,13 +118,25 @@ const SyncRulesScreen = () => {
   // Passive "needs you" signal — the ONE explicit deep-link into the review deck.
   const importStatus = useImportStatus();
   const attn = importStatus.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
+  const recentImportByConnection = useMemo(
+    () => latestImportsByConnection(importStatus.recentImports),
+    [importStatus.recentImports],
+  );
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRequestRef = useRef(0);
   useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current); }, []);
 
   const name = normalizeDisplayName(displayName || platformType || 'Platform');
-  const st = statusOf(status);
+  const contextConnection = connections.find((connection) => connection.Id === connectionId);
+  const importConnection = importStatus.connections.find((connection) => connection.connectionId === connectionId);
+  const st = deriveConnectionImportPresentation({
+    enabled: contextConnection?.IsEnabled !== false,
+    connectionStatus: contextConnection?.Status || status,
+    aggregateState: importConnection?.state,
+    latestImport: recentImportByConnection.get(connectionId),
+    progressStatus: progressByConnectionId[connectionId]?.status,
+  });
 
   useEffect(() => {
     let alive = true;
