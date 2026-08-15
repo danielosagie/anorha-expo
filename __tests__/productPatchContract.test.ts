@@ -10,7 +10,7 @@ import {
 } from '../src/contracts/product-patch.contract.ts';
 
 test('vendored product patch contract has the locked backend shape', () => {
-  assert.equal(PRODUCT_PATCH_CONTRACT_VERSION, 1);
+  assert.equal(PRODUCT_PATCH_CONTRACT_VERSION, 2);
   assert.deepEqual(PRODUCT_VARIANT_TYPES, ['flat', 'base', 'option']);
   assert.deepEqual(PRODUCT_PARENT_PATCH_FIELDS, [
     'Title',
@@ -42,7 +42,6 @@ test('vendored product patch contract has the locked backend shape', () => {
     'TaxCode',
     'RecognitionStatus',
     'OriginPlatform',
-    'PrimaryImageUrl',
   ]);
 
   for (const field of PRODUCT_PARENT_PATCH_FIELDS) {
@@ -57,4 +56,10 @@ test('vendored product patch contract has the locked backend shape', () => {
       `missing variant editability entry for ${field}`,
     );
   }
+
+  // Media is a set-command boundary, never a direct patch field. PrimaryImageUrl
+  // left the variant patch in contract v2 and is now derived from the ordered list.
+  assert.equal(PRODUCT_EDITABILITY_MANIFEST.media.ProductMedia.editability, 'set');
+  assert.equal(PRODUCT_EDITABILITY_MANIFEST.media.ProductMedia.command, 'setProductMedia');
+  assert.ok(!PRODUCT_VARIANT_PATCH_FIELDS.includes('PrimaryImageUrl' as never));
 });

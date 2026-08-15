@@ -11,11 +11,16 @@ import {
   platformConnectionsCacheKey,
   serializePlatformConnectionsCache,
 } from '../lib/platformConnectionsCache';
+import {
+  isUnhealthyPlatformConnection,
+  type PlatformConnectionRecommendedAction,
+  type PlatformConnectionSyncState,
+} from '../lib/platformConnectionVisibility';
 const log = createLogger('PlatformConnectionsContext');
 
 
 // Mirrors the canonical registry key set (src/config/platforms.ts). 'etsy' was a
-// ghost — never in the registry, no adapter, no column — removed.
+// ghost. It was never in the registry, had no adapter, and had no column.
 export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot';
 
 export interface PlatformConnectionRow {
@@ -25,8 +30,10 @@ export interface PlatformConnectionRow {
   DisplayName: string;
   Status: string;
   IsEnabled: boolean;
-  NeedsReauth?: boolean;
-  RecommendedAction?: 'reconnect' | 'rescan' | 'fix_resume' | 'manage' | null;
+  SyncState?: PlatformConnectionSyncState | null;
+  NeedsReauth?: boolean | null;
+  RecommendedAction?: PlatformConnectionRecommendedAction | null;
+  FailureReason?: string | null;
   LastSyncSuccessAt?: string | null;
   CreatedAt: string;
   UpdatedAt: string;
@@ -174,7 +181,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       });
 
       // NOTE: no toggles fetch. GET /api/platform-connections/toggles no longer
-      // exists on the backend — the path fell into the :id route and 400'd on
+      // exists on the backend. The path fell into the :id route and 400'd on
       // every refresh. Nothing consumed the result.
     } catch (e: any) {
       if (activeOwnerRef.current === requestedOwnerId) {
@@ -191,7 +198,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       log.debug(`[PlatformConnectionsContext] Refreshing connections (${reason})`);
       fetchConnections();
     }, 600);
-    // NOTE: do NOT add `scheduleRefresh` to its own deps — the self-reference made
+    // NOTE: do NOT add `scheduleRefresh` to its own deps. The self-reference made
     // this callback's identity change every render, which caused the socket effect
     // below (deps include scheduleRefresh) to disconnect/reconnect on every render.
   }, [fetchConnections]);
@@ -222,7 +229,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       }
     };
 
-    // Stable handler refs so cleanup off()s exactly these — the shared socket is
+    // Stable handler refs so cleanup off()s exactly these. The shared socket is
     // also used by useSyncProgress/useCollaboration, so never blanket-remove.
     const onSyncProgress = (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
       if (!data?.connectionId) return;
@@ -239,7 +246,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     };
 
     // The backend is being upgraded to include isEnabled/platformType on
-    // connection:status (disconnect events especially) — handle BOTH the old
+    // connection:status (disconnect events especially). Handle BOTH the old
     // {connectionId,status} shape and the richer one.
     const onConnectionStatus = (data: { connectionId: string; status: string; isEnabled?: boolean; platformType?: string; timestamp?: string }) => {
       if (!data?.connectionId) return;
@@ -302,7 +309,13 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       const storedStatus = normalizeStatus(conn.Status);
       // A stale sync-progress event must never revive a row the disconnect
       // endpoint has already marked inactive/disabled.
-      if (conn.IsEnabled === false || storedStatus === 'inactive' || storedStatus === 'disconnected' || storedStatus === 'disabled') {
+      if (
+        isUnhealthyPlatformConnection(conn)
+        || conn.IsEnabled === false
+        || storedStatus === 'inactive'
+        || storedStatus === 'disconnected'
+        || storedStatus === 'disabled'
+      ) {
         return conn;
       }
       const progress = progressByConnectionId[conn.Id];
@@ -350,7 +363,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
   }, [connectedByPlatform]);
 
   // Immediate shared-store update for mutations such as disconnect. On failure
-  // callers must refetch (refresh()) rather than restore the previous row — the
+  // callers must refetch (refresh()) rather than restore the previous row. The
   // backend disables the row BEFORE its cascade and can leave it disabled even
   // when the request reports failure, so only the server knows the real state.
   const updateConnectionLocally = useCallback((connectionId: string, patch: Partial<PlatformConnectionRow>) => {

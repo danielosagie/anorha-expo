@@ -1,10 +1,10 @@
-// platformConnectStatus — the ONE definition of "is this platform connected".
+// platformConnectStatus: the ONE definition of "is this platform connected".
 //
 // A platform is FULLY connected only when every step in connectStepsFor() is
 // done: the OAuth marker exists AND (for computer-write platforms like Facebook)
 // the user's computer is linked. This replaces the old per-screen connectedKeys
 // predicate that marked Facebook "Connected" the instant the OAuth row existed,
-// ignoring the computer — the source of the "connected but no computer" confusion.
+// ignoring the computer, which caused the "connected but no computer" confusion.
 //
 // Pure and framework-free so the connect list, the connect flow, and the publish
 // pre-flight all read the same truth. The hook wrapper is usePlatformConnectStatus.
@@ -15,7 +15,11 @@ import {
   type ConnectStepKind,
 } from '../config/platforms';
 import type { PlatformConnectionRow } from '../context/PlatformConnectionsContext';
-import { NOT_CONNECTED_STATUSES } from './platformConnectionVisibility';
+import {
+  isListedPlatformConnection,
+  isUnhealthyPlatformConnection,
+  NOT_CONNECTED_STATUSES,
+} from './platformConnectionVisibility';
 import {
   isActiveConnectionImportStatus,
   type ConnectionImportPresentation,
@@ -29,13 +33,14 @@ export {
   isVisiblePlatformConnection,
   isListedPlatformConnection,
   isDisconnectedPlatformConnection,
+  isUnhealthyPlatformConnection,
   isImportingConnectionStatus,
 } from './platformConnectionVisibility';
 
 /** Live computer-presence signal (from useFacebookJobStatus). */
 export interface ComputerPresence {
   computerOnline: boolean;
-  /** False while the first presence result is still loading — do not read
+  /** False while the first presence result is still loading. Do not read
    *  computerOnline=false as "offline" until this is true. */
   presenceLoaded: boolean;
 }
@@ -84,12 +89,14 @@ export function derivePlatformConnectStatus(
     ? (liveConnections || []).filter((connection) => resolvePlatformKey(connection.PlatformType) === key)
     : [];
   const importing = matchingConnections.some((connection) => {
+    if (!isListedPlatformConnection(connection) || isUnhealthyPlatformConnection(connection)) return false;
     const presentation = options.presentationByConnectionId?.get(connection.Id);
     return presentation?.importInProgress || isActiveConnectionImportStatus(connection.Status);
   });
   const oauthConnected =
     !!key &&
     matchingConnections.some((c) => {
+      if (!isListedPlatformConnection(c) || isUnhealthyPlatformConnection(c)) return false;
       if (
         options.presentationByConnectionId?.get(c.Id)?.importInProgress
         || isActiveConnectionImportStatus(c.Status)

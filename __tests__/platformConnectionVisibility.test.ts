@@ -5,6 +5,7 @@ import {
   isListedPlatformConnection,
   isDisconnectedPlatformConnection,
   isImportingConnectionStatus,
+  isUnhealthyPlatformConnection,
 } from '../src/lib/platformConnectionVisibility.ts';
 
 // ── isVisiblePlatformConnection — "usable for work" ─────────────────────────
@@ -26,12 +27,20 @@ test('IsEnabled=false alone hides the connection regardless of status', () => {
   assert.equal(isVisiblePlatformConnection({ IsEnabled: false, Status: 'active' }), false);
 });
 
-test('error connection stays visible — it needs a reconnect action', () => {
-  assert.equal(isVisiblePlatformConnection({ IsEnabled: true, Status: 'error' }), true);
+test('error connection is not usable for work', () => {
+  assert.equal(isVisiblePlatformConnection({ IsEnabled: true, Status: 'error' }), false);
+});
+
+test('review connection is repairable, not usable', () => {
+  const connection = { IsEnabled: true, Status: 'review' };
+
+  assert.equal(isVisiblePlatformConnection(connection), false);
+  assert.equal(isListedPlatformConnection(connection), true);
+  assert.equal(isUnhealthyPlatformConnection(connection), true);
 });
 
 test('mid-import statuses are visible', () => {
-  for (const Status of ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync', 'review']) {
+  for (const Status of ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync']) {
     assert.equal(isVisiblePlatformConnection({ IsEnabled: true, Status }), true, Status);
   }
 });
@@ -46,12 +55,12 @@ test('missing fields default to visible (a bare row is not assumed dead)', () =>
 
 // ── isListedPlatformConnection — "shown in the Connections list" ────────────
 
-test('soft-disconnected rows ARE listed (Disconnected state, tap re-enables)', () => {
-  assert.equal(isListedPlatformConnection({ IsEnabled: false, Status: 'inactive' }), true);
+test('soft-disconnected rows are not listed', () => {
+  assert.equal(isListedPlatformConnection({ IsEnabled: false, Status: 'inactive' }), false);
 });
 
-test('active, error, and scanning rows are listed', () => {
-  for (const Status of ['active', 'error', 'scanning']) {
+test('active, review, error, and scanning rows are listed', () => {
+  for (const Status of ['active', 'review', 'error', 'scanning']) {
     assert.equal(isListedPlatformConnection({ IsEnabled: true, Status }), true, Status);
   }
 });

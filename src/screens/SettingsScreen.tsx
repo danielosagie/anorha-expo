@@ -24,7 +24,7 @@ import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
 import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import {
   connectionImportPresentationsById,
-  partitionSellingPlatformConnections,
+  listSellingPlatformConnections,
 } from '../lib/connectionImportPresentation';
 import { createLogger } from '../utils/logger';
 
@@ -79,9 +79,9 @@ const SettingsScreen = () => {
     }),
     [connections, importStatus.connections, importStatus.recentImports, progressByConnectionId],
   );
-  const { active: activeConnections } = useMemo(
-    () => partitionSellingPlatformConnections(connections, presentationByConnectionId),
-    [connections, presentationByConnectionId],
+  const activeConnections = useMemo(
+    () => listSellingPlatformConnections(connections),
+    [connections],
   );
   const platformPreview = activeConnections.slice(0, 4);
   const activeConnectionIds = useMemo(

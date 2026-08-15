@@ -10,7 +10,7 @@ import type { ActivityPayload, Routine, ValueChange } from '../../types';
 
 // ── Tool-step humanizers (moved out of StreamingMessageBubble) ──────────
 
-// Icon per tool family for the step rows (Slack/Gmail-style step list).
+// Icon per tool family for the compact step list.
 export const toolStepIcon = (tool: string): string => {
   const t = (tool || '').toLowerCase();
   if (t.includes('query') || t.startsWith('supabase')) return 'database-outline';
