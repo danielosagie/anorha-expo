@@ -226,6 +226,24 @@ platform :ios do
     end
   end
 
+  desc "Show external review state for a build. Usage: fastlane beta_review_status [build:79]"
+  lane :beta_review_status do |options|
+    asc_login!
+    app = find_app
+    build = pick_build(app, options[:build]) or UI.user_error!("Build not found (build:#{options[:build]})")
+    detail = Spaceship::ConnectAPI.get_build(build_id: build.id, includes: "buildBetaDetail").first.build_beta_detail
+    UI.message("Build #{build.version}: internalState=#{detail.internal_build_state} externalState=#{detail.external_build_state}")
+  end
+
+  desc "Submit a build for external beta review. Usage: fastlane submit_beta_review [build:79]"
+  lane :submit_beta_review do |options|
+    asc_login!
+    app = find_app
+    build = pick_build(app, options[:build]) or UI.user_error!("Build not found (build:#{options[:build]})")
+    Spaceship::ConnectAPI.post_beta_app_review_submissions(build_id: build.id)
+    UI.success("Build #{build.version} submitted for external beta review ✅")
+  end
+
   desc "Expire build(s). Usage: fastlane expire_build build:54  |  fastlane expire_build keep_latest:true"
   lane :expire_build do |options|
     asc_login!
