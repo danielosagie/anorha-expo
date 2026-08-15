@@ -1,3 +1,11 @@
+import {
+  DISCONNECTED_CONNECTION_STATUSES,
+  isListedPlatformConnection,
+  isUnhealthyPlatformConnection,
+  type PlatformConnectionRecommendedAction,
+  type PlatformConnectionSyncState,
+} from './platformConnectionVisibility.ts';
+
 export interface RecentImportOutcome {
   connectionId: string;
   status: string;
@@ -20,7 +28,10 @@ export interface ConnectionImportPresentation {
   color: string;
   occurredAt: string | null;
   importInProgress: boolean;
+  failureReason: string | null;
 }
+
+type ConnectionImportPresentationBase = Omit<ConnectionImportPresentation, 'failureReason'>;
 
 const SUCCESS_STATUSES = new Set(['complete', 'completed', 'success', 'succeeded']);
 const ACTIVE_STATUSES = new Set([
@@ -33,13 +44,7 @@ const ACTIVE_STATUSES = new Set([
   'reconciling',
   'ready_to_sync',
 ]);
-const DISCONNECTED_STATUSES = new Set([
-  'inactive',
-  'disconnected',
-  'disabled',
-  'revoked',
-  'needs_reauth',
-]);
+const HEALTHY_CONNECTION_STATUSES = new Set(['active', 'live']);
 
 function normalizedStatus(value?: string | null): string {
   return String(value || '').trim().toLowerCase();
@@ -72,13 +77,13 @@ function isFailed(status: string): boolean {
   return status === 'error' || status.includes('fail');
 }
 
-function fallbackPresentation(rawStatus: string): Omit<ConnectionImportPresentation, 'occurredAt'> {
+function fallbackPresentation(rawStatus: string): Omit<ConnectionImportPresentationBase, 'occurredAt'> {
   const status = normalizedStatus(rawStatus);
   if (status === 'active' || status === 'live') {
     return { kind: 'synced', label: 'Synced', color: '#93C822', importInProgress: false };
   }
   if (status === 'review' || status === 'needs-attention') {
-    return { kind: 'review', label: 'Needs review', color: '#BA7517', importInProgress: false };
+    return { kind: 'review', label: 'Needs attention', color: '#DC2626', importInProgress: false };
   }
   if (isFailed(status) || status.includes('expired') || status.includes('revoked')) {
     return { kind: 'failed', label: 'Import failed', color: '#DC2626', importInProgress: false };
@@ -94,13 +99,21 @@ function fallbackPresentation(rawStatus: string): Omit<ConnectionImportPresentat
 
 export function deriveConnectionImportPresentation({
   enabled,
+  needsReauth = false,
   connectionStatus,
+  syncState,
+  recommendedAction,
+  failureReason = null,
   aggregateState,
   latestImport,
   progressStatus,
 }: {
   enabled: boolean;
+  needsReauth?: boolean;
   connectionStatus?: string | null;
+  syncState?: PlatformConnectionSyncState | null;
+  recommendedAction?: PlatformConnectionRecommendedAction | null;
+  failureReason?: string | null;
   aggregateState?: string | null;
   latestImport?: RecentImportOutcome | null;
   progressStatus?: string | null;
@@ -110,64 +123,113 @@ export function deriveConnectionImportPresentation({
   const latestStatus = normalizedStatus(latestImport?.status);
   const progress = normalizedStatus(progressStatus);
   const occurredAt = latestImport?.completedAt || latestImport?.createdAt || null;
+  const withFailureReason = (
+    presentation: ConnectionImportPresentationBase,
+  ): ConnectionImportPresentation => ({ ...presentation, failureReason });
 
-  // A running import is the freshest operational truth. It must beat a stale
-  // disabled/disconnected connection snapshot, which is common during the first
-  // refresh after OAuth creates a new row and queues its initial scan.
-  const activeStatus = [progress, aggregate, latestStatus, connection]
-    .find((status) => ACTIVE_STATUSES.has(status));
-  if (activeStatus) {
-    const scanning = activeStatus === 'pending' || activeStatus === 'scanning';
-    return {
-      kind: scanning ? 'scanning' : 'importing',
-      label: scanning ? 'Scanning products...' : 'Importing inventory...',
-      color: '#A2611A',
+  // The current connection row owns health. Run history and realtime progress
+  // can enrich a healthy row, but neither may revive a broken connection.
+  if (isUnhealthyPlatformConnection({
+    Status: connectionStatus,
+    SyncState: syncState,
+    NeedsReauth: needsReauth,
+    RecommendedAction: recommendedAction,
+  })) {
+    return withFailureReason({
+      kind: 'failed',
+      label: 'Needs attention',
+      color: '#DC2626',
       occurredAt,
-      importInProgress: true,
-    };
+      importInProgress: false,
+    });
   }
 
-  if (!enabled || DISCONNECTED_STATUSES.has(connection)) {
-    return {
+  // A disconnected row stays disconnected even if a stale run still says it is
+  // processing. A new pending connection may briefly carry IsEnabled=false, so
+  // the row's active import status is evaluated before that fallback flag.
+  if (DISCONNECTED_CONNECTION_STATUSES.has(connection)) {
+    return withFailureReason({
       kind: 'disconnected',
       label: 'Disconnected',
       color: '#71717A',
       occurredAt: null,
       importInProgress: false,
-    };
+    });
+  }
+
+  if (ACTIVE_STATUSES.has(connection)) {
+    return withFailureReason({
+      ...fallbackPresentation(connection),
+      occurredAt,
+    });
+  }
+
+  if (!enabled) {
+    return withFailureReason({
+      kind: 'disconnected',
+      label: 'Disconnected',
+      color: '#71717A',
+      occurredAt: null,
+      importInProgress: false,
+    });
+  }
+
+  // Import history is descriptive only after the connection row has confirmed
+  // a healthy state. Unknown row states stay neutral instead of becoming green.
+  if (!HEALTHY_CONNECTION_STATUSES.has(connection)) {
+    return withFailureReason({
+      ...fallbackPresentation(String(connectionStatus || aggregateState || '')),
+      occurredAt: null,
+    });
+  }
+
+  const activeStatus = [progress, aggregate, latestStatus]
+    .find((status) => ACTIVE_STATUSES.has(status));
+  if (activeStatus) {
+    const scanning = activeStatus === 'pending' || activeStatus === 'scanning';
+    return withFailureReason({
+      kind: scanning ? 'scanning' : 'importing',
+      label: scanning ? 'Scanning products...' : 'Importing inventory...',
+      color: '#A2611A',
+      occurredAt,
+      importInProgress: true,
+    });
   }
 
   if (SUCCESS_STATUSES.has(latestStatus)) {
-    return {
+    return withFailureReason({
       kind: 'synced',
       label: 'Synced',
       color: '#93C822',
       occurredAt,
       importInProgress: false,
-    };
+    });
   }
 
   if (isFailed(latestStatus)) {
-    return {
+    return withFailureReason({
       kind: 'failed',
       label: 'Import failed',
       color: '#DC2626',
       occurredAt,
       importInProgress: false,
-    };
+    });
   }
 
-  return {
+  return withFailureReason({
     ...fallbackPresentation(String(connectionStatus || aggregateState || '')),
     occurredAt: null,
-  };
+  });
 }
 
 export interface ConnectionImportPresentationRow {
   Id: string;
   IsEnabled?: boolean | null;
   Status?: string | null;
+  SyncState?: PlatformConnectionSyncState | null;
   NeedsReauth?: boolean | null;
+  RecommendedAction?: PlatformConnectionRecommendedAction | null;
+  FailureReason?: string | null;
 }
 
 export interface ConnectionImportAggregateState {
@@ -203,8 +265,12 @@ export function connectionImportPresentationsById({
   return new Map(connections.map((connection) => [
     connection.Id,
     deriveConnectionImportPresentation({
-      enabled: connection.IsEnabled !== false && connection.NeedsReauth !== true,
-      connectionStatus: connection.NeedsReauth ? 'revoked' : connection.Status,
+      enabled: connection.IsEnabled !== false,
+      needsReauth: connection.NeedsReauth === true,
+      connectionStatus: connection.Status,
+      syncState: connection.SyncState,
+      recommendedAction: connection.RecommendedAction,
+      failureReason: connection.FailureReason ?? null,
       aggregateState: aggregateByConnectionId.get(connection.Id),
       latestImport: latestByConnectionId.get(connection.Id),
       progressStatus: progressByConnectionId[connection.Id]?.status,
@@ -220,11 +286,6 @@ export interface SellingPlatformConnectionRow {
   NeedsReauth?: boolean | null;
 }
 
-export interface SellingPlatformConnectionPartition<T> {
-  active: T[];
-  inactive: T[];
-}
-
 export function isCsvPseudoConnection(
   connection: Pick<SellingPlatformConnectionRow, 'PlatformType'>,
 ): boolean {
@@ -236,34 +297,14 @@ export function isCsvPseudoConnection(
 }
 
 /**
- * Data-layer partition for selling-platform surfaces. CSV import records never
- * enter either list. A running import stays active even when the cached row still
- * carries a disconnected flag; all other disconnected/revoked rows are quiet.
+ * Data-layer list derivation for selling-platform surfaces. CSV import records
+ * and soft-disconnected rows never enter the rendered list. Health failures stay
+ * listed so the row can lead to the shared reconnect flow.
  */
-export function partitionSellingPlatformConnections<T extends SellingPlatformConnectionRow>(
+export function listSellingPlatformConnections<T extends SellingPlatformConnectionRow>(
   connections: readonly T[],
-  presentationByConnectionId: ReadonlyMap<string, ConnectionImportPresentation> = new Map(),
-): SellingPlatformConnectionPartition<T> {
-  const active: T[] = [];
-  const inactive: T[] = [];
-
-  for (const connection of connections) {
-    if (isCsvPseudoConnection(connection)) continue;
-
-    const presentation = presentationByConnectionId.get(connection.Id)
-      || deriveConnectionImportPresentation({
-        enabled: connection.IsEnabled !== false && connection.NeedsReauth !== true,
-        connectionStatus: connection.NeedsReauth ? 'revoked' : connection.Status,
-      });
-
-    if (presentation.importInProgress) {
-      active.push(connection);
-    } else if (connection.NeedsReauth === true || presentation.kind === 'disconnected') {
-      inactive.push(connection);
-    } else {
-      active.push(connection);
-    }
-  }
-
-  return { active, inactive };
+): T[] {
+  return connections.filter((connection) => (
+    !isCsvPseudoConnection(connection) && isListedPlatformConnection(connection)
+  ));
 }

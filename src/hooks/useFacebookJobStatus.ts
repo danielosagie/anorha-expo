@@ -26,7 +26,7 @@ import {
   WorkerPresenceDoc,
 } from '../convex/browserJobsApi';
 
-// Consumer heartbeats ~25s; 60s = 2 missed beats of slack before we flip offline.
+// Consumer heartbeats about every 25s; wait for two missed beats before flipping offline.
 const PRESENCE_TTL_MS = 60_000;
 // Local re-tick so the row flips offline without a new Convex push (presence
 // stops streaming when the laptop dies).
