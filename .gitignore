@@ -68,6 +68,7 @@ cleanup_*.sql
 /*.md
 !/README.md
 !/CONTRIBUTING.md
+!/IMPLEMENTATION_NOTES-R6M.md
 
 # ───────────────────────────── OS / editor ──────────────────────────────
 .DS_Store

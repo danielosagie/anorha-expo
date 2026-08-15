@@ -8,6 +8,8 @@
     "android": "EXPO_UNSTABLE_BONJOUR=0 expo run:android",
     "ios": "EXPO_UNSTABLE_BONJOUR=0 expo run:ios",
     "web": "EXPO_UNSTABLE_BONJOUR=0 expo start --web",
+    "test": "node --test --experimental-strip-types __tests__/*.test.ts __tests__/*.test.js",
+    "contracts:check": "node scripts/check-product-contract.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
     "db:types": "supabase gen types typescript --project-id $EXPO_PUBLIC_SUPABASE_PROJECT_ID --schema public > src/types/database.types.ts",
