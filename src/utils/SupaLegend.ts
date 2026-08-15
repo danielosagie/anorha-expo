@@ -337,7 +337,11 @@ export async function initializeLegendState(
                 select: 'Id, ProductVariantId, ImageUrl, Position',
                 getObservable: () => productImages$,
             }),
-            actions: ['read', 'create', 'update', 'delete'],
+            // READ-ONLY sync: media writes go through the backend boundary
+            // (set_product_media), never straight from the client. Allowing write
+            // actions let realtime echoes upsert rows back to Supabase, failing RLS
+            // with HTTP 400 → retry storm. Same class as InventoryLevels above.
+            actions: ['read'],
             realtime: false, // DISABLED: Images rarely change, reduces egress significantly
             persist: {
                 name: persistenceNames.ProductImages,

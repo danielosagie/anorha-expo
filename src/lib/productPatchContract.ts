@@ -11,7 +11,7 @@ import {
 type EditorContractBinding =
   | { scope: 'parent'; field: ProductParentPatchField }
   | { scope: 'variant'; field: ProductVariantPatchField }
-  | { scope: 'images'; field: 'ProductImages' };
+  | { scope: 'media'; field: 'ProductMedia' };
 
 // These are only the canonical fields the existing ListingEditorForm already
 // renders. Platform-only taxonomy, shipping, and marketplace metadata remain
@@ -32,10 +32,10 @@ const PRODUCT_EDITOR_CONTRACT_BINDINGS = {
   weight: { scope: 'variant', field: 'Weight' },
   weightUnit: { scope: 'variant', field: 'WeightUnit' },
   condition: { scope: 'variant', field: 'Condition' },
-  images: { scope: 'images', field: 'ProductImages' },
-  imageUris: { scope: 'images', field: 'ProductImages' },
-  imageUrls: { scope: 'images', field: 'ProductImages' },
-  photos: { scope: 'images', field: 'ProductImages' },
+  images: { scope: 'media', field: 'ProductMedia' },
+  imageUris: { scope: 'media', field: 'ProductMedia' },
+  imageUrls: { scope: 'media', field: 'ProductMedia' },
+  photos: { scope: 'media', field: 'ProductMedia' },
 } as const satisfies Record<string, EditorContractBinding>;
 
 export type ProductEditorContractField = keyof typeof PRODUCT_EDITOR_CONTRACT_BINDINGS;
@@ -47,8 +47,8 @@ export function isContractProductEditorField(field: string): field is ProductEdi
 export function isProductEditorFieldEditable(field: string): boolean {
   if (!isContractProductEditorField(field)) return false;
   const binding = PRODUCT_EDITOR_CONTRACT_BINDINGS[field];
-  if (binding.scope === 'images') {
-    return PRODUCT_EDITABILITY_MANIFEST.images.ProductImages.editability === 'set';
+  if (binding.scope === 'media') {
+    return PRODUCT_EDITABILITY_MANIFEST.media.ProductMedia.editability === 'set';
   }
   if (binding.scope === 'parent') {
     return PRODUCT_PARENT_PATCH_FIELDS.includes(binding.field)
