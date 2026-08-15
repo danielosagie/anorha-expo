@@ -191,24 +191,24 @@ export async function initializeLegendState(
     let marketplaceListings$: ObservableObject<Record<string, MarketplaceListing>>;
 
     const createBoundedList = <T extends { Id?: string }>(options: {
-        collection: BoundedCollectionName;
+        collectionName: BoundedCollectionName;
         select: string;
         filter?: (query: any) => any;
         getObservable: () => ObservableObject<Record<string, T>>;
     }) => {
-        const pageSize = COLLECTION_PAGE_SIZES[options.collection];
+        const pageSize = COLLECTION_PAGE_SIZES[options.collectionName];
         const accumulator = createCollectionPageAccumulator<T>(pageSize);
 
         return async (params: any) => {
             const { offset } = accumulator.beginPage();
-            syncProgress$[options.collection].set({
+            syncProgress$[options.collectionName].set({
                 pageSize,
                 loadedRows: offset,
                 phase: offset === 0 ? 'initial' : 'background',
             });
 
             let query = supabaseClient
-                .from(options.collection)
+                .from(options.collectionName)
                 .select(options.select)
                 .order('UpdatedAt', { ascending: false })
                 .order('Id', { ascending: false })
@@ -219,7 +219,7 @@ export async function initializeLegendState(
             const response = await query;
             if (response.error) {
                 accumulator.reset();
-                syncProgress$[options.collection].set({
+                syncProgress$[options.collectionName].set({
                     pageSize,
                     loadedRows: offset,
                     phase: 'error',
@@ -230,14 +230,14 @@ export async function initializeLegendState(
             const pageRows = (response.data || []) as unknown as T[];
             const accepted = accumulator.acceptPage(offset, pageRows);
             params.mode = accepted.mode;
-            syncProgress$[options.collection].set({
+            syncProgress$[options.collectionName].set({
                 pageSize,
                 loadedRows: accepted.loadedRows,
                 phase: accepted.hasMore ? 'background' : 'complete',
             });
 
             log.debug('[SupaLegend][measure] bounded page', {
-                collection: options.collection,
+                collection: options.collectionName,
                 offset,
                 rows: pageRows.length,
                 payloadBytes: utf8ByteLength(pageRows),
@@ -268,12 +268,12 @@ export async function initializeLegendState(
             // The inventory list never renders parent descriptions. ProductDetail
             // fetches Products.Description when the seller opens a detail surface.
             list: createBoundedList<ProductVariant>({
-                collection: 'ProductVariants',
+                collectionName: 'ProductVariants',
                 select: PRODUCT_VARIANT_LIST_SELECT,
                 filter: (query: any) => query.eq('UserId', currentUserId).not('Sku', 'like', 'DRAFT-%'),
                 getObservable: () => productVariants$,
             }),
-            actions: ['read', 'create', 'update', 'delete'],
+            actions: ['read'],
             realtime: { filter: `UserId=eq.${currentUserId}` },
             persist: {
                 name: persistenceNames.ProductVariants,
@@ -312,7 +312,7 @@ export async function initializeLegendState(
             collection: 'PlatformProductMappings',
             fieldId: 'Id',
             list: createBoundedList<PlatformProductMapping>({
-                collection: 'PlatformProductMappings',
+                collectionName: 'PlatformProductMappings',
                 select: 'Id, PlatformConnectionId, ProductVariantId, PlatformProductId, PlatformVariantId, PlatformSku, SyncStatus, IsEnabled, LastSyncedAt, UpdatedAt',
                 getObservable: () => platformProductMappings$,
             }),
@@ -333,7 +333,7 @@ export async function initializeLegendState(
             collection: 'ProductImages',
             fieldId: 'Id',
             list: createBoundedList<ProductImage>({
-                collection: 'ProductImages',
+                collectionName: 'ProductImages',
                 select: 'Id, ProductVariantId, ImageUrl, Position',
                 getObservable: () => productImages$,
             }),
@@ -354,7 +354,7 @@ export async function initializeLegendState(
             collection: 'InventoryLevels',
             fieldId: 'Id',
             list: createBoundedList<InventoryLevel>({
-                collection: 'InventoryLevels',
+                collectionName: 'InventoryLevels',
                 // PoolId and OrgId are needed for partner-shared inventory.
                 select: 'Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt',
                 getObservable: () => inventoryLevels$,
@@ -378,7 +378,7 @@ export async function initializeLegendState(
             collection: 'MarketplaceListings',
             fieldId: 'Id',
             list: createBoundedList<MarketplaceListing>({
-                collection: 'MarketplaceListings',
+                collectionName: 'MarketplaceListings',
                 select: 'Id, ProductVariantId, SellerUserId, Price, AvailableQuantity, IsEnabled, CreatedAt, UpdatedAt',
                 filter: (query: any) => query.eq('SellerUserId', currentUserId),
                 getObservable: () => marketplaceListings$,

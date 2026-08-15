@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildInventoryQuantityUpdate,
   mergeInventoryLevelsByNewest,
+  stripInventoryFromPlatformData,
 } from '../src/lib/inventorySync.ts';
 
 test('mergeInventoryLevelsByNewest selects the newest version of each row', () => {
@@ -27,6 +28,48 @@ test('mergeInventoryLevelsByNewest selects the newest version of each row', () =
   assert.equal(merged.tied.Quantity, 7);
   assert.equal(merged.legendOnly.Quantity, 4);
   assert.equal(merged.directOnly.Quantity, 6);
+});
+
+test('mergeInventoryLevelsByNewest deterministically prefers Legend when timestamps tie or cannot be parsed', () => {
+  const merged = mergeInventoryLevelsByNewest(
+    {
+      tied: { Quantity: 7, UpdatedAt: '2026-08-14T11:00:00.000Z' },
+      missing: { Quantity: 8 },
+      invalid: { Quantity: 9, UpdatedAt: 'not-a-date' },
+    },
+    {
+      tied: { Quantity: 1, UpdatedAt: '2026-08-14T11:00:00.000Z' },
+      missing: { Quantity: 2, UpdatedAt: null },
+      invalid: { Quantity: 3, UpdatedAt: 'also-not-a-date' },
+    },
+  );
+
+  assert.equal(merged.tied.Quantity, 7);
+  assert.equal(merged.missing.Quantity, 8);
+  assert.equal(merged.invalid.Quantity, 9);
+});
+
+test('stripInventoryFromPlatformData keeps mixed product edits while removing generic inventory writes', () => {
+  const source = {
+    shopify: {
+      title: 'Updated title',
+      locationQuantities: { location1: 4 },
+      variants: [{
+        id: 'variant1',
+        price: 12,
+        inventoryByLocation: { location1: { quantity: 4 } },
+      }],
+    },
+  };
+
+  assert.deepEqual(stripInventoryFromPlatformData(source), {
+    shopify: {
+      title: 'Updated title',
+      variants: [{ id: 'variant1', price: 12 }],
+    },
+  });
+  assert.deepEqual(source.shopify.locationQuantities, { location1: 4 });
+  assert.deepEqual(source.shopify.variants[0].inventoryByLocation, { location1: { quantity: 4 } });
 });
 
 test('buildInventoryQuantityUpdate resolves base inventory to the canonical variant and raw location', () => {
@@ -85,6 +128,20 @@ test('buildInventoryQuantityUpdate refuses a target without a real connection', 
       activeTab: 'square',
       platformVariants: [],
       location: { id: 'default' },
+      quantity: 1,
+    }),
+    null,
+  );
+});
+
+test('buildInventoryQuantityUpdate refuses an editor-only location id', () => {
+  assert.equal(
+    buildInventoryQuantityUpdate({
+      editorVariantId: '_base',
+      canonicalVariantId: 'variant-canonical',
+      activeTab: 'square',
+      platformVariants: [],
+      location: { id: 'square::connection-1::virtual-default', connectionId: 'connection-1' },
       quantity: 1,
     }),
     null,

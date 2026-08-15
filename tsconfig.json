@@ -8,6 +8,7 @@
     "jsx": "react-native",
     "lib": ["DOM", "ESNext"],
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "customConditions": ["react-native"],
     "noEmit": true,
     "resolveJsonModule": true,

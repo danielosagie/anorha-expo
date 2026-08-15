@@ -65,6 +65,12 @@ import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mo
 import { getVariantPlatforms } from '../lib/platforms';
 import { api, apiFetch } from '../lib/apiClient';
 import {
+  buildProductBulkArchiveActions,
+  getProductBulkActionFailures,
+  type ProductBulkActionResponse,
+  type ProductBulkArchiveActionType,
+} from '../lib/productBulkActions';
+import {
   buildPartnerInventoryOrigins,
   buildPoolModeIndex,
   PartnerInventoryOrigin,
@@ -81,6 +87,7 @@ import {
   subscribeCatalogPatches,
   subscribeCatalogStale,
 } from '../lib/catalogPatches';
+import { mergeInventoryLevelsByNewest } from '../lib/inventorySync';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
@@ -340,12 +347,12 @@ const InventoryOrdersScreen = observer(() => {
     });
   }, []);
 
-  const handleExitSelectionMode = () => {
+  const handleExitSelectionMode = useCallback(() => {
     setIsSelectionMode(false);
     setSelectedItems(new Set());
     selectedItemsRef.current = new Set();
     closeQuickChat();
-  };
+  }, []);
 
   // Preset: fetch slow movers variant IDs from nudges API (reuses insights data)
   const fetchSlowMoversVariantIds = useCallback(async () => {
@@ -523,20 +530,41 @@ const InventoryOrdersScreen = observer(() => {
     setSelectedItems(new Set(allIds));
   };
 
-  const runBulkDeleteByIds = useCallback(async (ids: string[]) => {
+  const runBulkSoftArchiveByIds = useCallback(async (
+    ids: string[],
+    actionType: ProductBulkArchiveActionType,
+  ) => {
     if (ids.length === 0) return;
     try {
-      const { error } = await supabase
-        .from('ProductVariants')
-        .update({ IsArchived: true })
-        .in('Id', ids);
-      if (error) throw error;
+      const response = await api.post<ProductBulkActionResponse>(
+        '/api/products/bulk-actions/execute',
+        { actions: buildProductBulkArchiveActions(ids, actionType) },
+      );
+      const failures = getProductBulkActionFailures(ids, response);
+      if (failures.length > 0) {
+        const verb = actionType === 'delete' ? 'delete' : 'archive';
+        const details = failures
+          .slice(0, 3)
+          .map((failure) => `${failure.itemId}: ${failure.error}`)
+          .join('; ');
+        throw new Error(
+          `Failed to ${verb} ${failures.length} of ${ids.length} items${details ? ` (${details})` : ''}.`,
+        );
+      }
       handleExitSelectionMode();
     } catch (err) {
-      log.error('Bulk delete failed', err);
-      Alert.alert('Error', 'Failed to delete items. Please try again.');
+      const verb = actionType === 'delete' ? 'delete' : 'archive';
+      log.error(`Bulk ${verb} failed`, err);
+      Alert.alert(
+        'Error',
+        err instanceof Error ? err.message : `Failed to ${verb} items. Please try again.`,
+      );
     }
-  }, []);
+  }, [handleExitSelectionMode]);
+
+  const runBulkDeleteByIds = useCallback(async (ids: string[]) => {
+    await runBulkSoftArchiveByIds(ids, 'delete');
+  }, [runBulkSoftArchiveByIds]);
 
   const handleBulkDelete = () => {
     const idsToDelete = Array.from(selectedItems);
@@ -551,19 +579,8 @@ const InventoryOrdersScreen = observer(() => {
   };
 
   const runBulkArchiveByIds = useCallback(async (ids: string[]) => {
-    if (ids.length === 0) return;
-    try {
-      const { error } = await supabase
-        .from('ProductVariants')
-        .update({ IsArchived: true })
-        .in('Id', ids);
-      if (error) throw error;
-      handleExitSelectionMode();
-    } catch (err) {
-      log.error('Bulk archive failed', err);
-      Alert.alert('Error', 'Failed to archive items. Please try again.');
-    }
-  }, []);
+    await runBulkSoftArchiveByIds(ids, 'archive');
+  }, [runBulkSoftArchiveByIds]);
 
 
 
@@ -956,11 +973,9 @@ const InventoryOrdersScreen = observer(() => {
   const catalogPatchVersion = useSyncExternalStore(subscribeCatalogPatches, getCatalogPatchVersion);
 
   // Union of the Legend mirror and the direct fetch — per key, the row with the
-  // NEWEST UpdatedAt wins (both sides carry it). The old positional spread
-  // ("direct always wins") silently masked realtime: a Legend row updated by a
-  // realtime event lost to a stale direct-fetch row until the next full
-  // refetch. Post-import correctness is preserved: fresh direct rows carry
-  // newer-or-equal UpdatedAt (ties go to direct), so they still win.
+  // NEWEST UpdatedAt wins. Inventory ties (including both stamps missing or
+  // unparseable) go to Legend, so realtime is never masked by an equally-dated
+  // fallback row. A valid timestamp always beats a missing/unparseable one.
   // Patches merge LAST — a local save or socket event beats both caches — and
   // are themselves newest-UpdatedAt-gated so they can't override fresher rows.
   const activeProductVariants = useMemo(
@@ -972,7 +987,7 @@ const InventoryOrdersScreen = observer(() => {
   );
   const activeInventoryLevels = useMemo(
     () => applyLevelPatchesToMap(
-      mergeNewestByUpdatedAt(legendInventoryLevels, directFetchLevels),
+      mergeInventoryLevelsByNewest(legendInventoryLevels, directFetchLevels),
       getLevelPatches(),
     ),
     [legendInventoryLevels, directFetchLevels, catalogPatchVersion],

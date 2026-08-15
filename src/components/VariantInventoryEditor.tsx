@@ -6,6 +6,10 @@ import { useTheme } from '../context/ThemeContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
+import { createLogger } from '../utils/logger';
+const log = createLogger('VariantInventoryEditor');
+
+export type InventoryUpdateCommit = void | boolean | Promise<void | boolean>;
 
 export interface InventoryItemData {
   quantity: number;
@@ -42,7 +46,7 @@ export interface VariantInventoryEditorProps {
   isGenerationMode?: boolean; // If true, enables override styling
 
   // Callbacks
-  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
+  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => InventoryUpdateCommit;
   onSelectImage?: (variantId: string) => void;
 
   // External update highlight (green border) – from realtime inventory subscription
@@ -57,7 +61,7 @@ const LocationRow: React.FC<{
   locName: string;
   quantity: number;
   price?: number; // undefined → price is shared at the platform-group level (hide it here)
-  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
+  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => InventoryUpdateCommit;
   externalUpdateQuantity?: boolean;
   externalUpdatePrice?: boolean;
 }> = ({ variantId, locId, locName, quantity, price, onUpdateInventory, externalUpdateQuantity, externalUpdatePrice }) => {
@@ -74,13 +78,37 @@ const LocationRow: React.FC<{
     const num = text.replace(/[^0-9]/g, '');
     setLocalQty(num);
     if (qtyTimeout.current) clearTimeout(qtyTimeout.current);
-    qtyTimeout.current = setTimeout(() => onUpdateInventory(variantId, locId, 'quantity', Number(num || '0')), 400);
+    qtyTimeout.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const committed = await onUpdateInventory(variantId, locId, 'quantity', Number(num || '0'));
+          if (committed === false) {
+            setLocalQty((current) => current === num ? String(quantity) : current);
+          }
+        } catch (error) {
+          log.error('[LocationRow] Quantity update failed:', error);
+          setLocalQty((current) => current === num ? String(quantity) : current);
+        }
+      })();
+    }, 400);
   };
   const handlePriceChange = (text: string) => {
     const num = text.replace(/[^0-9.]/g, '');
     setLocalPrice(num);
     if (priceTimeout.current) clearTimeout(priceTimeout.current);
-    priceTimeout.current = setTimeout(() => onUpdateInventory(variantId, locId, 'price', Number(num || '0')), 400);
+    priceTimeout.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const committed = await onUpdateInventory(variantId, locId, 'price', Number(num || '0'));
+          if (committed === false) {
+            setLocalPrice((current) => current === num ? String(price ?? '') : current);
+          }
+        } catch (error) {
+          log.error('[LocationRow] Price update failed:', error);
+          setLocalPrice((current) => current === num ? String(price ?? '') : current);
+        }
+      })();
+    }, 400);
   };
 
   return (
@@ -121,7 +149,7 @@ const GroupSharedPriceRow: React.FC<{
   variantId: string;
   locId: string; // any location in the group — parent propagates the price to all
   price: number;
-  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => void;
+  onUpdateInventory: (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => InventoryUpdateCommit;
   externalUpdatePrice?: boolean;
 }> = ({ variantId, locId, price, onUpdateInventory, externalUpdatePrice }) => {
   const [local, setLocal] = useState(String(Number.isFinite(price) ? price : 0));
@@ -131,7 +159,17 @@ const GroupSharedPriceRow: React.FC<{
     const num = text.replace(/[^0-9.]/g, '');
     setLocal(num);
     if (t.current) clearTimeout(t.current);
-    t.current = setTimeout(() => onUpdateInventory(variantId, locId, 'price', Number(num || '0')), 400);
+    t.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const committed = await onUpdateInventory(variantId, locId, 'price', Number(num || '0'));
+          if (committed === false) setLocal((current) => current === num ? String(price) : current);
+        } catch (error) {
+          log.error('[GroupSharedPriceRow] Price update failed:', error);
+          setLocal((current) => current === num ? String(price) : current);
+        }
+      })();
+    }, 400);
   };
   return (
     <View style={styles.groupPriceRow}>
@@ -169,7 +207,7 @@ const VariantInventoryEditor: React.FC<VariantInventoryEditorProps> = ({
     value: number
   ) => {
     // Just pass through - parent handles Shopify global pricing at ListingEditorForm lines 1502-1521
-    onUpdateInventory(variantId, locationId, field, value);
+    return onUpdateInventory(variantId, locationId, field, value);
   };
 
   // --- "All" Tab View ---
