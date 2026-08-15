@@ -2034,28 +2034,38 @@ const ProductDetailScreen = observer(
       for (const [connectionId, fields] of entries) {
         const label = platformLabelForConnection(connectionId);
         try {
-          const { ok, data } = await savePlatformOverride(productId, variantId, connectionId, fields);
-          if (!ok || !data?.success) {
+          const { outcome, data, reason } = await savePlatformOverride(productId, variantId, connectionId, fields);
+          if (outcome === 'not_saved') {
             const newer = pendingOverridesRef.current.get(connectionId) || {};
             pendingOverridesRef.current.set(connectionId, { ...fields, ...newer });
             allSucceeded = false;
+            log.warn('[ProductDetail] platform override not saved', { connectionId, reason });
             if (isLatest()) showToast({ title: `${label} details not saved`, tone: 'danger' });
             continue;
           }
+          // Stored (confirmed | pending | push_failed). Never requeue these — the write
+          // landed, and re-PUTting it would loop forever against a failing channel.
           if (isLatest()) {
             setSessionOverrides((prev) => ({
               ...prev,
-              [connectionId]: mergeConfirmedOverride(prev[connectionId], fields, data.overrides),
+              [connectionId]: mergeConfirmedOverride(prev[connectionId], fields, data?.overrides),
             }));
           }
-          // pushed:false = the override SAVED but the live push failed. Calm notice, and the
-          // refresh below repaints the Active Channels dot from the new SyncStatus.
-          if (data.pushed === false && isLatest()) {
-            showToast({
-              title: 'Saved, channel not synced',
-              tone: 'warn',
-              action: { label: 'View', onPress: viewChangedFields },
-            });
+          if (outcome === 'pending' && isLatest()) {
+            // Real work is queued (browser-driven channels). Not success, not failure.
+            showToast({ title: 'Saved, sync pending', tone: 'neutral' });
+          }
+          if (outcome === 'push_failed') {
+            // The reason is persisted server-side as SyncErrorMessage; the refresh below
+            // repaints the Active Channels dot and its message from it.
+            log.warn('[ProductDetail] platform override stored but push failed', { connectionId, reason });
+            if (isLatest()) {
+              showToast({
+                title: 'Saved, channel not synced',
+                tone: 'warn',
+                action: { label: 'View', onPress: viewChangedFields },
+              });
+            }
           }
           anyRefresh = true;
         } catch {
@@ -2129,13 +2139,14 @@ const ProductDetailScreen = observer(
         for (const f of OVERRIDE_FIELDS) if (f in current) clearFields[f] = null;
         const label = platformLabelForConnection(connectionId);
         try {
-          const { ok, data } = await savePlatformOverride(
+          const { outcome, reason } = await savePlatformOverride(
             detailedItem.ProductId,
             detailedItem.Id,
             connectionId,
             clearFields,
           );
-          if (!ok || !data?.success) {
+          if (outcome === 'not_saved') {
+            log.warn('[ProductDetail] platform override reset not saved', { connectionId, reason });
             showToast({ title: `${label} reset failed`, tone: 'danger' });
             return;
           }
@@ -2150,7 +2161,10 @@ const ProductDetailScreen = observer(
             if ('price' in clearFields) reverted.price = detailedItem.Price != null ? Number(detailedItem.Price) : reverted.price;
             return { ...prev, [platformKey]: reverted };
           });
-          if (data.pushed === false) {
+          if (outcome === 'pending') {
+            showToast({ title: 'Reset, sync pending', tone: 'neutral' });
+          } else if (outcome === 'push_failed') {
+            log.warn('[ProductDetail] platform override reset stored but push failed', { connectionId, reason });
             showToast({
               title: 'Reset, channel not synced',
               tone: 'warn',

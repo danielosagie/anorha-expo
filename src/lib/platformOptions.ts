@@ -19,10 +19,19 @@
  *           clears, an omitted key is left untouched. The server rejects empty-string text
  *           and non-positive prices, so this module normalizes those to null (= clear)
  *           before sending — an emptied field on a platform tab means "back to main details".
- *   200:    { success, overrides, pushed, syncStatus?, error? }
- *           pushed:false + error means the override SAVED but the live push failed.
+ *
+ *   Since backend Assurance Rewrite 3 the PUT's status code carries the push state
+ *   (200 confirmed / 202 pending / 502 stored-but-push-failed), and a non-2xx no longer
+ *   implies the override was discarded. ./platformOverrideOutcome documents those shapes
+ *   and owns the single decision; callers branch on `outcome`, never on `ok` alone.
  */
 import { apiFetch } from './apiClient';
+import {
+  classifyPlatformOverrideResponse as classifyResponse,
+  readPlatformOverrideReason as readReason,
+  type PlatformOptionsResponse,
+  type PlatformOverrideOutcome,
+} from './platformOverrideOutcome';
 
 /** The subset of fields a per-platform override can carry. */
 export const OVERRIDE_FIELDS = ['title', 'description', 'price'] as const;
@@ -45,17 +54,24 @@ export interface PlatformOptionEntry {
   syncStatus: string | null;
 }
 
-export interface PlatformOptionsResponse {
-  success: boolean;
-  overrides?: Record<string, unknown>;
-  pushed?: boolean;
-  syncStatus?: string;
-  error?: string;
-}
+export type {
+  PlatformOptionsResponse,
+  PlatformOverrideOutcome,
+} from './platformOverrideOutcome';
+export {
+  classifyPlatformOverrideResponse,
+  readPlatformOverrideReason,
+} from './platformOverrideOutcome';
 
 export interface PlatformOptionsResult {
   ok: boolean;
   status: number;
+  outcome: PlatformOverrideOutcome;
+  /** True when the override reached the server, even if the platform push did not. */
+  stored: boolean;
+  /** The server's explanation for a pending or failed push, or null when it gave none. */
+  reason: string | null;
+  syncStatus: string | null;
   data: PlatformOptionsResponse | null;
 }
 
@@ -89,7 +105,7 @@ export function sanitizeOverridePayload(overrides: PlatformOverrideValues): Plat
 }
 
 /** PUT a per-platform override for one connection. Never throws on a non-2xx — the caller
- *  inspects `ok`/`data` (mirrors the calm, non-blocking autosave error handling). */
+ *  inspects `outcome` (mirrors the calm, non-blocking autosave error handling). */
 export async function savePlatformOverride(
   productId: string,
   variantId: string,
@@ -106,7 +122,16 @@ export async function savePlatformOverride(
   } catch {
     data = null;
   }
-  return { ok: res.ok, status: res.status, data };
+  const outcome = classifyResponse(res.status, data);
+  return {
+    ok: res.ok,
+    status: res.status,
+    outcome,
+    stored: outcome !== 'not_saved',
+    reason: readReason(data),
+    syncStatus: typeof data?.syncStatus === 'string' ? data.syncStatus : null,
+    data,
+  };
 }
 
 /**
