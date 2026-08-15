@@ -32,6 +32,11 @@ import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContex
 import { PricingGuidanceCard } from './pricing/PricingGuidanceCard';
 import { pricingCacheKey, getFreshPricing, putPricing } from '../lib/pricingResearchCache';
 import { buildInventoryQuantityUpdate } from '../lib/inventorySync';
+import {
+  PRODUCT_EDITOR_FIELD_KEYS,
+  isContractProductEditorField,
+  isProductEditorFieldEditable,
+} from '../lib/productPatchContract';
 import { formatStoredPricingSummary } from '../lib/storedPricingResearch';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
 import { logger } from 'react-native-reanimated/lib/typescript/common';
@@ -264,7 +269,9 @@ export type ListingEditorFormProps = {
     platformConnectionId: string,
     platformLocationId: string,
     quantity: number,
-  ) => void | Promise<void>;
+  ) => boolean | Promise<boolean>;
+  /** Surface a quantity edit that cannot be mapped to canonical server IDs. */
+  onInventoryUpdateError?: () => void;
   /** Pricing evidence frozen during Match or loaded from its stored job result. */
   storedPricingResearch?: unknown;
 };
@@ -401,7 +408,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform, canonicalVariantId, onUpdateInventoryQuantity, storedPricingResearch }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform, canonicalVariantId, onUpdateInventoryQuantity, onInventoryUpdateError, storedPricingResearch }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
   const latestPlatformsRef = useRef(platforms);
   latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
@@ -1169,7 +1176,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   const categoryRequired = requiredFields?.includes?.('category');
   const categoryMissing = categoryRequired && !selectedCategoryId;
 
+  const canPatchEditorField = (key: string) => (
+    !isContractProductEditorField(key) || isProductEditorFieldEditable(key)
+  );
+
   const patchField = (key: string, value: any) => {
+    if (!canPatchEditorField(key)) {
+      log.warn(`[ListingEditorForm] Contract does not allow editing ${key}`);
+      return;
+    }
     const current = latestPlatformsRef.current;
     if (activeTab === 'all') {
       // Emit only the changed field for each platform. The parent applies these
@@ -1195,6 +1210,10 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   };
 
   const patchPlatformField = (platformKey: string, key: string, value: any) => {
+    if (!canPatchEditorField(key)) {
+      log.warn(`[ListingEditorForm] Contract does not allow editing ${key}`);
+      return;
+    }
     const current = latestPlatformsRef.current;
     latestPlatformsRef.current = {
       ...current,
@@ -1208,24 +1227,28 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // closure, so the second write clobbered the first (e.g. the price chip set the price
   // and then the band write reset it — the chip appeared to do nothing).
   const patchFields = (patch: Record<string, any>) => {
+    const editablePatch = Object.fromEntries(
+      Object.entries(patch).filter(([key]) => canPatchEditorField(key)),
+    );
+    if (Object.keys(editablePatch).length === 0) return;
     const current = latestPlatformsRef.current;
     if (activeTab === 'all') {
       const next: PlatformsData = {};
       for (const platformKey of platformKeys) {
-        next[platformKey] = patch;
+        next[platformKey] = editablePatch;
       }
       latestPlatformsRef.current = Object.fromEntries(Object.entries(current).map(([platformKey, data]) => [
         platformKey,
-        platformKeys.includes(platformKey) ? { ...(data || {}), ...patch } : data,
+        platformKeys.includes(platformKey) ? { ...(data || {}), ...editablePatch } : data,
       ]));
       onChangePlatforms(next);
     } else {
       const keyToEdit = activePlatformKey;
       latestPlatformsRef.current = {
         ...current,
-        [keyToEdit]: { ...(current[keyToEdit] || {}), ...patch },
+        [keyToEdit]: { ...(current[keyToEdit] || {}), ...editablePatch },
       };
-      onChangePlatforms({ [keyToEdit]: patch });
+      onChangePlatforms({ [keyToEdit]: editablePatch });
     }
   };
 
@@ -1305,7 +1328,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     if (platformLocs.length > 0) {
       return platformLocs.map((loc: any) => ({
         id: loc.id,
-        locationId: loc.locationId || loc.id,
+        locationId: loc.locationId,
         name: loc.name || 'Unknown Location',
         platformType: loc.platformType || platformKey,
         connectionId: loc.connectionId,
@@ -1333,7 +1356,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
         log.debug(`[ListingEditorForm LOCS] Filtered ${activeData.locations.length} → ${collapsed.length} for ${platformKey}`);
         return collapsed.map((loc: any) => ({
           ...loc,
-          locationId: loc.locationId || loc.id,
+          locationId: loc.locationId,
           platformType: loc.platformType || platformKey,
           connectionId: loc.connectionId,
           connectionName: loc.connectionName
@@ -1892,12 +1915,11 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // Every field already shown as a dedicated row/sheet (or handled elsewhere) — excluded from
   // the generic "additional fields" rows so nothing double-renders and no JSON blob appears.
   const STANDARD_FIELD_KEYS = new Set([
-    'title', 'description', 'tags', 'price', 'weight', 'weightUnit', 'sku', 'barcode', 'images', 'imageUris',
-    'options', 'variants', 'locations', 'locationQuantities', 'inventoryType', 'condition', 'conditionID',
+    ...PRODUCT_EDITOR_FIELD_KEYS,
+    'options', 'variants', 'locations', 'locationQuantities', 'inventoryType', 'conditionID',
     'category', 'categoryId', 'productCategoryId', 'productCategory', 'categoryPath', 'taxonomyConfidence',
-    'taxonomySource', 'itemSpecifics', 'brand', 'vendor', 'compareAtPrice', 'productType', 'seoTitle',
-    'seoDescription', 'seo', 'aiPriceRecommendation', 'aiRecommendedPrice', 'pickupLocation', 'deliveryMethod',
-    'shippingCost', 'shippingTier', 'estimatedDimensions', 'estimatedWeight', 'imageUrls',
+    'taxonomySource', 'itemSpecifics', 'seo', 'aiPriceRecommendation', 'aiRecommendedPrice', 'pickupLocation',
+    'deliveryMethod', 'shippingCost', 'shippingTier', 'estimatedDimensions', 'estimatedWeight',
     '__refilled', '__variantSuggestions', '_rawResponse', '_parseError', '_extractedJson',
   ]);
 
@@ -3334,7 +3356,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     return {
                       ...l,
                       id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
-                      locationId,
+                      locationId: l.locationId,
                       platformKey: pk,
                       isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
                     };
@@ -3384,7 +3406,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 const rawPlatformLocs = platformLocations?.[platformKey] || [];
                 const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
                   ...l,
-                  locationId: l.locationId || l.id
+                  locationId: l.locationId,
                 }));
 
                 // If dropdown is active (LOCATION_VARIANT_WITH_OPTIONS) and a location is selected,
@@ -3394,7 +3416,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   allLocs = selectedLoc
                     ? [{
                       id: selectedLoc.id,
-                      locationId: selectedLoc.locationId || selectedLoc.id,
+                      locationId: selectedLoc.locationId,
                       name: selectedLoc.name || 'Unknown',
                       platformKey,
                       connectionId: selectedLoc.connectionId,
@@ -3565,7 +3587,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               }
 
               // 3. Callback - per-location pricing for non-Shopify, global for Shopify
-              const handleUpdateInventory = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+              const handleUpdateInventory = async (variantId: string, locationId: string, field: 'quantity' | 'price', value: number): Promise<boolean> => {
                 if (field === 'price') value = toPrice(value); // never let a NaN price enter platform data
                 const resolvedLoc = allLocs.find(l => l.id === locationId);
                 const rawLocationId = resolvedLoc?.locationId || locationId;
@@ -3585,21 +3607,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   });
                   if (!inventoryUpdate) {
                     log.warn('[ListingEditorForm] Inventory quantity update is missing a canonical target');
-                    return;
+                    onInventoryUpdateError?.();
+                    return false;
                   }
-                  void (async () => {
-                    try {
-                      await onUpdateInventoryQuantity(
-                        inventoryUpdate.variantId,
-                        inventoryUpdate.platformConnectionId,
-                        inventoryUpdate.platformLocationId,
-                        inventoryUpdate.quantity,
-                      );
-                    } catch (error) {
-                      log.error('[ListingEditorForm] Inventory quantity update failed:', error);
-                    }
-                  })();
-                  return;
+                  return onUpdateInventoryQuantity(
+                    inventoryUpdate.variantId,
+                    inventoryUpdate.platformConnectionId,
+                    inventoryUpdate.platformLocationId,
+                    inventoryUpdate.quantity,
+                  );
                 }
 
                 // HANDLE BASE PRODUCT (non-variant product)
@@ -3611,7 +3627,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                     // Price changes update the base product price for this platform
                     patchPlatform(prev => ({ ...prev, price: value }));
                   }
-                  return;
+                  return true;
                 }
 
                 const nextPlatforms = { ...platforms };
@@ -3715,6 +3731,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 // Each platform manages its own pricing (Shopify=global, others=per-location)
 
                 onChangePlatforms(nextPlatforms);
+                return true;
               };
 
               // Tapping a variant's photo opens the SHARED Photos sheet (same one the top
@@ -3756,7 +3773,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                   return {
                     ...l,
                     id: buildAllTabLocationId({ platformKey: pk, connectionId: l.connectionId, locationId }),
-                    locationId,
+                    locationId: l.locationId,
                     platformKey: pk,
                     isGlobal: isShopifyGlobalLocation({ id: locationId, name: l.name, platformKey: pk })
                   };
@@ -3800,7 +3817,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               const rawPlatformLocs = platformLocations?.[platformKey] || [];
               const platformLocs = collapseSingleLocationLocs(platformKey, rawPlatformLocs).map((l: any) => ({
                 ...l,
-                locationId: l.locationId || l.id
+                locationId: l.locationId,
               }));
               allLocs = platformLocs.map((l: any) => ({
                 ...l,
@@ -3838,7 +3855,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               };
             }
 
-            const handleBaseInventoryUpdate = (variantId: string, locationId: string, field: 'quantity' | 'price', value: number) => {
+            const handleBaseInventoryUpdate = async (variantId: string, locationId: string, field: 'quantity' | 'price', value: number): Promise<boolean> => {
               const resolvedLoc = allLocs.find(l => l.id === locationId);
               const rawLocationId = resolvedLoc?.locationId || locationId;
               if (field === 'quantity' && onUpdateInventoryQuantity) {
@@ -3852,21 +3869,15 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 });
                 if (!inventoryUpdate) {
                   log.warn('[ListingEditorForm] Base inventory quantity update is missing a canonical target');
-                  return;
+                  onInventoryUpdateError?.();
+                  return false;
                 }
-                void (async () => {
-                  try {
-                    await onUpdateInventoryQuantity(
-                      inventoryUpdate.variantId,
-                      inventoryUpdate.platformConnectionId,
-                      inventoryUpdate.platformLocationId,
-                      inventoryUpdate.quantity,
-                    );
-                  } catch (error) {
-                    log.error('[ListingEditorForm] Base inventory quantity update failed:', error);
-                  }
-                })();
-                return;
+                return onUpdateInventoryQuantity(
+                  inventoryUpdate.variantId,
+                  inventoryUpdate.platformConnectionId,
+                  inventoryUpdate.platformLocationId,
+                  inventoryUpdate.quantity,
+                );
               }
               if (field === 'quantity') {
                 // Store per-location quantity in locationQuantities
@@ -3875,6 +3886,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
                 // Price changes update the base product price
                 patchPlatform(prev => ({ ...prev, price: value }));
               }
+              return true;
             };
 
             return (

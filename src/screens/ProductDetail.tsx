@@ -23,6 +23,12 @@ import { HybridConversationDataAdapter } from '../features/liquidationConversati
 import { API_BASE_URL } from '../config/env';
 import { apiFetch } from '../lib/apiClient';
 import { applyLevelPatch, applyVariantPatch } from '../lib/catalogPatches';
+import { stripInventoryFromPlatformData } from '../lib/inventorySync';
+import { pickEditableProductPatch } from '../lib/productPatchContract';
+import {
+  PRODUCT_PARENT_PATCH_FIELDS,
+  PRODUCT_VARIANT_PATCH_FIELDS,
+} from '../contracts/product-patch.contract';
 import { buildPoolModeIndex, sumPooledLevelQuantities } from '../lib/partnerInventory';
 import { createCanonicalBase } from '../utils/platformDataHydration';
 import { hasPlatformPrice } from '../utils/platformRequirements';
@@ -244,7 +250,8 @@ interface EditFormData {
 
 interface InventoryLocationWithPlatform {
   id: string;
-  locationId: string;
+  /** Real platform location ID. Undefined for virtual/default UI rows. */
+  locationId?: string;
   locationName: string;
   platformConnectionId: string;
   platformName: string;
@@ -263,101 +270,12 @@ interface GroupedInventoryLocations {
 
 
 /**
- * CRITICAL FIX: Clean displayedPlatforms data before save to prevent cross-platform location contamination.
- * When editing on 'all' tab, inventoryByLocation gets merged across platforms.
- * This function filters each platform's variants to ONLY include locations that belong to that platform.
- * 
- * LOCATION VALIDATION STRATEGY:
- * 1. PRIMARY: Use `locations` array from platform data (most reliable - actual DB data)
- * 2. SECONDARY: Use `connectionId` from platformData to match against location's connectionId
- * 3. FALLBACK: Pattern matching for known platform ID formats (least reliable, last resort)
+ * Generic product autosave carries product/listing fields only. Inventory
+ * quantities are stripped and persisted exclusively through the ledger-backed
+ * PUT /api/products/:variantId/inventory route.
  */
 function cleanPlatformDataForSave(displayedPlatforms: Record<string, any>): Record<string, any> {
-  const cleanedData: Record<string, any> = {};
-
-  for (const [platformKey, platformData] of Object.entries(displayedPlatforms)) {
-    if (!platformData) continue;
-
-    // Deep clone to avoid mutating original
-    const cleanedPlatform = JSON.parse(JSON.stringify(platformData));
-
-    // PRIMARY: Get location IDs from platform's locations array (source of truth)
-    const platformLocationIds = new Set<string>();
-    if (Array.isArray(cleanedPlatform.locations)) {
-      cleanedPlatform.locations.forEach((loc: any) => {
-        if (loc?.id) platformLocationIds.add(loc.id);
-      });
-    }
-
-    // SECONDARY: Get connectionId for this platform if available
-    const platformConnectionId = cleanedPlatform.connectionId || cleanedPlatform.connection?.id;
-
-    // Filter variants' inventoryByLocation to only include this platform's locations
-    if (Array.isArray(cleanedPlatform.variants)) {
-      cleanedPlatform.variants = cleanedPlatform.variants.map((variant: any) => {
-        if (!variant.inventoryByLocation) return variant;
-
-        const filteredInventory: Record<string, any> = {};
-        for (const [locId, locData] of Object.entries(variant.inventoryByLocation)) {
-          // PRIMARY: Use locations array if available
-          if (platformLocationIds.size > 0) {
-            // CRITICAL FIX: Always include 'default' key for platforms like eBay
-            if (locId === 'default' || platformLocationIds.has(locId)) {
-              filteredInventory[locId] = locData;
-            } else {
-              log.debug(`[cleanPlatformDataForSave] Filtered out location ${locId} from ${platformKey} - not in platform's locations`);
-            }
-            continue;
-          }
-
-          // For platforms WITHOUT locations (like eBay), always include 'default' key
-          if (locId === 'default') {
-            filteredInventory[locId] = locData;
-            continue;
-          }
-
-          // SECONDARY: Check if locData has connectionId that matches this platform
-          const locConnectionId = (locData as any)?.connectionId || (locData as any)?.platformConnectionId;
-          if (locConnectionId && platformConnectionId) {
-            if (locConnectionId === platformConnectionId) {
-              filteredInventory[locId] = locData;
-            } else {
-              log.debug(`[cleanPlatformDataForSave] Filtered location ${locId} from ${platformKey} - connectionId mismatch`);
-            }
-            continue;
-          }
-
-          // FALLBACK: Pattern matching for common platform ID formats
-          const isShopifyLoc = locId.includes('gid://shopify/');
-          const isSquareLoc = /^L[A-Z0-9]+$/.test(locId) || (/^[A-Z0-9]{8,}$/.test(locId) && !locId.includes('gid://'));
-          const isCloverLoc = /^[A-Z0-9]{13}$/.test(locId); // Clover IDs are typically 13 chars
-
-          // Cross-contamination check
-          if (platformKey === 'shopify' && (isSquareLoc || isCloverLoc) && !isShopifyLoc) {
-            log.debug(`[cleanPlatformDataForSave] Filtered non-Shopify location ${locId} from Shopify platform`);
-            continue;
-          }
-          if (platformKey === 'square' && (isShopifyLoc || isCloverLoc)) {
-            log.debug(`[cleanPlatformDataForSave] Filtered non-Square location ${locId} from Square platform`);
-            continue;
-          }
-          if (platformKey === 'clover' && (isShopifyLoc || isSquareLoc)) {
-            log.debug(`[cleanPlatformDataForSave] Filtered non-Clover location ${locId} from Clover platform`);
-            continue;
-          }
-
-          // If we can't determine, include it (conservative approach to avoid data loss)
-          filteredInventory[locId] = locData;
-        }
-
-        return { ...variant, inventoryByLocation: filteredInventory };
-      });
-    }
-
-    cleanedData[platformKey] = cleanedPlatform;
-  }
-
-  return cleanedData;
+  return stripInventoryFromPlatformData(displayedPlatforms);
 }
 
 const ProductDetailScreen = observer(
@@ -1214,15 +1132,14 @@ const ProductDetailScreen = observer(
 
               // Check if location already exists
               const existingLocation = grouped[poolName].locations.find(
-                loc => loc.locationId === (level as any).PoolId
+                loc => loc.id === (level as any).PoolId
               );
 
               if (existingLocation) {
                 existingLocation.quantity += (level.Quantity || 0);
               } else {
                 grouped[poolName].locations.push({
-                  id: level.Id || (level as any).PoolId,
-                  locationId: (level as any).PoolId || 'pool',
+                  id: (level as any).PoolId,
                   locationName: 'Shared Stock',
                   platformConnectionId: (level as any).PoolId,
                   platformName: poolName,
@@ -1266,7 +1183,7 @@ const ProductDetailScreen = observer(
             } else {
               grouped[platformName].locations.push({
                 id: level.Id || `${level.PlatformConnectionId}-${level.PlatformLocationId}`,
-                locationId: level.PlatformLocationId || 'default',
+                locationId: level.PlatformLocationId || undefined,
                 locationName,
                 platformConnectionId: level.PlatformConnectionId || '',
                 platformName,
@@ -1287,7 +1204,6 @@ const ProductDetailScreen = observer(
                 displayName: platformName,
                 locations: [{
                   id: `${connection.Id}-default`,
-                  locationId: 'default',
                   locationName: 'Main Location',
                   platformConnectionId: connection.Id,
                   platformName,
@@ -1629,7 +1545,7 @@ const ProductDetailScreen = observer(
     const buildPlatformLocations = useCallback(() => {
       // ⚡ CRITICAL FIX: Start with ALL platform locations from PlatformLocations table
       // Not just those with inventory records - this ensures new locations show up immediately
-      const locsByPlatform: Record<string, Array<{ id: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
+      const locsByPlatform: Record<string, Array<{ id: string; locationId?: string; name: string; connectionId: string; connectionName: string; platformType: string }>> = {};
 
       // Build from allPlatformLocations which contains ALL locations for all connections
       // This is the source of truth for which locations exist
@@ -1684,6 +1600,7 @@ const ProductDetailScreen = observer(
 
           locsByPlatform[platform].push({
             id: locationId,
+            locationId,
             name,
             connectionId: loc.PlatformConnectionId,
             connectionName,
@@ -1711,27 +1628,29 @@ const ProductDetailScreen = observer(
         if (!locsByPlatform[platform]) locsByPlatform[platform] = [];
 
         platformGroup.locations.forEach(loc => {
-          const locationId = loc.locationId || '';
+          const locationId = loc.locationId;
+          const editorLocationId = locationId || loc.id;
 
           // STRICT FILTERING - Same as primary loop
-          if (platform === 'shopify') {
+          if (locationId && platform === 'shopify') {
             const isLikeSquare = /^[A-Z0-9]{8,}$/.test(locationId) && !/^\d+$/.test(locationId);
             if (isLikeSquare) {
               log.warn(`[ProductDetail] Fallback: Filtered out likely-Square location from Shopify: ${locationId}`);
               return;
             }
-          } else if (platform === 'square') {
+          } else if (locationId && platform === 'square') {
             if (locationId.includes('gid://shopify/')) {
               log.warn(`[ProductDetail] Fallback: Filtered out likely-Shopify location from Square: ${locationId}`);
               return;
             }
           }
 
-          const exists = locsByPlatform[platform].some(l => l.id === locationId);
+          const exists = locsByPlatform[platform].some(l => l.id === editorLocationId);
           if (!exists) {
-            log.debug('[ProductDetail] Adding location from inventory that was missing from PlatformLocations:', locationId);
+            log.debug('[ProductDetail] Adding location from inventory that was missing from PlatformLocations:', editorLocationId);
             locsByPlatform[platform].push({
-              id: locationId,
+              id: editorLocationId,
+              ...(locationId ? { locationId } : {}),
               name: loc.locationName,
               connectionId: loc.platformConnectionId,
               connectionName: platformGroup.displayName,
@@ -1829,23 +1748,33 @@ const ProductDetailScreen = observer(
       const updateData: Record<string, any> = {};
 
       if (saveText) {
-        Object.assign(updateData, {
-          Title: canonical.title || currentForm.Title,
-          Description: canonical.description || currentForm.Description,
-          Price: canonical.price !== undefined && canonical.price !== '' && !isNaN(Number(canonical.price)) ? Number(canonical.price) : currentForm.Price,
-          CompareAtPrice: canonical.compareAtPrice !== undefined && canonical.compareAtPrice !== '' && !isNaN(Number(canonical.compareAtPrice)) ? Number(canonical.compareAtPrice) : currentForm.CompareAtPrice,
-          Sku: canonical.sku || currentForm.Sku,
-          Barcode: canonical.barcode || currentForm.Barcode,
-          Weight: canonical.weight !== undefined && canonical.weight !== '' && !isNaN(Number(canonical.weight)) ? Number(canonical.weight) : currentForm.Weight,
-          WeightUnit: canonical.weightUnit || currentForm.WeightUnit,
-          RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : currentForm.RequiresShipping,
-          IsTaxable: currentForm.IsTaxable,
-          TaxCode: currentForm.TaxCode,
+        const canonicalPatch = pickEditableProductPatch(
+          {
+            Title: canonical.title || currentForm.Title,
+            Description: canonical.description || currentForm.Description,
+            Vendor: canonical.vendor,
+            ProductType: canonical.productType,
+            Brand: canonical.brand,
+            // Tags invariant: omit an unknown value, while [] remains an intentional clear.
+            ...(Array.isArray(canonical.tags) ? { Tags: canonical.tags } : {}),
+            SeoTitle: canonical.seoTitle ?? canonical.seo?.seoTitle,
+            SeoDescription: canonical.seoDescription ?? canonical.seo?.seoDescription,
+          },
+          {
+            Price: canonical.price !== undefined && canonical.price !== '' && !isNaN(Number(canonical.price)) ? Number(canonical.price) : currentForm.Price,
+            CompareAtPrice: canonical.compareAtPrice !== undefined && canonical.compareAtPrice !== '' && !isNaN(Number(canonical.compareAtPrice)) ? Number(canonical.compareAtPrice) : currentForm.CompareAtPrice,
+            Sku: canonical.sku || currentForm.Sku,
+            Barcode: canonical.barcode || currentForm.Barcode,
+            Weight: canonical.weight !== undefined && canonical.weight !== '' && !isNaN(Number(canonical.weight)) ? Number(canonical.weight) : currentForm.Weight,
+            WeightUnit: canonical.weightUnit || currentForm.WeightUnit,
+            Condition: canonical.condition,
+            RequiresShipping: canonical.requiresShipping !== undefined ? canonical.requiresShipping : currentForm.RequiresShipping,
+            IsTaxable: currentForm.IsTaxable,
+            TaxCode: currentForm.TaxCode,
+          },
+        );
+        Object.assign(updateData, canonicalPatch.flat, {
           PlatformSpecificData: cleanedPlatformData,
-          // Tags invariant: omit an unknown value, while [] remains an intentional clear.
-          ...(Array.isArray(canonical.tags) ? { Tags: canonical.tags } : {}),
-          Vendor: canonical.vendor,
-          ProductType: canonical.productType,
         });
         setIsSaving(true);
       }
@@ -1908,14 +1837,14 @@ const ProductDetailScreen = observer(
               : null;
             const patchSource = savedItem || updateData;
             const patchFields: Record<string, any> = {};
-            (['Title', 'Price', 'CompareAtPrice', 'Sku', 'Barcode'] as const).forEach((column) => {
+            PRODUCT_VARIANT_PATCH_FIELDS.forEach((column) => {
               if (patchSource[column] !== undefined) patchFields[column] = patchSource[column];
             });
             // Product copy is displayed from the embedded Products projection.
             const productsPatch: Record<string, any> = {};
-            if (updateData.Title !== undefined) productsPatch.Title = updateData.Title;
-            if (updateData.Description !== undefined) productsPatch.Description = updateData.Description;
-            if (updateData.Tags !== undefined) productsPatch.Tags = updateData.Tags;
+            PRODUCT_PARENT_PATCH_FIELDS.forEach((column) => {
+              if (updateData[column] !== undefined) productsPatch[column] = updateData[column];
+            });
             if (Object.keys(productsPatch).length > 0) patchFields.Products = productsPatch;
             applyVariantPatch(item.Id, {
               ...patchFields,
@@ -2915,11 +2844,12 @@ const ProductDetailScreen = observer(
       platformConnectionId: string,
       platformLocationId: string,
       quantity: number
-    ) => {
+    ): Promise<boolean> => {
       try {
         const token = await ensureSupabaseJwt();
 
-        if (!token || !detailedItem) return;
+        if (!token) throw new Error('Not signed in. Inventory was not updated');
+        if (!detailedItem) throw new Error('Product is unavailable. Inventory was not updated');
 
         // Use the correct API structure from the backend
         const updateData = {
@@ -2985,10 +2915,12 @@ const ProductDetailScreen = observer(
 
         log.debug('Inventory updated successfully');
         capture(AnalyticsEvents.INVENTORY_UPDATED, { product_id: detailedItem?.ProductId });
+        return true;
 
       } catch (error) {
         log.error('Failed to update inventory:', error);
         showToast({ title: 'Failed to update inventory. Please try again.', tone: 'danger' });
+        return false;
       }
     }, [detailedItem, rawInventoryLevels, showToast]);
 
@@ -4708,27 +4640,36 @@ const ProductDetailScreen = observer(
               platformLocations={buildPlatformLocations()}
               canonicalVariantId={detailedItem.Id}
               onUpdateInventoryQuantity={updateInventoryQuantity}
+              onInventoryUpdateError={() => {
+                showToast({ title: 'Failed to update inventory. Please try again.', tone: 'danger' });
+              }}
               onChangePlatforms={(next) => {
                 log.debug('[ProductDetail] ListingEditorForm onChange:', Object.keys(next));
                 // A patch that changes nothing is a normalization, not an edit. Arming
                 // autosave for it made opening an item PUT its displayed values back to
                 // the server, clobbering a newer save with a stale local one.
-                if (!patchChangesValue(displayedPlatformsRef.current, next)) return;
-                // Genuine user edit: advance the autosave version token and clear
-                // any prior save error so autosave re-arms.
-                editVersionRef.current += 1;
-                setSaveError(null);
-                // Per-platform routing: a title/description/price edit made on ONE specific
-                // platform tab saves to that channel via the platform-options PUT and does
-                // NOT mark the canonical autosave dirty (which would fan it to every platform).
-                // Everything else (all-tab edits, variants, category, etc.) keeps the existing
-                // canonical autosave path exactly as-is.
-                const override = detectOverrideEdit(displayedPlatforms, next);
-                if (override) {
-                  queueOverrideSave(override.connectionId, override.fields);
-                } else {
-                  hasUnsavedChangesRef.current = true;
-                  setHasUnsavedChanges(true);
+                const previous = displayedPlatformsRef.current;
+                if (!patchChangesValue(previous, next)) return;
+                const productOnlyPrevious = stripInventoryFromPlatformData(previous);
+                const productOnlyPatch = stripInventoryFromPlatformData(next);
+                const hasProductChanges = patchChangesValue(productOnlyPrevious, productOnlyPatch);
+
+                // Inventory-only patches are already handled by the dedicated
+                // ledger endpoint. Mixed patches still arm the normal product save,
+                // whose PlatformSpecificData has quantities stripped before send.
+                if (hasProductChanges) {
+                  editVersionRef.current += 1;
+                  setSaveError(null);
+                  // Per-platform routing: a title/description/price edit made on ONE specific
+                  // platform tab saves to that channel via the platform-options PUT and does
+                  // NOT mark the canonical autosave dirty (which would fan it to every platform).
+                  const override = detectOverrideEdit(displayedPlatforms, productOnlyPatch);
+                  if (override) {
+                    queueOverrideSave(override.connectionId, override.fields);
+                  } else {
+                    hasUnsavedChangesRef.current = true;
+                    setHasUnsavedChanges(true);
+                  }
                 }
                 // DEEP merge ONLY (no eager setDisplayedPlatforms(next) — that made the
                 // functional updater below receive the PARTIAL `next` as prev, so a

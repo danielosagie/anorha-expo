@@ -25,6 +25,42 @@ export function mergeInventoryLevelsByNewest<T extends InventoryLevelWithTimesta
   return merged;
 }
 
+/**
+ * Remove inventory values from the platform payload used by generic product
+ * autosave. Quantities have their own ledger-backed endpoint and must never
+ * fall back through the lossy generic product route.
+ */
+export function stripInventoryFromPlatformData<T extends Record<string, any>>(
+  platforms: T,
+): T {
+  const stripped: Record<string, any> = {};
+
+  for (const [platformKey, platformValue] of Object.entries(platforms || {})) {
+    if (!platformValue || typeof platformValue !== 'object') {
+      stripped[platformKey] = platformValue;
+      continue;
+    }
+
+    const platform: Record<string, any> = {};
+    for (const [field, value] of Object.entries(platformValue)) {
+      if (field === 'locationQuantities') continue;
+      if (field === 'variants' && Array.isArray(value)) {
+        platform.variants = value.map((variant) => {
+          if (!variant || typeof variant !== 'object') return variant;
+          return Object.fromEntries(
+            Object.entries(variant).filter(([variantField]) => variantField !== 'inventoryByLocation'),
+          );
+        });
+        continue;
+      }
+      platform[field] = value;
+    }
+    stripped[platformKey] = platform;
+  }
+
+  return stripped as T;
+}
+
 export type InventoryEditorLocation = {
   id: string;
   locationId?: string;
@@ -70,7 +106,9 @@ export function buildInventoryQuantityUpdate({
   quantity: number;
 }): InventoryQuantityUpdate | null {
   const platformConnectionId = location?.connectionId?.trim();
-  const platformLocationId = (location?.locationId || location?.id)?.trim();
+  // `id` may be an editor-only composite/virtual key. Only the explicitly
+  // threaded platform location ID is legal for the backend inventory route.
+  const platformLocationId = location?.locationId?.trim();
   if (!platformConnectionId || !platformLocationId || !Number.isFinite(quantity)) return null;
 
   let variantId = editorVariantId === '_base' ? canonicalVariantId : undefined;

@@ -3,6 +3,7 @@ import { BRAND_PRIMARY } from '../design/tokens';
 import { View, Text, TextInput, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { createLogger } from '../utils/logger';
+import type { InventoryUpdateCommit } from './VariantInventoryEditor';
 const log = createLogger('VariantInventoryRow');
 
 
@@ -24,8 +25,8 @@ interface VariantInventoryRowProps {
     externalUpdatePrice?: boolean;
 
     // Callbacks
-    onChangeQuantity: (qty: number) => void;
-    onChangePrice: (price: number) => void;
+    onChangeQuantity: (qty: number) => InventoryUpdateCommit;
+    onChangePrice: (price: number) => InventoryUpdateCommit;
     onSelectImage?: () => void;
 }
 
@@ -72,7 +73,17 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
         setLocalQty(num);
         if (qtyTimeoutRef.current) clearTimeout(qtyTimeoutRef.current);
         qtyTimeoutRef.current = setTimeout(() => {
-            onChangeQuantity(Number(num || '0'));
+            void (async () => {
+                try {
+                    const committed = await onChangeQuantity(Number(num || '0'));
+                    if (committed === false) {
+                        setLocalQty((current) => current === num ? String(quantity) : current);
+                    }
+                } catch (error) {
+                    log.error('[VariantInventoryRow] Quantity update failed:', error);
+                    setLocalQty((current) => current === num ? String(quantity) : current);
+                }
+            })();
         }, 400);
     };
 
@@ -89,7 +100,17 @@ const VariantInventoryRow: React.FC<VariantInventoryRowProps> = ({
         priceTimeoutRef.current = setTimeout(() => {
             const parsed = Number(num || '0');
             // Never emit a non-finite price to the save path.
-            onChangePrice(Number.isFinite(parsed) ? parsed : 0);
+            void (async () => {
+                try {
+                    const committed = await onChangePrice(Number.isFinite(parsed) ? parsed : 0);
+                    if (committed === false) {
+                        setLocalPrice((current) => current === num ? String(Number.isFinite(price) ? price : 0) : current);
+                    }
+                } catch (error) {
+                    log.error('[VariantInventoryRow] Price update failed:', error);
+                    setLocalPrice((current) => current === num ? String(Number.isFinite(price) ? price : 0) : current);
+                }
+            })();
         }, 400);
     };
 
