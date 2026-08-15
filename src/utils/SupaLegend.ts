@@ -206,7 +206,11 @@ export async function initializeLegendState(
             collection: 'ProductImages',
             // Only fetch what's needed to display images
             select: (from: any) => from.select('Id, ProductVariantId, ImageUrl, Position'),
-            actions: ['read', 'create', 'update', 'delete'],
+            // READ-ONLY sync: product media (images and video) is an ordered canonical
+            // aggregate reconciled server-side by set_product_media. The client never
+            // writes it directly — a client-side write would bypass ordering, primary-image
+            // derivation, and the capability contract. Enforced by check-item-writes.
+            actions: ['read'],
             realtime: false, // DISABLED: Images rarely change, reduces egress significantly
             persist: {
                 name: `productImages_user_${currentUserId}_v3`, // Bumped for column change
