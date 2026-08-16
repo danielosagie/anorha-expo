@@ -6994,7 +6994,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           freeLimit: freemiumStatus.freeLimit,
           remaining: freemiumStatus.remaining,
         } : undefined}
-        hasSubscription={freemiumStatus?.hasSubscription || false}
       />
 
       <BillingGateSheet

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import {
     View,
@@ -9,7 +9,6 @@ import {
     ScrollView,
     ActivityIndicator,
     Dimensions,
-    Linking,
     Alert,
     Image,
     SafeAreaView,
@@ -17,14 +16,22 @@ import {
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { X } from 'lucide-react-native';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
-import { ensureSupabaseJwt } from '../lib/supabase';
-import { API_BASE_URL as ENV_API_BASE_URL } from '../config/env';
+import { ApiError, apiJson } from '../lib/apiClient';
+import {
+    deriveBillingState,
+    deriveBillingStateFromCheckoutConflict,
+    formatBillingTimestamp,
+    isCheckoutBlocked,
+    type BillingStateViewModel,
+    type RawBillingSummary,
+    type RawCheckoutConflict,
+} from '../utils/billingState';
 import { createLogger } from '../utils/logger';
 const log = createLogger('TierSelectorModal');
 
 
-const API_BASE_URL = `${ENV_API_BASE_URL}/api`;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 interface Tier {
@@ -83,7 +90,7 @@ interface TierSelectorModalProps {
         remaining: number;
     };
     usagePercent?: number;
-    hasSubscription?: boolean;
+    initialSummary?: RawBillingSummary | null;
 }
 
 const ANORHA_GREEN = BRAND_PRIMARY;
@@ -106,24 +113,52 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     onSuccess,
     usageInfo,
     usagePercent,
-    hasSubscription = false,
+    initialSummary,
 }) => {
     const theme = useTheme();
+    const navigation = useNavigation();
     // Default selected tier is growth
     const [selectedTierId, setSelectedTierId] = useState<'growth' | 'teams'>(TIERS[0].id);
     const [isLoading, setIsLoading] = useState(false);
-    const pendingCheckoutUrlRef = React.useRef<string | null>(null);
+    const [isBillingStateLoading, setIsBillingStateLoading] = useState(false);
+    const [billingState, setBillingState] = useState<BillingStateViewModel>(() =>
+        deriveBillingState(initialSummary, new Date()),
+    );
+    const pendingBrowserUrlRef = React.useRef<string | null>(null);
+
+    const refreshBillingState = useCallback(async () => {
+        setIsBillingStateLoading(true);
+        try {
+            const nextSummary = await apiJson<RawBillingSummary>('/api/billing/summary');
+            const nextBillingState = deriveBillingState(nextSummary, new Date());
+            setBillingState(current => nextBillingState.knowledge === 'unknown'
+                && isCheckoutBlocked(current.checkout.allowed)
+                ? current
+                : nextBillingState);
+        } catch (error) {
+            log.warn('[TierSelector] Billing summary unavailable:', error);
+        } finally {
+            setIsBillingStateLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!visible) return;
+        setBillingState(deriveBillingState(initialSummary, new Date()));
+        void refreshBillingState();
+    }, [initialSummary, refreshBillingState, visible]);
 
     // iOS presents SFSafariViewController only after the Modal has fully
     // dismissed; onDismiss is the deterministic signal (a fixed delay loses
     // under CPU load and the browser silently never appears).
     const handleModalDismiss = async () => {
         onDismiss?.();
-        const url = pendingCheckoutUrlRef.current;
-        pendingCheckoutUrlRef.current = null;
+        const url = pendingBrowserUrlRef.current;
+        pendingBrowserUrlRef.current = null;
         if (!url) return;
         try {
             await WebBrowser.openBrowserAsync(url);
+            await refreshBillingState();
             onSuccess?.();
         } catch (error: any) {
             log.error('[TierSelector] Checkout browser error:', error);
@@ -131,54 +166,66 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
         }
     };
 
+    const presentBillingUrl = async (url: string) => {
+        if (Platform.OS === 'ios') {
+            pendingBrowserUrlRef.current = url;
+            onClose();
+            return;
+        }
+        onClose();
+        await WebBrowser.openBrowserAsync(url);
+        await refreshBillingState();
+        onSuccess?.();
+    };
+
+    const openBillingSupport = () => {
+        onClose();
+        (navigation as any).navigate('BillingSupport');
+    };
+
     const handleCheckout = async () => {
-        if (!selectedTierId) return;
+        if (!selectedTierId
+            || isBillingStateLoading
+            || isCheckoutBlocked(billingState.checkout.allowed)) return;
 
         const tier = TIERS.find(t => t.id === selectedTierId);
         if (!tier) return;
 
         setIsLoading(true);
         try {
-            const token = await ensureSupabaseJwt();
-            if (!token) {
-                log.error('[TierSelector] No auth token');
-                Alert.alert('Error', 'Please sign in to continue');
-                return;
-            }
-
             const successUrl = 'https://app.anorha.app/billing?success=true';
             const cancelUrl = 'https://app.anorha.app/billing?canceled=true';
 
-            const response = await fetch(`${API_BASE_URL}/billing/checkout`, {
+            const response = await apiJson<{
+                provider?: string;
+                action?: string;
+                url?: string;
+            }>('/api/billing/checkout', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
+                body: {
                     tier: tier.name,
-                    paymentProvider: 'polar',
                     successUrl,
                     cancelUrl,
-                }),
+                },
             });
 
-            if (!response.ok) {
-                throw new Error(`Checkout failed: ${response.status}`);
+            if (response.action === 'redirect' && response.url) {
+                await presentBillingUrl(response.url);
+                return;
             }
-
-            const { url } = await response.json();
-            if (url) {
-                if (Platform.OS === 'ios') {
-                    pendingCheckoutUrlRef.current = url;
-                    onClose();
-                } else {
-                    onClose();
-                    await WebBrowser.openBrowserAsync(url);
-                    onSuccess?.();
+            throw new Error('Checkout redirect unavailable');
+        } catch (error: any) {
+            if (error instanceof ApiError && error.status === 409) {
+                const blocked = deriveBillingStateFromCheckoutConflict(
+                    error.body as RawCheckoutConflict,
+                    new Date(),
+                );
+                if (blocked.knowledge === 'known') {
+                    setBillingState(blocked);
+                    void refreshBillingState();
+                    return;
                 }
             }
-        } catch (error: any) {
             log.error('[TierSelector] Checkout error:', error);
             Alert.alert('Checkout Error', 'Failed to start checkout. Please try again.');
         } finally {
@@ -189,36 +236,28 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     const handleManageAccount = async () => {
         setIsLoading(true);
         try {
-            const token = await ensureSupabaseJwt();
-            if (!token) {
-                log.error('[TierSelector] No auth token');
-                Alert.alert('Error', 'Please sign in to continue');
-                return;
-            }
-
-            const response = await fetch(`${API_BASE_URL}/billing/portal`, {
+            const response = await apiJson<{
+                action?: string;
+                url?: string | null;
+            }>('/api/billing/portal', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
             });
 
-            if (!response.ok) {
-                throw new Error(`Manage account failed: ${response.status}`);
+            if (response.action === 'contact_support') {
+                openBillingSupport();
+                return;
             }
-
-            const { url } = await response.json();
-            if (url) {
-                onClose();
-                const supported = await Linking.canOpenURL(url);
-                if (supported) {
-                    await Linking.openURL(url);
-                } else {
-                    Alert.alert('Error', 'Cannot open billing portal');
-                }
+            if (response.action === 'manage' && response.url) {
+                await presentBillingUrl(response.url);
+                return;
             }
+            throw new Error('Billing management action unavailable');
         } catch (error: any) {
+            if (error instanceof ApiError && error.status === 409
+                && error.body?.action === 'contact_support') {
+                openBillingSupport();
+                return;
+            }
             log.error('[TierSelector] Manage account error:', error);
             Alert.alert('Error', 'Failed to open billing portal. Please try again.');
         } finally {
@@ -227,6 +266,42 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     };
 
     const selectedTier = TIERS.find(t => t.id === selectedTierId) || TIERS[0];
+    const checkoutTimestamp = formatBillingTimestamp(billingState.checkout.eligibleAt);
+    const resubscribeTimestamp = formatBillingTimestamp(billingState.resubscribe.eligibleAt);
+    const billingNotice = billingState.handoff?.state === 'scheduled'
+        ? checkoutTimestamp
+            ? `Switch scheduled. Checkout ${checkoutTimestamp}.`
+            : 'Switch scheduled.'
+        : billingState.resubscribe.offered === true && billingState.resubscribe.eligible === false
+            ? resubscribeTimestamp
+                ? `Re-subscribe ${resubscribeTimestamp}.`
+                : 'Re-subscribe unavailable.'
+            : billingState.checkout.state === 'blocked' && checkoutTimestamp
+                ? `Checkout ${checkoutTimestamp}.`
+                : billingState.handoff?.state === 'ready'
+                    ? 'Switch ready.'
+                    : null;
+    const providerNote = billingState.entitlementProvider === 'manual'
+        ? 'Support managed.'
+        : billingState.entitlementProvider === 'polar'
+            ? 'Managed through Polar.'
+            : billingState.entitlementProvider === 'shopify'
+                ? 'Managed through Shopify.'
+                : billingState.checkout.provider === 'polar'
+                    ? 'Checkout through Polar.'
+                    : billingState.checkout.provider === 'shopify'
+                        ? 'Checkout through Shopify.'
+                        : null;
+    const checkoutLabel = billingState.checkout.action === 'schedule_handoff'
+        ? 'Schedule switch'
+        : billingState.checkout.state === 'blocked'
+            ? 'Checkout unavailable'
+            : billingState.resubscribe.offered === true
+                ? 'Re-subscribe'
+                : 'Continue';
+    const billingRequestLoading = isLoading || isBillingStateLoading;
+    const checkoutDisabled = billingRequestLoading
+        || isCheckoutBlocked(billingState.checkout.allowed);
 
     return (
         <Modal
@@ -307,31 +382,28 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
                         <TouchableOpacity
                             style={[
                                 styles.checkoutButton,
-                                !selectedTierId && styles.checkoutButtonDisabled,
+                                checkoutDisabled && styles.checkoutButtonDisabled,
                             ]}
                             onPress={handleCheckout}
-                            disabled={!selectedTierId || isLoading}
+                            disabled={checkoutDisabled}
                         >
-                            {isLoading ? (
+                            {billingRequestLoading ? (
                                 <ActivityIndicator color="#fff" />
                             ) : (
-                                <Text style={styles.checkoutButtonText}>Upgrade for ${selectedTier.price}/{selectedTier.billingPeriod}</Text>
+                                <Text style={styles.checkoutButtonText}>{checkoutLabel}</Text>
                             )}
                         </TouchableOpacity>
 
-                        {hasSubscription ? (
-                            <TouchableOpacity
-                                style={styles.manageButton}
-                                onPress={handleManageAccount}
-                                disabled={isLoading}
-                            >
-                                <Text style={styles.manageButtonText}>Manage subscription</Text>
-                            </TouchableOpacity>
-                        ) : (
-                            <View style={{ alignItems: 'center', marginTop: 12 }}>
-                                <Text style={styles.footerNote}>Auto-renews monthly. Cancel anytime.</Text>
-                            </View>
-                        )}
+                        {billingNotice ? <Text style={styles.footerNote}>{billingNotice}</Text> : null}
+
+                        <TouchableOpacity
+                            style={styles.manageButton}
+                            onPress={handleManageAccount}
+                            disabled={billingRequestLoading}
+                        >
+                            <Text style={styles.manageButtonText}>Manage subscription</Text>
+                        </TouchableOpacity>
+                        {providerNote ? <Text style={styles.footerNote}>{providerNote}</Text> : null}
                     </View>
                 </View>
             </View>
