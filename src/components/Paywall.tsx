@@ -12,7 +12,12 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../context/ThemeContext';
 import Button from './Button';
-import { UserEntitlements, FREE_TRIAL_DAYS } from '../utils/entitlements';
+import { UserEntitlements } from '../utils/entitlements';
+import {
+  formatBillingDate,
+  formatBillingTimestamp,
+  isCheckoutBlocked,
+} from '../utils/billingState';
 
 interface PaywallProps {
   visible: boolean;
@@ -40,30 +45,50 @@ const Paywall: React.FC<PaywallProps> = ({
 
   const ANORHA_GREEN = BRAND_PRIMARY;
   const WHITE_BG = '#FFFFFF';
+  const checkoutBlocked = isCheckoutBlocked(entitlements?.checkoutAllowed);
+  const canOpenPlans = !checkoutBlocked
+    && !(entitlements?.resubscribeOffered === true
+      && entitlements.resubscribeEligible === false);
+  const upgradeLabel = entitlements?.checkoutAction === 'schedule_handoff'
+    ? 'Schedule switch'
+    : entitlements?.resubscribeOffered === true
+      ? 'Re-subscribe'
+      : 'View plans';
 
   const getTitle = () => {
-    if (!entitlements) return 'Start Your Free Trial';
+    if (!entitlements) return 'Choose a plan';
 
-    if (entitlements.subscriptionStatus === 'expired') {
-      return 'Your Subscription Has Expired';
+    if (entitlements.subscriptionStatus === 'inactive') {
+      return 'Subscription inactive';
     }
-    if (entitlements.subscriptionStatus === 'trialing' && entitlements.trialDaysLeft <= 3) {
-      return 'Your Trial is Ending Soon';
+    if (entitlements.subscriptionStatus === 'canceled_paid_through') {
+      return 'Plan ends soon';
     }
-    return 'Upgrade to Access This Feature';
+    return 'Choose a plan';
   };
 
   const getSubtitle = () => {
     if (!entitlements) {
-      return `Start your ${FREE_TRIAL_DAYS}-day free trial to unlock all features.`;
+      return feature
+        ? `Upgrade your plan to access ${feature}.`
+        : 'Upgrade to unlock premium features.';
     }
 
-    if (entitlements.subscriptionStatus === 'trialing') {
-      return `You have ${entitlements.trialDaysLeft} day${entitlements.trialDaysLeft !== 1 ? 's' : ''} left in your trial. Upgrade now to continue using all features.`;
+    if (entitlements.handoffState === 'scheduled') {
+      const eligibleAt = formatBillingTimestamp(entitlements.handoffEligibleAt);
+      return eligibleAt ? `Checkout ${eligibleAt}.` : 'Switch scheduled.';
     }
-
-    if (entitlements.subscriptionStatus === 'expired') {
-      return 'Reactivate your subscription to continue syncing inventory across platforms.';
+    if (entitlements.subscriptionStatus === 'canceled_paid_through') {
+      const paidThrough = formatBillingDate(entitlements.currentPeriodEnd);
+      return paidThrough ? `Paid through ${paidThrough}.` : 'Access remains active.';
+    }
+    if (entitlements.resubscribeOffered === true && entitlements.resubscribeEligible === false) {
+      const eligibleAt = formatBillingTimestamp(entitlements.resubscribeEligibleAt);
+      return eligibleAt ? `Re-subscribe ${eligibleAt}.` : 'Re-subscribe unavailable.';
+    }
+    if (checkoutBlocked) {
+      const eligibleAt = formatBillingTimestamp(entitlements.checkoutEligibleAt);
+      return eligibleAt ? `Checkout ${eligibleAt}.` : 'Checkout unavailable.';
     }
 
     return feature
@@ -101,16 +126,6 @@ const Paywall: React.FC<PaywallProps> = ({
             <Text style={[styles.subtitle, { color: themeColors.textSecondary }]}>{subtitleProp ?? getSubtitle()}</Text>
           </View>
 
-          {/* Trial badge */}
-          {entitlements?.subscriptionStatus === 'trialing' && (
-            <View style={[styles.trialBadge, { backgroundColor: '#FFF3CD', borderColor: '#FFD93D' }]}>
-              <Icon name="clock-outline" size={18} color="#856404" />
-              <Text style={styles.trialBadgeText}>
-                {entitlements.trialDaysLeft} day{entitlements.trialDaysLeft !== 1 ? 's' : ''} remaining in trial
-              </Text>
-            </View>
-          )}
-
           {/* Features list */}
           <ScrollView style={styles.featuresContainer} showsVerticalScrollIndicator={false}>
             {features.map((item, index) => (
@@ -134,6 +149,7 @@ const Paywall: React.FC<PaywallProps> = ({
             <TouchableOpacity
               style={[styles.pricingCard, styles.pricingCardSelected, { borderColor: ANORHA_GREEN }]}
               onPress={onUpgrade}
+              disabled={!canOpenPlans}
             >
               <View style={styles.pricingHeader}>
                 <Text style={[styles.pricingName, { color: themeColors.text }]}>Growth</Text>
@@ -151,9 +167,10 @@ const Paywall: React.FC<PaywallProps> = ({
           {/* CTA buttons */}
           <View style={styles.ctaContainer}>
             <Button
-              title="Upgrade Now"
+              title={upgradeLabel}
               onPress={onUpgrade}
               style={styles.upgradeButton}
+              disabled={!canOpenPlans}
             />
             <TouchableOpacity onPress={onClose} style={styles.maybeLaterButton}>
               <Text style={[styles.maybeLaterText, { color: themeColors.textSecondary }]}>Maybe Later</Text>
@@ -161,9 +178,13 @@ const Paywall: React.FC<PaywallProps> = ({
           </View>
 
           {/* Footer note */}
-          <Text style={[styles.footerNote, { color: themeColors.textSecondary }]}>
-            Cancel anytime. Secure payment via Polar.
-          </Text>
+          {entitlements?.billingProvider === 'polar' ? (
+            <Text style={[styles.footerNote, { color: themeColors.textSecondary }]}>Managed through Polar.</Text>
+          ) : entitlements?.billingProvider === 'shopify' ? (
+            <Text style={[styles.footerNote, { color: themeColors.textSecondary }]}>Managed through Shopify.</Text>
+          ) : entitlements?.billingProvider === 'manual' ? (
+            <Text style={[styles.footerNote, { color: themeColors.textSecondary }]}>Support managed.</Text>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -326,11 +347,6 @@ const styles = StyleSheet.create({
 });
 
 export default Paywall;
-
-
-
-
-
 
 
 

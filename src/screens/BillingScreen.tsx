@@ -18,7 +18,7 @@ import {
   Platform,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@clerk/expo';
 import PageHeader from '../components/ui/PageHeader';
@@ -26,6 +26,14 @@ import TierSelectorModal from '../components/TierSelectorModal';
 import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
+import { ApiError, apiJson } from '../lib/apiClient';
+import {
+  deriveBillingState,
+  formatBillingDate,
+  formatBillingTimestamp,
+  isCheckoutBlocked,
+  type RawBillingSummary,
+} from '../utils/billingState';
 import { createLogger } from '../utils/logger';
 const log = createLogger('BillingScreen');
 
@@ -37,6 +45,8 @@ const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
 
 const ANORHA_GREEN = BRAND_PRIMARY;
 const WHITE_BG = '#FFFFFF';
+
+type BillingSummaryResponse = RawBillingSummary & Record<string, any>;
 
 function safeNumber(value: any, fallback = 0): number {
   const num = typeof value === 'string' ? Number(value) : value;
@@ -76,7 +86,7 @@ const FEATURE_LABELS: Record<string, string> = {
 function getFeatureDisplayName(key: string): string {
   const norm = String(key || '').toLowerCase().trim();
   if (FEATURE_LABELS[norm]) return FEATURE_LABELS[norm];
-  // Unknown key — bucket by generic intent (no tool/vendor names) so nothing internal leaks.
+  // Unknown keys are bucketed by generic intent (no tool/vendor names), so nothing internal leaks.
   if (/ship/.test(norm)) return 'Shipping estimates'; // before vision: "shipping_vision_*" is shipping
   if (/(scrape|crawl|web|research|search)/.test(norm)) return 'Web research';
   if (/(generat|text|writ|caption)/.test(norm)) return 'Listing details';
@@ -88,7 +98,7 @@ function getFeatureDisplayName(key: string): string {
   if (/receipt/.test(norm)) return 'Receipt scans';
   if (/manifest/.test(norm)) return 'Manifest scans';
   if (/(liquidat|clearout)/.test(norm)) return 'Clearout research';
-  // Never humanize the raw key (it may carry an internal name) — generic label instead.
+  // Never humanize the raw key (it may carry an internal name). Use a generic label instead.
   return 'AI usage';
 }
 
@@ -126,10 +136,9 @@ export default function BillingScreen() {
   const { getToken } = useAuth();
   const insets = useSafeAreaInsets();
 
-  const [summary, setSummary] = useState<any>(null);
+  const [summary, setSummary] = useState<BillingSummaryResponse | null>(null);
   const [invoices, setInvoices] = useState<any>(null);
   const [upcoming, setUpcoming] = useState<any>({ upcoming: null });
-  const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
   const [partnerPaymentMethod, setPartnerPaymentMethod] = useState<{
     hasPaymentMethod: boolean;
     lastFour?: string;
@@ -139,6 +148,8 @@ export default function BillingScreen() {
   const [userRole, setUserRole] = useState<'owner' | 'employee' | 'partner' | 'org:admin' | undefined>(undefined);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [isBillingActionLoading, setIsBillingActionLoading] = useState(false);
   const [showTierSelector, setShowTierSelector] = useState(false);
   const [showCreditsModal, setShowCreditsModal] = useState(false);
   const [selectedCreditAmount, setSelectedCreditAmount] = useState<number | null>(50);
@@ -173,7 +184,6 @@ export default function BillingScreen() {
       if (summaryRes?.ok) {
         const newSummary = await summaryRes.json();
         setSummary(newSummary);
-        setHasActiveSubscription(newSummary?.subscription?.Status === 'active');
       }
       if (invoicesRes?.ok) {
         const newInvoices = await invoicesRes.json();
@@ -194,9 +204,9 @@ export default function BillingScreen() {
     }
   }, [getToken, isPartner]);
 
-  useEffect(() => {
-    refreshBillingData();
-  }, []);
+  useFocusEffect(useCallback(() => {
+    void refreshBillingData();
+  }, [refreshBillingData]));
 
   // BillingGateSheet's "Add credits" lands here with addCredits set.
   useEffect(() => {
@@ -214,9 +224,11 @@ export default function BillingScreen() {
   }, [refreshBillingData]);
 
   const planFromSummary =
-    summary?.subscription?.CurrentPlan || summary?.tier_name || summary?.subscription?.current_plan;
-  const subscriptionStatus = summary?.subscription?.Status || summary?.subscription?.status;
+    summary?.subscription?.CurrentPlan || summary?.subscription?.current_plan;
   const planName = (planFromSummary as 'Growth' | 'Teams' | undefined) || undefined;
+  const billingState = deriveBillingState(summary, new Date());
+  const hasActiveSubscription = billingState.subscription.state === 'active'
+    || billingState.subscription.state === 'canceled_paid_through';
 
   const computeAllowanceCents = safeNumber(
     summary?.compute_allowance_cents ?? summary?.ai_allowance_cents ?? summary?.ai_credits_cents,
@@ -227,7 +239,7 @@ export default function BillingScreen() {
   const teamMembersExtra = Math.max(0, safeNumber(summary?.team_members_extra));
   const teamMembersCost = safeNumber(summary?.team_members_cost);
 
-  let planTitle = 'No active plan';
+  let planTitle = summary?.subscription === null ? 'No active plan' : 'Plan details';
   let basePrice = 0;
   if (planName === 'Growth') {
     planTitle = 'Growth · $20/month';
@@ -280,31 +292,105 @@ export default function BillingScreen() {
   const aiOverageDollars = aiOverageCents / 100;
   const totalCostEstimate = basePrice + teamMembersCost + aiOverageDollars;
 
+  const openBillingSupport = () => {
+    (navigation as any).navigate('BillingSupport', {
+      context: {
+        planName: planName || 'Unknown',
+        subscriptionStatus: billingState.subscription.state,
+        aiAllowanceCents: computeAllowanceCents,
+        aiUsedCents: computeUsedCents,
+      },
+    });
+  };
+
   const handleManageSubscription = async () => {
     setActionError(null);
+    setActionNotice(null);
+    setIsBillingActionLoading(true);
     try {
-      const token = await getToken();
-      if (!token) return;
-      const res = await fetch(`${API_BASE}/billing/portal`, {
+      const data = await apiJson<{
+        action?: string;
+        url?: string | null;
+      }>('/api/billing/portal', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
-      if (!res.ok) {
-        setActionError('Unable to open subscription portal.');
+      if (data?.action === 'contact_support') {
+        openBillingSupport();
         return;
       }
-      const data = await res.json().catch(() => null);
-      if (data?.url) {
+      if (data?.action === 'manage' && data?.url) {
         capture(AnalyticsEvents.BILLING_PORTAL_OPENED);
         await WebBrowser.openBrowserAsync(data.url);
-        refreshBillingData();
+        await refreshBillingData();
       } else {
-        setActionError('Unable to open subscription portal.');
+        setActionError('Management unavailable.');
       }
     } catch (error) {
+      if (error instanceof ApiError && error.body?.action === 'contact_support') {
+        openBillingSupport();
+        return;
+      }
       log.error('Failed to open portal:', error);
-      setActionError('Unable to open subscription portal.');
+      setActionError(error instanceof ApiError && error.body?.error === 'entitlement_not_found'
+        ? 'No billing record.'
+        : 'Management unavailable.');
+    } finally {
+      setIsBillingActionLoading(false);
     }
+  };
+
+  const cancelBillingSubscription = async () => {
+    setActionError(null);
+    setActionNotice(null);
+    setIsBillingActionLoading(true);
+    try {
+      const data = await apiJson<{
+        action?: string;
+        url?: string | null;
+        status?: string | null;
+        currentPeriodEnd?: string | null;
+      }>('/api/billing/cancel', {
+        method: 'POST',
+      });
+      if (data?.action === 'contact_support') {
+        openBillingSupport();
+        return;
+      }
+      if (data?.action === 'manage' && data?.url) {
+        await WebBrowser.openBrowserAsync(data.url);
+        await refreshBillingData();
+        return;
+      }
+      if (data?.action === 'canceled') {
+        const paidThrough = formatBillingDate(data.currentPeriodEnd || null);
+        const rawStatus = typeof data.status === 'string' ? data.status.replace(/_/g, ' ') : 'canceled';
+        const statusLabel = rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1);
+        setActionNotice(paidThrough
+          ? `${statusLabel}. Paid through ${paidThrough}.`
+          : `${statusLabel}.`);
+        await refreshBillingData();
+        return;
+      }
+      setActionError('Cancellation unavailable.');
+    } catch (error) {
+      if (error instanceof ApiError && error.body?.action === 'contact_support') {
+        openBillingSupport();
+        return;
+      }
+      log.error('Failed to cancel subscription:', error);
+      setActionError(error instanceof ApiError && error.body?.error === 'entitlement_not_found'
+        ? 'No billing record.'
+        : 'Cancellation unavailable.');
+    } finally {
+      setIsBillingActionLoading(false);
+    }
+  };
+
+  const handleCancelSubscription = () => {
+    Alert.alert('Cancel plan', 'Cancel this plan?', [
+      { text: 'Keep plan', style: 'cancel' },
+      { text: 'Continue', style: 'destructive', onPress: () => void cancelBillingSubscription() },
+    ]);
   };
 
   const handleAddPartnerPaymentMethod = async () => {
@@ -384,12 +470,47 @@ export default function BillingScreen() {
     if (url) Linking.openURL(url);
   };
 
-  const supportContext = {
-    planName: planName || 'Unknown',
-    subscriptionStatus: subscriptionStatus || 'inactive',
-    aiAllowanceCents: computeAllowanceCents,
-    aiUsedCents: computeUsedCents,
-  };
+  const periodEndLabel = formatBillingDate(billingState.subscription.currentPeriodEnd);
+  const checkoutEligibleLabel = formatBillingTimestamp(billingState.checkout.eligibleAt);
+  const resubscribeEligibleLabel = formatBillingTimestamp(billingState.resubscribe.eligibleAt);
+  const subscriptionLabel = billingState.subscription.state === 'canceled_paid_through'
+    ? periodEndLabel
+      ? `Paid through ${periodEndLabel}`
+      : 'Canceled'
+    : billingState.subscription.state === 'active'
+      ? 'Access active'
+      : billingState.subscription.state === 'inactive'
+        ? 'Inactive'
+        : null;
+  const providerLabel = billingState.entitlementProvider === 'polar'
+    ? 'Managed through Polar'
+    : billingState.entitlementProvider === 'shopify'
+      ? 'Managed through Shopify'
+      : billingState.entitlementProvider === 'manual'
+        ? 'Support managed'
+        : null;
+  const billingNotice = billingState.handoff?.state === 'scheduled'
+    ? checkoutEligibleLabel
+      ? `Switch scheduled. Checkout ${checkoutEligibleLabel}.`
+      : 'Switch scheduled.'
+    : billingState.resubscribe.offered === true && billingState.resubscribe.eligible === false
+      ? resubscribeEligibleLabel
+        ? `Re-subscribe ${resubscribeEligibleLabel}.`
+        : 'Re-subscribe unavailable.'
+      : billingState.checkout.state === 'blocked' && checkoutEligibleLabel
+        ? `Checkout ${checkoutEligibleLabel}.`
+        : billingState.handoff?.state === 'ready'
+          ? 'Switch ready.'
+          : null;
+  const hasKnownEntitlement = billingState.entitlementProvider !== 'unknown'
+    && billingState.subscription.state !== 'none'
+    && billingState.subscription.state !== 'unknown';
+  const canAttemptManage = billingState.subscription.state !== 'none';
+  const checkoutBlocked = isCheckoutBlocked(billingState.checkout.allowed);
+  const showCancel = billingState.subscription.state === 'active';
+  const resubscribeEnabled = billingState.resubscribe.offered === true
+    && billingState.resubscribe.eligible !== false
+    && !checkoutBlocked;
 
   return (
     <View style={styles.container}>
@@ -407,38 +528,106 @@ export default function BillingScreen() {
             <View>
               <Text style={styles.listLabel}>Current Plan</Text>
               <Text style={styles.listValue}>{planTitle.split('·')[0].trim() || 'Free Trial'}</Text>
-              <Text style={styles.listSubValue}>{subscriptionStatus === 'active' ? 'Subscribed' : 'Inactive'}</Text>
+              {subscriptionLabel ? <Text style={styles.listSubValue}>{subscriptionLabel}</Text> : null}
             </View>
           </View>
-          <View style={styles.separator} />
-          <View style={styles.listItem}>
-            <View>
-              <Text style={styles.listLabel}>Expiration Date</Text>
-              <Text style={styles.listValue}>
-                {summary?.subscription?.CurrentPeriodEnd
-                  ? new Date(summary.subscription.CurrentPeriodEnd).toLocaleDateString('en-US', {
-                    month: 'long',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })
-                  : 'N/A'}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.separator} />
-          {hasActiveSubscription ? (
-            <TouchableOpacity style={styles.listItemAction} onPress={handleManageSubscription}>
-              <Text style={styles.listValue}>Manage Subscription</Text>
-              <ChevronRight size={20} color="#D4D4D8" />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={styles.listItemAction} onPress={() => setShowTierSelector(true)}>
-              <Text style={styles.listValue}>Upgrade</Text>
-              <ChevronRight size={20} color="#D4D4D8" />
-            </TouchableOpacity>
-          )}
+          {periodEndLabel ? (
+            <>
+              <View style={styles.separator} />
+              <View style={styles.listItem}>
+                <View>
+                  <Text style={styles.listLabel}>
+                    {billingState.subscription.state === 'canceled_paid_through' ? 'Paid through' : 'Period end'}
+                  </Text>
+                  <Text style={styles.listValue}>{periodEndLabel}</Text>
+                </View>
+              </View>
+            </>
+          ) : null}
+          {providerLabel ? (
+            <>
+              <View style={styles.separator} />
+              <View style={styles.listItem}>
+                <Text style={styles.listLabel}>Billing</Text>
+                <Text style={styles.listValue}>{providerLabel}</Text>
+              </View>
+            </>
+          ) : null}
+          {canAttemptManage ? (
+            <>
+              <View style={styles.separator} />
+              <TouchableOpacity
+                style={styles.listItemAction}
+                onPress={handleManageSubscription}
+                disabled={isBillingActionLoading}
+              >
+                <Text style={styles.listValue}>Manage plan</Text>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
+            </>
+          ) : null}
+          {billingState.resubscribe.offered === true ? (
+            <>
+              <View style={styles.separator} />
+              <TouchableOpacity
+                style={[styles.listItemAction, !resubscribeEnabled && styles.disabledAction]}
+                onPress={() => setShowTierSelector(true)}
+                disabled={!resubscribeEnabled || isBillingActionLoading}
+              >
+                <View>
+                  <Text style={styles.listValue}>Re-subscribe</Text>
+                  {!resubscribeEnabled && resubscribeEligibleLabel ? (
+                    <Text style={styles.listSubValue}>Available {resubscribeEligibleLabel}</Text>
+                  ) : null}
+                </View>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
+            </>
+          ) : billingState.checkout.action === 'schedule_handoff' ? (
+            <>
+              <View style={styles.separator} />
+              <TouchableOpacity
+                style={styles.listItemAction}
+                onPress={() => setShowTierSelector(true)}
+                disabled={isBillingActionLoading}
+              >
+                <Text style={styles.listValue}>Schedule switch</Text>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
+            </>
+          ) : !hasKnownEntitlement ? (
+            <>
+              <View style={styles.separator} />
+              <TouchableOpacity
+                style={[
+                  styles.listItemAction,
+                  checkoutBlocked && styles.disabledAction,
+                ]}
+                onPress={() => setShowTierSelector(true)}
+                disabled={checkoutBlocked || isBillingActionLoading}
+              >
+                <Text style={styles.listValue}>View plans</Text>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
+            </>
+          ) : null}
+          {showCancel ? (
+            <>
+              <View style={styles.separator} />
+              <TouchableOpacity
+                style={styles.listItemAction}
+                onPress={handleCancelSubscription}
+                disabled={isBillingActionLoading}
+              >
+                <Text style={styles.cancelActionText}>Cancel plan</Text>
+                <ChevronRight size={20} color="#D4D4D8" />
+              </TouchableOpacity>
+            </>
+          ) : null}
         </View>
 
+        {billingNotice ? <Text style={styles.actionNoticeText}>{billingNotice}</Text> : null}
+        {actionNotice ? <Text style={styles.actionNoticeText}>{actionNotice}</Text> : null}
         {actionError ? (
           <Text style={styles.actionErrorText}>{actionError}</Text>
         ) : null}
@@ -597,7 +786,7 @@ export default function BillingScreen() {
         <View style={styles.cardGroup}>
           <TouchableOpacity
             style={styles.listItemAction}
-            onPress={() => (navigation as any).navigate('BillingSupport', { context: supportContext })}
+            onPress={openBillingSupport}
           >
             <View style={{ flex: 1, paddingRight: 8 }}>
               <Text style={styles.listValue}>Report Subscription Issue</Text>
@@ -659,7 +848,7 @@ export default function BillingScreen() {
           setShowTierSelector(false);
           refreshBillingData();
         }}
-        hasSubscription={hasActiveSubscription}
+        initialSummary={summary}
         usagePercent={computeUsagePercent}
       />
     </View>
@@ -685,6 +874,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  disabledAction: {
+    opacity: 0.45,
+  },
+  cancelActionText: {
+    fontSize: 16,
+    color: '#DC2626',
+    fontFamily: 'Inter_600SemiBold',
   },
   usageItem: {
     paddingVertical: 14,
@@ -739,6 +936,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'Inter_500Medium',
     color: '#DC2626',
+    marginTop: -16,
+    marginBottom: 24,
+    marginLeft: 4,
+  },
+  actionNoticeText: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: '#52525B',
     marginTop: -16,
     marginBottom: 24,
     marginLeft: 4,
