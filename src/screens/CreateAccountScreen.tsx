@@ -1429,14 +1429,25 @@ export default function CreateAccountScreen() {
 
       // 2. Update the existing user record (created by backend sync)
       // We use UPDATE because the user MUST exist for the token exchange to work.
-      const { error: userError } = await supabase.from('Users').update({
+      // PhoneNumber has a partial unique index (Users_PhoneNumber_unique): a number
+      // already on another Users row must cost the phone field, never the account,
+      // so a 23505 retries the same update without the phone.
+      const trimmedPhone = formData.phone?.trim();
+      const baseUserUpdate = {
         FirstName: formData.firstName.trim(),
-        PhoneNumber: formData.phone,
         Region: formData.region || 'US',
         Currency: formData.currency || 'USD',
         Occupation: finalRole,
         BusinessType: finalBusinessType,
-      }).eq('Id', dbUserId);
+      };
+      let { error: userError } = await supabase.from('Users').update(
+        trimmedPhone ? { ...baseUserUpdate, PhoneNumber: trimmedPhone } : baseUserUpdate,
+      ).eq('Id', dbUserId);
+
+      if (userError && (userError as { code?: string }).code === '23505' && trimmedPhone) {
+        log.warn('Phone already registered to another account; finishing setup without it.');
+        ({ error: userError } = await supabase.from('Users').update(baseUserUpdate).eq('Id', dbUserId));
+      }
 
       if (userError) throw userError;
 
