@@ -1444,7 +1444,16 @@ export default function CreateAccountScreen() {
         trimmedPhone ? { ...baseUserUpdate, PhoneNumber: trimmedPhone } : baseUserUpdate,
       ).eq('Id', dbUserId);
 
-      if (userError && (userError as { code?: string }).code === '23505' && trimmedPhone) {
+      // The supabase shim does not reliably surface .code, so match the
+      // constraint by message too; any phone-uniqueness failure retries
+      // without the phone rather than killing setup.
+      const isPhoneConflict = (e: unknown): boolean => {
+        const err = e as { code?: string; message?: string; details?: string };
+        return err?.code === '23505'
+          || /Users_PhoneNumber_unique|duplicate key/i.test(String(err?.message || ''))
+          || /Users_PhoneNumber_unique/i.test(String(err?.details || ''));
+      };
+      if (userError && isPhoneConflict(userError) && trimmedPhone) {
         log.warn('Phone already registered to another account; finishing setup without it.');
         ({ error: userError } = await supabase.from('Users').update(baseUserUpdate).eq('Id', dbUserId));
       }
