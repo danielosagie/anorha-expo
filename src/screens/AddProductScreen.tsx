@@ -407,7 +407,7 @@ import { ShelfScanPlaceholderRow } from '../components/camera/ShelfScanProgressC
 import BottomActionBar from '../components/BottomActionBar';
 import { BillingGateResponse, normalizeBillingGateResponse } from '../types/billingGate';
 import { ToastHost } from '../components/Toast';
-import { useToast, useToastAnchor } from '../context/ToastContext';
+import { useToast } from '../context/ToastContext';
 import {
   clearPendingBillingAction,
   loadPendingBillingAction,
@@ -2295,12 +2295,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // cold start isn't the dark/unfocused capture that made first scans misfire.
   const cameraReadyAtRef = useRef(0);
   const isFocused = useIsFocused();
-  const [cameraControlsHeight, setCameraControlsHeight] = useState(160);
-  useToastAnchor(
-    'add-product-controls',
-    isFocused && !showDeepSearchSheet,
-    cameraControlsHeight + 16,
-  );
 
   // "Creating your listings" → "Ready to review" card flow (post-checkout).
   const [creatingListings, setCreatingListings] = useState<{ photoUri?: string | null; count: number; itemIds?: string[] } | null>(null);
@@ -6558,7 +6552,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           so a collapsed (auto-height) wrapper would strand it off-screen. */}
       <Animated.View style={[StyleSheet.absoluteFill, controlsFadeStyle]} pointerEvents="box-none">
       <BottomControls
-        onLayout={event => setCameraControlsHeight(event.nativeEvent.layout.height)}
         onCapture={handleCapture}
         isCapturing={isCapturing}
         captureButtonScale={captureButtonScale}
@@ -6725,11 +6718,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             ) : openFolder ? (
               <View style={StyleSheet.absoluteFill}>{renderShelfFolderPage()}</View>
             ) : null}
-            <ToastHost
-              enabled={nativeModalVisible('cart', !!showDeepSearchSheet)}
-              priority={1}
-              ignoreAnchors
-            />
+            <ToastHost enabled={nativeModalVisible('cart', !!showDeepSearchSheet)} priority={1} />
           </View>
         )}
       </Modal>

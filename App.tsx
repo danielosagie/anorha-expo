@@ -27,6 +27,7 @@ import { JobsProvider } from './src/context/JobsContext';
 import { NarrationProvider } from './src/context/NarrationContext';
 import { ToastProvider } from './src/context/ToastContext';
 import { ToastHost } from './src/components/Toast';
+import { resetSaveStatus } from './src/context/saveStatusStore';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PostHogProvider, PostHogIdentify } from './src/providers/PostHogProvider';
 import { ConvexProvider } from './src/providers/ConvexProvider';
@@ -346,6 +347,9 @@ const App: React.FC = () => {
       if (!isSignedIn) {
         console.log('[App] User signed out, clearing Legend State');
         setLegendStateModules(null);
+        // No save survives a sign-out, so the nav tag must not either. A request left
+        // hanging on a dead token would otherwise strand it on "Saving".
+        resetSaveStatus();
         return;
       }
 

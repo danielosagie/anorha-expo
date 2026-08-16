@@ -16,7 +16,7 @@ import ShadowSurface from './ui/ShadowSurface';
 import { AnorhaFace } from './brand/AnorhaFace';
 import { openQuickChat, setQuickChatDarkMode, useQuickChatStore } from './sprout/quickChatStore';
 import { sproutDarkTheme } from '../design/sproutTheme';
-import { useToastAnchor } from '../context/ToastContext';
+import SaveStatusTag from './SaveStatusTag';
 
 // Order here only gates which routes render; display order follows the navigator.
 const TAB_ICON: Record<string, string> = {
@@ -56,7 +56,6 @@ const TabBar: React.FC<TabBarProps> = ({
   // reads as a bug, so the tab row stands down while the composer is up — same slot, one
   // thing in it. The composer's own close button puts the tabs back.
   const sproutDocked = useQuickChatStore().visible;
-  useToastAnchor('main-tab-bar', !sproutDocked, rowHeight + bottomInset);
 
   const addRotateAnim = useRef(new Animated.Value(0)).current;
   const addRotate = addRotateAnim.interpolate({
@@ -127,6 +126,16 @@ const TabBar: React.FC<TabBarProps> = ({
           />
         </View>
       )}
+
+      {/* Save state rides above the row's centre, in the fade zone the container already
+          reserves, so the tabs keep their spacing and nothing shifts when it appears. It is
+          absent unless a save is in flight or just landed, so most of the time this is air. */}
+      <View
+        pointerEvents="none"
+        style={[styles.statusSlot, { bottom: rowHeight + bottomInset + 2 }]}
+      >
+        <SaveStatusTag dark={dark} />
+      </View>
 
       <View
         style={[
@@ -235,6 +244,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 36,
+  },
+  statusSlot: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
   sideButton: {
     height: SIDE_BUTTON_SIZE,

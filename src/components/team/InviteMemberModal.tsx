@@ -303,7 +303,7 @@ export default function InviteMemberModal({ visible, orgId, onClose, onSuccess }
             </TouchableOpacity>
           </View>
         </View>
-        <ToastHost enabled={visible} priority={1} ignoreAnchors />
+        <ToastHost enabled={visible} priority={1} />
       </KeyboardAvoidingView>
     </Modal>
   );

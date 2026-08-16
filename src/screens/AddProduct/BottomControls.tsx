@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, type LayoutChangeEvent } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, FadeIn, SlideInDown, withTiming, runOnJS } from 'react-native-reanimated';
 import { PanGestureHandler, State, type PanGestureHandlerGestureEvent } from 'react-native-gesture-handler';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -37,7 +37,6 @@ export const BottomControls: React.FC<{
   isShelfStreaming?: boolean;
   isShelfHandling?: boolean;
   unseenResultsCount?: number;
-  onLayout?: (event: LayoutChangeEvent) => void;
 }> = ({
   onCapture,
   isCapturing,
@@ -62,7 +61,6 @@ export const BottomControls: React.FC<{
   isShelfStreaming = false,
   isShelfHandling = false,
   unseenResultsCount = 0,
-  onLayout,
 }) => {
     const activeIndex = items.findIndex(i => i.id === activeItemId);
     const totalItems = items.length;
@@ -192,7 +190,7 @@ export const BottomControls: React.FC<{
     const activeMode = hoveredMode || cameraMode;
 
     return (
-      <View style={styles.bottomControls} onLayout={onLayout}>
+      <View style={styles.bottomControls}>
         <Animated.View entering={FadeIn.delay(500)} style={styles.controlsRow}>
           <View style={{ gap: 4, justifyContent: "center" }}>
             <TouchableOpacity style={[styles.galleryButton, { gap: 4 }]} onPress={() => onImageUpload()}>

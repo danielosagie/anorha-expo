@@ -20,12 +20,10 @@ import {
 type ToastContextValue = {
   toast: ToastRecord | null;
   activeHostId: string | null;
-  bottomAnchorHeight: number;
   showToast: (input: ToastInput) => void;
   dismissToast: (id?: number) => void;
   registerHost: (id: string, priority: number) => void;
   unregisterHost: (id: string) => void;
-  updateAnchor: (id: string, height: number | null) => void;
 };
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -33,9 +31,7 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(toastReducer, initialToastState);
   const [activeHostId, setActiveHostId] = useState<string | null>(null);
-  const [bottomAnchorHeight, setBottomAnchorHeight] = useState(0);
   const hostsRef = useRef(new Map<string, { priority: number; order: number }>());
-  const anchorsRef = useRef(new Map<string, number>());
   const hostOrderRef = useRef(0);
 
   const resolveActiveHost = useCallback(() => {
@@ -58,13 +54,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     resolveActiveHost();
   }, [resolveActiveHost]);
 
-  const updateAnchor = useCallback((id: string, height: number | null) => {
-    if (height == null || height <= 0) anchorsRef.current.delete(id);
-    else anchorsRef.current.set(id, height);
-    const nextHeight = Math.max(0, ...anchorsRef.current.values());
-    setBottomAnchorHeight(nextHeight);
-  }, []);
-
   const showToast = useCallback((input: ToastInput) => {
     dispatch({ type: 'show', input, now: Date.now() });
     void Haptics.selectionAsync().catch(() => undefined);
@@ -77,21 +66,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const value = useMemo<ToastContextValue>(() => ({
     toast: state.current,
     activeHostId,
-    bottomAnchorHeight,
     showToast,
     dismissToast,
     registerHost,
     unregisterHost,
-    updateAnchor,
   }), [
     activeHostId,
-    bottomAnchorHeight,
     dismissToast,
     registerHost,
     showToast,
     state.current,
     unregisterHost,
-    updateAnchor,
   ]);
 
   return <ToastContext.Provider value={value}>{children}</ToastContext.Provider>;
@@ -106,14 +91,6 @@ function useToastContext() {
 export function useToast() {
   const { showToast, dismissToast } = useToastContext();
   return useMemo(() => ({ showToast, dismissToast }), [dismissToast, showToast]);
-}
-
-export function useToastAnchor(id: string, active: boolean, height: number) {
-  const { updateAnchor } = useToastContext();
-  useEffect(() => {
-    updateAnchor(id, active ? height : null);
-    return () => updateAnchor(id, null);
-  }, [active, height, id, updateAnchor]);
 }
 
 export function useToastHostRegistration(id: string, enabled: boolean, priority: number) {

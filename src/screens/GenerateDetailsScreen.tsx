@@ -4,7 +4,7 @@ import { supabase, ensureSupabaseJwt } from '../lib/supabase';
 import { API_BASE_URL } from '../config/env';
 import { apiFetch } from '../lib/apiClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Animated, Easing, BackHandler } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Image, FlatList, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, BackHandler } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { StackScreenProps } from '@react-navigation/stack';
 import { AppStackParamList } from '../navigation/AppNavigator';
@@ -38,7 +38,6 @@ import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import { useToastAnchor } from '../context/ToastContext';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
 import { selectItem } from '../features/cart/cartStore';
 import { fetchGenerateJobStatus } from '../lib/generateJobs';
@@ -115,6 +114,7 @@ type GeneratedResult = {
 // Platform field schema extracted to separate file for maintainability
 import { PLATFORM_FIELD_SCHEMA } from '../utils/platformSchemas';
 import { createLogger } from '../utils/logger';
+import { saveStarted } from '../context/saveStatusStore';
 const log = createLogger('GenerateDetailsScreen');
 
 // NOTE: Schema currently not used in this file - UI uses ListingEditorForm which has its own logic
@@ -168,25 +168,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   const [jobData, setJobData] = useState<{ status?: string; currentStage?: string; results?: GeneratedResult[]; summary?: any; completedAt?: string } | null>(null);
   const [dbImages, setDbImages] = useState<Record<string, string[]>>({});
   const [isInputExpanded, setIsInputExpanded] = useState(false);
-  const [composerHeight, setComposerHeight] = useState(120);
-  const [composerKeyboardHeight, setComposerKeyboardHeight] = useState(0);
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const show = Keyboard.addListener(showEvent, event => {
-      setComposerKeyboardHeight(Math.max(event.endCoordinates?.height ?? 0, 0));
-    });
-    const hide = Keyboard.addListener(hideEvent, () => setComposerKeyboardHeight(0));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
-  useToastAnchor(
-    'generate-details-composer',
-    isFocused && mode === 'edit' && isInputExpanded,
-    composerHeight + Math.max(composerKeyboardHeight - insets.bottom, 0),
-  );
   // Chat-style "wanna change something" composer text (replaces SmartCommandInput).
   const [quickFixText, setQuickFixText] = useState('');
   useEffect(() => {
@@ -758,6 +739,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       && sendGeneration === editorGenerationRef.current
       && sendSessionKey === lastEditorSessionKeyRef.current;
 
+    // Same reason as ProductDetail: the exit flush outlives this screen's own header pill,
+    // so the nav tag is settled from the request rather than from `saveState`.
+    let savedCleanly = false;
+    const settleNavTag = saveStarted();
+
     try {
       if (responseIsCurrent()) setSaveState('saving');
       await AsyncStorage.setItem(draftKey, JSON.stringify({ draftData: snapshot, savedAt: Date.now() }));
@@ -784,6 +770,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         setSaveState(draftEditVersionRef.current === sendEditVersion ? 'saved' : 'idle');
       }
       log.debug('[GEN-DETAILS AutoSave] ✅ Saved', variantId ? '(local + backend)' : '(local)');
+      savedCleanly = true;
       return true;
     } catch (error) {
       log.error('[GEN-DETAILS AutoSave] ❌ Error:', error);
@@ -792,6 +779,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         setSaveState('error');
       }
       return false;
+    } finally {
+      settleNavTag(savedCleanly);
     }
   }, [draftKey, variantIdForDraft, editorSessionKey]);
 
@@ -3235,10 +3224,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
             pointerEvents="none"
           />
 
-          <View
-            onLayout={event => setComposerHeight(event.nativeEvent.layout.height)}
-            style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}
-          >
+          <View style={{ paddingTop: 20, paddingBottom: 24, paddingHorizontal: 4 }}>
             {mode === 'edit' ? (isInputExpanded ? (
             <View style={{ flexDirection: 'column', justifyContent: "center", alignItems: 'flex-start', gap: 8, marginBottom: 4, minWidth: "100%" }}>
               <TouchableOpacity
