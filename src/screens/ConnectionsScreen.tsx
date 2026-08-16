@@ -142,6 +142,7 @@ const ConnectionsScreen = () => {
   // The global picker hands every platform to the one shared connect flow. This
   // keeps store-specific steps, such as Shopify's picker, on the same path.
   const [flowPlatform, setFlowPlatform] = useState<string | null>(null);
+  const [retryConnectionId, setRetryConnectionId] = useState<string | null>(null);
 
   const handleStartConnect = useCallback(
     (platform: string) => {
@@ -157,10 +158,16 @@ const ConnectionsScreen = () => {
         Alert.alert(def?.label ?? 'Platform', `${def?.label ?? 'This platform'} can’t be connected in-app yet.`);
         return;
       }
+      setRetryConnectionId(null);
       setFlowPlatform(def.key);
     },
     [overlay, runCsvImport],
   );
+
+  const openImportRetry = useCallback((connection: PlatformConnectionRow) => {
+    setRetryConnectionId(connection.Id);
+    setFlowPlatform(connection.PlatformType);
+  }, []);
 
   // Hold the latest handler in a ref so the focus effect below can stay stable.
   const startConnectRef = useRef(handleStartConnect);
@@ -327,6 +334,7 @@ const ConnectionsScreen = () => {
               const attn = attentionByConn[c.Id] || 0;
               const title = shopLabel(c);
               const started = importDateLabel(st.occurredAt || undefined);
+              const secondaryFailureDate = importDateLabel(st.secondaryFailure?.occurredAt);
               const statusColor = needsReconnect ? theme.colors.error : st.color;
               const statusParts = [st.label];
               if (importInProgress && attn > 0) statusParts.push(`${attn} pending`);
@@ -344,7 +352,11 @@ const ConnectionsScreen = () => {
                       handleStartConnect(c.PlatformType);
                       return;
                     }
-                    if (importInProgress || st.kind === 'failed') {
+                    if (st.kind === 'failed' && st.canRetryImport) {
+                      openImportRetry(c);
+                      return;
+                    }
+                    if (importInProgress) {
                       navigation.navigate('ImportQuestionQueue', {
                         connectionId: c.Id,
                         importId: recentImport?.importId,
@@ -369,9 +381,22 @@ const ConnectionsScreen = () => {
                       </Text>
                     </View>
                     {managing && st.failureReason ? (
-                      <Text style={[styles.failureReason, { color: theme.colors.error }]}>
-                        {st.failureReason}
-                      </Text>
+                      <Text style={[styles.failureReason, { color: theme.colors.error }]}>{st.failureReason}</Text>
+                    ) : null}
+                    {st.secondaryFailure && st.canRetryImport ? (
+                      <TouchableOpacity
+                        style={styles.secondaryFailure}
+                        activeOpacity={0.7}
+                        onPress={(event: any) => {
+                          event.stopPropagation?.();
+                          openImportRetry(c);
+                        }}
+                      >
+                        <RefreshCw size={12} color={theme.colors.error} />
+                        <Text style={[styles.secondaryFailureText, { color: theme.colors.error }]}>
+                          {[st.secondaryFailure.label, secondaryFailureDate].filter(Boolean).join(', ')}
+                        </Text>
+                      </TouchableOpacity>
                     ) : null}
                   </View>
                   {importInProgress ? (
@@ -584,10 +609,15 @@ const ConnectionsScreen = () => {
         visible={!!flowPlatform}
         platform={flowPlatform}
         orgId={currentOrg?.id}
-        onCancel={() => setFlowPlatform(null)}
+        retryConnectionId={retryConnectionId}
+        onCancel={() => {
+          setFlowPlatform(null);
+          setRetryConnectionId(null);
+        }}
         onConnected={(connectionId) => {
           const platformName = flowPlatform || 'Platform';
           setFlowPlatform(null);
+          setRetryConnectionId(null);
           refresh?.();
           // New store, new inbox work: refresh the shared summary too so the
           // "needs you" counts move with the connect, not on the next focus.
@@ -641,6 +671,8 @@ const styles = StyleSheet.create({
   dot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   failureReason: { fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 17, marginTop: 5 },
+  secondaryFailure: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5, alignSelf: 'flex-start' },
+  secondaryFailureText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
 
   reconnectText: { color: '#71717A', fontSize: 12.5, fontFamily: 'Inter_600SemiBold' },
 

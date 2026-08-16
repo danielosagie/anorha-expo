@@ -37,12 +37,9 @@ type Card = {
   onPress: () => void;
 };
 
-const statusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
-  if (uiState === 'importing') return { label: 'Importing inventory...', color: '#A2611A' };
-  if (uiState === 'connected') return { label: 'Connected', color: '#93C822' };
+const setupStatusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
   if (uiState === 'needs-computer') return { label: 'Finish setup', color: '#BA7517' };
-  if (uiState === 'checking') return { label: 'Checking', color: '#71717A' };
-  return { label: 'Connect', color: '#71717A' };
+  return { label: 'Checking status', color: '#71717A' };
 };
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
@@ -247,7 +244,9 @@ const SettingsScreen = () => {
               }, {
                 presentationByConnectionId,
               });
-              const st = statusOf(connectStatus.uiState);
+              const st = connectStatus.uiState === 'needs-computer' || connectStatus.uiState === 'checking'
+                ? setupStatusOf(connectStatus.uiState)
+                : presentationByConnectionId.get(c.Id)!;
               return (
                 <TouchableOpacity
                   key={c.Id}

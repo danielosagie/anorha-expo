@@ -20,6 +20,7 @@ import { listPlatforms } from '../../config/platforms';
 import { type ConnectablePlatform } from '../../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
 import { useFacebookJobStatus } from '../../hooks/useFacebookJobStatus';
+import { useImportStatus } from '../../hooks/useImportStatus';
 import { derivePlatformConnectStatus } from '../../lib/platformConnectStatus';
 import { connectionImportPresentationsById } from '../../lib/connectionImportPresentation';
 
@@ -54,9 +55,15 @@ export default function ConnectAccountsStep({
 }) {
   const { connections, progressByConnectionId, refresh } = usePlatformConnections();
   const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const importStatus = useImportStatus();
   const presentationByConnectionId = useMemo(
-    () => connectionImportPresentationsById({ connections, progressByConnectionId }),
-    [connections, progressByConnectionId],
+    () => connectionImportPresentationsById({
+      connections,
+      aggregateConnections: importStatus.connections,
+      recentImports: importStatus.recentImports,
+      progressByConnectionId,
+    }),
+    [connections, importStatus.connections, importStatus.recentImports, progressByConnectionId],
   );
 
   // The platform whose combined connect flow (OAuth + link-computer) is open.
@@ -123,7 +130,7 @@ export default function ConnectAccountsStep({
               <View style={styles.rowInfo}>
                 <Text style={styles.rowName}>{p.name}</Text>
                 {importing ? (
-                  <Text style={styles.rowStatus} numberOfLines={1}>Importing inventory…</Text>
+                  <Text style={styles.rowStatus} numberOfLines={1}>Importing items</Text>
                 ) : null}
               </View>
 

@@ -31,10 +31,7 @@ import PlatformAvatar from '../components/PlatformAvatar';
 import ErrorModal from '../components/ErrorModal';
 import { createLogger } from '../utils/logger';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
-import {
-  deriveConnectionImportPresentation,
-  latestImportsByConnection,
-} from '../lib/connectionImportPresentation';
+import { connectionImportPresentationsById } from '../lib/connectionImportPresentation';
 
 const log = createLogger('SyncRulesScreen');
 
@@ -118,10 +115,6 @@ const SyncRulesScreen = () => {
   // Passive "needs you" signal — the ONE explicit deep-link into the review deck.
   const importStatus = useImportStatus();
   const attn = importStatus.lanes.matches.byConnection.find((b) => b.connectionId === connectionId)?.count || 0;
-  const recentImportByConnection = useMemo(
-    () => latestImportsByConnection(importStatus.recentImports),
-    [importStatus.recentImports],
-  );
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRequestRef = useRef(0);
@@ -129,14 +122,18 @@ const SyncRulesScreen = () => {
 
   const name = normalizeDisplayName(displayName || platformType || 'Platform');
   const contextConnection = connections.find((connection) => connection.Id === connectionId);
-  const importConnection = importStatus.connections.find((connection) => connection.connectionId === connectionId);
-  const st = deriveConnectionImportPresentation({
-    enabled: contextConnection?.IsEnabled !== false,
-    connectionStatus: contextConnection?.Status || status,
-    aggregateState: importConnection?.state,
-    latestImport: recentImportByConnection.get(connectionId),
-    progressStatus: progressByConnectionId[connectionId]?.status,
-  });
+  const presentationByConnectionId = useMemo(
+    () => connectionImportPresentationsById({
+      connections: contextConnection
+        ? [contextConnection]
+        : [{ Id: connectionId, IsEnabled: true, Status: status }],
+      aggregateConnections: importStatus.connections,
+      recentImports: importStatus.recentImports,
+      progressByConnectionId,
+    }),
+    [connectionId, contextConnection, importStatus.connections, importStatus.recentImports, progressByConnectionId, status],
+  );
+  const st = presentationByConnectionId.get(connectionId)!;
 
   useEffect(() => {
     let alive = true;
