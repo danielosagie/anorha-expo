@@ -37,7 +37,6 @@ import {
   ChatComposerFooter,
   ChatSurfaceWash,
 } from '../features/liquidationConversation/components/ChatChrome';
-import { useToastAnchor } from '../context/ToastContext';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -356,7 +355,6 @@ const CampaignThreadScreen = () => {
     return () => { show.remove(); hide.remove(); };
   }, []);
   const feedKeyboardInset = Math.max(keyboardHeight - insets.bottom, 0);
-  useToastAnchor('campaign-thread-composer', isFocused, footerH + feedKeyboardInset);
 
   // When Sprout asks a structured question (or proposes a plan), drop the keyboard so the
   // card takes its place at the bottom instead of stacking on top of the keyboard. Tapping

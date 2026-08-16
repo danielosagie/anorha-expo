@@ -61,6 +61,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 import { useToast } from '../context/ToastContext';
+import { saveStarted } from '../context/saveStatusStore';
 const log = createLogger('ProductDetail');
 
 
@@ -1780,6 +1781,12 @@ const ProductDetailScreen = observer(
       }
       if (savePhotos) updateData.ImageUrls = imageSnapshot;
 
+      // The nav tag is driven from the request itself, not from `isSaving`. Leaving the screen
+      // flushes pending saves on the way out, and that flush must still report where the seller
+      // lands, after this component's state is gone.
+      let savedCleanly = false;
+      const settleNavTag = saveStarted();
+
       try {
         const authToken = await ensureSupabaseJwt();
         if (!authToken) throw new Error('Not signed in. Changes not saved');
@@ -1863,6 +1870,7 @@ const ProductDetailScreen = observer(
           // product-wide text dirty flag after a gallery-only save.
           setDetailedItem(prev => prev ? { ...prev } : prev);
         }
+        savedCleanly = true;
         return true;
       } catch (error) {
         log.error('Serialized product save failed:', error);
@@ -1876,6 +1884,7 @@ const ProductDetailScreen = observer(
         }
         return false;
       } finally {
+        settleNavTag(savedCleanly);
         if (isLatest()) setIsSaving(false);
       }
     }, [showToast, viewChangedFields, loadPlatformData]);

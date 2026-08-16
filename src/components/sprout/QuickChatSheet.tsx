@@ -60,7 +60,6 @@ import {
 } from '../../features/liquidationConversation/components/ChatChrome';
 import { CHAT_COLORS } from '../../design/chatGlass';
 import { getSproutTheme, sproutLightTheme } from '../../design/sproutTheme';
-import { useToastAnchor } from '../../context/ToastContext';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -758,7 +757,6 @@ function QuickChatConversation({
   // keyboard value, it has to track the same lift in JS or the transcript scrolls under
   // the lifted composer and the newest turn is unreachable.
   const composerLift = full ? Math.max(keyboardHeight - insets.bottom, 0) : 0;
-  useToastAnchor('quick-chat-composer', true, footerHeight + composerLift);
 
   // Opening the sheet raised the keyboard immediately, mid entry-spring: the seller landed
   // on a sheet whose visible strip was the grabber, with the transcript they came to read

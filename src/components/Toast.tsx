@@ -29,19 +29,20 @@ function ToneIcon({ tone }: { tone: ToastTone }) {
 }
 
 function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: (id: number) => void }) {
-  const translateY = useSharedValue(12);
+  // Toasts live at the top everywhere, so they drop IN from above and leave the same way.
+  const translateY = useSharedValue(-12);
   const opacity = useSharedValue(0);
 
   const finishDismiss = useCallback(() => onDismiss(toast.id), [onDismiss, toast.id]);
   const dismissAnimated = useCallback(() => {
-    translateY.value = withTiming(24, { duration: 140, easing: Easing.in(Easing.cubic) });
+    translateY.value = withTiming(-24, { duration: 140, easing: Easing.in(Easing.cubic) });
     opacity.value = withTiming(0, { duration: 120 }, finished => {
       if (finished) runOnJS(finishDismiss)();
     });
   }, [finishDismiss, opacity, translateY]);
 
   useEffect(() => {
-    translateY.value = 12;
+    translateY.value = -12;
     opacity.value = 0;
     translateY.value = withTiming(0, { duration: 180, easing: Easing.out(Easing.cubic) });
     opacity.value = withTiming(1, { duration: 150 });
@@ -56,15 +57,15 @@ function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: (id: n
     transform: [{ translateY: translateY.value }],
   }));
 
-  const swipeDown = Gesture.Pan()
-    .activeOffsetY(6)
+  const swipeUp = Gesture.Pan()
+    .activeOffsetY(-6)
     .failOffsetX([-18, 18])
     .onUpdate(event => {
-      translateY.value = Math.max(0, event.translationY);
-      opacity.value = Math.max(0.35, 1 - event.translationY / 160);
+      translateY.value = Math.min(0, event.translationY);
+      opacity.value = Math.max(0.35, 1 + event.translationY / 160);
     })
     .onEnd(event => {
-      if (event.translationY > 32 || event.velocityY > 450) {
+      if (event.translationY < -32 || event.velocityY < -450) {
         runOnJS(dismissAnimated)();
         return;
       }
@@ -78,7 +79,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: (id: n
   };
 
   return (
-    <GestureDetector gesture={swipeDown}>
+    <GestureDetector gesture={swipeUp}>
       <Animated.View
         accessibilityLiveRegion="polite"
         accessibilityRole="alert"
@@ -112,29 +113,21 @@ function ToastCard({ toast, onDismiss }: { toast: ToastRecord; onDismiss: (id: n
 export function ToastHost({
   enabled = true,
   priority = 0,
-  ignoreAnchors = false,
 }: {
   enabled?: boolean;
   priority?: number;
-  ignoreAnchors?: boolean;
 }) {
   const id = useId();
   const insets = useSafeAreaInsets();
-  const { toast, activeHostId, bottomAnchorHeight, dismissToast } = useToastHostRegistration(
-    id,
-    enabled,
-    priority,
-  );
+  const { toast, activeHostId, dismissToast } = useToastHostRegistration(id, enabled, priority);
   const active = enabled && activeHostId === id;
-  const occupiedBottom = !ignoreAnchors && bottomAnchorHeight > 0
-    ? bottomAnchorHeight
-    : insets.bottom;
 
   if (!active || !toast) return null;
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      <View pointerEvents="box-none" style={[styles.host, { bottom: occupiedBottom + 16 }]}>
+      {/* One slot, one place: clear of the notch on every screen, in every host. */}
+      <View pointerEvents="box-none" style={[styles.host, { top: insets.top + 8 }]}>
         <ToastCard key={toast.id} toast={toast} onDismiss={dismissToast} />
       </View>
     </View>
