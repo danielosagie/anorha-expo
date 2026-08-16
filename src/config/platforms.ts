@@ -173,7 +173,9 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     connect: {
       strategy: 'oauth',
       loginPath: '/api/auth/clover/login',
-      redirectStyle: 'tagged',
+      // Bare, not tagged: the backend's Clover App Market finish page returns on
+      // anorhaapp://auth-callback, so both entry paths must share one surface.
+      redirectStyle: 'bare',
     },
     capabilities: {
       canPublish: true,
