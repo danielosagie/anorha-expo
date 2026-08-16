@@ -112,7 +112,9 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
       const res = await connect(platform as ConnectablePlatform, { shopifyShop });
       if (res.success) {
         connectedConnectionIdRef.current = res.connectionId;
-        refresh?.();
+        // Awaited: advanceAfterOAuth reads connect status derived from this
+        // context, so advancing before the refresh lands renders stale state.
+        await refresh();
         // The inbox summary must move with the new connection (shared store —
         // every mounted consumer updates), not wait for the next focus/poll.
         void refreshInboxSummary();
