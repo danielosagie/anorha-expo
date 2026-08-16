@@ -54,7 +54,7 @@ export interface PlatformConnectDef {
   /** Backend path that begins the auth flow (relative to API_BASE_URL). */
   loginPath: string;
   /**
-   * bare   → deep-links back to `anorhaapp://auth-callback` (Shopify, Facebook).
+   * bare   → deep-links back to `anorhaapp://auth-callback` (Shopify, Clover, Facebook).
    * tagged → deep-links to `anorhaapp://auth/callback?platform=<key>`.
    */
   redirectStyle: 'bare' | 'tagged';
@@ -173,7 +173,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     connect: {
       strategy: 'oauth',
       loginPath: '/api/auth/clover/login',
-      redirectStyle: 'tagged',
+      redirectStyle: 'bare',
     },
     capabilities: {
       canPublish: true,

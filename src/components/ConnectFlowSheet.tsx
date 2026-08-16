@@ -111,9 +111,11 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
       const res = await connect(platform as ConnectablePlatform, { shopifyShop });
       if (res.success) {
         connectedConnectionIdRef.current = res.connectionId;
-        refresh?.();
-        // Nudge once more after the callback row commits, then decide next step.
-        setTimeout(() => refresh?.(), 2500);
+        // Resolve the server-backed row before reporting completion so status
+        // changes are visible without waiting for a screen remount.
+        await refresh();
+        // Nudge once more in case a replica was briefly behind the OAuth write.
+        setTimeout(() => void refresh(), 2500);
         if (res.connectionId && res.scanStarted === false) {
           setFailedConnectionId(res.connectionId);
           setConnectError('Your store is connected, but the inventory import did not start.');

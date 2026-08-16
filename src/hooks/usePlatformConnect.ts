@@ -95,8 +95,8 @@ export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
         return { success: false, errorMessage: 'Choose your Shopify store first.' };
       }
 
-      // 'bare' platforms (Shopify, Facebook) reuse a single callback; 'tagged'
-      // OAuth platforms carry the platform key on the deep link.
+      // 'bare' platforms reuse a single callback; 'tagged' OAuth platforms
+      // carry the platform key on the deep link.
       const finalRedirectUri =
         def.redirectStyle === 'bare'
           ? 'anorhaapp://auth-callback'
