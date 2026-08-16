@@ -12,13 +12,22 @@ import { useFacebookJobStatus } from './useFacebookJobStatus';
 import {
   derivePlatformConnectStatus,
   type PlatformConnectStatus,
+  type PlatformConnectStatusOptions,
 } from '../lib/platformConnectStatus';
 
-export function usePlatformConnectStatus(platform: string): PlatformConnectStatus {
+export function usePlatformConnectStatus(
+  platform: string,
+  options: PlatformConnectStatusOptions = {},
+): PlatformConnectStatus {
   const { liveConnections } = usePlatformConnections();
   const { computerOnline, presenceLoaded } = useFacebookJobStatus();
   return useMemo(
-    () => derivePlatformConnectStatus(platform, liveConnections, { computerOnline, presenceLoaded }),
-    [platform, liveConnections, computerOnline, presenceLoaded],
+    () => derivePlatformConnectStatus(
+      platform,
+      liveConnections,
+      { computerOnline, presenceLoaded },
+      options,
+    ),
+    [platform, liveConnections, computerOnline, presenceLoaded, options],
   );
 }

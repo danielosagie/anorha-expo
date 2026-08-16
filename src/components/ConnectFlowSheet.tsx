@@ -11,7 +11,7 @@
  *
  * COPY = outcome, never plumbing (feedback_no_internal_leak): "your computer".
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import BaseModal from './BaseModal';
@@ -22,12 +22,16 @@ import LinkComputerScanSheet from './LinkComputerScanSheet';
 import ShopifyStorePicker from './ShopifyStorePicker';
 import { usePlatformConnect, ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
-import { refreshInboxSummary } from '../hooks/useImportStatus';
+import { refreshInboxSummary, useImportStatus } from '../hooks/useImportStatus';
 import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { getPlatform, connectStepsFor, type ConnectStepKind } from '../config/platforms';
 import { BRAND_PRIMARY } from '../design/tokens';
+import {
+  connectionImportPresentationsById,
+  latestImportsByConnection,
+} from '../lib/connectionImportPresentation';
 
-type FlowPhase = 'consent' | 'shopifyPicker' | 'connecting' | 'importFailed' | 'linkComputer' | 'done';
+type FlowPhase = 'consent' | 'shopifyPicker' | 'connecting' | 'importing' | 'importFailed' | 'linkComputer' | 'done';
 
 interface Props {
   visible: boolean;
@@ -38,14 +42,37 @@ interface Props {
   onCancel: () => void;
   /** All required steps are satisfied (or the user finished the flow). */
   onConnected: (connectionId?: string) => void;
+  /** Opens the existing import retry state for this connected account. */
+  retryConnectionId?: string | null;
 }
 
 const TEXT_SECONDARY = '#6B7280';
 
-export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, onConnected }: Props) {
+export default function ConnectFlowSheet({
+  visible,
+  platform,
+  orgId,
+  onCancel,
+  onConnected,
+  retryConnectionId = null,
+}: Props) {
   const { connect, startScan } = usePlatformConnect({ orgId });
-  const { refresh } = usePlatformConnections();
-  const status = usePlatformConnectStatus(platform || '');
+  const { connections, progressByConnectionId, refresh } = usePlatformConnections();
+  const importStatus = useImportStatus();
+  const presentationByConnectionId = useMemo(
+    () => connectionImportPresentationsById({
+      connections,
+      aggregateConnections: importStatus.connections,
+      recentImports: importStatus.recentImports,
+      progressByConnectionId,
+    }),
+    [connections, importStatus.connections, importStatus.recentImports, progressByConnectionId],
+  );
+  const statusOptions = useMemo(
+    () => ({ presentationByConnectionId }),
+    [presentationByConnectionId],
+  );
+  const status = usePlatformConnectStatus(platform || '', statusOptions);
   const statusRef = useRef(status);
   statusRef.current = status;
 
@@ -54,6 +81,9 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
   const [failedConnectionId, setFailedConnectionId] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const connectedConnectionIdRef = useRef<string | undefined>(undefined);
+  const importStartedAtRef = useRef<number | null>(null);
+  const importObservedRef = useRef(false);
+  const importPendingRef = useRef(false);
 
   const steps = platform ? connectStepsFor(platform) : [];
   const def = platform ? getPlatform(platform) : undefined;
@@ -68,28 +98,41 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     setConnectError(null);
     setFailedConnectionId(null);
     setScanOpen(false);
-    connectedConnectionIdRef.current = undefined;
-    if (!s.oauthConnected && s.steps.includes('oauth')) {
+    connectedConnectionIdRef.current = retryConnectionId || undefined;
+    importStartedAtRef.current = null;
+    importObservedRef.current = false;
+    importPendingRef.current = false;
+    if (retryConnectionId) {
+      setFailedConnectionId(retryConnectionId);
+      setPhase('importFailed');
+    } else if (!s.oauthConnected && s.steps.includes('oauth')) {
       setPhase('consent');
     } else if (s.requiresComputer && !s.computerOnline) {
       setPhase('linkComputer');
+    } else if (s.importing) {
+      importPendingRef.current = true;
+      importObservedRef.current = true;
+      setPhase('importing');
     } else {
       setPhase('done');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, platform]);
+  }, [visible, platform, retryConnectionId]);
 
   const finish = useCallback(() => {
+    importPendingRef.current = false;
     setPhase('done');
     onConnected(connectedConnectionIdRef.current);
   }, [onConnected]);
 
-  // After OAuth: go to the computer step if this platform needs a computer and one
-  // isn't already online; otherwise we're done.
-  const advanceAfterOAuth = useCallback(() => {
+  // Required setup stays first. Once it is satisfied, a server-confirmed scan
+  // gets its own dismissible phase until the shared import sources turn terminal.
+  const advanceAfterSetup = useCallback(() => {
     const s = statusRef.current;
     if (s.requiresComputer && !s.computerOnline) {
       setPhase('linkComputer');
+    } else if (importPendingRef.current) {
+      setPhase('importing');
     } else {
       finish();
     }
@@ -100,24 +143,85 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
   // Without this the sheet would sit on "Link your computer" until manually closed.
   useEffect(() => {
     if (phase === 'linkComputer' && status.computerOnline) {
-      finish();
+      advanceAfterSetup();
     }
-  }, [phase, status.computerOnline, finish]);
+  }, [phase, status.computerOnline, advanceAfterSetup]);
+
+  // The start-scan response establishes that work began. Completion still comes
+  // only from the shared connection/import stores. This effect never estimates
+  // progress and never cancels the scan when the sheet is dismissed.
+  useEffect(() => {
+    if (phase !== 'importing') return;
+
+    const connectionId = connectedConnectionIdRef.current;
+    const latestImport = connectionId
+      ? latestImportsByConnection(importStatus.recentImports).get(connectionId)
+      : undefined;
+    const presentation = connectionId
+      ? presentationByConnectionId.get(connectionId)
+      : undefined;
+    const attemptStartedAt = importStartedAtRef.current;
+    const createdAt = latestImport ? Date.parse(latestImport.createdAt) : Number.NaN;
+    const completedAt = latestImport?.completedAt
+      ? Date.parse(latestImport.completedAt)
+      : Number.NaN;
+    const presentationAt = presentation?.occurredAt
+      ? Date.parse(presentation.occurredAt)
+      : Number.NaN;
+    const belongsToAttempt = attemptStartedAt == null
+      || (!Number.isNaN(createdAt) && createdAt >= attemptStartedAt)
+      || (!Number.isNaN(completedAt) && completedAt >= attemptStartedAt)
+      || (!Number.isNaN(presentationAt) && presentationAt >= attemptStartedAt);
+    const importIsActive = status.importing || presentation?.importInProgress === true;
+
+    if (belongsToAttempt && latestImport) {
+      const runStatus = latestImport.status.trim().toLowerCase();
+      const runFailed = runStatus === 'error' || runStatus.includes('fail');
+      const runSucceeded = ['complete', 'completed', 'success', 'succeeded'].includes(runStatus);
+      if (latestImport.completedAt || runFailed || runSucceeded) {
+        if (runFailed) {
+          setFailedConnectionId(connectionId || null);
+          setConnectError('Import stopped.');
+          setPhase('importFailed');
+        } else {
+          finish();
+        }
+        return;
+      }
+    }
+
+    if (importIsActive) {
+      importObservedRef.current = true;
+      return;
+    }
+
+    if (importObservedRef.current) {
+      if (belongsToAttempt && presentation?.kind === 'failed') {
+        setFailedConnectionId(connectionId || null);
+        setConnectError('Import stopped.');
+        setPhase('importFailed');
+      } else {
+        finish();
+      }
+    }
+  }, [phase, status.importing, importStatus.recentImports, presentationByConnectionId, finish]);
 
   const completeOAuth = useCallback(async (shopifyShop?: string) => {
     if (!platform) return;
     setPhase('connecting');
     setConnectError(null);
+    importStartedAtRef.current = Date.now();
+    importObservedRef.current = false;
+    importPendingRef.current = false;
     try {
       const res = await connect(platform as ConnectablePlatform, { shopifyShop });
       if (res.success) {
         connectedConnectionIdRef.current = res.connectionId;
-        // Awaited: advanceAfterOAuth reads connect status derived from this
+        // Awaited: advanceAfterSetup reads connect status derived from this
         // context, so advancing before the refresh lands renders stale state.
-        await refresh();
+        await Promise.all([refresh(), refreshInboxSummary()]);
         // The inbox summary must move with the new connection (shared store —
         // every mounted consumer updates), not wait for the next focus/poll.
-        void refreshInboxSummary();
         // Nudge once more after the callback row commits, then decide next step.
         setTimeout(() => {
           refresh?.();
@@ -125,11 +229,12 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
         }, 2500);
         if (res.connectionId && res.scanStarted === false) {
           setFailedConnectionId(res.connectionId);
-          setConnectError('Your store is connected, but the inventory import did not start.');
+          setConnectError('Import did not start.');
           setPhase('importFailed');
           return;
         }
-        advanceAfterOAuth();
+        importPendingRef.current = res.scanStarted !== false;
+        advanceAfterSetup();
       } else if (res.cancelled) {
         setPhase('consent');
       } else {
@@ -140,7 +245,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
       setConnectError('Something went wrong. Please try again.');
       setPhase('consent');
     }
-  }, [platform, connect, refresh, advanceAfterOAuth]);
+  }, [platform, connect, refresh, advanceAfterSetup]);
 
   const runOAuth = useCallback(() => {
     if (platform === 'shopify') {
@@ -155,16 +260,19 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
     if (!failedConnectionId) return;
     setConnectError(null);
     setPhase('connecting');
+    importStartedAtRef.current = Date.now();
+    importObservedRef.current = false;
     const started = await startScan(failedConnectionId);
     if (started) {
-      refresh?.();
-      void refreshInboxSummary();
-      advanceAfterOAuth();
+      connectedConnectionIdRef.current = failedConnectionId;
+      importPendingRef.current = true;
+      await Promise.all([refresh(), refreshInboxSummary()]);
+      advanceAfterSetup();
       return;
     }
-    setConnectError('The import still could not start. Check your connection and try again.');
+    setConnectError('Import did not start.');
     setPhase('importFailed');
-  }, [failedConnectionId, startScan, refresh, advanceAfterOAuth]);
+  }, [failedConnectionId, startScan, refresh, advanceAfterSetup]);
 
   if (!platform || !def) return null;
 
@@ -216,7 +324,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
 
         {phase === 'linkComputer' ? (
           <View>
-            <LinkComputerBody orgId={orgId || undefined} hideSkip onDone={finish} />
+            <LinkComputerBody orgId={orgId || undefined} hideSkip onDone={advanceAfterSetup} />
             <TouchableOpacity style={styles.scanBtn} onPress={() => setScanOpen(true)} activeOpacity={0.85}>
               <Icon name="qrcode-scan" size={18} color={BRAND_PRIMARY} />
               <Text style={styles.scanBtnText}>Scan the code on your computer</Text>
@@ -227,11 +335,22 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
           </View>
         ) : null}
 
+        {phase === 'importing' ? (
+          <View style={styles.importFailedWrap}>
+            <Icon name="progress-clock" size={34} color="#A2611A" />
+            <Text style={styles.importFailedTitle}>Importing items</Text>
+            <Text style={styles.importFailedText}>Safe to close. Keeps going.</Text>
+            <TouchableOpacity style={styles.laterBtn} onPress={onCancel} activeOpacity={0.7}>
+              <Text style={styles.laterText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {phase === 'importFailed' ? (
           <View style={styles.importFailedWrap}>
             <Icon name="alert-circle-outline" size={34} color="#BA7517" />
-            <Text style={styles.importFailedTitle}>Connected, import paused</Text>
-            <Text style={styles.importFailedText}>{connectError}</Text>
+            <Text style={styles.importFailedTitle}>Import failed</Text>
+            {connectError ? <Text style={styles.importFailedText}>{connectError}</Text> : null}
             <TouchableOpacity style={styles.retryBtn} onPress={retryImport} activeOpacity={0.85}>
               <Text style={styles.retryBtnText}>Retry import</Text>
             </TouchableOpacity>
@@ -261,7 +380,7 @@ export default function ConnectFlowSheet({ visible, platform, orgId, onCancel, o
         onClose={() => setScanOpen(false)}
         onLinked={() => {
           setScanOpen(false);
-          finish();
+          advanceAfterSetup();
         }}
       />
     </>

@@ -16,6 +16,7 @@ import {
   type PlatformConnectionRecommendedAction,
   type PlatformConnectionSyncState,
 } from '../lib/platformConnectionVisibility';
+import { ACTIVE_IMPORT_EVIDENCE_TTL_MS } from '../lib/connectionImportPresentation';
 const log = createLogger('PlatformConnectionsContext');
 
 
@@ -71,7 +72,7 @@ const CONNECTION_STATUS_SET = new Set(['active', 'inactive', 'pending', 'review'
 // 'inactive' is here so a disconnect event (from this device or another) pulls
 // the real row state instead of leaving a stale "connected" row on screen.
 const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error', 'inactive']);
-const PROGRESS_OVERRIDE_TTL_MS = 2 * 60 * 1000;
+const PROGRESS_OVERRIDE_TTL_MS = ACTIVE_IMPORT_EVIDENCE_TTL_MS;
 
 const normalizeStatus = (value?: string) => (value || '').toLowerCase().trim();
 
