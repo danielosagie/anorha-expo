@@ -416,15 +416,23 @@ const TabNavigator = () => {
   );
 };
 
-const AuthStack = ({ showOnboarding }: { showOnboarding: boolean }) => (
+const AuthStack = ({
+  showOnboarding,
+  authNotice,
+}: {
+  showOnboarding: boolean;
+  authNotice?: string | null;
+}) => (
   <AuthStackNav.Navigator screenOptions={{ headerShown: false, animationEnabled: false }}>
-    {showOnboarding ? (
+    {showOnboarding && !authNotice ? (
       <>
         <AuthStackNav.Screen name="InitialScreen" component={InitialScreen} />
         <AuthStackNav.Screen name="OnboardingSlides" component={OnboardingSlides} />
       </>
     ) : null}
-    <AuthStackNav.Screen name="Auth" component={AuthScreen} />
+    <AuthStackNav.Screen name="Auth">
+      {(props: any) => <AuthScreen {...props} sessionNotice={authNotice} />}
+    </AuthStackNav.Screen>
     <AuthStackNav.Screen name="VerifyCode" component={VerifyCodeScreen} />
     <AppStackNav.Screen name="CreateAccountScreen" component={CreateAccountScreen} />
   </AuthStackNav.Navigator>
@@ -525,7 +533,13 @@ SplashScreen.preventAutoHideAsync();
  * making them wait on it stranded every fresh signup on a full-screen shell (see the
  * landing gate below).
  */
-const AppNavigator = ({ dataReady = true }: { dataReady?: boolean }) => {
+const AppNavigator = ({
+  dataReady = true,
+  authNotice = null,
+}: {
+  dataReady?: boolean;
+  authNotice?: string | null;
+}) => {
   const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
   const clerk = useClerk();
   const session = React.useContext(SessionContext);
@@ -922,7 +936,9 @@ const AppNavigator = ({ dataReady = true }: { dataReady?: boolean }) => {
           }}
         >
           <Stack.Screen name="AuthStack">
-            {(props: any) => <AuthStack {...props} showOnboarding={devShowOnboarding} />}
+            {(props: any) => (
+              <AuthStack {...props} showOnboarding={devShowOnboarding} authNotice={authNotice} />
+            )}
           </Stack.Screen>
 
           <Stack.Screen name="AppStack">
