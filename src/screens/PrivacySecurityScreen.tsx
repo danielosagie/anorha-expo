@@ -1,33 +1,39 @@
-// Privacy & Security — data policy summary plus the REAL delete-account flow
-// (type-to-confirm org name + reason → DELETE /api/users/me → sign out), which
-// previously only existed buried inside the legacy AccountSettings mega-screen.
+// Privacy & Security: data policy summary plus the in-app account-erasure flow.
 
 import React, { useContext, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Modal,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '@clerk/expo';
 import { ChevronRight, FileText, ShieldCheck, Trash2 } from 'lucide-react-native';
+import { BaseModal } from '../components/BaseModal';
 import { PageHeader } from '../components/ui/PageHeader';
 import { AuthContext } from '../context/AuthContext';
 import { useOrg } from '../context/OrgContext';
-import { API_BASE_URL } from '../config/env';
+import { apiJson, ApiError } from '../lib/apiClient';
+import {
+  deriveBillingState,
+  formatBillingDate,
+  type RawBillingSummary,
+} from '../utils/billingState';
+
+type DeletionResponse = {
+  status?: 'scheduled' | 'deleted';
+  requestId?: string;
+};
 
 const PrivacySecurityScreen = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { getToken } = useAuth();
   const authContext = useContext(AuthContext);
   const { currentOrg } = useOrg();
 
@@ -35,41 +41,99 @@ const PrivacySecurityScreen = () => {
   const [confirmName, setConfirmName] = useState('');
   const [reason, setReason] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
+  const [billingSummary, setBillingSummary] = useState<RawBillingSummary | null>(null);
 
-  const businessName = currentOrg?.name || '';
+  const confirmationText = currentOrg?.name || 'DELETE';
+  const billingState = deriveBillingState(billingSummary, new Date());
+  const rawSubscriptionStatus = billingSummary?.subscription?.Status
+    || billingSummary?.subscription?.status
+    || null;
+  const planName = billingSummary?.subscription?.CurrentPlan
+    || billingSummary?.subscription?.current_plan
+    || 'Paid plan';
+  const hasActiveSubscription = billingState.subscription.state === 'active'
+    || billingState.subscription.state === 'canceled_paid_through'
+    || ['trialing', 'past_due', 'unpaid', 'incomplete'].includes(String(rawSubscriptionStatus || '').toLowerCase());
+  const paidThrough = formatBillingDate(billingState.subscription.currentPeriodEnd);
+  const billingVerified = billingSummary !== null && !billingLoading && !billingError;
+  const confirmationMatches = confirmName.trim().toLowerCase() === confirmationText.toLowerCase();
+
+  const loadBillingStatus = async () => {
+    setBillingLoading(true);
+    setBillingError(null);
+    setBillingSummary(null);
+    try {
+      const summary = await apiJson<RawBillingSummary>('/api/billing/summary');
+      const hasSubscriptionField = summary !== null
+        && typeof summary === 'object'
+        && Object.prototype.hasOwnProperty.call(summary, 'subscription');
+      const hasUsableSubscription = hasSubscriptionField
+        && (summary.subscription === null
+          || typeof (summary.subscription?.Status || summary.subscription?.status) === 'string');
+      if (!hasUsableSubscription) {
+        throw new Error('Billing response did not include subscription status.');
+      }
+      setBillingSummary(summary);
+    } catch {
+      setBillingError('Billing status is unavailable. Try again before deleting your account.');
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
+  const openDeleteFlow = () => {
+    setConfirmName('');
+    setReason('');
+    setDeleteOpen(true);
+    void loadBillingStatus();
+  };
+
+  const closeDeleteFlow = () => {
+    if (deleting) return;
+    setDeleteOpen(false);
+  };
 
   const confirmDelete = async () => {
-    if (businessName && confirmName.trim().toLowerCase() !== businessName.toLowerCase()) {
-      Alert.alert('Name mismatch', 'Type your business name exactly as shown.');
+    if (!billingVerified) {
+      Alert.alert('Billing status required', 'Check your billing status before deleting your account.');
       return;
     }
-    if (!reason.trim()) {
-      Alert.alert('Reason required', 'Tell us briefly why you are leaving.');
+    if (!confirmationMatches) {
+      Alert.alert('Confirmation does not match', `Type ${confirmationText} exactly as shown.`);
       return;
     }
     setDeleting(true);
     try {
-      const token = await getToken();
-      if (!token) {
-        Alert.alert('Error', 'Please log in again to delete your account.');
+      // This versioned endpoint must return a durable request ID. The legacy
+      // DELETE /api/users/me route can return 200 after only partial cleanup, so
+      // it must never be treated as completed account erasure by the app.
+      const result = await apiJson<DeletionResponse>('/api/users/me/erasure', {
+        method: 'DELETE',
+        body: {
+          reason: reason.trim() || undefined,
+          confirmation: confirmationText,
+          activeSubscriptionAcknowledged: hasActiveSubscription,
+        },
+      });
+      const accepted = (result?.status === 'scheduled' || result?.status === 'deleted')
+        && typeof result?.requestId === 'string'
+        && result.requestId.trim().length > 0;
+      if (!accepted) {
+        Alert.alert(
+          'Deletion not confirmed',
+          'The service did not confirm a complete deletion request. Your account has not been reported as deleted.',
+        );
         return;
       }
-      const response = await fetch(`${API_BASE_URL}/api/users/me`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: reason.trim() }),
-      });
-      if (response.ok) {
-        setDeleteOpen(false);
-        Alert.alert('Account deleted', 'Your account has been permanently deleted.', [
-          { text: 'OK', onPress: () => authContext?.signOut() },
-        ]);
-      } else {
-        const data = await response.json().catch(() => ({}));
-        Alert.alert('Error', data.message || 'Failed to delete account. Please contact support.');
-      }
-    } catch {
-      Alert.alert('Error', 'An error occurred while deleting your account. Please try again.');
+      setDeleteOpen(false);
+      await authContext?.signOut();
+    } catch (error) {
+      const message = error instanceof ApiError && error.status === 404
+        ? 'Account deletion is not available on the server yet. Your account was not reported as deleted.'
+        : 'The deletion request could not be completed. Your account was not reported as deleted.';
+      Alert.alert('Deletion failed', message);
     } finally {
       setDeleting(false);
     }
@@ -92,13 +156,12 @@ const PrivacySecurityScreen = () => {
               <ShieldCheck size={20} color="#93C822" />
             </View>
             <Text style={styles.infoText}>
-              Your listings, connections and usage data belong to your org. Deleting your
-              account removes them — permanently.
+              Your listings, connections and usage data belong to your org. A completed account
+              deletion removes them permanently.
             </Text>
           </View>
-          <TouchableOpacity
+          <Pressable
             style={[styles.linkRow, styles.rowBorder]}
-            activeOpacity={0.7}
             onPress={() => navigation.navigate('DeleteAccountInfo')}
           >
             <View style={[styles.iconWrap, { backgroundColor: '#F1F1EE' }]}>
@@ -106,48 +169,89 @@ const PrivacySecurityScreen = () => {
             </View>
             <Text style={styles.linkText}>Full data & deletion policy</Text>
             <ChevronRight size={20} color="#D4D4D8" />
-          </TouchableOpacity>
+          </Pressable>
         </View>
 
         <Text style={[styles.section, { marginTop: 26 }]}>Danger zone</Text>
         <View style={[styles.card, styles.dangerCard]}>
-          <TouchableOpacity style={styles.linkRow} activeOpacity={0.7} onPress={() => setDeleteOpen(true)}>
+          <Pressable style={styles.linkRow} onPress={openDeleteFlow}>
             <View style={[styles.iconWrap, { backgroundColor: 'rgba(220,38,38,0.10)' }]}>
               <Trash2 size={20} color="#DC2626" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.dangerTitle}>Delete account</Text>
-              <Text style={styles.dangerSub}>Permanent — removes your account, listings and connections</Text>
+              <Text style={styles.dangerSub}>Request permanent deletion of your account and data</Text>
             </View>
             <ChevronRight size={20} color="#D4D4D8" />
-          </TouchableOpacity>
+          </Pressable>
         </View>
       </ScrollView>
 
-      {/* Type-to-confirm delete modal */}
-      <Modal visible={deleteOpen} transparent animationType="fade" onRequestClose={() => setDeleteOpen(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+      <BaseModal
+        visible={deleteOpen}
+        onClose={closeDeleteFlow}
+        position="bottom"
+        containerStyle={styles.modalCard}
+      >
+        <ScrollView
+          style={styles.modalScroll}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
             <Text style={styles.modalTitle}>Delete account?</Text>
             <Text style={styles.modalBody}>
-              Permanently deletes your account, listings and connections. This can't be undone.
+              This starts permanent deletion of your account and associated data. This cannot be undone.
             </Text>
-            {!!businessName && (
-              <>
-                <Text style={styles.modalLabel}>
-                  Type your business name to confirm: <Text style={styles.modalStrong}>{businessName}</Text>
-                </Text>
-                <TextInput
-                  style={styles.input}
-                  value={confirmName}
-                  onChangeText={setConfirmName}
-                  placeholder={businessName}
-                  placeholderTextColor="#C7C7CC"
-                  autoCapitalize="none"
-                />
-              </>
-            )}
-            <Text style={styles.modalLabel}>Why are you leaving?</Text>
+            <View style={[styles.billingNotice, hasActiveSubscription && styles.billingNoticeActive]}>
+              {billingLoading ? (
+                <View style={styles.billingLoadingRow}>
+                  <ActivityIndicator color="#18181B" size="small" />
+                  <Text style={styles.billingNoticeText}>Checking billing status</Text>
+                </View>
+              ) : billingError ? (
+                <>
+                  <Text style={styles.billingNoticeText}>{billingError}</Text>
+                  <Pressable style={styles.billingRetry} onPress={() => void loadBillingStatus()}>
+                    <Text style={styles.billingRetryText}>Retry</Text>
+                  </Pressable>
+                </>
+              ) : hasActiveSubscription ? (
+                <>
+                  <Text style={styles.billingNoticeTitle}>Subscription on account</Text>
+                  <Text style={styles.billingNoticeText}>
+                    {planName} is {billingState.subscription.state === 'canceled_paid_through' ? 'canceled' : String(rawSubscriptionStatus || 'active').replace(/_/g, ' ')}
+                    {paidThrough ? ` through ${paidThrough}` : ''}. Deleting your Anorha account does not cancel provider billing or stop charges. Manage billing first if needed.
+                  </Text>
+                  <Pressable
+                    style={styles.billingRetry}
+                    onPress={() => {
+                      setDeleteOpen(false);
+                      navigation.navigate('Billing');
+                    }}
+                  >
+                    <Text style={styles.billingRetryText}>Review billing</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.billingNoticeTitle}>Billing status</Text>
+                  <Text style={styles.billingNoticeText}>No active subscription.</Text>
+                </>
+              )}
+            </View>
+            <Text style={styles.modalLabel}>
+              Type <Text style={styles.modalStrong}>{confirmationText}</Text> to confirm
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={confirmName}
+              onChangeText={setConfirmName}
+              placeholder={confirmationText}
+              placeholderTextColor="#C7C7CC"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.modalLabel}>Reason (optional)</Text>
             <TextInput
               style={[styles.input, { minHeight: 64 }]}
               value={reason}
@@ -157,21 +261,19 @@ const PrivacySecurityScreen = () => {
               multiline
             />
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeleteOpen(false)} activeOpacity={0.8}>
+              <Pressable style={styles.cancelBtn} onPress={closeDeleteFlow}>
                 <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.deleteBtn, deleting && { opacity: 0.6 }]}
+              </Pressable>
+              <Pressable
+                style={[styles.deleteBtn, (!billingVerified || !confirmationMatches || deleting) && styles.disabledBtn]}
                 onPress={confirmDelete}
-                disabled={deleting}
-                activeOpacity={0.8}
+                disabled={!billingVerified || !confirmationMatches || deleting}
               >
-                {deleting ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.deleteText}>Delete forever</Text>}
-              </TouchableOpacity>
+                {deleting ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.deleteText}>Delete account</Text>}
+              </Pressable>
             </View>
-          </View>
-        </View>
-      </Modal>
+        </ScrollView>
+      </BaseModal>
     </View>
   );
 };
@@ -192,10 +294,17 @@ const styles = StyleSheet.create({
   dangerTitle: { fontSize: 16, color: '#DC2626', fontFamily: 'Inter_600SemiBold' },
   dangerSub: { fontSize: 13, color: '#9CA3AF', fontFamily: 'Inter_400Regular', marginTop: 2 },
 
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
-  modalCard: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: 20 },
+  modalCard: { maxHeight: '90%', alignItems: 'stretch', padding: 20 },
+  modalScroll: { width: '100%' },
   modalTitle: { fontSize: 20, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 8 },
   modalBody: { fontSize: 14, color: '#71717A', fontFamily: 'Inter_400Regular', lineHeight: 21, marginBottom: 14 },
+  billingNotice: { backgroundColor: '#F1F1EE', borderRadius: 14, padding: 12, marginBottom: 10 },
+  billingNoticeActive: { backgroundColor: '#FFF4E5', borderWidth: 1, borderColor: '#F4C27A' },
+  billingLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  billingNoticeTitle: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_700Bold', marginBottom: 4 },
+  billingNoticeText: { fontSize: 13, color: '#52525B', fontFamily: 'Inter_400Regular', lineHeight: 19 },
+  billingRetry: { alignSelf: 'flex-start', paddingVertical: 8, paddingRight: 12, marginTop: 2 },
+  billingRetryText: { fontSize: 14, color: '#18181B', fontFamily: 'Inter_700Bold' },
   modalLabel: { fontSize: 13, color: '#18181B', fontFamily: 'Inter_600SemiBold', marginBottom: 6, marginTop: 6 },
   modalStrong: { fontFamily: 'Inter_700Bold' },
   input: {
@@ -206,6 +315,7 @@ const styles = StyleSheet.create({
   cancelBtn: { flex: 1, borderRadius: 16, paddingVertical: 14, alignItems: 'center', backgroundColor: '#F1F1EE' },
   cancelText: { fontSize: 15, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   deleteBtn: { flex: 1, borderRadius: 16, paddingVertical: 14, alignItems: 'center', backgroundColor: '#DC2626' },
+  disabledBtn: { opacity: 0.45 },
   deleteText: { fontSize: 15, color: '#FFFFFF', fontFamily: 'Inter_700Bold' },
 });
 
