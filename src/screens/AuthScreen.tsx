@@ -77,6 +77,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
   const insets = useSafeAreaInsets();
   const initialMode = route?.params?.mode;
   const [isLogin, setIsLogin] = useState(initialMode !== 'signup');
+  // The splash is now a brand beat that continues on its own, so this screen is the one
+  // place every way in is offered. Providers first; the email form opens on top of them.
+  const [emailOpen, setEmailOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -434,8 +437,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
   }, [email, isSignInLoaded, signIn, navigation, showErrorModal]);
 
   const onBack = () => {
+    if (emailOpen) {
+      setEmailOpen(false);
+      setFieldErrors({});
+      return;
+    }
     if (navigation.canGoBack()) navigation.goBack();
   };
+  const canBack = emailOpen || navigation.canGoBack();
 
   const reqs = getPasswordRequirements(password);
   const metCount = reqs.filter(r => r.met).length;
@@ -465,12 +474,20 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
 
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={[styles.body, { paddingTop: insets.top }]}>
-          <TouchableOpacity style={styles.backBtn} onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <ChevronLeft />
-          </TouchableOpacity>
+          <View style={styles.backBtn}>
+            {canBack && (
+              <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                <ChevronLeft />
+              </TouchableOpacity>
+            )}
+          </View>
 
-          <Text style={styles.header}>{isLogin ? 'Welcome back' : 'Create account'}</Text>
+          <Text style={styles.header}>
+            {!emailOpen ? 'Welcome' : isLogin ? 'Welcome back' : 'Create account'}
+          </Text>
 
+          {emailOpen ? (
+          <>
           <View style={styles.fields}>
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Email</Text>
@@ -563,18 +580,26 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
             </Text>
           )}
 
+          <View style={styles.flexSpacer} />
+
+          <View style={[styles.switchRow, { paddingBottom: insets.bottom + 18 }]}>
+            <Text style={styles.switchText}>{isLogin ? 'New here?' : 'Have an account?'}</Text>
+            <TouchableOpacity onPress={() => { setIsLogin(v => !v); setFieldErrors({}); }} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+              <Text style={styles.switchLink}>{isLogin ? 'Sign up' : 'Log in'}</Text>
+            </TouchableOpacity>
+          </View>
+          </>
+          ) : (
+          <>
+          <TouchableOpacity style={styles.primaryBtn} onPress={() => setEmailOpen(true)} activeOpacity={0.9}>
+            <Text style={styles.primaryBtnText}>Continue with email</Text>
+          </TouchableOpacity>
+
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
             <Text style={styles.dividerText}>or</Text>
             <View style={styles.dividerLine} />
           </View>
-
-          {isLogin && isBiometricSupported && (
-            <TouchableOpacity style={styles.socialBtn} onPress={handleBiometricLogin} activeOpacity={0.9}>
-              <Icon name="face-recognition" size={20} color={INK} />
-              <Text style={styles.socialText}>Sign in with Face ID</Text>
-            </TouchableOpacity>
-          )}
 
           <AppleSignInButton
             style={styles.socialBtn}
@@ -587,14 +612,27 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
             {googleLoading ? <ActivityIndicator size="small" color={INK} /> : <><GoogleMark /><Text style={styles.socialText}>Continue with Google</Text></>}
           </TouchableOpacity>
 
+          {isBiometricSupported && hasBiometricCreds && (
+            <TouchableOpacity style={styles.socialBtn} onPress={handleBiometricLogin} activeOpacity={0.9}>
+              <Icon name="face-recognition" size={20} color={INK} />
+              <Text style={styles.socialText}>Sign in with Face ID</Text>
+            </TouchableOpacity>
+          )}
+
           <View style={styles.flexSpacer} />
 
-          <View style={[styles.switchRow, { paddingBottom: insets.bottom + 18 }]}>
-            <Text style={styles.switchText}>{isLogin ? 'New here?' : 'Have an account?'}</Text>
-            <TouchableOpacity onPress={() => { setIsLogin(v => !v); setFieldErrors({}); }} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-              <Text style={styles.switchLink}>{isLogin ? 'Sign up' : 'Log in'}</Text>
-            </TouchableOpacity>
-          </View>
+          <Text style={[styles.terms, { paddingBottom: insets.bottom + 18 }]}>
+            By continuing you agree to our{' '}
+            <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/terms')}>
+              Terms
+            </Text>
+            {' '}&{' '}
+            <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/privacy')}>
+              Privacy
+            </Text>
+          </Text>
+          </>
+          )}
         </View>
       </KeyboardAvoidingView>
     </View>

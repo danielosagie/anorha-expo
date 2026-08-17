@@ -1,23 +1,8 @@
-import React, { useCallback, useState, useEffect } from 'react';
-import { BRAND_PRIMARY } from '../design/tokens';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-  Linking,
-} from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Image, Animated } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Mail } from 'lucide-react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { useSSO, useClerk } from '@clerk/expo';
-import * as LocalAuthentication from 'expo-local-authentication';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
-import AppleSignInButton from '../components/AppleSignInButton';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
 import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
 import { Inter_600SemiBold } from '@expo-google-fonts/inter/600SemiBold';
@@ -29,21 +14,19 @@ type Props = {
   navigation: any;
 };
 
+/** How long the brand holds before the screen continues on its own. */
+const HOLD_MS = 900;
+/** Dissolve to white so the hand-off to the (white) auth surface is not a hard cut. */
+const FADE_MS = 300;
+
+/**
+ * Brand splash. It holds a beat and continues by itself into Auth, which is the one
+ * surface that presents every way in. `replace` rather than `navigate`, so continuing
+ * cannot be undone by a back gesture into a screen that would only continue again.
+ */
 const InitialScreen = ({ navigation }: Props) => {
   const insets = useSafeAreaInsets();
-  const { startSSOFlow } = useSSO();
-  const clerk = useClerk();
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [faceReady, setFaceReady] = useState(false);
-
-  // Show Face ID whenever the device has biometric hardware — it's a quick-login affordance.
-  useEffect(() => {
-    (async () => {
-      try {
-        setFaceReady(await LocalAuthentication.hasHardwareAsync());
-      } catch { /* ignore */ }
-    })();
-  }, []);
+  const fade = useRef(new Animated.Value(0)).current;
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -53,42 +36,26 @@ const InitialScreen = ({ navigation }: Props) => {
     Inter_800ExtraBold,
   });
 
-  const handleGoogle = useCallback(async () => {
-    if (googleLoading) return;
-    setGoogleLoading(true);
-    const runFlow = () => startSSOFlow({
-      strategy: 'oauth_google',
-      redirectUrl: 'anorhaapp://redirect',
-    });
-    try {
-      let result;
-      try {
-        result = await runFlow();
-      } catch (err: any) {
-        // A leftover session on this device (e.g. a previous tester in TestFlight) makes Clerk
-        // reject a fresh SSO sign-in with `session_exists`. Clear the stale session and retry once.
-        const code = err?.errors?.[0]?.code ?? err?.code;
-        const msg = err?.errors?.[0]?.message ?? err?.message ?? '';
-        if (code === 'session_exists' || /already (signed in|exists)|session already exists/i.test(msg)) {
-          await clerk.signOut();
-          result = await runFlow();
-        } else {
-          throw err;
-        }
-      }
-      const { createdSessionId, setActive } = result;
-      if (createdSessionId && setActive) {
-        await setActive({ session: createdSessionId });
-      }
-    } catch (err: any) {
-      Alert.alert(
-        'Google sign-in failed',
-        err?.errors?.[0]?.message ?? err?.message ?? 'Could not sign in with Google.'
-      );
-    } finally {
-      setGoogleLoading(false);
-    }
-  }, [googleLoading, startSSOFlow, clerk]);
+  useEffect(() => {
+    // Start the beat only once the wordmark can actually render, or the brand flashes by.
+    if (!fontsLoaded) return;
+    let done = false;
+    const hold = setTimeout(() => {
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: FADE_MS,
+        useNativeDriver: true,
+      }).start(() => {
+        if (done) return;
+        done = true;
+        navigation.replace('Auth', { mode: 'login' });
+      });
+    }, HOLD_MS);
+    return () => {
+      done = true;
+      clearTimeout(hold);
+    };
+  }, [fontsLoaded, fade, navigation]);
 
   if (!fontsLoaded) {
     return <AnimatedGradientBackground />;
@@ -98,7 +65,7 @@ const InitialScreen = ({ navigation }: Props) => {
     <View style={styles.root}>
       <Image
         source={require('../assets/splash_store_dither.png')}
-        style={{height: "100%", width: "100%", bottom: 60, position: "absolute"}}
+        style={styles.photo}
         resizeMode="cover"
       />
       <LinearGradient
@@ -115,7 +82,7 @@ const InitialScreen = ({ navigation }: Props) => {
       <View
         style={[
           styles.content,
-          { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 18 },
+          { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 40 },
         ]}
       >
         <View style={styles.logoRow}>
@@ -126,63 +93,10 @@ const InitialScreen = ({ navigation }: Props) => {
           <Text style={styles.wordmark}>anorha</Text>
         </View>
 
-        <View style={styles.bottom}>
-          <Text style={styles.headline}>Sell anything, anywhere, fast.</Text>
-
-          <TouchableOpacity
-            style={styles.emailButton}
-            activeOpacity={0.9}
-            onPress={() => navigation.navigate('Auth', { mode: 'login' })}
-          >
-            <Mail size={20} color="#FFFFFF" strokeWidth={1.8} />
-            <Text style={styles.emailButtonText}>Continue with email</Text>
-          </TouchableOpacity>
-
-          <AppleSignInButton
-            style={styles.lightButton}
-            textStyle={styles.lightButtonText}
-            tint="#18181B"
-            onError={(message) => Alert.alert('Apple sign-in failed', message)}
-          />
-
-          <TouchableOpacity
-            style={styles.lightButton}
-            activeOpacity={0.9}
-            onPress={handleGoogle}
-            disabled={googleLoading}
-          >
-            {googleLoading ? (
-              <ActivityIndicator size="small" color="#18181B" />
-            ) : (
-              <>
-                <Image
-                  source={require('../assets/google.png')}
-                  style={styles.googleIcon}
-                />
-                <Text style={styles.lightButtonText}>Continue with Google</Text>
-              </>
-            )}
-          </TouchableOpacity>
-
-          {faceReady && (
-            <TouchableOpacity
-              style={styles.lightButton}
-              activeOpacity={0.9}
-              onPress={() => navigation.navigate('Auth', { mode: 'login', autoFaceId: true })}
-            >
-              <Icon name="face-recognition" size={20} color="#18181B" />
-              <Text style={styles.lightButtonText}>Sign in with Face ID</Text>
-            </TouchableOpacity>
-          )}
-
-          <Text style={styles.terms}>
-            By continuing, you agree to our{' '}
-            <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/terms')}>
-              terms of service
-            </Text>
-          </Text>
-        </View>
+        <Text style={styles.headline}>Sell anything, anywhere, fast.</Text>
       </View>
+
+      <Animated.View pointerEvents="none" style={[styles.fade, { opacity: fade }]} />
     </View>
   );
 };
@@ -191,6 +105,12 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#000C38',
+  },
+  photo: {
+    height: '100%',
+    width: '100%',
+    bottom: 60,
+    position: 'absolute',
   },
   content: {
     flex: 1,
@@ -215,10 +135,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: -0.64,
   },
-  bottom: {
-    width: '100%',
-    alignItems: 'center',
-  },
   headline: {
     fontSize: 22,
     lineHeight: 28,
@@ -226,61 +142,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     textAlign: 'center',
     letterSpacing: -0.44,
-    minWidth: "60%",
-    marginBottom: 18,
+    minWidth: '60%',
   },
-  emailButton: {
-    width: '100%',
-    height: 54,
-    borderRadius: 16,
-    backgroundColor: BRAND_PRIMARY,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginBottom: 10,
-  },
-  emailButtonText: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#FFFFFF',
-  },
-  // Apple, Google and Face ID all render through this one box, so no provider can read
-  // as the smaller or lesser option (App Store guideline 4.8). White, not the warm
-  // neutral, because Apple's custom-button rules allow only black, white or white-outline.
-  lightButton: {
-    width: '100%',
-    height: 54,
-    borderRadius: 16,
+  fade: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: '#FFFFFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginBottom: 10,
-  },
-  lightButtonText: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#18181B',
-  },
-  googleIcon: {
-    width: 20,
-    height: 20,
-    resizeMode: 'contain',
-  },
-  terms: {
-    marginTop: 14,
-    fontSize: 14,
-    lineHeight: 18,
-    fontFamily: 'Inter_500Medium',
-    color: '#FFFFFF',
-    textAlign: 'center',
-  },
-  termsLink: {
-    fontFamily: 'Inter_500Medium',
-    color: '#FFFFFF',
-    textDecorationLine: 'underline',
   },
 });
 
