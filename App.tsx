@@ -7,7 +7,8 @@ import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
-import { ensureSupabaseJwt, forceRefreshSupabaseJwt, supabase } from './src/lib/supabase';
+import { ensureSupabaseJwt, forceRefreshSupabaseJwt, stopClerkSupabaseBridge, supabase } from './src/lib/supabase';
+import { bridgeBootGate, settleWithin } from './src/lib/bootGate';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
@@ -82,7 +83,7 @@ const APP_NAVIGATION_THEME = {
   },
 };
 
-const App: React.FC = () => {
+const AppLifecycleEffects: React.FC = () => {
   // Splash tripwire: AppNavigator hides the splash 2s after it mounts, and the boot
   // shells hide it on their own mount. If NOTHING has hidden it by 6s, some boot state
   // stalled without a surface — force the splash down so whatever rendered is visible.
@@ -105,8 +106,8 @@ const App: React.FC = () => {
     cleanupCache();
   }, []);
 
-  // Use Clerk's official Expo SecureStore token cache
-  const tokenCache = clerkTokenCache;
+  return null;
+};
 
   // Socket → catalog patch bus bridge, mounted once at app level so team edits,
   // webhook inventory changes, and partnership updates keep the shelf live even
@@ -128,16 +129,22 @@ const App: React.FC = () => {
     // up yet, show a brief "Connecting" shell, then (after a grace window) a loud,
     // recoverable reconnect screen — NEVER the app on a dead bridge (which silently
     // showed empty data on every page).
-    const [bridgeGraceElapsed, setBridgeGraceElapsed] = useState(false);
+    const [, setBridgeGateTick] = useState(0);
     const [reconnecting, setReconnecting] = useState(false);
+    const bridgeGateSnapshot = bridgeBootGate.observe({
+      isSignedIn: Boolean(isSignedIn),
+      bridgeReady: Boolean(session?.bridgeReady),
+      now: Date.now(),
+    });
+    const bridgeGraceElapsed = bridgeGateSnapshot.surface === 'reconnect';
     useEffect(() => {
-      if (!isSignedIn || session?.bridgeReady) {
-        setBridgeGraceElapsed(false);
-        return;
-      }
-      const t = setTimeout(() => setBridgeGraceElapsed(true), 12000);
+      if (bridgeGateSnapshot.surface !== 'connecting') return;
+      const t = setTimeout(
+        () => setBridgeGateTick((tick) => tick + 1),
+        Math.max(0, bridgeGateSnapshot.remainingMs),
+      );
       return () => clearTimeout(t);
-    }, [isSignedIn, session?.bridgeReady]);
+    }, [bridgeGateSnapshot.deadlineAt, bridgeGateSnapshot.remainingMs, bridgeGateSnapshot.surface]);
     const handleReconnect = useCallback(async () => {
       setReconnecting(true);
       try {
@@ -149,16 +156,17 @@ const App: React.FC = () => {
       }
     }, [session]);
     const handleReconnectSignOut = useCallback(async () => {
-      try {
-        await clerkSignOut?.();
-      } catch {
-        /* ignore; purge below still runs */
-      }
-      try {
-        await purgeClerkAndAuthCaches();
-      } catch {
-        /* best-effort */
-      }
+      try { stopClerkSupabaseBridge(); } catch { /* bridge may already be down */ }
+      // Cache purge starts immediately and is never held hostage by Clerk's network
+      // revocation. A dead bridge therefore cannot remove the sign-out escape hatch.
+      await Promise.allSettled([
+        settleWithin(
+          Promise.resolve().then(() => clerkSignOut?.()),
+          5000,
+          'Clerk sign out timed out',
+        ),
+        purgeClerkAndAuthCaches(),
+      ]);
     }, [clerkSignOut]);
 
     // "Go home" escape for SafeErrorBoundary: after 2 failed "Try Again" resets on the
@@ -619,19 +627,19 @@ const App: React.FC = () => {
             ) : !isSignedIn ? (
               // If not signed in, don't wait for session/legend state
               <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
-            ) : (!session || session.bootstrapState === 'initializing') ? (
+            ) : (!session || session.bootstrapState === 'initializing') && !bridgeGraceElapsed ? (
               <AppStartupShell
                 title="Restoring your workspace"
                 message={session?.bootstrapError || 'Checking your session and loading cached account data.'}
               />
-            ) : !session.bridgeReady ? (
+            ) : !session?.bridgeReady ? (
               // Signed in, but the live Supabase bridge isn't up — RLS queries would
               // return empty. NEVER render the app on a dead bridge (that silently
               // showed no data everywhere). Brief shell during the grace window, then a
               // loud, recoverable reconnect screen.
               bridgeGraceElapsed ? (
                 <SessionReconnectScreen
-                  message={session.bootstrapError || undefined}
+                  message={session?.bootstrapError || undefined}
                   reconnecting={reconnecting}
                   onRetry={handleReconnect}
                   onSignOut={handleReconnectSignOut}
@@ -758,9 +766,10 @@ const App: React.FC = () => {
     );
   };
 
-  return (
+const App: React.FC = () => (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: APP_LIGHT_BACKGROUND }}>
-        <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={tokenCache}>
+        <AppLifecycleEffects />
+        <ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!} tokenCache={clerkTokenCache}>
           {/* Convex (Clerk-authed) wraps the app so the chat can subscribe to live
               messages via useQuery. Inside ClerkProvider so it can read the session. */}
           <ConvexProvider>
@@ -785,6 +794,5 @@ const App: React.FC = () => {
       </ClerkProvider>
     </GestureHandlerRootView>
   );
-};
 
 export default Sentry.wrap(App);

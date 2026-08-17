@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
-import { ensureSupabaseJwt } from './supabase';
+import { getClerkSessionToken } from './supabase';
+import { CLERK_TOKEN_TIMEOUT_MS, settleWithin } from './bootGate';
 import { SOCKET_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
 const log = createLogger('collaborationSocket');
@@ -17,8 +18,8 @@ export type { Socket } from 'socket.io-client';
  * same endpoint — triple auth handshakes and duplicate subscriptions. This
  * module owns ONE connection, ref-counted across subscribers, created with the
  * superset of the previous options so every consumer's needs are met:
- *   - auth:   { token }                      (both)
- *   - query:  { token, userName? }           (sync sent token; collab sent userName)
+ *   - auth:   fresh raw Clerk session token  (the gateway's accepted mobile token)
+ *   - query:  { userName? }                  (identity comes from verified auth, not query)
  *   - transports: ['websocket', 'polling']   (collab's superset; sync was websocket-only)
  *   - reconnection enabled                   (collab's behavior)
  *
@@ -42,6 +43,7 @@ let connectPromise: Promise<Socket | null> | null = null;
 let refCount = 0;
 let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentUserName: string | undefined;
+let currentGetClerkToken: (() => Promise<string | null>) | null = null;
 
 /**
  * Ready listeners fire whenever a shared socket instance becomes available —
@@ -76,8 +78,18 @@ function notifySocketReady(socket: Socket) {
 }
 
 async function createSocket(): Promise<Socket | null> {
-  const token = await ensureSupabaseJwt();
-  if (!token) {
+  // `/collaboration` accepts Supabase Auth tokens or raw Clerk session tokens. It does
+  // NOT verify the custom HS256 token returned by the legacy /api/auth/exchange bridge,
+  // even though REST's SupabaseAuthGuard does. Always use raw Clerk here.
+  const readRawClerkToken = () => currentGetClerkToken
+    ? settleWithin(
+        Promise.resolve().then(() => currentGetClerkToken?.() ?? null),
+        CLERK_TOKEN_TIMEOUT_MS,
+        'Collaboration Clerk token read timed out',
+      )
+    : getClerkSessionToken();
+  let prefetchedToken = await readRawClerkToken().catch(() => null);
+  if (!prefetchedToken) {
     log.warn('[collaborationSocket] No auth token available; not connecting');
     return null;
   }
@@ -87,8 +99,21 @@ async function createSocket(): Promise<Socket | null> {
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionAttempts: 5,
-    auth: { token },
-    query: { token, ...(currentUserName ? { userName: currentUserName } : {}) },
+    // Socket.IO calls the auth callback for every connection attempt. Consume the
+    // preflight token once, then ask Clerk for a fresh token on reconnect so a socket
+    // suspended past JWT expiry cannot keep replaying the stale handshake forever.
+    auth: (callback) => {
+      if (prefetchedToken) {
+        const token = prefetchedToken;
+        prefetchedToken = null;
+        callback({ token });
+        return;
+      }
+      readRawClerkToken()
+        .then((token) => callback(token ? { token } : {}))
+        .catch(() => callback({}));
+    },
+    query: { ...(currentUserName ? { userName: currentUserName } : {}) },
   });
 }
 
@@ -96,8 +121,12 @@ async function createSocket(): Promise<Socket | null> {
  * Acquire the shared collaboration socket, incrementing the subscriber count.
  * Resolves to the connected socket (or null if no auth token is available).
  */
-export async function acquireCollaborationSocket(opts?: { userName?: string }): Promise<Socket | null> {
+export async function acquireCollaborationSocket(opts?: {
+  userName?: string;
+  getClerkToken?: () => Promise<string | null>;
+}): Promise<Socket | null> {
   if (opts?.userName) currentUserName = opts.userName;
+  if (opts?.getClerkToken) currentGetClerkToken = opts.getClerkToken;
   refCount += 1;
   if (disconnectTimer) {
     clearTimeout(disconnectTimer);
@@ -126,10 +155,11 @@ export function releaseCollaborationSocket(): void {
   if (disconnectTimer) clearTimeout(disconnectTimer);
   disconnectTimer = setTimeout(() => {
     disconnectTimer = null;
-    if (refCount === 0 && sharedSocket) {
-      sharedSocket.disconnect();
+    if (refCount === 0) {
+      sharedSocket?.disconnect();
       sharedSocket = null;
       currentUserName = undefined;
+      currentGetClerkToken = null;
     }
   }, RELEASE_GRACE_MS);
 }
