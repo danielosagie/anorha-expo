@@ -17,7 +17,7 @@ import { PlatformConnectionsProvider, usePlatformConnections } from './src/conte
 import { PlatformPickerOverlayProvider, usePlatformPickerOverlay } from './src/context/PlatformPickerOverlayContext';
 import BottomNav from './src/components/BottomNav';
 import { Text } from 'react-native';
-import { ClerkProvider, useAuth } from '@clerk/expo';
+import { ClerkProvider, useAuth, useClerk, useUser } from '@clerk/expo';
 import { tokenCache as clerkTokenCache } from '@clerk/expo/token-cache';
 import * as SecureStore from 'expo-secure-store';
 import { EnhancedSessionProvider } from './src/context/EnhancedSessionProvider';
@@ -43,6 +43,8 @@ import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
 import SessionReconnectScreen from './src/components/SessionReconnectScreen';
 import { purgeClerkAndAuthCaches } from './src/utils/authCleanup';
+import VerifyCodeScreen from './src/screens/VerifyCodeScreen';
+import { resolveVerificationGate } from './src/lib/verificationGate';
 import {
   ActiveFlowCheckpoint,
   clearActiveFlowCheckpoint,
@@ -123,7 +125,16 @@ const AppLifecycleEffects: React.FC = () => {
   const AuthedAppContent: React.FC<{ navigationRef: React.RefObject<NavigationContainerRef<any> | null> }> = ({ navigationRef }) => {
     const [legendStateModules, setLegendStateModules] = useState<LegendStateObservables | null>(null);
     const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
+    const { isLoaded: clerkUserLoaded, user: clerkUser } = useUser();
+    const clerk = useClerk();
     const session = useContext(SessionContext);
+    const verificationGateSnapshot = resolveVerificationGate({
+      authLoaded: clerkLoaded,
+      userLoaded: clerkUserLoaded,
+      isSignedIn: Boolean(isSignedIn),
+      primaryEmailVerificationStatus: clerkUser?.primaryEmailAddress?.verification.status,
+    });
+    const hasVerifiedSession = verificationGateSnapshot.surface === 'signed_in';
 
     // Fail-loud reconnect gating: when signed in but the live Supabase bridge isn't
     // up yet, show a brief "Connecting" shell, then (after a grace window) a loud,
@@ -132,7 +143,7 @@ const AppLifecycleEffects: React.FC = () => {
     const [, setBridgeGateTick] = useState(0);
     const [reconnecting, setReconnecting] = useState(false);
     const bridgeGateSnapshot = bridgeBootGate.observe({
-      isSignedIn: Boolean(isSignedIn),
+      isSignedIn: hasVerifiedSession,
       bridgeReady: Boolean(session?.bridgeReady),
       now: Date.now(),
     });
@@ -167,7 +178,19 @@ const AppLifecycleEffects: React.FC = () => {
         ),
         purgeClerkAndAuthCaches(),
       ]);
-    }, [clerkSignOut]);
+      const sessionSurvives = () =>
+        !!clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0;
+      if (sessionSurvives()) {
+        await settleWithin(
+          Promise.resolve().then(() => clerk.signOut()),
+          5000,
+          'Clerk sign out retry timed out',
+        ).catch(() => undefined);
+      }
+      if (sessionSurvives() && typeof (clerk as any)?.setActive === 'function') {
+        await (clerk as any).setActive({ session: null }).catch(() => undefined);
+      }
+    }, [clerk, clerkSignOut]);
 
     // "Go home" escape for SafeErrorBoundary: after 2 failed "Try Again" resets on the
     // signed-in navigator, hard-reset the nav tree to the tab navigator so a screen that
@@ -362,7 +385,7 @@ const AppLifecycleEffects: React.FC = () => {
     useEffect(() => {
       if (!clerkLoaded) return;
 
-      if (!isSignedIn) {
+      if (!hasVerifiedSession) {
         console.log('[App] User signed out, clearing Legend State');
         setLegendStateModules(null);
         // No save survives a sign-out, so the nav tag must not either. A request left
@@ -433,10 +456,10 @@ const AppLifecycleEffects: React.FC = () => {
           clearTimeout(fallbackTimer);
         }
       };
-    }, [clerkLoaded, isSignedIn, session?.bridgeReady, session?.user?.id]);
+    }, [clerkLoaded, hasVerifiedSession, session?.bridgeReady, session?.user?.id]);
 
     useEffect(() => {
-      if (!clerkLoaded || !isSignedIn || !session?.ready) return;
+      if (!clerkLoaded || !hasVerifiedSession || !session?.ready) return;
       const userId = session?.user?.id;
       if (!userId) return;
 
@@ -500,14 +523,14 @@ const AppLifecycleEffects: React.FC = () => {
       buildFallbackCompleteRoute,
       clerkLoaded,
       fetchLatestActiveFlowFromBackend,
-      isSignedIn,
+      hasVerifiedSession,
       navigationRef,
       session?.ready,
       session?.user?.id,
     ]);
 
     useEffect(() => {
-      if (!clerkLoaded || !isSignedIn || !session?.ready) return;
+      if (!clerkLoaded || !hasVerifiedSession || !session?.ready) return;
       const userId = session?.user?.id;
       if (!userId) return;
 
@@ -561,7 +584,7 @@ const AppLifecycleEffects: React.FC = () => {
       return () => {
         sub.remove();
       };
-    }, [buildFallbackCompleteRoute, clerkLoaded, isSignedIn, navigationRef, session?.ready, session?.user?.id]);
+    }, [buildFallbackCompleteRoute, clerkLoaded, hasVerifiedSession, navigationRef, session?.ready, session?.user?.id]);
 
     const resetLegendState = async () => {
       console.log('[App] Manually resetting Legend State by forcing re-initialization...');
@@ -629,14 +652,19 @@ const AppLifecycleEffects: React.FC = () => {
         <LegendStateContext.Provider value={legendStateModules}>
           <ThemeProvider>
             <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-            {!clerkLoaded ? (
+            {verificationGateSnapshot.surface === 'loading' ? (
               <AppStartupShell
                 title="Starting up"
                 message="Loading cached session state and checking service health."
               />
-            ) : !isSignedIn ? (
+            ) : verificationGateSnapshot.surface === 'signed_out' ? (
               // If not signed in, don't wait for session/legend state
               <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
+            ) : verificationGateSnapshot.surface === 'verification_required' ? (
+              <VerifyCodeScreen
+                verificationRequired
+                onSignOut={handleReconnectSignOut}
+              />
             ) : (!session || session.bootstrapState === 'initializing') && !bridgeGraceElapsed ? (
               <AppStartupShell
                 title="Restoring your workspace"
@@ -670,8 +698,8 @@ const AppLifecycleEffects: React.FC = () => {
                 <AppNavigator dataReady={!!legendStateModules} />
               </SafeErrorBoundary>
             )}
-            <GlobalPlatformPickerOverlay />
-            <CatalogRealtimeBridge />
+            {hasVerifiedSession ? <GlobalPlatformPickerOverlay /> : null}
+            {hasVerifiedSession ? <CatalogRealtimeBridge /> : null}
           </ThemeProvider>
         </LegendStateContext.Provider>
       </LegendStateControlContext.Provider>
