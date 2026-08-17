@@ -16,7 +16,6 @@ import { Mail } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSSO, useClerk } from '@clerk/expo';
 import * as LocalAuthentication from 'expo-local-authentication';
-import * as AppleAuthentication from 'expo-apple-authentication';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
 import AppleSignInButton from '../components/AppleSignInButton';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
@@ -140,16 +139,14 @@ const InitialScreen = ({ navigation }: Props) => {
           </TouchableOpacity>
 
           <AppleSignInButton
-            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
-            cornerRadius={16}
-            height={54}
-            spinnerColor="#18181B"
-            containerStyle={styles.appleButton}
+            style={styles.lightButton}
+            textStyle={styles.lightButtonText}
+            tint="#18181B"
             onError={(message) => Alert.alert('Apple sign-in failed', message)}
           />
 
           <TouchableOpacity
-            style={styles.googleButton}
+            style={styles.lightButton}
             activeOpacity={0.9}
             onPress={handleGoogle}
             disabled={googleLoading}
@@ -162,19 +159,19 @@ const InitialScreen = ({ navigation }: Props) => {
                   source={require('../assets/google.png')}
                   style={styles.googleIcon}
                 />
-                <Text style={styles.googleButtonText}>Continue with Google</Text>
+                <Text style={styles.lightButtonText}>Continue with Google</Text>
               </>
             )}
           </TouchableOpacity>
 
           {faceReady && (
             <TouchableOpacity
-              style={styles.faceButton}
-              activeOpacity={0.85}
+              style={styles.lightButton}
+              activeOpacity={0.9}
               onPress={() => navigation.navigate('Auth', { mode: 'login', autoFaceId: true })}
             >
-              <Icon name="face-recognition" size={20} color="#1C1B17" />
-              <Text style={styles.faceButtonText}>Sign in with Face ID</Text>
+              <Icon name="face-recognition" size={20} color="#18181B" />
+              <Text style={styles.lightButtonText}>Sign in with Face ID</Text>
             </TouchableOpacity>
           )}
 
@@ -248,46 +245,29 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     color: '#FFFFFF',
   },
-  // Same box and spacing as the Google button below it: Apple must never read as the
-  // smaller or lesser option (App Store guideline 4.8).
-  appleButton: {
-    marginBottom: 10,
-  },
-  googleButton: {
+  // Apple, Google and Face ID all render through this one box, so no provider can read
+  // as the smaller or lesser option (App Store guideline 4.8). White, not the warm
+  // neutral, because Apple's custom-button rules allow only black, white or white-outline.
+  lightButton: {
     width: '100%',
     height: 54,
     borderRadius: 16,
-    backgroundColor: '#F0EFEC',
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
     marginBottom: 10,
+  },
+  lightButtonText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#18181B',
   },
   googleIcon: {
     width: 20,
     height: 20,
     resizeMode: 'contain',
-  },
-  googleButtonText: {
-    fontSize: 16,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#18181B',
-  },
-  faceButton: {
-    width: '100%',
-    height: 54,
-    borderRadius: 16,
-    backgroundColor: '#F0EFEC',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  faceButtonText: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#1C1B17',
   },
   terms: {
     marginTop: 14,

@@ -21,7 +21,6 @@ import { useSSO, useAuth, useClerk } from '@clerk/expo';
 // The custom email/password + code flows here use the classic resource API
 // (attemptFirstFactor, setActive, createdSessionId), which lives under /legacy.
 import { useSignIn, useSignUp } from '@clerk/expo/legacy';
-import * as AppleAuthentication from 'expo-apple-authentication';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AppleSignInButton from '../components/AppleSignInButton';
 import ErrorModal from '../components/ErrorModal';
@@ -578,11 +577,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
           )}
 
           <AppleSignInButton
-            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE_OUTLINE}
-            cornerRadius={26}
-            height={52}
-            spinnerColor={INK}
-            containerStyle={styles.appleBtn}
+            style={styles.socialBtn}
+            textStyle={styles.socialText}
+            tint={INK}
             onError={(message) => showErrorModal('Apple Sign-In Failed', message, 'error')}
           />
 
@@ -656,9 +653,8 @@ const styles = StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 22 },
   dividerLine: { flex: 1, height: 1, backgroundColor: FIELD_BORDER },
   dividerText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: OR_GRAY },
-  // Same box and spacing as the Google button below it: Apple must never read as the
-  // smaller or lesser option (App Store guideline 4.8).
-  appleBtn: { marginTop: 12 },
+  // Apple, Google and Face ID all render through this one box, so no provider can read
+  // as the smaller or lesser option (App Store guideline 4.8).
   socialBtn: {
     marginTop: 12,
     height: 52,
