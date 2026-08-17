@@ -134,7 +134,7 @@ test('zombie session escalates after the full backoff when the backend is reacha
   );
 });
 
-test('ambiguous reachability never invalidates the stored session', () => {
+test('exhausted ambiguous reachability degrades to preserve the session and offline cached path', () => {
   const missingEvidence = decideBridgeFailure({
     kind: 'token_unavailable',
     retryCount: TOKEN_UNAVAILABLE_RETRY_LIMIT,
@@ -149,11 +149,13 @@ test('ambiguous reachability never invalidates the stored session', () => {
     backendReachability: 'ambiguous',
   });
 
-  assert.equal(missingEvidence, 'quiet_retry');
-  assert.equal(failedProbe, 'quiet_retry');
+  // Degrade preserves persisted auth and terminates this retry chain, allowing
+  // the provider to restore cached account data without signing the user out.
+  assert.equal(missingEvidence, 'degrade');
+  assert.equal(failedProbe, 'degrade');
 });
 
-test('Try again converges when a second exhausted cycle proves backend reachability', () => {
+test('post-degrade validation still invalidates a zombie when the backend becomes reachable', () => {
   const classifyExhaustedCycle = (backendReachability: 'reachable' | 'ambiguous') =>
     decideBridgeFailure({
       kind: 'token_unavailable',
@@ -163,10 +165,10 @@ test('Try again converges when a second exhausted cycle proves backend reachabil
       backendReachability,
     });
 
-  // The first ambiguous cycle keeps the session while the boot gate reaches reconnect.
-  assert.equal(classifyExhaustedCycle('ambiguous'), 'quiet_retry');
-  // SessionReconnectScreen starts the same retry path. A second zero-token cycle
-  // with a backend 200 must use the invalid-session teardown instead of looping.
+  // The offline pass terminates in cached mode without latching invalid-session state.
+  assert.equal(classifyExhaustedCycle('ambiguous'), 'degrade');
+  // A later validation pass starts a fresh bounded cycle. Reachable evidence must
+  // use the invalid-session teardown so the zombie still converges after a degrade.
   assert.equal(classifyExhaustedCycle('reachable'), 'invalid_session');
 });
 

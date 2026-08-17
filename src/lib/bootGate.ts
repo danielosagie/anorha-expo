@@ -124,7 +124,7 @@ export function decideBridgeFailure(input: {
   if (input.retryCount < maxRetries) return 'quiet_retry';
   if (input.bridgeWasReady) return 'preserve_live_bridge';
   if (input.kind === 'token_unavailable') {
-    return input.backendReachability === 'reachable' ? 'invalid_session' : 'quiet_retry';
+    return input.backendReachability === 'reachable' ? 'invalid_session' : 'degrade';
   }
   return 'degrade';
 }
