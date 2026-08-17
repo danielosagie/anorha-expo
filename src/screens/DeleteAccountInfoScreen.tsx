@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, StatusBar } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import PageHeader from '../components/ui/PageHeader';
+import { PageHeader } from '../components/ui/PageHeader';
 
 const styles = StyleSheet.create({
   root: {
@@ -82,9 +82,9 @@ export default function DeleteAccountInfoScreen() {
           <Text style={styles.heading}>How to request account and data deletion</Text>
           <Text style={styles.body}>In the app:</Text>
           <View style={styles.list}>
-            <Text style={styles.listItem}>• Open <Text style={styles.appName}>Anorha</Text> → Profile → Delete Account</Text>
-            <Text style={styles.listItem}>• Follow the steps (confirm your business name and reason)</Text>
-            <Text style={styles.listItem}>• Your account and associated data will be deleted</Text>
+            <Text style={styles.listItem}>• Open <Text style={styles.appName}>Anorha</Text> → Profile → Privacy &amp; Security → Delete account</Text>
+            <Text style={styles.listItem}>• Review your billing status and type the confirmation shown</Text>
+            <Text style={styles.listItem}>• The app signs you out only after the service accepts a complete deletion request</Text>
           </View>
           <Text style={styles.body}>
             You can also contact support with the subject &quot;Delete my account&quot; and the email address of your account.
@@ -92,7 +92,7 @@ export default function DeleteAccountInfoScreen() {
 
           <Text style={styles.heading}>What we delete</Text>
           <Text style={styles.body}>
-            Account and profile, organization memberships, platform connections, products and listings data, usage and activity data tied to your account, and other user data we hold for your account.
+            A completed deletion removes your account and profile, organization memberships, sole-member organizations, platform credentials, products and listings owned only by those organizations, and user-linked usage and activity data.
           </Text>
 
           <Text style={styles.heading}>What we may keep (and for how long)</Text>
@@ -102,7 +102,7 @@ export default function DeleteAccountInfoScreen() {
 
           <Text style={styles.heading}>Timing</Text>
           <Text style={styles.body}>
-            Deletion is processed when you confirm in the app (or when we process your support request).
+            The app reports only a deletion request that the service has durably accepted. It does not report an account as deleted after a failed or incomplete request.
           </Text>
         </View>
       </ScrollView>
