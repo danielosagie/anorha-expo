@@ -2,7 +2,18 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SessionContext, SessionContextType, SessionMode, SessionUser } from './SessionContext';
 import { configureClerkSupabaseBridge, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
-import { BRIDGE_BOOT_GRACE_MS, CLERK_TOKEN_TIMEOUT_MS, decideBridgeFailure, settleWithin } from '../lib/bootGate';
+import {
+  BACKEND_REACHABILITY_TIMEOUT_MS,
+  BackendReachability,
+  BRIDGE_BOOT_GRACE_MS,
+  CLERK_TOKEN_TIMEOUT_MS,
+  TOKEN_UNAVAILABLE_RETRY_LIMIT,
+  decideBridgeFailure,
+  decideValidationLoop,
+  settleWithin,
+  tokenRetryDelayMs,
+} from '../lib/bootGate';
+import { API_BASE_URL } from '../config/env';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
@@ -13,9 +24,10 @@ const log = createLogger('EnhancedSessionProvider');
 interface EnhancedSessionProviderProps {
   children: React.ReactNode;
   getClerkToken: () => Promise<string | null>;
-  // Clerk's current signed-in flag. Used to (re)bootstrap on a warm re-login — see the
+  // Verified signed-in flag. Used to (re)bootstrap on a warm re-login. See the
   // signed-in-transition effect below.
-  isSignedIn?: boolean;
+  isSignedIn: boolean;
+  onInvalidSession: () => Promise<void>;
 }
 
 const ENTITLEMENTS_CACHE_KEY = 'sssync_entitlements_cache_v1';
@@ -24,6 +36,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   children,
   getClerkToken,
   isSignedIn,
+  onInvalidSession,
 }) => {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<SessionUser>(null);
@@ -40,6 +53,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const userRef = useRef<SessionUser>(null);
   const authPersistence = useRef(AuthPersistence.getInstance());
   const appStateManager = useRef(AppStateManager.getInstance());
+  const isSignedInRef = useRef(isSignedIn);
+  const invalidSessionInFlightRef = useRef(false);
+  isSignedInRef.current = isSignedIn;
 
   useEffect(() => {
     userRef.current = user;
@@ -129,19 +145,52 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   }, []);
 
   const scheduleValidationRetry = useCallback((force: boolean, retryCount: number, delayMs: number) => {
-    validationRetryTimersRef.current.forEach(clearTimeout);
-    validationRetryTimersRef.current.clear();
+    const loopDecision = decideValidationLoop(isSignedInRef.current);
+    if (!loopDecision.shouldScheduleRetry || invalidSessionInFlightRef.current) {
+      clearValidationRetryTimers();
+      return;
+    }
+
+    clearValidationRetryTimers();
     const timer = setTimeout(() => {
       validationRetryTimersRef.current.delete(timer);
+      if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+        clearValidationRetryTimers();
+        return;
+      }
       validationRunnerRef.current?.(force, retryCount).catch(log.error);
     }, delayMs);
     validationRetryTimersRef.current.add(timer);
+  }, [clearValidationRetryTimers]);
+
+  const checkBackendReachability = useCallback(async (): Promise<BackendReachability> => {
+    const controller = new AbortController();
+    try {
+      // The backend root GET is an existing unauthenticated liveness route that returns
+      // directly without database or queue work. It is called only after the full
+      // 7,500ms null-token backoff, and its 4,000ms budget is derived in bootGate.ts.
+      const response = await settleWithin(
+        fetch(`${API_BASE_URL}/`, { signal: controller.signal }),
+        BACKEND_REACHABILITY_TIMEOUT_MS,
+        'Backend reachability check timed out',
+      );
+      return response.ok ? 'reachable' : 'ambiguous';
+    } catch {
+      return 'ambiguous';
+    } finally {
+      controller.abort();
+    }
   }, []);
 
   // Enhanced token validation with 30-minute intervals and auto-retry. The public
   // wrapper below single-flights this function so init/foreground/interval/sign-in
   // triggers cannot configure or tear down the same bridge concurrently.
   const performAuthValidation = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
+    if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+      clearValidationRetryTimers();
+      return;
+    }
+
     try {
       const shouldRevalidateAccount = force || authPersistence.current.shouldValidateAuth();
       const needsBridgeSetup = !configuredRef.current;
@@ -167,15 +216,43 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         return null;
       });
 
+      if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+        clearValidationRetryTimers();
+        return;
+      }
+
       if (!token) {
+        const backendReachability =
+          retryCount >= TOKEN_UNAVAILABLE_RETRY_LIMIT && !configuredRef.current
+            ? await checkBackendReachability()
+            : undefined;
         const decision = decideBridgeFailure({
           kind: 'token_unavailable',
           retryCount,
           bridgeWasReady: configuredRef.current,
+          isSignedIn: isSignedInRef.current,
+          backendReachability,
         });
 
+        if (decision === 'signed_out') {
+          clearValidationRetryTimers();
+          return;
+        }
+
+        if (decision === 'invalid_session') {
+          clearValidationRetryTimers();
+          invalidSessionInFlightRef.current = true;
+          setBridgeReady(false);
+          setBootstrapError('Session expired. Sign in again.');
+          log.warn('[EnhancedSessionProvider] Stored session is invalid; running hardened sign-out');
+          await onInvalidSession().catch((error) => {
+            log.error('[EnhancedSessionProvider] Hardened invalid-session sign-out failed:', error);
+          });
+          return;
+        }
+
         if (decision === 'quiet_retry') {
-          const retryDelay = Math.min(Math.pow(2, retryCount) * 500, 4000);
+          const retryDelay = tokenRetryDelayMs(retryCount);
           log.debug(
             `[EnhancedSessionProvider] Clerk token unavailable; retrying quietly in ${retryDelay}ms (attempt ${retryCount + 2})`,
           );
@@ -272,7 +349,13 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         kind: 'configuration_failed',
         retryCount,
         bridgeWasReady: configuredRef.current,
+        isSignedIn: isSignedInRef.current,
       });
+
+      if (decision === 'signed_out') {
+        clearValidationRetryTimers();
+        return;
+      }
 
       if (decision === 'quiet_retry') {
         const retryDelay = Math.pow(2, retryCount) * 1000;
@@ -306,14 +389,21 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   }, [
     clearSessionState,
     clearValidationRetryTimers,
+    checkBackendReachability,
     getClerkToken,
     loadCachedEntitlements,
+    onInvalidSession,
     persistEntitlements,
     scheduleValidationRetry,
     setCachedSessionState,
   ]);
 
   const validateAuthIfNeeded = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
+    if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+      clearValidationRetryTimers();
+      return;
+    }
+
     if (validationInFlightRef.current) {
       return validationInFlightRef.current;
     }
@@ -325,12 +415,18 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     } finally {
       if (validationInFlightRef.current === validation) validationInFlightRef.current = null;
     }
-  }, [performAuthValidation]);
+  }, [clearValidationRetryTimers, performAuthValidation]);
   validationRunnerRef.current = validateAuthIfNeeded;
 
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
     log.debug('[EnhancedSessionProvider] Checking persisted auth state...');
+
+    if (!decideValidationLoop(isSignedInRef.current).shouldRun) {
+      clearValidationRetryTimers();
+      setInitializing(false);
+      return;
+    }
 
     // If the live bridge is already up, this is an effect RE-RUN (the init effect's
     // callback deps churned), not a fresh boot. Do NOT demote the session back to
@@ -390,12 +486,20 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     }
 
     setInitializing(false);
-  }, [loadCachedEntitlements, validateAuthIfNeeded]);
+  }, [clearValidationRetryTimers, loadCachedEntitlements, validateAuthIfNeeded]);
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!decideValidationLoop(isSignedIn).shouldRun) {
+      clearValidationRetryTimers();
+      setInitializing(false);
+      appStateManager.current.cleanup();
+      return;
+    }
     
     log.debug('[EnhancedSessionProvider] Initializing...');
+    setInitializing(true);
     
     // Initialize app state manager
     appStateManager.current.initialize(() => {
@@ -422,7 +526,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       clearValidationRetryTimers();
       appStateManager.current.cleanup();
     };
-  }, [clearValidationRetryTimers, initializeFromPersistedState, validateAuthIfNeeded]);
+  }, [clearValidationRetryTimers, initializeFromPersistedState, isSignedIn, validateAuthIfNeeded]);
 
   // Re-bootstrap the session when Clerk transitions to signed-in. The init effect only
   // runs on mount and AppStateManager only fires on app-foreground, so a WARM sign-in
@@ -437,15 +541,24 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   useEffect(() => {
     const was = wasSignedInRef.current;
     wasSignedInRef.current = isSignedIn;
+    if (isSignedIn === false) {
+      clearValidationRetryTimers();
+      return;
+    }
     if (was === false && isSignedIn === true && !configuredRef.current) {
+      invalidSessionInFlightRef.current = false;
       log.debug('[EnhancedSessionProvider] Signed-in transition; (re)bootstrapping session');
       setBootstrapError(null);
       validateAuthIfNeeded(true).catch(log.error);
     }
-  }, [isSignedIn, validateAuthIfNeeded]);
+  }, [clearValidationRetryTimers, isSignedIn, validateAuthIfNeeded]);
 
   const refresh = useCallback(async () => {
     log.debug('[EnhancedSessionProvider] Manual refresh requested');
+    if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+      clearValidationRetryTimers();
+      return;
+    }
     try {
       // Retry is a genuine bridge rebuild. configuredRef can be stale-true while its
       // token/socket is dead; trusting it made the reconnect button a no-op.

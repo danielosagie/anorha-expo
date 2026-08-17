@@ -7,8 +7,8 @@ import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LogBox } from 'react-native';
 import 'react-native-get-random-values';
-import { ensureSupabaseJwt, forceRefreshSupabaseJwt, stopClerkSupabaseBridge, supabase } from './src/lib/supabase';
-import { bridgeBootGate, settleWithin } from './src/lib/bootGate';
+import { ensureSupabaseJwt, forceRefreshSupabaseJwt, supabase } from './src/lib/supabase';
+import { bridgeBootGate } from './src/lib/bootGate';
 import { LegendStateContext } from './src/context/LegendStateContext';
 import { LegendStateControlContext } from './src/context/LegendStateControlContext';
 import { initializeFallbackLegendState, initializeLegendState, LegendStateObservables } from './src/utils/SupaLegend';
@@ -42,7 +42,7 @@ import { markCatalogStale } from './src/lib/catalogPatches';
 import { AppDataProvider } from './src/context/AppDataContext';
 import AppStartupShell from './src/components/AppStartupShell';
 import SessionReconnectScreen from './src/components/SessionReconnectScreen';
-import { purgeClerkAndAuthCaches } from './src/utils/authCleanup';
+import { performHardenedSignOut } from './src/utils/hardenedSignOut';
 import VerifyCodeScreen from './src/screens/VerifyCodeScreen';
 import { resolveVerificationGate } from './src/lib/verificationGate';
 import {
@@ -74,6 +74,7 @@ WebBrowser.maybeCompleteAuthSession();
 initFlowLogger().catch(() => { });
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_SSSYNC_API_BASE_URL || 'https://api.sssync.app';
+const SESSION_EXPIRED_NOTICE = 'Session expired. Sign in again.';
 const APP_LIGHT_BACKGROUND = '#FFFFFF';
 const APP_NAVIGATION_THEME = {
   ...DefaultTheme,
@@ -122,7 +123,11 @@ const AppLifecycleEffects: React.FC = () => {
   };
 
   // Authed app content (without NavigationContainer)
-  const AuthedAppContent: React.FC<{ navigationRef: React.RefObject<NavigationContainerRef<any> | null> }> = ({ navigationRef }) => {
+  const AuthedAppContent: React.FC<{
+    navigationRef: React.RefObject<NavigationContainerRef<any> | null>;
+    authNotice: string | null;
+    onSessionRestored: () => void;
+  }> = ({ navigationRef, authNotice, onSessionRestored }) => {
     const [legendStateModules, setLegendStateModules] = useState<LegendStateObservables | null>(null);
     const { isLoaded: clerkLoaded, isSignedIn, signOut: clerkSignOut } = useAuth();
     const { isLoaded: clerkUserLoaded, user: clerkUser } = useUser();
@@ -135,6 +140,9 @@ const AppLifecycleEffects: React.FC = () => {
       primaryEmailVerificationStatus: clerkUser?.primaryEmailAddress?.verification.status,
     });
     const hasVerifiedSession = verificationGateSnapshot.surface === 'signed_in';
+    useEffect(() => {
+      if (hasVerifiedSession && session?.bridgeReady) onSessionRestored();
+    }, [hasVerifiedSession, onSessionRestored, session?.bridgeReady]);
 
     // Fail-loud reconnect gating: when signed in but the live Supabase bridge isn't
     // up yet, show a brief "Connecting" shell, then (after a grace window) a loud,
@@ -167,29 +175,10 @@ const AppLifecycleEffects: React.FC = () => {
       }
     }, [session]);
     const handleReconnectSignOut = useCallback(async () => {
-      try { stopClerkSupabaseBridge(); } catch { /* bridge may already be down */ }
-      // Cache purge starts immediately and is never held hostage by Clerk's network
-      // revocation. A dead bridge therefore cannot remove the sign-out escape hatch.
-      await Promise.allSettled([
-        settleWithin(
-          Promise.resolve().then(() => clerkSignOut?.()),
-          5000,
-          'Clerk sign out timed out',
-        ),
-        purgeClerkAndAuthCaches(),
-      ]);
-      const sessionSurvives = () =>
-        !!clerk?.session || (clerk?.client?.sessions?.length ?? 0) > 0;
-      if (sessionSurvives()) {
-        await settleWithin(
-          Promise.resolve().then(() => clerk.signOut()),
-          5000,
-          'Clerk sign out retry timed out',
-        ).catch(() => undefined);
-      }
-      if (sessionSurvives() && typeof (clerk as any)?.setActive === 'function') {
-        await (clerk as any).setActive({ session: null }).catch(() => undefined);
-      }
+      await performHardenedSignOut({
+        client: clerk as any,
+        primarySignOut: clerkSignOut,
+      });
     }, [clerk, clerkSignOut]);
 
     // "Go home" escape for SafeErrorBoundary: after 2 failed "Try Again" resets on the
@@ -659,7 +648,7 @@ const AppLifecycleEffects: React.FC = () => {
               />
             ) : verificationGateSnapshot.surface === 'signed_out' ? (
               // If not signed in, don't wait for session/legend state
-              <SafeErrorBoundary><AppNavigator /></SafeErrorBoundary>
+              <SafeErrorBoundary><AppNavigator authNotice={authNotice} /></SafeErrorBoundary>
             ) : verificationGateSnapshot.surface === 'verification_required' ? (
               <VerifyCodeScreen
                 verificationRequired
@@ -706,8 +695,20 @@ const AppLifecycleEffects: React.FC = () => {
     );
   };
 
-  const WithSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { getToken, isSignedIn } = useAuth();
+  const WithSessionProvider: React.FC<{
+    children: React.ReactNode;
+    onInvalidSession: () => Promise<void>;
+  }> = ({ children, onInvalidSession }) => {
+    const { getToken, isLoaded: authLoaded, isSignedIn } = useAuth();
+    const { isLoaded: userLoaded, user } = useUser();
+    // The provider is an ancestor of AuthedAppContent, so compute the same verified
+    // email gate here and make it the sole permission signal for validation work.
+    const hasVerifiedSession = resolveVerificationGate({
+      authLoaded,
+      userLoaded,
+      isSignedIn: Boolean(isSignedIn),
+      primaryEmailVerificationStatus: user?.primaryEmailAddress?.verification.status,
+    }).surface === 'signed_in';
     // Keep getClerkToken's IDENTITY STABLE across renders. Clerk's getToken can be a
     // fresh reference each render; if it leaks into this callback's deps, getClerkToken
     // changes → EnhancedSessionProvider's validateAuthIfNeeded/init effect re-runs every
@@ -718,15 +719,33 @@ const AppLifecycleEffects: React.FC = () => {
     const getClerkToken = useCallback(() => getTokenRef.current(), []);
 
     return (
-      <EnhancedSessionProvider getClerkToken={getClerkToken} isSignedIn={isSignedIn}>
+      <EnhancedSessionProvider
+        getClerkToken={getClerkToken}
+        isSignedIn={hasVerifiedSession}
+        onInvalidSession={onInvalidSession}
+      >
         {children}
       </EnhancedSessionProvider>
     );
   };
 
   const DebugClerkState = () => {
-    const { isLoaded, isSignedIn } = useAuth();
+    const { isLoaded, isSignedIn, signOut } = useAuth();
+    const clerk = useClerk();
     const navigationRef = useRef<NavigationContainerRef<any>>(null);
+    const [authNotice, setAuthNotice] = useState<string | null>(null);
+    const clerkRef = useRef(clerk);
+    const signOutRef = useRef(signOut);
+    clerkRef.current = clerk;
+    signOutRef.current = signOut;
+    const handleInvalidSession = useCallback(async () => {
+      setAuthNotice(SESSION_EXPIRED_NOTICE);
+      await performHardenedSignOut({
+        client: clerkRef.current as any,
+        primarySignOut: signOutRef.current,
+      });
+    }, []);
+    const handleSessionRestored = useCallback(() => setAuthNotice(null), []);
     // NOTE: do NOT add a per-render console.log here. Core 3 / clerk-js v6 re-renders
     // every useAuth() consumer on every resource emit, so a log here floods hundreds of
     // lines per second and makes the (otherwise cheap) re-renders expensive.
@@ -774,7 +793,7 @@ const AppLifecycleEffects: React.FC = () => {
                   ("useAppData must be used within an AppDataProvider"). AuthedAppContent already
                   handles the signed-out / not-ready states internally (and supplies its own
                   ThemeProvider, StatusBar and global overlays). */}
-              <WithSessionProvider>
+              <WithSessionProvider onInvalidSession={handleInvalidSession}>
                 <OrgProvider>
                   {/* Binds the PostHog identity to the signed-in user AND their
                       active org, so it must sit inside OrgProvider (it reads
@@ -790,7 +809,11 @@ const AppLifecycleEffects: React.FC = () => {
                     <AppDataProvider>
                       <LiveActivityProvider>
                         <JobsProvider>
-                          <AuthedAppContent navigationRef={navigationRef} />
+                          <AuthedAppContent
+                            navigationRef={navigationRef}
+                            authNotice={authNotice}
+                            onSessionRestored={handleSessionRestored}
+                          />
                         </JobsProvider>
                       </LiveActivityProvider>
                     </AppDataProvider>

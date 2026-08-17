@@ -83,9 +83,10 @@ const FaceIdMark = () => (
 type AuthScreenProps = {
   navigation: any;
   route?: { params?: { mode?: 'login' | 'signup'; autoFaceId?: boolean } };
+  sessionNotice?: string | null;
 };
 
-const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
+const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotice }) => {
   const insets = useSafeAreaInsets();
   const initialMode = route?.params?.mode;
   const [isLogin, setIsLogin] = useState(initialMode !== 'signup');
@@ -484,6 +485,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
           </View>
 
           <Text style={styles.header}>{isLogin ? 'Welcome back' : 'Create account'}</Text>
+          {sessionNotice ? <Text style={styles.sessionNotice}>{sessionNotice}</Text> : null}
 
           <View style={styles.fields}>
             <View style={styles.fieldGroup}>
@@ -625,6 +627,7 @@ const styles = StyleSheet.create({
     color: INK,
     letterSpacing: -0.6,
   },
+  sessionNotice: { marginTop: 8, fontSize: 14, lineHeight: 20, fontFamily: 'Inter_500Medium', color: MUTED },
   fields: { marginTop: 24, gap: 16 },
   fieldGroup: { gap: 8 },
   label: { fontSize: 13, lineHeight: 16, fontFamily: 'Inter_600SemiBold', color: LABEL },
