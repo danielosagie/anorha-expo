@@ -92,8 +92,8 @@ export const sproutLightTheme: SproutTheme = {
     errorText: '#B91C1C',
   },
   hero: {
-    background: '#93C822',
-    gradientEnd: '#93C822',
+    background: '#6F9C26',
+    gradientEnd: '#6F9C26',
     text: '#FFFFFF',
     textSecondary: 'rgba(255,255,255,0.78)',
     textMuted: 'rgba(255,255,255,0.60)',
