@@ -2,6 +2,7 @@ import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../config/env';
+import { BRIDGE_CONFIG_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, settleWithin } from './bootGate';
 import { createLogger } from '../utils/logger';
 const log = createLogger('supabase');
 
@@ -62,6 +63,7 @@ let lastExpiresInSeconds: number | null = null;
 const FALLBACK_REFRESH_SECONDS = 8 * 60; // only used if the backend omits expires_in
 const REFRESH_LEAD_SECONDS = 60; // refresh this many seconds before expiry
 let getClerkTokenFn: (() => Promise<string | null>) | null = null;
+let bridgeGeneration = 0;
 // Promise lock to prevent race conditions when multiple components call ensureSupabaseJwt concurrently
 let exchangeInProgress: Promise<boolean> | null = null;
 let lastExchangeOutcome: 'idle' | 'success' | 'exchange_failed' | 'clerk_token_missing' = 'idle';
@@ -167,7 +169,7 @@ export const supabase = CLERK_NATIVE_AUTH
       auth: baseAuthOptions,
       // Native third-party auth: supabase-js pulls the Clerk token on demand for both
       // REST and Realtime — no mint, no custom fetch, no refresh timer.
-      accessToken: async () => (getClerkTokenFn ? await getClerkTokenFn() : null),
+      accessToken: async () => getClerkSessionToken().catch(() => null),
     })
   : createClient(supabaseUrl, supabaseAnonKey, {
       auth: baseAuthOptions,
@@ -185,7 +187,10 @@ export function getCurrentSupabaseJwt(): string | null {
  * @deprecated MINT-BRIDGE FALLBACK — drives the Clerk→Supabase token exchange. Bypassed
  * under native auth (EXPO_PUBLIC_CLERK_NATIVE_AUTH=true). Remove after the native soak.
  */
-async function refreshSupabaseToken(): Promise<boolean> {
+async function refreshSupabaseToken(
+  initialClerkToken?: string,
+  expectedGeneration: number = bridgeGeneration,
+): Promise<boolean> {
   // If an exchange is already in progress, wait for it instead of starting another
   if (exchangeInProgress) {
     log.debug('[supabase.ts] Exchange already in progress, waiting...');
@@ -193,10 +198,12 @@ async function refreshSupabaseToken(): Promise<boolean> {
   }
   
   // Start exchange and store the promise so concurrent calls can wait
-  exchangeInProgress = exchangeClerkForSupabase().finally(() => {
-    exchangeInProgress = null;
+  let trackedExchange: Promise<boolean>;
+  trackedExchange = exchangeClerkForSupabase(initialClerkToken, expectedGeneration).finally(() => {
+    if (exchangeInProgress === trackedExchange) exchangeInProgress = null;
     emitSupabaseJwtState();
   });
+  exchangeInProgress = trackedExchange;
   emitSupabaseJwtState();
   
   return exchangeInProgress;
@@ -260,7 +267,9 @@ export async function ensureSupabaseJwt(): Promise<string | null> {
     // No mint: the Clerk token IS the token backend + Supabase accept. Clerk's SDK
     // returns a fresh (cached/auto-refreshed) token each call. Warm currentSupabaseJwt
     // so the synchronous getCurrentSupabaseJwt() stays best-effort current.
-    const token = getClerkTokenFn ? await getClerkTokenFn() : null;
+    const generation = bridgeGeneration;
+    const token = await getClerkSessionToken().catch(() => null);
+    if (generation !== bridgeGeneration) return null;
     currentSupabaseJwt = token;
     emitSupabaseJwtState();
     return token;
@@ -287,42 +296,66 @@ export async function ensureSupabaseJwt(): Promise<string | null> {
  * short-lived HS256 Supabase JWT. Not used under native auth (the Clerk session token is
  * sent to Supabase directly). Remove after the native soak.
  */
-async function exchangeClerkForSupabase(): Promise<boolean> {
-  if (!getClerkTokenFn) {
+async function exchangeClerkForSupabase(
+  initialClerkToken?: string,
+  expectedGeneration: number = bridgeGeneration,
+): Promise<boolean> {
+  if (!getClerkTokenFn && !initialClerkToken) {
     currentSupabaseJwt = null;
     lastExchangeOutcome = 'idle';
     emitSupabaseJwtState();
     return false;
   }
   try {
-    const clerkToken = await getClerkTokenFn();
+    // Bootstrap already acquired a bounded Clerk token. Reuse it so configuration
+    // cannot wedge on a second SecureStore/Clerk read. Refreshes use the same bounded
+    // getter through getClerkSessionToken().
+    const clerkToken = initialClerkToken ?? await getClerkSessionToken();
+    if (expectedGeneration !== bridgeGeneration) return false;
     const hasClerk = !!clerkToken;
     log.debug('[supabase.ts] exchangeClerkForSupabase start. hasClerkToken =', hasClerk);
     if (!clerkToken) {
-      currentSupabaseJwt = null;
-      lastExchangeOutcome = 'clerk_token_missing';
-      emitSupabaseJwtState();
+      if (expectedGeneration === bridgeGeneration) {
+        currentSupabaseJwt = null;
+        lastExchangeOutcome = 'clerk_token_missing';
+        emitSupabaseJwtState();
+      }
       return false;
     }
     const base = apiBaseUrl.endsWith('/api') ? apiBaseUrl : `${apiBaseUrl}/api`;
     const url = `${base}/auth/exchange`;
     log.debug('[supabase.ts] Exchanging Clerk token for Supabase JWT at', url);
     log.debug('[supabase.ts] EXCHANGE URL =', url);
-    const resp = await realFetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${clerkToken}` },
-    });
+    const resp = await settleWithin(
+      realFetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${clerkToken}` },
+      }),
+      BRIDGE_CONFIG_TIMEOUT_MS,
+      'Clerk to Supabase token exchange timed out',
+    );
     log.debug('[supabase.ts] Exchange response status:', resp.status, resp.ok);
     if (!resp.ok) {
-      const text = await resp.text().catch(() => '<no body>');
+      const text = await settleWithin(
+        resp.text(),
+        BRIDGE_CONFIG_TIMEOUT_MS,
+        'Clerk to Supabase exchange error body timed out',
+      ).catch(() => '<no body>');
       log.debug('[supabase.ts] Exchange error body:', text);
-      currentSupabaseJwt = null;
-      lastExchangeOutcome = 'exchange_failed';
-      emitSupabaseJwtState();
+      if (expectedGeneration === bridgeGeneration) {
+        currentSupabaseJwt = null;
+        lastExchangeOutcome = 'exchange_failed';
+        emitSupabaseJwtState();
+      }
       return false;
     }
-    const body = await resp.json();
+    const body = await settleWithin(
+      resp.json(),
+      BRIDGE_CONFIG_TIMEOUT_MS,
+      'Clerk to Supabase exchange response body timed out',
+    );
     log.debug('[supabase.ts] Exchange body:', body);
+    if (expectedGeneration !== bridgeGeneration) return false;
     currentSupabaseJwt = body.supabase_token as string;
     lastExpiresInSeconds = typeof body.expires_in === 'number' && body.expires_in > 0
       ? body.expires_in
@@ -345,9 +378,11 @@ async function exchangeClerkForSupabase(): Promise<boolean> {
     return !!currentSupabaseJwt;
   } catch (e) {
     log.error('[supabase.ts] exchangeClerkForSupabase error:', e);
-    currentSupabaseJwt = null;
-    lastExchangeOutcome = 'exchange_failed';
-    emitSupabaseJwtState();
+    if (expectedGeneration === bridgeGeneration) {
+      currentSupabaseJwt = null;
+      lastExchangeOutcome = 'exchange_failed';
+      emitSupabaseJwtState();
+    }
     return false;
   }
 }
@@ -382,9 +417,12 @@ function scheduleNextRefresh() {
 
 export async function configureClerkSupabaseBridge(options: {
   getClerkToken: () => Promise<string | null>;
+  /** Token already acquired by bootstrap; avoids a second unbounded Clerk read. */
+  initialClerkToken?: string;
   /** @deprecated Ignored — refresh cadence is derived from the token's `expires_in`. */
   autoRefreshMinutes?: number;
 }) {
+  const generation = ++bridgeGeneration;
   getClerkTokenFn = options.getClerkToken;
   lastExchangeOutcome = 'idle';
   log.debug('[supabase.ts] configureClerkSupabaseBridge called.');
@@ -392,7 +430,14 @@ export async function configureClerkSupabaseBridge(options: {
   if (CLERK_NATIVE_AUTH) {
     // Native third-party auth: no exchange, no refresh timer — supabase-js calls the
     // accessToken callback on demand. Just warm the token for sync getters/state.
-    currentSupabaseJwt = await options.getClerkToken().catch(() => null);
+    const token = options.initialClerkToken ?? await settleWithin(
+      options.getClerkToken(),
+      CLERK_TOKEN_TIMEOUT_MS,
+      'Clerk session token read timed out while configuring Supabase',
+    );
+    if (generation !== bridgeGeneration) throw new Error('Supabase bridge configuration was superseded');
+    if (!token) throw new Error('Clerk session token unavailable while configuring Supabase');
+    currentSupabaseJwt = token;
     lastExchangeOutcome = currentSupabaseJwt ? 'success' : 'clerk_token_missing';
     // Push the token to Realtime too: supabase-js only fetches accessToken at CONNECT
     // time, so RLS channels otherwise hold the first token forever and silently 401
@@ -404,7 +449,8 @@ export async function configureClerkSupabaseBridge(options: {
     return;
   }
 
-  const ok = await refreshSupabaseToken();
+  const ok = await refreshSupabaseToken(options.initialClerkToken, generation);
+  if (generation !== bridgeGeneration) throw new Error('Supabase bridge configuration was superseded');
   if (!ok) throw new Error('Failed to exchange Clerk token for Supabase JWT');
 
   // Schedule the next refresh from the token's actual lifetime (NOT a fixed interval).
@@ -424,7 +470,10 @@ export async function forceRefreshSupabaseJwt(): Promise<boolean> {
     // No timer to realign; re-warm the cached token AND re-auth Realtime — on
     // foreground the OS may have let the token the channels hold expire while
     // backgrounded, so without this live updates stay dead until a full reconnect.
-    currentSupabaseJwt = await getClerkTokenFn().catch(() => null);
+    const generation = bridgeGeneration;
+    const token = await getClerkSessionToken().catch(() => null);
+    if (generation !== bridgeGeneration) return false;
+    currentSupabaseJwt = token;
     if (currentSupabaseJwt) {
       try { (supabase as any)?.realtime?.setAuth?.(currentSupabaseJwt); } catch { /* realtime optional */ }
     }
@@ -437,12 +486,24 @@ export async function forceRefreshSupabaseJwt(): Promise<boolean> {
 }
 
 export function stopClerkSupabaseBridge() {
+  bridgeGeneration += 1;
   clearRefreshTimer();
+  exchangeInProgress = null;
   currentSupabaseJwt = null;
   lastExpiresInSeconds = null;
   getClerkTokenFn = null;
   lastExchangeOutcome = 'idle';
   emitSupabaseJwtState();
+}
+
+/**
+ * The raw Clerk session token. Custom backend gateways accept this token directly;
+ * unlike ensureSupabaseJwt(), this never returns the mint-bridge HS256 token.
+ */
+export async function getClerkSessionToken(): Promise<string | null> {
+  const getter = getClerkTokenFn;
+  if (!getter) return null;
+  return settleWithin(getter(), CLERK_TOKEN_TIMEOUT_MS, 'Clerk session token read timed out');
 }
 
 // Compatibility shim for supabase.auth.getUser()/getSession() (~38 + 4 call sites).

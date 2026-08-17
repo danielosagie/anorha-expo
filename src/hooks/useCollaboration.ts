@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useUser } from '@clerk/expo';
+import { useAuth, useUser } from '@clerk/expo';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 import { applyLevelPatch, applyVariantPatch, markCatalogStale } from '../lib/catalogPatches';
 import { createLogger } from '../utils/logger';
@@ -53,6 +53,9 @@ interface PresenceUser {
 
 export function useCollaboration() {
   const { user } = useUser();
+  const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
@@ -98,7 +101,10 @@ export function useCollaboration() {
     };
 
     // Share the single /collaboration connection instead of opening our own.
-    acquireCollaborationSocket({ userName })
+    acquireCollaborationSocket({
+      userName,
+      getClerkToken: () => getTokenRef.current(),
+    })
       .then((s) => {
         if (!active) {
           releaseCollaborationSocket();

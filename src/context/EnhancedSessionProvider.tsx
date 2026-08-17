@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SessionContext, SessionContextType, SessionMode, SessionUser } from './SessionContext';
-import { configureClerkSupabaseBridge, forceRefreshSupabaseJwt, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
+import { configureClerkSupabaseBridge, getUserLike, stopClerkSupabaseBridge } from '../lib/supabase';
+import { BRIDGE_BOOT_GRACE_MS, CLERK_TOKEN_TIMEOUT_MS, decideBridgeFailure, settleWithin } from '../lib/bootGate';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
@@ -118,69 +119,86 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     setLastReadyAt(null);
   }, []);
 
-  // Enhanced token validation with 30-minute intervals and auto-retry
-  const validateAuthIfNeeded = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
-    const shouldRevalidateAccount = force || authPersistence.current.shouldValidateAuth();
-    const needsBridgeSetup = !configuredRef.current;
-    const shouldValidate = needsBridgeSetup || shouldRevalidateAccount;
-    
-    if (!shouldValidate) {
-      log.debug('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
-      // shouldValidate was false because needsBridgeSetup was false → the bridge IS
-      // configured. The init effect can re-run (callback deps churn) and reset
-      // bridgeReady=false; a skipped validation must NOT leave it stuck false, or the
-      // app bounces to the reconnect screen over a perfectly live bridge. Re-affirm.
-      if (configuredRef.current) {
-        setBridgeReady(true);
-        setReady(true);
-      }
-      return;
-    }
+  const validationRunnerRef = useRef<((force?: boolean, retryCount?: number) => Promise<void>) | null>(null);
+  const validationInFlightRef = useRef<Promise<void> | null>(null);
+  const validationRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
-    log.debug('[EnhancedSessionProvider] Performing auth validation, attempt:', retryCount + 1);
-    
+  const clearValidationRetryTimers = useCallback(() => {
+    validationRetryTimersRef.current.forEach(clearTimeout);
+    validationRetryTimersRef.current.clear();
+  }, []);
+
+  const scheduleValidationRetry = useCallback((force: boolean, retryCount: number, delayMs: number) => {
+    validationRetryTimersRef.current.forEach(clearTimeout);
+    validationRetryTimersRef.current.clear();
+    const timer = setTimeout(() => {
+      validationRetryTimersRef.current.delete(timer);
+      validationRunnerRef.current?.(force, retryCount).catch(log.error);
+    }, delayMs);
+    validationRetryTimersRef.current.add(timer);
+  }, []);
+
+  // Enhanced token validation with 30-minute intervals and auto-retry. The public
+  // wrapper below single-flights this function so init/foreground/interval/sign-in
+  // triggers cannot configure or tear down the same bridge concurrently.
+  const performAuthValidation = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
     try {
-      // getClerkToken has no internal timeout; a stalled Clerk SDK left boot stuck at
-      // 'initializing' forever (splash-hang). Bound it: after 10s treat the token as
-      // null, which enters the existing quiet-retry → degrade path below.
-      const token = await Promise.race<string | null>([
+      const shouldRevalidateAccount = force || authPersistence.current.shouldValidateAuth();
+      const needsBridgeSetup = !configuredRef.current;
+      const shouldValidate = needsBridgeSetup || shouldRevalidateAccount;
+
+      if (!shouldValidate) {
+        log.debug('[EnhancedSessionProvider] Skipping auth validation (within 30-min window)');
+        if (configuredRef.current) {
+          setBridgeReady(true);
+          setReady(true);
+        }
+        return;
+      }
+
+      log.debug('[EnhancedSessionProvider] Performing auth validation, attempt:', retryCount + 1);
+
+      const token = await settleWithin(
         getClerkToken(),
-        new Promise<null>(resolve => setTimeout(() => resolve(null), 10000)),
-      ]);
+        CLERK_TOKEN_TIMEOUT_MS,
+        'Clerk session token read timed out during auth validation',
+      ).catch((error) => {
+        log.warn('[EnhancedSessionProvider] Clerk token read did not settle:', error);
+        return null;
+      });
 
       if (!token) {
-        // A null Clerk token is almost always TRANSIENT — the token is mid-rotation, a
-        // concurrent validation grabbed it, or the SDK is still warming on cold start.
-        // It is NOT a sign-out. Do NOT tear down a HEALTHY bridge or flip the app to the
-        // reconnect screen on the first null (that's what made a normal online login
-        // briefly show home, then bounce to "Can't reach your account" until Try again).
-        // Retry QUIETLY, leaving bridgeReady as-is so the app stays up; only after the
-        // retries are exhausted do we treat the token as genuinely gone and degrade.
-        if (retryCount < 4) {
-          const retryDelay = Math.min(Math.pow(2, retryCount) * 500, 4000); // 0.5s,1s,2s,4s
+        const decision = decideBridgeFailure({
+          kind: 'token_unavailable',
+          retryCount,
+          bridgeWasReady: configuredRef.current,
+        });
+
+        if (decision === 'quiet_retry') {
+          const retryDelay = Math.min(Math.pow(2, retryCount) * 500, 4000);
           log.debug(
             `[EnhancedSessionProvider] Clerk token unavailable; retrying quietly in ${retryDelay}ms (attempt ${retryCount + 2})`,
           );
-          setTimeout(() => {
-            validateAuthIfNeeded(force, retryCount + 1).catch(log.error);
-          }, retryDelay);
+          scheduleValidationRetry(force, retryCount + 1, retryDelay);
           return;
         }
 
-        // Retries exhausted — token genuinely unavailable. NOW tear down the bridge and
-        // degrade (cached data → loud reconnect screen, or clear if there's no cache).
-        if (configuredRef.current) {
-          try {
-            stopClerkSupabaseBridge();
-          } catch {}
-          configuredRef.current = false;
-          setBridgeReady(false);
+        if (decision === 'preserve_live_bridge') {
+          log.warn('[EnhancedSessionProvider] Clerk token retries exhausted; preserving the existing live bridge');
+          setBridgeReady(true);
+          setReady(true);
+          return;
         }
+
+        try {
+          stopClerkSupabaseBridge();
+        } catch {}
+        configuredRef.current = false;
+        setBridgeReady(false);
 
         const restoredFromCache = await setCachedSessionState(
           'Session token is unavailable. Continuing with cached account data while the session reconnects.',
         );
-
         if (!restoredFromCache) {
           await clearSessionState({ clearPersistedAuth: true });
         }
@@ -189,11 +207,13 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       if (!configuredRef.current) {
         log.debug('[EnhancedSessionProvider] Configuring Supabase bridge...');
-        // Refresh cadence is derived from the token's expires_in inside the bridge.
-        await configureClerkSupabaseBridge({ getClerkToken });
+        // Reuse the bounded token above. configureClerkSupabaseBridge also bounds the
+        // exchange fetch, so every pre-ready await now has a settlement guarantee.
+        await configureClerkSupabaseBridge({ getClerkToken, initialClerkToken: token });
         configuredRef.current = true;
       }
 
+      clearValidationRetryTimers();
       setBridgeReady(true);
       setReady(true);
       setSessionMode('live');
@@ -202,7 +222,6 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       if (!shouldRevalidateAccount) {
         setBootstrapError(null);
         log.debug('[EnhancedSessionProvider] Bridge is ready; skipping account revalidation within auth window');
-        // Still refresh user from me so session.user.id matches JWT sub (fixes onboarding identity mismatch)
         try {
           const { user: me } = await getUserLike();
           if (me?.id) {
@@ -249,32 +268,65 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       log.debug('[EnhancedSessionProvider] Session ready for user:', resolvedUser?.id);
     } catch (e) {
       log.error('[EnhancedSessionProvider] Auth validation failed:', e);
-      
-      // Auto-retry with exponential backoff (max 3 attempts)
-      if (retryCount < 2) {
-        const retryDelay = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
+      const decision = decideBridgeFailure({
+        kind: 'configuration_failed',
+        retryCount,
+        bridgeWasReady: configuredRef.current,
+      });
+
+      if (decision === 'quiet_retry') {
+        const retryDelay = Math.pow(2, retryCount) * 1000;
         log.debug(`[EnhancedSessionProvider] Auto-retrying in ${retryDelay}ms...`);
-        
-        setTimeout(() => {
-          validateAuthIfNeeded(force, retryCount + 1).catch(log.error);
-        }, retryDelay);
-      } else {
-        log.error('[EnhancedSessionProvider] Max retries reached, entering degraded mode if cache is available');
-        configuredRef.current = false;
-        setBridgeReady(false);
-        setSessionMode('cached');
+        scheduleValidationRetry(force, retryCount + 1, retryDelay);
+        return;
+      }
 
-        const restoredFromCache = await setCachedSessionState(
-          'Live services are unavailable right now. Continuing with cached account data.',
-        );
-        if (restoredFromCache) {
-          return;
-        }
+      if (decision === 'preserve_live_bridge') {
+        log.warn('[EnhancedSessionProvider] Account refresh failed after bridge setup; preserving live bridge');
+        setBridgeReady(true);
+        setReady(true);
+        return;
+      }
 
+      log.error('[EnhancedSessionProvider] Max retries reached, entering degraded mode if cache is available');
+      try {
+        stopClerkSupabaseBridge();
+      } catch {}
+      configuredRef.current = false;
+      setBridgeReady(false);
+      setSessionMode('cached');
+
+      const restoredFromCache = await setCachedSessionState(
+        'Live services are unavailable right now. Continuing with cached account data.',
+      );
+      if (!restoredFromCache) {
         await clearSessionState({ clearPersistedAuth: true });
       }
     }
-  }, [clearSessionState, getClerkToken, loadCachedEntitlements, persistEntitlements, setCachedSessionState]);
+  }, [
+    clearSessionState,
+    clearValidationRetryTimers,
+    getClerkToken,
+    loadCachedEntitlements,
+    persistEntitlements,
+    scheduleValidationRetry,
+    setCachedSessionState,
+  ]);
+
+  const validateAuthIfNeeded = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
+    if (validationInFlightRef.current) {
+      return validationInFlightRef.current;
+    }
+
+    const validation = performAuthValidation(force, retryCount);
+    validationInFlightRef.current = validation;
+    try {
+      await validation;
+    } finally {
+      if (validationInFlightRef.current === validation) validationInFlightRef.current = null;
+    }
+  }, [performAuthValidation]);
+  validationRunnerRef.current = validateAuthIfNeeded;
 
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
@@ -333,7 +385,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       // flips bridgeReady when it lands, and the app degrades to its reconnect/retry path.
       await Promise.race([
         validateAuthIfNeeded(true),
-        new Promise<void>((resolve) => setTimeout(resolve, 12000)),
+        new Promise<void>((resolve) => setTimeout(resolve, BRIDGE_BOOT_GRACE_MS)),
       ]).catch(log.error);
     }
 
@@ -367,9 +419,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+      clearValidationRetryTimers();
       appStateManager.current.cleanup();
     };
-  }, [initializeFromPersistedState, validateAuthIfNeeded]);
+  }, [clearValidationRetryTimers, initializeFromPersistedState, validateAuthIfNeeded]);
 
   // Re-bootstrap the session when Clerk transitions to signed-in. The init effect only
   // runs on mount and AppStateManager only fires on app-foreground, so a WARM sign-in
@@ -394,16 +447,18 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const refresh = useCallback(async () => {
     log.debug('[EnhancedSessionProvider] Manual refresh requested');
     try {
-      // Gate on configuredRef (a stable ref), NOT the bridgeReady STATE — reading
-      // state here would force bridgeReady into the deps and churn refresh's identity.
+      // Retry is a genuine bridge rebuild. configuredRef can be stale-true while its
+      // token/socket is dead; trusting it made the reconnect button a no-op.
+      clearValidationRetryTimers();
+      try {
+        stopClerkSupabaseBridge();
+      } catch {}
+      configuredRef.current = false;
+      setBridgeReady(false);
+      await validateAuthIfNeeded(true);
       if (!configuredRef.current) {
-        await validateAuthIfNeeded(true);
+        throw new Error('Supabase bridge did not reconnect');
       }
-
-      // Always re-warm the token + re-auth Realtime on a manual refresh, even if the
-      // bridge already reads ready — the reconnect "Try again" must recover stale
-      // Realtime channels (validateAuthIfNeeded skips reconfigure once configured).
-      await forceRefreshSupabaseJwt().catch(() => false);
 
       const { user: me } = await getUserLike();
       const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());
@@ -440,7 +495,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       }
       setBootstrapError('Refresh failed. Cached account data is still available.');
     }
-  }, [loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
+  }, [clearValidationRetryTimers, loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
 
   const value: SessionContextType = useMemo(() => ({ 
     ready: ready && !initializing, 
