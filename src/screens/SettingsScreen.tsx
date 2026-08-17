@@ -165,10 +165,11 @@ const SettingsScreen = () => {
         type="warning"
         title="Sign out?"
         message="You'll need to sign back in to access your inventory/stores."
-        buttonText="Stay signed-in"
+        buttonText="Sign out"
         onClose={() => setShowSignOut(false)}
-        secondaryButtonText="Sign out"
-        onSecondaryPress={() => { setShowSignOut(false); authContext?.signOut(); }}
+        onPrimaryPress={() => { setShowSignOut(false); authContext?.signOut(); }}
+        secondaryButtonText="Stay signed in"
+        onSecondaryPress={() => setShowSignOut(false)}
       />
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 18, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}

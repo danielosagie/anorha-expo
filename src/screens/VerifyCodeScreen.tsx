@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Animated, ActivityIndicator, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useClerk } from '@clerk/expo';
+import { useClerk, useUser } from '@clerk/expo';
 // Core 3 split: classic resource API (attemptFirstFactor / attemptEmailAddressVerification)
 // lives under /legacy; the main hooks are the new Future/signals API.
 import { useSignUp, useSignIn } from '@clerk/expo/legacy';
@@ -24,15 +24,19 @@ type VerifyCodeRoute = {
 };
 
 type Props = {
-  navigation: any;
-  route: VerifyCodeRoute;
+  navigation?: any;
+  route?: VerifyCodeRoute;
+  verificationRequired?: boolean;
+  onSignOut?: () => void | Promise<void>;
 };
 
 const CELL_COUNT = 6;
 
-const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
+const VerifyCodeScreen: React.FC<Props> = ({ navigation, route, verificationRequired = false, onSignOut }) => {
   const insets = useSafeAreaInsets();
-  const contactLabel = route?.params?.contactLabel ?? '';
+  const { isLoaded: isUserLoaded, user } = useUser();
+  const primaryEmailAddress = user?.primaryEmailAddress;
+  const contactLabel = route?.params?.contactLabel ?? primaryEmailAddress?.emailAddress ?? '';
   const mode = route?.params?.mode ?? 'signup';
   const isResetMode = mode === 'reset';
   const { signUp, isLoaded: isSignUpLoaded } = useSignUp();
@@ -44,6 +48,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
   const [digits, setDigits] = useState<string[]>(Array(CELL_COUNT).fill(''));
   const [newPassword, setNewPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [resendTimer, setResendTimer] = useState(0);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -121,7 +126,11 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           return;
         }
       } else {
-        if (!isSignUpLoaded || !signUp) {
+        if (verificationRequired && (!isUserLoaded || !primaryEmailAddress)) {
+          setErrorMessage('Please wait, we are preparing verification.');
+          return;
+        }
+        if (!verificationRequired && (!isSignUpLoaded || !signUp)) {
           setErrorMessage('Please wait, we are preparing verification.');
           return;
         }
@@ -145,13 +154,23 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
           triggerErrorShake();
         }
       } else {
-        const res = await signUp!.attemptEmailAddressVerification({ code });
-        if (res.status === 'complete' && res.createdSessionId) {
-          try { await clerk.setActive({ session: res.createdSessionId }); } catch { }
-          navigation.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'CreateAccountScreen' } }] });
+        if (verificationRequired) {
+          const verifiedEmail = await primaryEmailAddress!.attemptVerification({ code });
+          if (verifiedEmail.verification.status !== 'verified') {
+            setErrorMessage('Unable to complete verification. Please try again.');
+            triggerErrorShake();
+            return;
+          }
+          await user?.reload();
         } else {
-          setErrorMessage('Unable to complete verification. Please try again.');
-          triggerErrorShake();
+          const res = await signUp!.attemptEmailAddressVerification({ code });
+          if (res.status === 'complete' && res.createdSessionId) {
+            try { await clerk.setActive({ session: res.createdSessionId }); } catch { }
+            navigation?.reset({ index: 0, routes: [{ name: 'AppStack', params: { initialScreenName: 'CreateAccountScreen' } }] });
+          } else {
+            setErrorMessage('Unable to complete verification. Please try again.');
+            triggerErrorShake();
+          }
         }
       }
     } catch (e: any) {
@@ -164,7 +183,7 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
     } finally {
       setSubmitting(false);
     }
-  }, [code, newPassword, isResetMode, isSignInLoaded, signIn, isSignUpLoaded, signUp, clerk, navigation, submitting, triggerErrorShake]);
+  }, [code, newPassword, isResetMode, isSignInLoaded, signIn, verificationRequired, isUserLoaded, primaryEmailAddress, isSignUpLoaded, signUp, user, clerk, navigation, submitting, triggerErrorShake]);
 
   // Auto-submit when all 6 digits are filled (signup only; reset mode requires password)
   useEffect(() => {
@@ -197,8 +216,16 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
         await signIn.create({ strategy: 'reset_password_email_code', identifier: contactLabel });
         setSuccessMessage('Password reset code resent.');
       } else {
-        if (!isSignUpLoaded || !signUp) return;
-        await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+        if (verificationRequired) {
+          if (!isUserLoaded || !primaryEmailAddress) {
+            setErrorMessage('Please wait, we are preparing verification.');
+            return;
+          }
+          await primaryEmailAddress.prepareVerification({ strategy: 'email_code' });
+        } else {
+          if (!isSignUpLoaded || !signUp) return;
+          await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+        }
         setSuccessMessage('Verification code resent.');
       }
       setResendTimer(60);
@@ -210,15 +237,36 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
     }
   };
 
+  const handleSignOut = useCallback(async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    setErrorMessage(null);
+    try {
+      if (onSignOut) {
+        await onSignOut();
+      } else {
+        await clerk.signOut();
+      }
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Unable to sign out. Please try again.');
+    } finally {
+      setSigningOut(false);
+    }
+  }, [clerk, onSignOut, signingOut]);
+
   const disabled = code.length !== CELL_COUNT || submitting || (isResetMode && newPassword.length < 8);
 
   return (
     <View style={styles.container}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[styles.body, { paddingTop: insets.top }]}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Icon name="chevron-left" size={26} color={INK} />
-          </TouchableOpacity>
+          {verificationRequired ? (
+            <View style={styles.backBtn} />
+          ) : (
+            <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Icon name="chevron-left" size={26} color={INK} />
+            </TouchableOpacity>
+          )}
 
           <View style={styles.iconSquare}>
             <Icon name={isResetMode ? 'lock-reset' : 'email-outline'} size={28} color={DEEP_ICON} />
@@ -302,6 +350,21 @@ const VerifyCodeScreen: React.FC<Props> = ({ navigation, route }) => {
               {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend code'}
             </Text>
           </TouchableOpacity>
+
+          {verificationRequired ? (
+            <Pressable
+              style={styles.signOutButton}
+              onPress={handleSignOut}
+              disabled={signingOut || submitting}
+              hitSlop={8}
+            >
+              {signingOut ? (
+                <ActivityIndicator size="small" color={SUB} />
+              ) : (
+                <Text style={styles.signOutText}>Sign out</Text>
+              )}
+            </Pressable>
+          ) : null}
 
           <View style={styles.flex} />
         </View>
@@ -393,6 +456,8 @@ const styles = StyleSheet.create({
   resendRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 18 },
   resendText: { color: SUB, fontSize: 14, fontFamily: 'Inter_500Medium' },
   resendLink: { color: GREEN_DEEP, fontSize: 14, fontFamily: 'Inter_700Bold' },
+  signOutButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  signOutText: { color: SUB, fontSize: 14, fontFamily: 'Inter_600SemiBold' },
 });
 
 export default VerifyCodeScreen;
