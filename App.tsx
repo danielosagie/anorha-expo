@@ -312,6 +312,16 @@ const AppLifecycleEffects: React.FC = () => {
             return;
           }
 
+          // Handle return from a hosted checkout / billing portal.
+          // The in-app auth session normally swallows this URL and hands it straight back
+          // to the caller, which refreshes billing itself. This branch is the other path:
+          // the session was already dismissed, or the OS delivered the link cold. Billing
+          // refetches on focus, so landing there is the whole refresh.
+          if (url.startsWith('anorhaapp://billing/return')) {
+            navigationRef.current?.navigate('AppStack', { screen: 'Billing' });
+            return;
+          }
+
           // Handle partner invite deep link
           if (url.startsWith('anorhaapp://partner/accept')) {
             const urlObject = new URL(url);

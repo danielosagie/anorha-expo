@@ -21,7 +21,9 @@ import { useSSO, useAuth, useClerk } from '@clerk/expo';
 // The custom email/password + code flows here use the classic resource API
 // (attemptFirstFactor, setActive, createdSessionId), which lives under /legacy.
 import { useSignIn, useSignUp } from '@clerk/expo/legacy';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import AppleSignInButton from '../components/AppleSignInButton';
 import ErrorModal from '../components/ErrorModal';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { createLogger } from '../utils/logger';
@@ -575,6 +577,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route }) => {
             </TouchableOpacity>
           )}
 
+          <AppleSignInButton
+            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE_OUTLINE}
+            cornerRadius={26}
+            height={52}
+            spinnerColor={INK}
+            containerStyle={styles.appleBtn}
+            onError={(message) => showErrorModal('Apple Sign-In Failed', message, 'error')}
+          />
+
           <TouchableOpacity style={styles.socialBtn} onPress={handleGoogleSignIn} activeOpacity={0.9} disabled={googleLoading}>
             {googleLoading ? <ActivityIndicator size="small" color={INK} /> : <><GoogleMark /><Text style={styles.socialText}>Continue with Google</Text></>}
           </TouchableOpacity>
@@ -645,6 +656,9 @@ const styles = StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 22 },
   dividerLine: { flex: 1, height: 1, backgroundColor: FIELD_BORDER },
   dividerText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: OR_GRAY },
+  // Same box and spacing as the Google button below it: Apple must never read as the
+  // smaller or lesser option (App Store guideline 4.8).
+  appleBtn: { marginTop: 12 },
   socialBtn: {
     marginTop: 12,
     height: 52,

@@ -44,8 +44,9 @@ export default {
     buildNumber: "80",
     icon: "./src/assets/1024_anorha.png",
     infoPlist: {
-      ITSAppUsesNonExemptEncryption: false,
-      NSLocationWhenInUseUsageDescription: "Anorha may access your location to provide enhanced features through third-party services. Location access is optional and can be disabled in your device settings."
+      ITSAppUsesNonExemptEncryption: false
+      // Permission strings live on the plugin that owns each capability (expo-location,
+      // expo-camera, expo-image-picker, expo-audio) so each key has exactly one source.
     }
   },
   assetBundlePatterns: [
@@ -69,11 +70,35 @@ export default {
       }
     ],
     [
+      // The app only ever asks for foreground location (requestForegroundPermissionsAsync in
+      // CreateAccountScreen and InteractiveMapModal; requestBackgroundPermissionsAsync is
+      // called nowhere), yet the auto-applied plugin defaults were still shipping the two
+      // "Always" strings. Asking for a capability the app never uses is a review finding.
+      "expo-location",
+      {
+        locationWhenInUsePermission: "Anorha uses your location to autofill your business address, set your region and currency, and choose local pickup locations.",
+        locationAlwaysPermission: false,
+        locationAlwaysAndWhenInUsePermission: false
+      }
+    ],
+    [
       "expo-camera",
       {
-        cameraPermission: "Allow Anorha to access your camera",
-        microphonePermission: "Allow Anorha to access your microphone",
-        recordAudioAndroid: true
+        cameraPermission: "Anorha uses your camera to photograph items you want to list.",
+        // The mic is recorded by expo-audio (voice notes), not by the camera — no CameraView
+        // calls recordAsync anywhere. The string still lives here because expo-audio's own
+        // config plugin drops the return value of its createPermissionsPlugin call
+        // (node_modules/expo-audio/plugin/build/withAudio.js), so its `microphonePermission`
+        // never reaches the Info.plist. This is the one plugin that actually writes
+        // NSMicrophoneUsageDescription. Verified by prebuild, not assumed.
+        microphonePermission: "Anorha uses your microphone to record the voice notes you dictate instead of typing.",
+        recordAudioAndroid: false
+      }
+    ],
+    [
+      "expo-image-picker",
+      {
+        photosPermission: "Anorha uses your photo library to attach existing photos to your listings."
       }
     ],
     [
@@ -90,6 +115,8 @@ export default {
     ],
     "expo-asset",
     [
+      // No `microphonePermission` here on purpose: this plugin silently discards it (see the
+      // expo-camera note above). The mic string lives on expo-camera, which does apply.
       "expo-audio",
       {
         enableBackgroundPlayback: true,
