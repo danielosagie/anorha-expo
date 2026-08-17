@@ -25,12 +25,11 @@ import { derivePlatformConnectStatus } from '../../lib/platformConnectStatus';
 import { connectionImportPresentationsById } from '../../lib/connectionImportPresentation';
 
 const INK = '#1C1B17';
-const SUBTLE = '#8A887E';
-const DIM = '#71717A';
+const SUBTLE = '#6B6A63';
 const GREEN = '#93C822';
 const GREEN_DEEP = '#93C822';
 const BORDER = '#EAE6DA';
-const DIVIDER = '#F1F2F4';
+const CARD_BG = '#FBFAF6';
 
 type PlatformDef = {
   key: ConnectablePlatform;
@@ -45,12 +44,10 @@ const PLATFORMS: PlatformDef[] = listPlatforms({ connectableOnly: true }).map((d
 export default function ConnectAccountsStep({
   orgId,
   orgName,
-  email,
   onDone,
 }: {
   orgId?: string | null;
   orgName?: string;
-  email?: string;
   onDone: () => void;
 }) {
   const { connections, progressByConnectionId, refresh } = usePlatformConnections();
@@ -87,33 +84,14 @@ export default function ConnectAccountsStep({
     [isFullyConnected],
   );
   const name = orgName?.trim() || 'My store';
-  const initial = name.charAt(0).toUpperCase();
 
   return (
     <Animated.View entering={FadeIn.duration(280)} style={styles.wrap}>
       <Text style={styles.title}>Connect your stores</Text>
-      <Text style={styles.subtitle}>We'll pull your products in.</Text>
+      <Text style={styles.subtitle}>We'll pull your products into {name}.</Text>
 
-      <View style={styles.card}>
-        {/* Org summary */}
-        <View style={styles.orgRow}>
-          <View style={styles.orgAvatar}><Text style={styles.orgInitial}>{initial}</Text></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.orgName} numberOfLines={1}>{name}</Text>
-            {!!email && <Text style={styles.orgEmail} numberOfLines={1}>{email}</Text>}
-          </View>
-          {connectedCount > 0 && (
-            <View style={styles.orgStat}>
-              <Text style={styles.orgStatNum}>{connectedCount}</Text>
-              <Text style={styles.orgStatLbl}>Connected</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.divider} />
-        <Text style={styles.sectionLabel}>CONNECTED STORES</Text>
-
-        {PLATFORMS.map((p, i) => {
+      <View style={styles.selectList}>
+        {PLATFORMS.map((p) => {
           const platformStatus = derivePlatformConnectStatus(
             p.key,
             connections,
@@ -123,48 +101,42 @@ export default function ConnectAccountsStep({
           const connected = platformStatus.isFullyConnected;
           const importing = platformStatus.importing;
           return (
-            <View key={p.key} style={[styles.row, i > 0 && styles.rowBorder]}>
-              <View style={styles.logoSquare}>
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.selectRow, connected && styles.selectRowActive]}
+              onPress={() => setFlowPlatform(p.key)}
+              disabled={connected}
+              activeOpacity={0.85}
+            >
+              <View style={styles.selectIconCircle}>
                 <PlatformLogo type={p.key} size={22} />
               </View>
-              <View style={styles.rowInfo}>
-                <Text style={styles.rowName}>{p.name}</Text>
+              <View style={styles.selectLabelWrap}>
+                <Text style={styles.selectLabel}>{p.name}</Text>
                 {importing ? (
                   <Text style={styles.rowStatus} numberOfLines={1}>Importing items</Text>
                 ) : null}
               </View>
 
               {connected ? (
-                <View style={styles.connectedWrap}>
-                  <View style={styles.checkCircle}><Check size={11} color="#FFFFFF" /></View>
-                  <Text style={styles.connectedText}>Connected</Text>
+                <View style={[styles.selectorBox, styles.selectorSelected]}>
+                  <Check size={14} color="#FFFFFF" />
                 </View>
               ) : (
-                <TouchableOpacity
-                  style={styles.connectPill}
-                  onPress={() => setFlowPlatform(p.key)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.connectText}>Connect</Text>
-                </TouchableOpacity>
+                <Text style={styles.connectText}>Connect</Text>
               )}
-            </View>
+            </TouchableOpacity>
           );
         })}
       </View>
 
-      <Text style={styles.hint}>
-        We only read and sync what you connect. Disconnect anytime in Settings.
-      </Text>
+      <Text style={styles.hint}>We only sync what you connect.</Text>
 
-      <View style={styles.footer}>
-        <TouchableOpacity style={styles.primaryBtn} onPress={onDone} activeOpacity={0.9}>
-          <Text style={styles.primaryText}>Continue</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.skipBtn} onPress={onDone} activeOpacity={0.7}>
-          <Text style={styles.skipText}>Skip for now</Text>
-        </TouchableOpacity>
-      </View>
+      <View style={{ flex: 1, minHeight: 12 }} />
+
+      <TouchableOpacity style={styles.primaryBtn} onPress={onDone} activeOpacity={0.9}>
+        <Text style={styles.primaryText}>{connectedCount > 0 ? 'Continue' : 'Skip'}</Text>
+      </TouchableOpacity>
 
       <ConnectFlowSheet
         visible={!!flowPlatform}
@@ -181,14 +153,19 @@ export default function ConnectAccountsStep({
   );
 }
 
+// Every value below is the one its sibling step in CreateAccountScreen uses.
+// This step used to be a settings-style card with dividers and a section label,
+// which read as a different screen; it is now the same rows the seller has been
+// tapping for ten steps.
 const styles = StyleSheet.create({
-  wrap: { flex: 1, padding: 24 },
+  wrap: { flex: 1, padding: 24, justifyContent: 'space-between' },
   title: {
     fontSize: 26,
     lineHeight: 32,
     fontFamily: 'Inter_700Bold',
     color: INK,
     letterSpacing: -0.5,
+    marginBottom: 4,
   },
   subtitle: {
     fontSize: 15,
@@ -196,68 +173,56 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     color: SUBTLE,
     marginTop: 6,
-    marginBottom: 22,
   },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1,
+
+  selectList: { marginTop: 18, gap: 10 },
+  selectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 62,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    backgroundColor: CARD_BG,
+    borderWidth: 1.5,
     borderColor: BORDER,
-    overflow: 'hidden',
   },
-  orgRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 14 },
-  orgAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center' },
-  orgInitial: { fontSize: 20, fontFamily: 'Inter_800ExtraBold', color: '#FFFFFF' },
-  orgName: { fontSize: 18, fontFamily: 'Inter_700Bold', color: '#18181B' },
-  orgEmail: { fontSize: 13, fontFamily: 'Inter_500Medium', color: DIM, marginTop: 2 },
-  orgStat: { alignItems: 'center', paddingLeft: 8 },
-  orgStatNum: { fontSize: 17, fontFamily: 'Inter_700Bold', color: '#18181B' },
-  orgStatLbl: { fontSize: 11, fontFamily: 'Inter_500Medium', color: DIM, marginTop: 1 },
-
-  divider: { height: 1, backgroundColor: DIVIDER },
-  sectionLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', color: DIM, letterSpacing: 0.6, paddingHorizontal: 14, paddingTop: 14, paddingBottom: 2 },
-
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, minHeight: 60, paddingVertical: 10 },
-  rowBorder: { borderTopWidth: 1, borderTopColor: '#EFEBDF' },
-  logoSquare: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#F1EFE6', alignItems: 'center', justifyContent: 'center' },
-  rowInfo: { flex: 1 },
-  rowName: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: INK },
-  rowStatus: { fontSize: 12, fontFamily: 'Inter_500Medium', color: GREEN_DEEP, marginTop: 2 },
-
-  connectPill: {
-    height: 32,
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    borderWidth: 1,
+  selectRowActive: {
+    backgroundColor: 'rgba(147,200,34,0.10)',
     borderColor: GREEN,
+  },
+  // Same 40pt circle as the sibling rows, neutral fill so brand logos read.
+  selectIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F1EFE6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  connectText: { color: GREEN_DEEP, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  selectLabelWrap: { flex: 1, marginLeft: 13 },
+  selectLabel: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: INK },
+  rowStatus: { fontSize: 12, fontFamily: 'Inter_500Medium', color: GREEN_DEEP, marginTop: 2 },
 
-  connectedWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  checkCircle: { width: 18, height: 18, borderRadius: 9, backgroundColor: GREEN, alignItems: 'center', justifyContent: 'center' },
-  connectedText: { color: '#93C822', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  selectorBox: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  selectorSelected: { backgroundColor: GREEN },
+  connectText: { color: GREEN_DEEP, fontSize: 15, fontFamily: 'Inter_600SemiBold' },
 
   hint: {
-    fontSize: 12,
-    lineHeight: 17,
-    fontFamily: 'Inter_400Regular',
-    color: '#9CA3AF',
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: SUBTLE,
     marginTop: 14,
-    marginHorizontal: 4,
   },
 
-  footer: { marginTop: 'auto', paddingTop: 24, gap: 12, alignItems: 'center' },
   primaryBtn: {
-    width: '100%',
     backgroundColor: GREEN,
     height: 54,
     borderRadius: 999,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
   },
   primaryText: { color: '#FFFFFF', fontSize: 16, fontFamily: 'Inter_700Bold' },
-  skipBtn: { height: 24, alignItems: 'center', justifyContent: 'center' },
-  skipText: { color: SUBTLE, fontSize: 15, fontFamily: 'Inter_600SemiBold' },
 });

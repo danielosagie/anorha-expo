@@ -35,6 +35,7 @@ import type { CampaignSummary, ReportDocument } from '../features/liquidationCon
 import { NewClearoutSheet, NewClearoutInput } from '../components/liquidation/NewClearoutSheet';
 import { DateRangeSheet, DateRange, todayRange } from '../components/liquidation/DateRangeSheet';
 import { useOrg } from '../context/OrgContext';
+import { isSetupUnknown } from '../lib/orgResolution';
 import { useIsNight } from '../hooks/useIsNight';
 import { trackInsightAction, useOrgNudges } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
@@ -451,7 +452,7 @@ const SproutHomeScreen: React.FC = () => {
 
   // Periodic insight (LLM nudges) — the recommendation layer the home
   // blurb surfaces when there's no fresher digest/briefing to show.
-  const { currentOrg, isLoading: isOrgLoading } = useOrg();
+  const { currentOrg, isLoading: isOrgLoading, orgResolution, refreshOrgs } = useOrg();
   const {
     insight,
     lastInsight,
@@ -482,6 +483,9 @@ const SproutHomeScreen: React.FC = () => {
     setHomeRefreshing(true);
     try {
       await Promise.allSettled([
+        // Pulling down is what a seller does when the workspace looks wrong, and
+        // this used to refresh everything except the workspace itself.
+        refreshOrgs(),
         refetchInsight(),
         refreshProductCount(),
         refreshCampaignData(),
@@ -489,7 +493,7 @@ const SproutHomeScreen: React.FC = () => {
     } finally {
       setHomeRefreshing(false);
     }
-  }, [refetchInsight, refreshCampaignData, refreshProductCount]);
+  }, [refetchInsight, refreshCampaignData, refreshOrgs, refreshProductCount]);
   // Setup state drives the empty dashboard: an established seller (has a platform
   // AND items) who simply hasn't started a clearout should NOT see first-run
   // onboarding — only the "Start a clearout" CTA. `setupUnknown` suppresses the
@@ -499,7 +503,10 @@ const SproutHomeScreen: React.FC = () => {
   // "Unknown" until the org is resolved AND the count has settled — the count
   // gates on currentOrg (see AppDataContext.refreshProductCount), so before the
   // org loads productCount is its 0 default and would flash the checklist.
-  const setupUnknown = isOrgLoading || productCountLoading || !currentOrg?.id;
+  // This reads orgResolution, not `!currentOrg?.id`: a workspace that resolved
+  // to nothing is an answer we can render, not an unknown we wait on forever.
+  const setupUnknown = isSetupUnknown(orgResolution, productCountLoading);
+  const noWorkspace = orgResolution === 'none';
   // Only surface ACTIONABLE headlines — status noise ("Insights paused") stays off the hero.
   const rawHeadline = insight?.topDIN?.headline?.trim();
   // The backend insight is LLM-cached for 6h with no invalidation when the seller
@@ -1560,8 +1567,27 @@ const SproutHomeScreen: React.FC = () => {
             setupUnknown ? (
               // Org / item-count not resolved yet — hold on a quiet spinner
               // instead of flashing the first-run checklist to an established seller.
+              // Bounded by ORG_RESOLVE_GRACE_MS in OrgContext, so this spinner
+              // always becomes either content or the card below.
               <View style={styles.loadingBox}>
                 <ActivityIndicator color={BRAND} />
+              </View>
+            ) : noWorkspace ? (
+              // Resolved to no workspace. Usually the membership row lost its race
+              // with onboarding. Name it and give it a retry rather than spinning.
+              <View style={[
+                styles.emptyCard,
+                { backgroundColor: THEME.colors.card, borderColor: THEME.colors.border },
+              ]}>
+                <Text style={[styles.emptyTitle, { color: THEME.colors.text }]}>
+                  Workspace not ready
+                </Text>
+                <Text style={[styles.emptyBody, { color: THEME.colors.textSecondary, marginBottom: 12 }]}>
+                  Still setting up. This usually clears in a moment.
+                </Text>
+                <TouchableOpacity onPress={refreshOrgs}>
+                  <Text style={[styles.errorRetry, { color: BRAND }]}>Retry</Text>
+                </TouchableOpacity>
               </View>
             ) : (activeFilter === 'All' && !hasSetup) ? (
               // First-run onboarding checklist — ONLY for a genuinely new seller

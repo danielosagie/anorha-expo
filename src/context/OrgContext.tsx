@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../lib/supabase';
 import { getCollaborationSocket, onCollaborationSocketReady, type Socket } from '../lib/collaborationSocket';
 import { markCatalogStale } from '../lib/catalogPatches';
+import { ORG_RESOLVE_GRACE_MS, resolveOrgState, type OrgResolution } from '../lib/orgResolution';
 import { SessionContext } from './SessionContext';
 import { API_BASE_URL } from '../config/env';
 import { createLogger } from '../utils/logger';
@@ -24,6 +25,7 @@ export interface OrgContextType {
   currentOrg: UserOrgAccess | null;
   availableOrgs: UserOrgAccess[];
   isLoading: boolean;
+  orgResolution: OrgResolution;
   error: string | null;
   hasPendingInvites: boolean;
   switchOrg: (orgId: string) => Promise<void>;
@@ -34,6 +36,7 @@ export const OrgContext = createContext<OrgContextType>({
   currentOrg: null,
   availableOrgs: [],
   isLoading: true,
+  orgResolution: 'pending',
   error: null,
   hasPendingInvites: false,
   switchOrg: async () => { },
@@ -83,6 +86,23 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentOrg, setCurrentOrg] = useState<UserOrgAccess | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Derived, so there is exactly one definition of "we don't know yet" and it
+  // cannot drift from what Home renders.
+  const orgResolution: OrgResolution = resolveOrgState(!!currentOrg, isLoading);
+
+  // The deadline that makes 'pending' a state you leave. Every path that sets
+  // isLoading false clears this timer by re-running the effect; the paths that
+  // forget to (the early return while waiting on the session) get bounded here.
+  useEffect(() => {
+    if (!isSignedIn || !isLoading) return;
+    const timer = setTimeout(() => {
+      log.warn(`[OrgContext] No workspace resolved within ${ORG_RESOLVE_GRACE_MS}ms; leaving pending`);
+      setIsLoading(false);
+      setError(prev => prev ?? 'Could not load your workspace.');
+    }, ORG_RESOLVE_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [isSignedIn, isLoading]);
 
   // Derived state: check if user has pending org invitations
   const hasPendingInvites = invitationsLoaded && (userInvitations?.data?.length ?? 0) > 0;
@@ -426,6 +446,7 @@ export const OrgProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentOrg,
         availableOrgs,
         isLoading,
+        orgResolution,
         error,
         hasPendingInvites,
         switchOrg,
