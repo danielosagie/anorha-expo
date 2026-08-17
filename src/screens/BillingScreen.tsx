@@ -17,7 +17,6 @@ import {
   StatusBar,
   Platform,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@clerk/expo';
@@ -27,6 +26,7 @@ import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { ApiError, apiJson } from '../lib/apiClient';
+import { openBillingUrl } from '../lib/billingReturn';
 import {
   deriveBillingState,
   formatBillingDate,
@@ -320,7 +320,7 @@ export default function BillingScreen() {
       }
       if (data?.action === 'manage' && data?.url) {
         capture(AnalyticsEvents.BILLING_PORTAL_OPENED);
-        await WebBrowser.openBrowserAsync(data.url);
+        await openBillingUrl(data.url);
         await refreshBillingData();
       } else {
         setActionError('Management unavailable.');
@@ -357,7 +357,7 @@ export default function BillingScreen() {
         return;
       }
       if (data?.action === 'manage' && data?.url) {
-        await WebBrowser.openBrowserAsync(data.url);
+        await openBillingUrl(data.url);
         await refreshBillingData();
         return;
       }
@@ -437,7 +437,7 @@ export default function BillingScreen() {
           const url = pendingCheckoutUrlRef.current;
           pendingCheckoutUrlRef.current = null;
           if (url) {
-            await WebBrowser.openBrowserAsync(url);
+            await openBillingUrl(url);
             refreshBillingData();
           }
         }
@@ -457,7 +457,7 @@ export default function BillingScreen() {
     pendingCheckoutUrlRef.current = null;
     if (!url) return;
     try {
-      await WebBrowser.openBrowserAsync(url);
+      await openBillingUrl(url);
       refreshBillingData();
     } catch (error) {
       log.error('Checkout browser error:', error);

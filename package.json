@@ -36,6 +36,7 @@
     "base64-arraybuffer": "^1.0.2",
     "convex": "^1.31.4",
     "expo": "^55.0.0",
+    "expo-apple-authentication": "~55.0.15",
     "expo-application": "~55.0.9",
     "expo-asset": "~55.0.8",
     "expo-audio": "~55.0.8",

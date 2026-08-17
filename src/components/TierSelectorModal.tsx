@@ -14,11 +14,11 @@ import {
     SafeAreaView,
     Platform,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
 import { X } from 'lucide-react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { ApiError, apiJson } from '../lib/apiClient';
+import { openBillingUrl, withMobileReturn } from '../lib/billingReturn';
 import {
     deriveBillingState,
     deriveBillingStateFromCheckoutConflict,
@@ -157,7 +157,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
         pendingBrowserUrlRef.current = null;
         if (!url) return;
         try {
-            await WebBrowser.openBrowserAsync(url);
+            await openBillingUrl(url);
             await refreshBillingState();
             onSuccess?.();
         } catch (error: any) {
@@ -173,7 +173,7 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
             return;
         }
         onClose();
-        await WebBrowser.openBrowserAsync(url);
+        await openBillingUrl(url);
         await refreshBillingState();
         onSuccess?.();
     };
@@ -193,8 +193,10 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
 
         setIsLoading(true);
         try {
-            const successUrl = 'https://app.anorha.app/billing?success=true';
-            const cancelUrl = 'https://app.anorha.app/billing?canceled=true';
+            // Both endings bounce back into the app; the web page renders normally for
+            // anyone who reaches these URLs from a desktop browser.
+            const successUrl = withMobileReturn('https://app.anorha.app/billing?success=true');
+            const cancelUrl = withMobileReturn('https://app.anorha.app/billing?canceled=true');
 
             const response = await apiJson<{
                 provider?: string;

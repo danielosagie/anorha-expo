@@ -16,7 +16,9 @@ import { Mail } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSSO, useClerk } from '@clerk/expo';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import AnimatedGradientBackground from '../components/AnimatedGradientBackground';
+import AppleSignInButton from '../components/AppleSignInButton';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
 import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
 import { Inter_600SemiBold } from '@expo-google-fonts/inter/600SemiBold';
@@ -137,6 +139,15 @@ const InitialScreen = ({ navigation }: Props) => {
             <Text style={styles.emailButtonText}>Continue with email</Text>
           </TouchableOpacity>
 
+          <AppleSignInButton
+            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+            cornerRadius={16}
+            height={54}
+            spinnerColor="#18181B"
+            containerStyle={styles.appleButton}
+            onError={(message) => Alert.alert('Apple sign-in failed', message)}
+          />
+
           <TouchableOpacity
             style={styles.googleButton}
             activeOpacity={0.9}
@@ -236,6 +247,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
     color: '#FFFFFF',
+  },
+  // Same box and spacing as the Google button below it: Apple must never read as the
+  // smaller or lesser option (App Store guideline 4.8).
+  appleButton: {
+    marginBottom: 10,
   },
   googleButton: {
     width: '100%',
