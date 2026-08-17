@@ -47,6 +47,7 @@ import Animated, {
 import ConnectAccountsStep from '../components/onboarding/ConnectAccountsStep';
 import WelcomeHero from '../components/onboarding/WelcomeHero';
 import ErrorModal from '../components/ErrorModal';
+import { resolveOtherList, resolveOtherValue, showsOtherField } from '../lib/onboardingOther';
 import { createLogger } from '../utils/logger';
 const log = createLogger('CreateAccountScreen');
 
@@ -99,9 +100,11 @@ interface FormData {
   role: string;
   customRole: string;
   sellCategories: string[];
+  sellOther: string;
   goal: string;
   goalOther: string;
   heardFrom: string;
+  heardOther: string;
   phone: string;
   region: string | null;
   currency: string | null;
@@ -179,7 +182,8 @@ const STEPS_ORDER: Step[] = [
 // --- MEMOIZED COMPONENTS ---
 
 const Stepper = memo(({ currentStep }: { currentStep: Step }) => {
-  const currentIndex = STEPS_ORDER.indexOf(currentStep);
+  // CONNECT sits past the last counted step, so every dot is filled there.
+  const currentIndex = currentStep === 'CONNECT' ? STEPS_ORDER.length : STEPS_ORDER.indexOf(currentStep);
   // Only show stepper if not welcome
   if (currentStep === 'WELCOME') return null;
 
@@ -305,7 +309,6 @@ const WelcomeStep = memo(({ onNext, showBackButton, onSignOut, firstName }: { on
       <View style={{ flex: 1, minHeight: 16 }} />
 
       <View style={{ alignItems: 'center', gap: 16 }}>
-        <Text style={styles.getDesktop}>Get the desktop app</Text>
         <TouchableOpacity style={[styles.primaryButton, { width: '100%' }]} onPress={onNext} activeOpacity={0.9}>
           <Text style={styles.primaryButtonText}>Next</Text>
         </TouchableOpacity>
@@ -504,20 +507,54 @@ const StoreAddressStep = memo(({
   </Animated.View>
 ));
 
+// The one "please specify" field. Every step that offers Other renders this and
+// nothing else, so a step can no longer ship an Other option with no way to
+// answer it.
+const OtherField = memo(({ show, label, placeholder, value, onChange, onSubmit, onReveal }: {
+  show: boolean;
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (t: string) => void;
+  onSubmit: () => void;
+  onReveal?: () => void;
+}) => {
+  if (!show) return null;
+  return (
+    // A field revealed below the fold is the same bug as no field at all, so
+    // laying out scrolls it into view above the keyboard.
+    <Animated.View entering={FadeInDown} style={styles.otherField} onLayout={() => onReveal?.()}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        placeholder={placeholder}
+        placeholderTextColor={ONBOARDING.subtitle}
+        value={value}
+        onChangeText={onChange}
+        autoFocus
+        onSubmitEditing={onSubmit}
+        returnKeyType="done"
+      />
+    </Animated.View>
+  );
+});
+
 const BusinessTypeStep = memo(({
   businessName,
   selectedTypes,
   customType,
   onSelect,
   onCustomChange,
-  onNext
+  onNext,
+  onReveal
 }: {
   businessName: string,
   selectedTypes: string[],
   customType: string,
   onSelect: (id: string) => void,
   onCustomChange: (t: string) => void,
-  onNext: () => void
+  onNext: () => void,
+  onReveal: () => void
 }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>What type of business is {businessName}?</Text>
@@ -537,20 +574,15 @@ const BusinessTypeStep = memo(({
         );
       })}
     </View>
-    {selectedTypes.includes('other') && (
-      <Animated.View entering={FadeInDown} style={{ marginTop: 24 }}>
-        <Text style={styles.label}>Please specify</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Service Provider"
-          placeholderTextColor={ONBOARDING.subtitle}
-          value={customType}
-          onChangeText={onCustomChange}
-          autoFocus // Focus when revealed
-          onSubmitEditing={onNext}
-        />
-      </Animated.View>
-    )}
+    <OtherField
+      show={showsOtherField(selectedTypes)}
+      label="Please specify"
+      placeholder="e.g. Service Provider"
+      value={customType}
+      onChange={onCustomChange}
+      onSubmit={onNext}
+      onReveal={onReveal}
+    />
     <View style={{ flex: 1 }} />
     <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
       <Text style={styles.primaryButtonText}>Next</Text>
@@ -563,13 +595,15 @@ const RoleStep = memo(({
   customRole,
   onSelect,
   onCustomChange,
-  onNext
+  onNext,
+  onReveal
 }: {
   selectedRole: string,
   customRole: string,
   onSelect: (id: string) => void,
   onCustomChange: (t: string) => void,
-  onNext: () => void
+  onNext: () => void,
+  onReveal: () => void
 }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>What is your role?</Text>
@@ -589,21 +623,15 @@ const RoleStep = memo(({
       ))}
     </View>
 
-    {/* Typeable Other for Role */}
-    {selectedRole === 'other' && (
-      <Animated.View entering={FadeInDown} style={{ marginTop: 24 }}>
-        <Text style={styles.label}>Please specify role</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Consultant"
-          placeholderTextColor={ONBOARDING.subtitle}
-          value={customRole}
-          onChangeText={onCustomChange}
-          autoFocus
-          onSubmitEditing={onNext}
-        />
-      </Animated.View>
-    )}
+    <OtherField
+      show={showsOtherField(selectedRole)}
+      label="Please specify role"
+      placeholder="e.g. Consultant"
+      value={customRole}
+      onChange={onCustomChange}
+      onSubmit={onNext}
+      onReveal={onReveal}
+    />
 
     <View style={{ flex: 1 }} />
     <TouchableOpacity style={styles.primaryButton} onPress={onNext}>
@@ -624,7 +652,7 @@ const SelectRow = memo(({ icon, label, selected, multi, onPress }: { icon: strin
   </TouchableOpacity>
 ));
 
-const SellWhatStep = memo(({ selected, onToggle, onNext }: { selected: string[]; onToggle: (id: string) => void; onNext: () => void }) => (
+const SellWhatStep = memo(({ selected, other, onToggle, onOtherChange, onNext, onReveal }: { selected: string[]; other: string; onToggle: (id: string) => void; onOtherChange: (t: string) => void; onNext: () => void; onReveal: () => void }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>What do you sell?</Text>
     <Text style={styles.subtitle}>Pick all that fit.</Text>
@@ -633,6 +661,15 @@ const SellWhatStep = memo(({ selected, onToggle, onNext }: { selected: string[];
         <SelectRow key={c.id} icon={c.icon} label={c.label} multi selected={selected.includes(c.id)} onPress={() => onToggle(c.id)} />
       ))}
     </View>
+    <OtherField
+      show={showsOtherField(selected)}
+      label="Please specify"
+      placeholder="e.g. Auto parts"
+      value={other}
+      onChange={onOtherChange}
+      onSubmit={onNext}
+      onReveal={onReveal}
+    />
     <View style={{ flex: 1, minHeight: 12 }} />
     <TouchableOpacity style={styles.primaryButton} onPress={onNext} activeOpacity={0.9}>
       <Text style={styles.primaryButtonText}>Continue</Text>
@@ -640,28 +677,23 @@ const SellWhatStep = memo(({ selected, onToggle, onNext }: { selected: string[];
   </Animated.View>
 ));
 
-const GoalStep = memo(({ goal, goalOther, onSelect, onOtherChange, onNext }: { goal: string; goalOther: string; onSelect: (id: string) => void; onOtherChange: (t: string) => void; onNext: () => void }) => (
+const GoalStep = memo(({ goal, goalOther, onSelect, onOtherChange, onNext, onReveal }: { goal: string; goalOther: string; onSelect: (id: string) => void; onOtherChange: (t: string) => void; onNext: () => void; onReveal: () => void }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>What's your goal?</Text>
     <View style={styles.selectList}>
       {GOALS.map(g => (
         <SelectRow key={g.id} icon={g.icon} label={g.label} selected={goal === g.id} onPress={() => onSelect(g.id)} />
       ))}
-      {goal === 'other' && (
-        <Animated.View entering={FadeInDown} style={{ gap: 8, marginTop: 6 }}>
-          <Text style={styles.label}>Explain</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Tell us more"
-            placeholderTextColor={ONBOARDING.subtitle}
-            value={goalOther}
-            onChangeText={onOtherChange}
-            autoFocus
-            onSubmitEditing={onNext}
-          />
-        </Animated.View>
-      )}
     </View>
+    <OtherField
+      show={showsOtherField(goal)}
+      label="Please specify"
+      placeholder="Tell us more"
+      value={goalOther}
+      onChange={onOtherChange}
+      onSubmit={onNext}
+      onReveal={onReveal}
+    />
     <View style={{ flex: 1, minHeight: 12 }} />
     <TouchableOpacity style={styles.primaryButton} onPress={onNext} activeOpacity={0.9}>
       <Text style={styles.primaryButtonText}>Continue</Text>
@@ -669,7 +701,7 @@ const GoalStep = memo(({ goal, goalOther, onSelect, onOtherChange, onNext }: { g
   </Animated.View>
 ));
 
-const HeardStep = memo(({ heard, onSelect, onNext }: { heard: string; onSelect: (id: string) => void; onNext: () => void }) => (
+const HeardStep = memo(({ heard, heardOther, onSelect, onOtherChange, onNext, onReveal }: { heard: string; heardOther: string; onSelect: (id: string) => void; onOtherChange: (t: string) => void; onNext: () => void; onReveal: () => void }) => (
   <Animated.View entering={SlideInRight} exiting={SlideOutLeft} style={styles.stepContainer}>
     <Text style={styles.stepTitle}>Where'd you hear about us?</Text>
     <View style={styles.selectList}>
@@ -677,6 +709,15 @@ const HeardStep = memo(({ heard, onSelect, onNext }: { heard: string; onSelect: 
         <SelectRow key={h.id} icon={h.icon} label={h.label} selected={heard === h.id} onPress={() => onSelect(h.id)} />
       ))}
     </View>
+    <OtherField
+      show={showsOtherField(heard)}
+      label="Please specify"
+      placeholder="e.g. A podcast"
+      value={heardOther}
+      onChange={onOtherChange}
+      onSubmit={onNext}
+      onReveal={onReveal}
+    />
     <View style={{ flex: 1, minHeight: 12 }} />
     <TouchableOpacity style={styles.primaryButton} onPress={onNext} activeOpacity={0.9}>
       <Text style={styles.primaryButtonText}>Continue</Text>
@@ -972,9 +1013,11 @@ export default function CreateAccountScreen() {
     role: '',
     customRole: '',
     sellCategories: [],
+    sellOther: '',
     goal: '',
     goalOther: '',
     heardFrom: '',
+    heardOther: '',
     phone: '',
     region: 'US',
     currency: 'USD',
@@ -996,6 +1039,10 @@ export default function CreateAccountScreen() {
   // Refs for stable callbacks
   const formDataRef = useRef(formData);
   const phoneInputRef = useRef<PhoneInput>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const revealOther = useCallback(() => {
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+  }, []);
 
   // Update ref on render
   formDataRef.current = formData;
@@ -1103,15 +1150,19 @@ export default function CreateAccountScreen() {
   const setCustomBusinessType = useCallback((t: string) => setFormData(p => ({ ...p, customBusinessType: t })), []);
   const setRole = useCallback((id: string) => setFormData(p => ({ ...p, role: id })), []);
   const setCustomRole = useCallback((t: string) => setFormData(p => ({ ...p, customRole: t })), []);
-  const toggleSellCategory = useCallback((id: string) => setFormData(p => ({
-    ...p,
-    sellCategories: p.sellCategories.includes(id)
+  const toggleSellCategory = useCallback((id: string) => setFormData(p => {
+    const sellCategories = p.sellCategories.includes(id)
       ? p.sellCategories.filter(c => c !== id)
-      : [...p.sellCategories, id],
-  })), []);
+      : [...p.sellCategories, id];
+    // Dropping Other drops what was typed into it, so a stale answer cannot
+    // survive into the submit.
+    return { ...p, sellCategories, sellOther: sellCategories.includes('other') ? p.sellOther : '' };
+  }), []);
+  const setSellOther = useCallback((t: string) => setFormData(p => ({ ...p, sellOther: t })), []);
   const setGoal = useCallback((id: string) => setFormData(p => ({ ...p, goal: id, goalOther: id === 'other' ? p.goalOther : '' })), []);
   const setGoalOther = useCallback((t: string) => setFormData(p => ({ ...p, goalOther: t })), []);
-  const setHeardFrom = useCallback((id: string) => setFormData(p => ({ ...p, heardFrom: id })), []);
+  const setHeardFrom = useCallback((id: string) => setFormData(p => ({ ...p, heardFrom: id, heardOther: id === 'other' ? p.heardOther : '' })), []);
+  const setHeardOther = useCallback((t: string) => setFormData(p => ({ ...p, heardOther: t })), []);
 
   // Use My Location for address autofill
   const handleUseLocation = useCallback(async () => {
@@ -1421,11 +1472,8 @@ export default function CreateAccountScreen() {
 
       const dbUserId = supabaseUser.id; // Correct UUID
       const email = clerkUser.primaryEmailAddress?.emailAddress || '';
-      const finalBusinessType = formData.businessType
-        .map(t => (t === 'other' ? formData.customBusinessType.trim() : t))
-        .filter(Boolean)
-        .join(', ');
-      const finalRole = formData.role === 'other' ? formData.customRole : formData.role;
+      const finalBusinessType = resolveOtherList(formData.businessType, formData.customBusinessType).join(', ');
+      const finalRole = resolveOtherValue(formData.role, formData.customRole);
 
       // 2. Update the existing user record (created by backend sync)
       // We use UPDATE because the user MUST exist for the token exchange to work.
@@ -1600,10 +1648,10 @@ export default function CreateAccountScreen() {
 
       capture(AnalyticsEvents.ONBOARDING_COMPLETED, {
         create_organization: !!createOrganization,
-        business_types: formData.businessType,
-        sell_categories: formData.sellCategories,
-        goal: formData.goal === 'other' ? (formData.goalOther || 'other') : formData.goal,
-        heard_from: formData.heardFrom,
+        business_types: resolveOtherList(formData.businessType, formData.customBusinessType),
+        sell_categories: resolveOtherList(formData.sellCategories, formData.sellOther),
+        goal: resolveOtherValue(formData.goal, formData.goalOther),
+        heard_from: resolveOtherValue(formData.heardFrom, formData.heardOther),
       });
 
       // Onboarding data is saved and the org exists. Hand off to the (skippable)
@@ -1660,8 +1708,11 @@ export default function CreateAccountScreen() {
         message={errorModal.message}
         onClose={closeModal}
       />
-      {currentStep !== 'WELCOME' && currentStep !== 'CONNECT' && (
+      {currentStep !== 'WELCOME' && (
         <View style={styles.headerRow}>
+          {/* CONNECT is past the point of no return: the org exists, so it keeps
+              the stepper but loses the back arrow. */}
+          {currentStep === 'CONNECT' ? <View style={{ width: 44 }} /> : (
           <TouchableOpacity onPress={() => {
             if (currentStep === 'NAME') goToStep('WELCOME');
             if (currentStep === 'BUSINESS_NAME') goToStep('NAME');
@@ -1677,6 +1728,7 @@ export default function CreateAccountScreen() {
           }} style={{ padding: 10 }} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
             <Icon name="chevron-left" size={26} color={ONBOARDING.title} />
           </TouchableOpacity>
+          )}
 
           <Stepper currentStep={currentStep} />
 
@@ -1692,6 +1744,7 @@ export default function CreateAccountScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={{ flexGrow: 1, paddingBottom: Math.max(insets.bottom, 20) }}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
@@ -1753,6 +1806,7 @@ export default function CreateAccountScreen() {
               onSelect={setBusinessType}
               onCustomChange={setCustomBusinessType}
               onNext={handleNext}
+              onReveal={revealOther}
             />
           )}
 
@@ -1763,6 +1817,7 @@ export default function CreateAccountScreen() {
               onSelect={setRole}
               onCustomChange={setCustomRole}
               onNext={handleNext}
+              onReveal={revealOther}
             />
           )}
 
@@ -1778,8 +1833,11 @@ export default function CreateAccountScreen() {
           {currentStep === 'SELL_WHAT' && (
             <SellWhatStep
               selected={formData.sellCategories}
+              other={formData.sellOther}
               onToggle={toggleSellCategory}
+              onOtherChange={setSellOther}
               onNext={handleNext}
+              onReveal={revealOther}
             />
           )}
 
@@ -1790,14 +1848,18 @@ export default function CreateAccountScreen() {
               onSelect={setGoal}
               onOtherChange={setGoalOther}
               onNext={handleNext}
+              onReveal={revealOther}
             />
           )}
 
           {currentStep === 'HEARD' && (
             <HeardStep
               heard={formData.heardFrom}
+              heardOther={formData.heardOther}
               onSelect={setHeardFrom}
+              onOtherChange={setHeardOther}
               onNext={handleNext}
+              onReveal={revealOther}
             />
           )}
 
@@ -1837,7 +1899,6 @@ export default function CreateAccountScreen() {
             <ConnectAccountsStep
               orgId={createdOrgId}
               orgName={formData.businessName}
-              email={clerkUser?.primaryEmailAddress?.emailAddress}
               onDone={finishToApp}
             />
           )}
@@ -1963,7 +2024,6 @@ const styles = StyleSheet.create({
   },
   featureLabel: { flex: 1, fontSize: 16, fontFamily: 'Inter_600SemiBold', color: ONBOARDING.title },
   featurePlayBtn: { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(147,200,34,0.18)', alignItems: 'center', justifyContent: 'center' },
-  getDesktop: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: ONBOARDING.subtitle },
   useLocationButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1988,6 +2048,7 @@ const styles = StyleSheet.create({
     color: ONBOARDING.subtitle,
     marginBottom: 8,
   },
+  otherField: { marginTop: 18 },
   // Buttons
   primaryButton: {
     backgroundColor: ONBOARDING.green,
