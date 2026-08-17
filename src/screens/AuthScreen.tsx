@@ -13,7 +13,7 @@ import {
   Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Rect } from 'react-native-svg';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
 import { useSSO, useAuth, useClerk } from '@clerk/expo';
@@ -33,7 +33,9 @@ const INK = '#1C1B17';
 const LABEL = '#6B6A63';
 const FIELD_BG = '#F6F5F1';
 const FIELD_BORDER = '#EAE6DA';
-const GREEN_DEEP = '#93C822';
+// The boards use a deeper green for text-on-white links than the fill green — #93C822
+// does not carry at 14px on #FFFFFF.
+const GREEN_DEEP = '#4A7C00';
 const MUTED = '#8A887E';
 const OR_GRAY = '#A8A69C';
 const SOCIAL_BORDER = '#E0DCCF';
@@ -62,9 +64,19 @@ const ChevronLeft = () => (
 const GoogleMark = () => (
   <Svg width={19} height={19} viewBox="0 0 24 24">
     <Path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z" fill="#4285F4" />
-    <Path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z" fill="#93C822" />
+    {/* Google's own green. It had been recoloured to the anorha brand green, which is both
+        off-board and against Google's mark rules. */}
+    <Path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z" fill="#34A853" />
     <Path d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z" fill="#FBBC05" />
     <Path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z" fill="#EA4335" />
+  </Svg>
+);
+
+// The board draws Face ID as a device, not a face.
+const FaceIdMark = () => (
+  <Svg width={20} height={20} viewBox="0 0 24 24">
+    <Rect x={5} y={2} width={14} height={20} rx={2} fill="none" stroke="#2A2A2A" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M12 18h.01" fill="none" stroke="#2A2A2A" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
   </Svg>
 );
 
@@ -78,9 +90,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
   const insets = useSafeAreaInsets();
   const initialMode = route?.params?.mode;
   const [isLogin, setIsLogin] = useState(initialMode !== 'signup');
-  // The splash is now a brand beat that continues on its own, so this screen is the one
-  // place every way in is offered. Providers first; the email form opens on top of them.
-  const [emailOpen, setEmailOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -438,14 +447,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
   }, [email, isSignInLoaded, signIn, navigation, showErrorModal]);
 
   const onBack = () => {
-    if (emailOpen) {
-      setEmailOpen(false);
-      setFieldErrors({});
-      return;
-    }
     if (navigation.canGoBack()) navigation.goBack();
   };
-  const canBack = emailOpen || navigation.canGoBack();
 
   const reqs = getPasswordRequirements(password);
   const metCount = reqs.filter(r => r.met).length;
@@ -476,20 +479,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={[styles.body, { paddingTop: insets.top }]}>
           <View style={styles.backBtn}>
-            {canBack && (
-              <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-                <ChevronLeft />
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <ChevronLeft />
+            </TouchableOpacity>
           </View>
 
-          <Text style={styles.header}>
-            {!emailOpen ? 'Welcome' : isLogin ? 'Welcome back' : 'Create account'}
-          </Text>
+          <Text style={styles.header}>{isLogin ? 'Welcome back' : 'Create account'}</Text>
           {sessionNotice ? <Text style={styles.sessionNotice}>{sessionNotice}</Text> : null}
 
-          {emailOpen ? (
-          <>
           <View style={styles.fields}>
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Email</Text>
@@ -557,7 +554,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
           </View>
 
           <TouchableOpacity
-            style={[styles.primaryBtn, loading && styles.primaryBtnBusy]}
+            style={[styles.primaryBtn, !isLogin && styles.primaryBtnSignup, loading && styles.primaryBtnBusy]}
             onPress={handleAuth}
             activeOpacity={0.9}
             disabled={loading}
@@ -572,39 +569,27 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
           {!isLogin && (
             <Text style={styles.terms}>
               By continuing you agree to our{' '}
-              <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/terms')}>
-                Terms
-              </Text>
+              <Text onPress={() => Linking.openURL('https://anorha.app/terms')}>Terms</Text>
               {' '}&{' '}
-              <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/privacy')}>
-                Privacy
-              </Text>
+              <Text onPress={() => Linking.openURL('https://anorha.app/privacy')}>Privacy</Text>
             </Text>
           )}
 
-          <View style={styles.flexSpacer} />
-
-          <View style={[styles.switchRow, { paddingBottom: insets.bottom + 18 }]}>
-            <Text style={styles.switchText}>{isLogin ? 'New here?' : 'Have an account?'}</Text>
-            <TouchableOpacity onPress={() => { setIsLogin(v => !v); setFieldErrors({}); }} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
-              <Text style={styles.switchLink}>{isLogin ? 'Sign up' : 'Log in'}</Text>
-            </TouchableOpacity>
-          </View>
-          </>
-          ) : (
-          <>
-          <TouchableOpacity style={styles.primaryBtn} onPress={() => setEmailOpen(true)} activeOpacity={0.9}>
-            <Text style={styles.primaryBtnText}>Continue with email</Text>
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
+          <View style={[styles.divider, !isLogin && styles.dividerSignup]}>
             <View style={styles.dividerLine} />
             <Text style={styles.dividerText}>or</Text>
             <View style={styles.dividerLine} />
           </View>
 
+          {isLogin && isBiometricSupported && (
+            <TouchableOpacity style={[styles.socialBtn, styles.socialBtnFirst]} onPress={handleBiometricLogin} activeOpacity={0.9}>
+              <FaceIdMark />
+              <Text style={styles.socialText}>Continue with Face ID</Text>
+            </TouchableOpacity>
+          )}
+
           <AppleSignInButton
-            style={styles.socialBtn}
+            style={[styles.socialBtn, !(isLogin && isBiometricSupported) && styles.socialBtnFirst]}
             textStyle={styles.socialText}
             tint={INK}
             onError={(message) => showErrorModal('Apple Sign-In Failed', message, 'error')}
@@ -614,27 +599,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
             {googleLoading ? <ActivityIndicator size="small" color={INK} /> : <><GoogleMark /><Text style={styles.socialText}>Continue with Google</Text></>}
           </TouchableOpacity>
 
-          {isBiometricSupported && hasBiometricCreds && (
-            <TouchableOpacity style={styles.socialBtn} onPress={handleBiometricLogin} activeOpacity={0.9}>
-              <Icon name="face-recognition" size={20} color={INK} />
-              <Text style={styles.socialText}>Sign in with Face ID</Text>
-            </TouchableOpacity>
-          )}
-
           <View style={styles.flexSpacer} />
 
-          <Text style={[styles.terms, { paddingBottom: insets.bottom + 18 }]}>
-            By continuing you agree to our{' '}
-            <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/terms')}>
-              Terms
-            </Text>
-            {' '}&{' '}
-            <Text style={styles.termsLink} onPress={() => Linking.openURL('https://anorha.app/privacy')}>
-              Privacy
-            </Text>
-          </Text>
-          </>
-          )}
+          <View style={[styles.switchRow, { paddingBottom: Math.max(30, insets.bottom) }]}>
+            <Text style={styles.switchText}>{isLogin ? 'New here?' : 'Have an account?'}</Text>
+            <TouchableOpacity onPress={() => { setIsLogin(v => !v); setFieldErrors({}); }} hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+              <Text style={styles.switchLink}>{isLogin ? 'Sign up' : 'Log in'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -645,9 +617,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   flex: { flex: 1 },
   body: { flex: 1, paddingHorizontal: 24 },
-  backBtn: { width: 40, height: 44, justifyContent: 'center', marginLeft: -8 },
+  // Board puts the chevron at x=20 while the body runs at 24.
+  backBtn: { width: 40, height: 44, justifyContent: 'center', marginLeft: -4 },
   header: {
-    marginTop: 18,
+    marginTop: 38,
     fontSize: 30,
     lineHeight: 36,
     fontFamily: 'Inter_800ExtraBold',
@@ -687,11 +660,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Sign up has no Forgot row above, so the board opens the gap by 4.
+  primaryBtnSignup: { marginTop: 24 },
   primaryBtnBusy: { opacity: 0.85 },
-  primaryBtnText: { fontSize: 16, fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
-  terms: { marginTop: 14, textAlign: 'center', fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium', color: MUTED, paddingHorizontal: 6 },
-  termsLink: { fontFamily: 'Inter_600SemiBold', color: GREEN_DEEP, textDecorationLine: 'underline' },
+  primaryBtnText: { fontSize: 16, lineHeight: 20, fontFamily: 'Inter_700Bold', color: '#FFFFFF' },
+  // One flat muted line on the board — the links are not called out in green.
+  terms: { marginTop: 14, textAlign: 'center', fontSize: 12, lineHeight: 17, fontFamily: 'Inter_500Medium', color: MUTED, paddingHorizontal: 30 },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 22 },
+  // The terms line above already carries 14, so sign up closes back to 18.
+  dividerSignup: { marginTop: 18 },
   dividerLine: { flex: 1, height: 1, backgroundColor: FIELD_BORDER },
   dividerText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: OR_GRAY },
   // Apple, Google and Face ID all render through this one box, so no provider can read
@@ -708,7 +685,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  socialText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: INK },
+  socialBtnFirst: { marginTop: 18 },
+  socialText: { fontSize: 15, lineHeight: 18, fontFamily: 'Inter_600SemiBold', color: INK },
   flexSpacer: { flex: 1, minHeight: 14 },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingTop: 8 },
   switchText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: LABEL },
