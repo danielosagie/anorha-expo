@@ -90,6 +90,7 @@ type QuickScanRunOptions = {
   skipPreflight?: boolean;
   textHint?: string;
   mode?: 'adaptive' | 'legacy';
+  tapStartedAtMs?: number;
 };
 
 type QuickScanTask = {
@@ -254,7 +255,6 @@ import { Camera, CameraView, CameraType, FlashMode, BarcodeScanningResult } from
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
-import { decode as base64Decode } from 'base64-arraybuffer';
 import spinners from 'unicode-animations';
 import Animated, {
   useSharedValue,
@@ -415,6 +415,8 @@ import {
   savePendingBillingAction,
 } from '../utils/billingGatePersistence';
 import { createLogger } from '../utils/logger';
+import { mapWithConcurrency } from '../utils/mapWithConcurrency';
+import { PRODUCT_IMAGE_UPLOAD_CONCURRENCY, uploadProductImage } from '../utils/uploadProductImage';
 const log = createLogger('AddProductScreen');
 
 
@@ -2557,18 +2559,44 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     freeLimit: freemiumStatus?.freeLimit,
   }), [freemiumStatus]);
 
-  const requestQuickScanAccess = useCallback(async (): Promise<boolean> => {
+  const isQuickScanLocallyBlocked = Boolean(
+    freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted,
+  );
+
+  const beginQuickScanAccessCheck = useCallback((source: 'capture' | 'picker') => {
+    const startedAt = Date.now();
+    const promise = preflightAIGate('ai_quick_scan', 1).then((gate) => {
+      log.debug(`[UPLOAD_TIMING] source=${source} gate_preflight_ms=${Date.now() - startedAt}`);
+      return gate;
+    });
+    // The picker/camera can be canceled after the request starts. Attach a rejection
+    // observer immediately so that abandoned preflights never become unhandled.
+    void promise.catch((error) => {
+      log.debug(`[UPLOAD_TIMING] source=${source} gate_preflight_failed_ms=${Date.now() - startedAt}`, error);
+    });
+    return promise;
+  }, [preflightAIGate]);
+
+  const requestQuickScanAccess = useCallback(async (
+    startedGate?: Promise<BillingGateResponse>,
+    source: 'capture' | 'picker' | 'scan' = 'scan',
+  ): Promise<boolean> => {
+    const waitStartedAt = Date.now();
     const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
       ? buildFreemiumBlockedGate()
-      : await preflightAIGate('ai_quick_scan', 1);
+      : await (startedGate ?? preflightAIGate('ai_quick_scan', 1));
 
     if (gate.code === 'credits_exhausted_but_invoiceable') {
-      return (await presentBillingGateSheet(gate)) === 'continue';
+      const canContinue = (await presentBillingGateSheet(gate)) === 'continue';
+      log.debug(`[UPLOAD_TIMING] source=${source} gate_wait_ms=${Date.now() - waitStartedAt} allowed=${canContinue}`);
+      return canContinue;
     }
     if (!gate.canProceed) {
       await presentBillingGateSheet(gate);
+      log.debug(`[UPLOAD_TIMING] source=${source} gate_wait_ms=${Date.now() - waitStartedAt} allowed=false`);
       return false;
     }
+    log.debug(`[UPLOAD_TIMING] source=${source} gate_wait_ms=${Date.now() - waitStartedAt} allowed=true`);
     return true;
   }, [buildFreemiumBlockedGate, freemiumStatus, preflightAIGate, presentBillingGateSheet]);
 
@@ -2771,11 +2799,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
     if (!cameraRef.current || isCapturing) return;
 
-    // Resolve quota before touching the camera, creating an item, showing scan
-    // progress, or opening a stream. A granted initiation is carried into the
-    // actual scan so an already-approved capture is never killed by a second gate.
-    if (!(await requestQuickScanAccess())) return;
-
     if ((cameraMode === 'manifest' || cameraMode === 'receipt')) {
       const documentPhotoCount = bulkItems.reduce((count, item) => count + item.photos.length, 0);
       if (documentPhotoCount >= MAX_DOCUMENT_PHOTOS) {
@@ -2791,6 +2814,16 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       Alert.alert('Photo limit', `${MAX_PHOTOS_PER_ITEM} photos per item`);
       return;
     }
+
+    // Exhausted free-tier state is already local, so keep that deterministic block
+    // before the shutter. Otherwise overlap the network preflight with the camera
+    // capture and resolve it only before starting the billable scan.
+    if (isQuickScanLocallyBlocked) {
+      await requestQuickScanAccess(undefined, 'capture');
+      return;
+    }
+    const captureTapStartedAt = Date.now();
+    const startedGate = beginQuickScanAccessCheck('capture');
 
     try {
       setIsCapturing(true);
@@ -2828,8 +2861,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       if (photo) {
         const quickScanOptions: QuickScanRunOptions | undefined = cameraMode === 'camera'
-          ? { mode: 'adaptive', skipPreflight: true }
-          : { skipPreflight: true };
+          ? { mode: 'adaptive', skipPreflight: true, tapStartedAtMs: captureTapStartedAt }
+          : { skipPreflight: true, tapStartedAtMs: captureTapStartedAt };
         const newPhoto: CapturedPhoto = {
           id: `photo-${Date.now()}`,
           uri: photo.uri,
@@ -2846,10 +2879,13 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const targetItem = liveActiveId
           ? (liveItems.find((item) => item.id === liveActiveId) ?? selectItem(liveActiveId))
           : liveItems.find((item) => item.isActive);
+        let startApprovedScan: (() => void) | null = null;
+        let isShelfScan = false;
 
         if (cameraMode === 'shelf' && liveItems.length === 0 && !targetItem) {
+          isShelfScan = true;
           setShelfPhotoUri(newPhoto.uri);
-          handleShelfModeScan(newPhoto, { skipPreflight: true });
+          startApprovedScan = () => handleShelfModeScan(newPhoto, { skipPreflight: true });
         } else {
           if (targetItem) {
             // The destination is resolved once from live refs. Attach and scan with that exact
@@ -2862,7 +2898,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                 : { ...item, isActive: false }
             )));
             if (wasEmpty) {
-              scheduleDelayedScan(targetId, () => performQuickScan(newPhoto, targetId, quickScanOptions));
+              startApprovedScan = () => scheduleDelayedScan(
+                targetId,
+                () => performQuickScan(newPhoto, targetId, quickScanOptions),
+              );
             }
           } else if (liveItems.length === 0) {
             // Very first photo ever - create first item
@@ -2880,7 +2919,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             log.debug('[ITEM CREATION] Triggering quick scan (first photo of first item)');
 
             log.debug('[FIRST ITEM] Created first item with ID:', firstItem.id);
-            scheduleDelayedScan(firstItem.id, () => {
+            startApprovedScan = () => scheduleDelayedScan(firstItem.id, () => {
               log.debug('[FIRST ITEM] About to call performQuickScan for first item:', firstItem.id);
               performQuickScan(newPhoto, firstItem.id, quickScanOptions);
             });
@@ -2897,7 +2936,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   : { ...item, isActive: false }
               )));
               if (wasEmpty) {
-                scheduleDelayedScan(fallbackId, () => performQuickScan(newPhoto, fallbackId, quickScanOptions));
+                startApprovedScan = () => scheduleDelayedScan(
+                  fallbackId,
+                  () => performQuickScan(newPhoto, fallbackId, quickScanOptions),
+                );
               }
             }
           } else {
@@ -2907,9 +2949,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               ...prev.map(item => ({ ...item, isActive: false })),
               { id: newId, photos: [{ ...newPhoto, isCover: true }], title: undefined, isActive: true },
             ]);
-            scheduleDelayedScan(newId, () => performQuickScan(newPhoto, newId, quickScanOptions));
+            startApprovedScan = () => scheduleDelayedScan(
+              newId,
+              () => performQuickScan(newPhoto, newId, quickScanOptions),
+            );
           }
+        }
 
+        // The local photo/item state above renders immediately. If billing denies,
+        // keep that photo attached but unscanned so the user's capture is not lost.
+        const canScan = await requestQuickScanAccess(startedGate, 'capture');
+        if (canScan) startApprovedScan?.();
+        if (!isShelfScan || !canScan) {
           setCurrentInstruction('ready');
           stopProgressAnimation();
         }
@@ -2923,7 +2974,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess, scheduleDelayedScan]);
+  }, [beginQuickScanAccessCheck, isQuickScanLocallyBlocked, isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess, scheduleDelayedScan]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -4067,10 +4118,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     // Some call sites wire this straight into onPress, which passes the press event as the
     // first arg. Anything that isn't a string means "no target item", never a target.
     if (typeof targetItemId !== 'string') targetItemId = undefined;
+    const pickerTapStartedAt = Date.now();
 
-    // Check quota before opening the picker. This is intentionally before any file
-    // selection, item mutation, upload, loading state, or stream creation.
-    if (!(await requestQuickScanAccess())) return;
+    // Preserve the synchronous local free-tier block. Every non-local billing check
+    // starts before the picker but is not awaited until a selected photo needs a scan.
+    if (isQuickScanLocallyBlocked) {
+      await requestQuickScanAccess(undefined, 'picker');
+      return;
+    }
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -4097,6 +4152,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
+    const startedGate = beginQuickScanAccessCheck('picker');
+    const pickerOpenedAt = Date.now();
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false,
@@ -4104,6 +4161,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       selectionLimit: isDocumentImport ? remainingDocumentSlots : remainingItemSlots || MAX_PHOTOS_PER_ITEM,
       quality: 0.8,
     });
+    log.debug(
+      `[UPLOAD_TIMING] source=picker picker_open_to_selection_ms=${Date.now() - pickerOpenedAt} canceled=${result.canceled}`,
+    );
 
     if (!result.canceled && result.assets?.length) {
       const existingTargetUris = new Set((pickerTargetItem?.photos || []).map((photo) => photo.uri));
@@ -4127,8 +4187,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // captures: one photo of several things becomes a shelf folder, one thing stays single.
       // Explicit corrections (targetItemId from wrong-item / add-details) stay single-scan.
       const uploadScanOptions: QuickScanRunOptions | undefined = cameraMode === 'camera'
-        ? { mode: 'adaptive', skipPreflight: true }
-        : { skipPreflight: true };
+        ? { mode: 'adaptive', skipPreflight: true, tapStartedAtMs: pickerTapStartedAt }
+        : { skipPreflight: true, tapStartedAtMs: pickerTapStartedAt };
+      const explicitUploadScanOptions: QuickScanRunOptions = {
+        skipPreflight: true,
+        tapStartedAtMs: pickerTapStartedAt,
+      };
       // Build CapturedPhoto for each selected asset (no crop frame)
       const newPhotos: CapturedPhoto[] = assets.map((asset, idx) => ({
         id: `upload-${Date.now()}-${idx}`,
@@ -4146,6 +4210,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       const effectiveItem = effectiveItemId
         ? (liveItems.find((item) => item.id === effectiveItemId) ?? selectItem(effectiveItemId))
         : null;
+      let startApprovedScan: (() => void) | null = null;
 
       // SHELF MODE: Route uploaded image to shelf extraction instead of normal bulkItems
       // ONLY if we don't already have items. If we have items, we are likely adding photos to one of them.
@@ -4154,11 +4219,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         const shelfPhoto = newPhotos[0];
         setCapturedPhotos((prev) => mergeRetainedPhotos(prev, [shelfPhoto]));
         setShelfPhotoUri(shelfPhoto.uri);
-        handleShelfModeScan(shelfPhoto, { skipPreflight: true });
-        return;
-      }
-
-      if (effectiveItemId && effectiveItem) {
+        startApprovedScan = () => handleShelfModeScan(shelfPhoto, { skipPreflight: true });
+      } else if (effectiveItemId && effectiveItem) {
         const wasEmpty = (effectiveItem.photos?.length ?? 0) === 0;
         setBulkItems(prev => prev.map(item => {
           if (item.id !== effectiveItemId) return item;
@@ -4176,10 +4238,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // Plain multi-photo gallery imports to an already-matched item don't each fire a full
         // (~15s, billable) re-match — that was a cost regression from dropping the old gate.
         if (newPhotos[0] && (!!targetItemId || wasEmpty)) {
-          scheduleDelayedScan(effectiveItemId, () => performQuickScan(
+          startApprovedScan = () => scheduleDelayedScan(effectiveItemId, () => performQuickScan(
             newPhotos[0],
             effectiveItemId,
-            targetItemId ? { skipPreflight: true } : uploadScanOptions,
+            targetItemId ? explicitUploadScanOptions : uploadScanOptions,
           ));
         }
       } else if (liveItems.length === 0) {
@@ -4193,7 +4255,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setActiveItemId(firstItem.id);
         setCapturedPhotos((prev) => mergeRetainedPhotos(prev, newPhotos));
         if (newPhotos[0]) {
-          scheduleDelayedScan(
+          startApprovedScan = () => scheduleDelayedScan(
             firstItem.id,
             () => performQuickScan(newPhotos[0], firstItem.id, uploadScanOptions),
           );
@@ -4212,14 +4274,22 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         setActiveItemId(newItem.id);
         setCapturedPhotos((prev) => mergeRetainedPhotos(prev, newPhotos));
         if (newPhotos[0]) {
-          scheduleDelayedScan(
+          startApprovedScan = () => scheduleDelayedScan(
             newItem.id,
             () => performQuickScan(newPhotos[0], newItem.id, uploadScanOptions),
           );
         }
       }
+
+      // Local URIs are committed above before this await, so the existing thumbnail
+      // sheet/top strip can render immediately. A denial leaves them attached but
+      // unscanned; only an approved scan enters upload/SSE work.
+      if (startApprovedScan) {
+        const canScan = await requestQuickScanAccess(startedGate, 'picker');
+        if (canScan) startApprovedScan();
+      }
     }
-  }, [cameraMode, canAddAnotherItem, handleShelfModeScan, requestQuickScanAccess, scheduleDelayedScan, setActiveItemId, setBulkItems]);
+  }, [beginQuickScanAccessCheck, cameraMode, canAddAnotherItem, handleShelfModeScan, isQuickScanLocallyBlocked, requestQuickScanAccess, scheduleDelayedScan, setActiveItemId, setBulkItems]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -4281,70 +4351,14 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     return await ensureSupabaseJwt();
   }
 
-  // Upload image to Supabase Storage and get public URL
-  // Compresses/resizes before upload to reduce storage and egress (Supabase Free Plan)
-  const uploadImageToSupabase = useCallback(async (localUri: string, photoId: string): Promise<string> => {
-    try {
-      log.debug('[UPLOAD] Starting upload for:', photoId);
-
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('User not authenticated');
-      }
-
-      // Compress before upload — this image is BOTH the scan input and the listing cover. 1440px @
-      // 0.8 (~halves the 1920@0.9 payload) uploads ~2x faster, stays a clean cover, and is plenty
-      // of detail for the VLM + Lens. Upload is on the scan's critical path, so the smaller the faster.
-      const compressed = await runImageTransform(() => ImageManipulator.manipulateAsync(
-        localUri,
-        [{ resize: { width: 1440 } }], // only downscale if wider than 1440px
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG },
-      ));
-
-      // React Native fetch() does not support file:// URIs on Android - use expo-file-system
-      let byteArray: Uint8Array;
-      if (Platform.OS === 'android') {
-        const base64 = await FileSystem.readAsStringAsync(compressed.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const arrayBuffer = base64Decode(base64);
-        byteArray = new Uint8Array(arrayBuffer);
-      } else {
-        const response = await fetch(compressed.uri);
-        const arrayBuffer = await response.arrayBuffer();
-        byteArray = new Uint8Array(arrayBuffer);
-      }
-
-      // Create file name
-      const fileName = `${user.id}/${photoId}-${Date.now()}.jpg`;
-
-      const { data, error } = await supabase.storage
-        .from('product-images')
-        .upload(fileName, byteArray, {
-          contentType: 'image/jpeg',
-          cacheControl: '86400', // 24h - reduces egress via browser cache
-        });
-
-      if (error) {
-        log.error('[UPLOAD] Supabase upload error:', error);
-        throw error;
-      }
-
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from('product-images')
-        .getPublicUrl(fileName);
-
-      const publicUrl = urlData.publicUrl;
-      log.debug('[UPLOAD] Successfully uploaded to:', publicUrl);
-
-      return publicUrl;
-    } catch (error) {
-      log.error('[UPLOAD] Failed to upload image:', error);
-      throw error;
-    }
-  }, []);
+  // One upload writer for camera scans, bulk analysis, shelf crops, and chat photo dumps.
+  // The shared utility owns 1440px/0.8 compression, cached identity, native streaming,
+  // timing receipts, and the global three-upload ceiling.
+  const uploadImageToSupabase = useCallback((
+    localUri: string,
+    photoId: string,
+    accessToken?: string | null,
+  ): Promise<string> => uploadProductImage(localUri, photoId, { accessToken }), []);
   uploadImageToSupabaseRef.current = uploadImageToSupabase;
 
   // Auto-quick scan when photo is captured
@@ -4466,7 +4480,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Set loading state for this item
       setItemLoadingStates(prev => ({
         ...prev,
-        [itemId]: { isLoading: true, stage: 'Searching…', error: undefined }
+        [itemId]: { isLoading: true, stage: 'Uploading', error: undefined }
       }));
 
       // Drop any previously confirmed/auto-selected match for this item NOW, at the start of
@@ -4496,7 +4510,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       // Upload image to Supabase Storage first
       log.debug('[QUICK SCAN] Uploading image to Supabase...');
-      const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id);
+      const publicImageUrl = await uploadImageToSupabase(photo.uri, photo.id, tokenMaybe);
       if (isRunCancelled()) return;
       log.debug('[QUICK SCAN] Image uploaded to:', publicImageUrl);
 
@@ -4505,6 +4519,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // local file:// path — otherwise add_scan_to_campaign can't open the image and the agent
       // falls back to "send me a pic" and can't price by the item's real condition.
       if (publicImageUrl) setItemPhotoUri(itemId, photo.id, publicImageUrl);
+      setItemLoadingStates(prev => ({
+        ...prev,
+        [itemId]: { isLoading: true, stage: 'Searching…', error: undefined },
+      }));
 
       const token = tokenMaybe;
 
@@ -4533,6 +4551,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
 
       let adaptiveResolution: 'single' | 'multi' | null = null;
       let shelfPricingGeneration = shelfPricingGenerationRef.current;
+      let loggedFirstScanStart = false;
       const runMatchStream = (streamMode: 'adaptive' | 'ocr-vlm-search') => new Promise<StreamResult | null>((resolve, reject) => {
         let latestMatches: any[] = [];
         let latestConfidence: any = 'medium';
@@ -4551,6 +4570,12 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           if (isRunCancelled()) finish(() => resolve(null));
         }, 400);
 
+        if (!loggedFirstScanStart && options?.tapStartedAtMs) {
+          loggedFirstScanStart = true;
+          log.debug(
+            `[UPLOAD_TIMING] photo=${photo.id} tap_to_first_scan_start_ms=${Date.now() - options.tapStartedAtMs}`,
+          );
+        }
         streamHandleRef.current = openQuickScanStream({
           url: `${API_BASE_URL}/api/products/orchestrate/quick-scan-stream`,
           token,
@@ -5451,8 +5476,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // Upload images to Supabase Storage first
       log.debug('[ANALYZE] Uploading images to Supabase...');
 
-      const publicImageUrls = await Promise.all(
-        firstPhotos.map(photo => uploadImageToSupabase(photo.uri, photo.id))
+      const publicImageUrls = await mapWithConcurrency(
+        firstPhotos,
+        PRODUCT_IMAGE_UPLOAD_CONCURRENCY,
+        (photo) => uploadImageToSupabase(photo.uri, photo.id),
       );
 
       const products = buildMatchAnalyzeProducts(publicImageUrls, itemsForAnalyze, quickMatchHintsByItemId);
