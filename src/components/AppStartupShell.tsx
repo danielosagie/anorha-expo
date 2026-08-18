@@ -1,6 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
+import { UPDATE_ID_FRAGMENT } from '../lib/updateIdentity';
 
 type AppStartupShellProps = {
   title: string;
@@ -80,6 +81,16 @@ const AppStartupShell: React.FC<AppStartupShellProps> = ({
           {message}
         </Text>
       </View>
+      <Text
+        style={{
+          position: 'absolute',
+          bottom: 12,
+          fontSize: 10,
+          color: '#9AA39F',
+        }}
+      >
+        {UPDATE_ID_FRAGMENT}
+      </Text>
     </View>
   );
 };
