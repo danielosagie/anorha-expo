@@ -1,14 +1,7 @@
-// PlatformConnectSheet — the per-platform OAuth consent page shown after a
-// platform is chosen from the picker and BEFORE the connect webview opens
-// (mirrors the "Connect <X> account → Continue to <X>" pattern other apps use).
-//
-// It reuses the shared DISCLOSURES copy (title/subtitle/bullets) so the wording
-// stays in one place, renders the platform↔Anorha icon pair, and on "Continue"
-// hands off to the caller (which runs usePlatformConnect().connect()).
+// PlatformConsentBody is the OAuth consent content embedded by ConnectFlowSheet.
 
 import React from 'react';
 import {
-  Modal,
   View,
   Text,
   Image,
@@ -16,30 +9,18 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RefreshCw, ShieldCheck, Unlink } from 'lucide-react-native';
 import PlatformLogo from './PlatformLogo';
 import { getPlatform } from '../config/platforms';
-import { DISCLOSURES } from './ConnectDisclosureModal';
+import { DISCLOSURES } from '../lib/platformDisclosures';
 
 // One icon per disclosure bullet (sync / permissions / disconnect), in order.
 const BULLET_ICONS = [RefreshCw, ShieldCheck, Unlink];
 const ANORHA_MARK = require('../assets/rounded_anorha.png');
 
-interface Props {
-  visible: boolean;
-  /** Canonical platform spelling, or null when nothing is selected. */
-  platform: string | null;
-  busy?: boolean;
-  error?: string | null;
-  onContinue: () => void;
-  onCancel: () => void;
-}
-
 /**
- * The consent content (icon pair + disclosures + Continue), WITHOUT the modal
- * chrome, so it can be embedded either in PlatformConnectSheet's own modal or as
- * the OAuth step inside the reusable ConnectFlowSheet. One copy, no drift.
+ * The consent content (icon pair, disclosures, and Continue) without modal
+ * chrome. ConnectFlowSheet is the only surface owner.
  */
 export function PlatformConsentBody({
   platform,
@@ -121,52 +102,7 @@ export function PlatformConsentBody({
   );
 }
 
-export default function PlatformConnectSheet({
-  visible,
-  platform,
-  busy = false,
-  error,
-  onContinue,
-  onCancel,
-}: Props) {
-  const insets = useSafeAreaInsets();
-  const def = platform ? getPlatform(platform) : undefined;
-  const d = platform ? DISCLOSURES[platform] : undefined;
-
-  // Nothing to show until a platform with known copy is selected.
-  if (!platform || !def || !d) return null;
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
-      <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={busy ? undefined : onCancel} />
-        <View style={[styles.card, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
-          <View style={styles.grabber} />
-          <PlatformConsentBody
-            platform={platform}
-            busy={busy}
-            error={error}
-            onContinue={onContinue}
-            onCancel={onCancel}
-          />
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 const styles = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    alignItems: 'center',
-  },
-  grabber: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#E4E4E7', marginBottom: 22 },
-
   iconRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 22 },
   iconTile: {
     width: 64,

@@ -679,15 +679,11 @@ const ConnectionsScreen = () => {
           setFlowPlatform(null);
           setRetryConnectionId(null);
         }}
-        onConnected={(connectionId) => {
+        onConnected={(connectionId, attentionCount) => {
           const platformName = flowPlatform || 'Platform';
           setFlowPlatform(null);
           setRetryConnectionId(null);
-          refresh?.();
-          // New store, new inbox work: refresh the shared summary too so the
-          // "needs you" counts move with the connect, not on the next focus.
-          void importStatus.refresh();
-          if (connectionId) {
+          if (connectionId && (attentionCount || 0) > 0) {
             navigation.navigate('ImportQuestionQueue', { connectionId, platformName });
           }
         }}

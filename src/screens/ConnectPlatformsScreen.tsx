@@ -49,7 +49,7 @@ const BLURB: Partial<Record<PlatformKey, string>> = {
 export default function ConnectPlatformsScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { currentOrg } = useOrg();
-  const { connections, progressByConnectionId, refresh } = usePlatformConnections();
+  const { connections, progressByConnectionId } = usePlatformConnections();
   const {
     computerOnline,
     presenceLoaded,
@@ -257,18 +257,13 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         platform={flowPlatform}
         orgId={currentOrg?.id}
         onCancel={() => setFlowPlatform(null)}
-        onConnected={(connectionId) => {
+        onConnected={(connectionId, attentionCount) => {
+          const platformName = flowPlatform ?? 'Platform';
           setFlowPlatform(null);
-          // The backend commits the connection row on the OAuth callback; nudge
-          // twice so the row flips to Connected without a manual reload. The
-          // shared inbox summary moves with it (imports start immediately).
-          refresh?.();
-          void importStatus.refresh();
-          setTimeout(() => refresh?.(), 2500);
-          if (connectionId) {
+          if (connectionId && (attentionCount || 0) > 0) {
             navigation.navigate('ImportQuestionQueue', {
               connectionId,
-              platformName: flowPlatform ?? 'Platform',
+              platformName,
             });
           }
         }}
