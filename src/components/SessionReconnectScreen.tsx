@@ -2,6 +2,7 @@ import React from 'react';
 import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { UPDATE_ID_FRAGMENT } from '../lib/updateIdentity';
+import { logSessionDiagnostic, SessionDiagnosticEvents } from '../lib/mobileFlowLogger';
 
 type SessionReconnectScreenProps = {
   /** Human-readable reason the live session couldn't be established. */
@@ -28,6 +29,7 @@ const SessionReconnectScreen: React.FC<SessionReconnectScreenProps> = ({
   // This screen renders before AppNavigator (the only other splash-hide site), so it
   // must drop the native splash itself or it is invisible under the splash forever.
   React.useEffect(() => {
+    logSessionDiagnostic(SessionDiagnosticEvents.RECONNECT_SHOWN);
     SplashScreen.hideAsync().catch(() => { });
   }, []);
   return (
