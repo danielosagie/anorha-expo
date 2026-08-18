@@ -61,7 +61,9 @@ const AppleSignInButton = ({
 }: Props) => {
   const clerk = useClerk();
   const { startAppleAuthenticationFlow } = useSignInWithApple();
-  const [available, setAvailable] = useState(false);
+  // Every real iOS 13+ device supports Apple sign-in; the only false case is a dev
+  // client built before the native module existed. Render always, gate at press.
+  const [available, setAvailable] = useState(true);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -72,7 +74,7 @@ const AppleSignInButton = ({
         if (!cancelled) setAvailable(ok);
       })
       .catch(() => {
-        /* leave the button hidden rather than render one that cannot work */
+        if (!cancelled) setAvailable(false);
       });
     return () => {
       cancelled = true;
@@ -81,6 +83,10 @@ const AppleSignInButton = ({
 
   const handlePress = useCallback(async () => {
     if (busy) return;
+    if (!available) {
+      onError('Apple sign-in is not available on this device.');
+      return;
+    }
     setBusy(true);
     try {
       let result;
@@ -113,7 +119,7 @@ const AppleSignInButton = ({
     }
   }, [busy, startAppleAuthenticationFlow, clerk, onError]);
 
-  if (Platform.OS !== 'ios' || !available) return null;
+  if (Platform.OS !== 'ios') return null;
 
   return (
     <TouchableOpacity
