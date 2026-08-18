@@ -13,6 +13,7 @@ import {
   settleWithin,
   tokenRetryDelayMs,
 } from '../lib/bootGate';
+import { SESSION_WATCHDOG_MAX_ATTEMPTS, SessionRecoveryPolicy } from '../lib/sessionRecovery';
 import { API_BASE_URL } from '../config/env';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
@@ -47,6 +48,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const [sessionMode, setSessionMode] = useState<SessionMode>('cached');
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [lastReadyAt, setLastReadyAt] = useState<number | null>(null);
+  const [validationInFlight, setValidationInFlight] = useState(false);
   
   const configuredRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -55,7 +57,17 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const appStateManager = useRef(AppStateManager.getInstance());
   const isSignedInRef = useRef(isSignedIn);
   const invalidSessionInFlightRef = useRef(false);
+  const readyRef = useRef(ready);
+  const bootstrapErrorRef = useRef(bootstrapError);
+  const sessionEpochRef = useRef(0);
+  const validationRunnerRef = useRef<((force?: boolean, retryCount?: number) => Promise<void>) | null>(null);
+  const validationInFlightRef = useRef<Promise<void> | null>(null);
+  const validationRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const sessionWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recoveryPolicyRef = useRef(new SessionRecoveryPolicy());
   isSignedInRef.current = isSignedIn;
+  readyRef.current = ready;
+  bootstrapErrorRef.current = bootstrapError;
 
   useEffect(() => {
     userRef.current = user;
@@ -87,9 +99,17 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const setCachedSessionState = useCallback(async (
     overrideMessage?: string,
     overrideLastReadyAt?: number | null,
+    expectedSessionEpoch?: number,
   ) => {
     const persistedState = await authPersistence.current.getAuthState();
     const cachedEntitlements = await loadCachedEntitlements();
+
+    if (
+      expectedSessionEpoch != null &&
+      (expectedSessionEpoch !== sessionEpochRef.current || !isSignedInRef.current)
+    ) {
+      return false;
+    }
 
     if (persistedState?.isAuthenticated && persistedState.userId) {
       const cachedUser = {
@@ -115,34 +135,44 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     return false;
   }, [loadCachedEntitlements]);
 
-  const clearSessionState = useCallback(async (options: { clearPersistedAuth?: boolean } = {}) => {
-    if (options.clearPersistedAuth) {
-      await authPersistence.current.clearAuthData();
+  const clearValidationRetryTimers = useCallback(() => {
+    validationRetryTimersRef.current.forEach(clearTimeout);
+    validationRetryTimersRef.current.clear();
+  }, []);
+
+  const clearSessionWatchdogTimer = useCallback(() => {
+    if (sessionWatchdogTimerRef.current) {
+      clearTimeout(sessionWatchdogTimerRef.current);
+      sessionWatchdogTimerRef.current = null;
     }
+  }, []);
+
+  const clearSessionState = useCallback(async (options: { clearPersistedAuth?: boolean } = {}) => {
+    const shouldClearPersistedAuth = options.clearPersistedAuth === true;
+    sessionEpochRef.current += 1;
+    clearValidationRetryTimers();
+    clearSessionWatchdogTimer();
 
     try {
       stopClerkSupabaseBridge();
     } catch {}
 
     configuredRef.current = false;
+    invalidSessionInFlightRef.current = false;
     setReady(false);
     setBridgeReady(false);
     setSessionMode('cached');
     setUser(null);
     setEntitlements(null);
     setUsingCachedSession(false);
-    setBootstrapError(options.clearPersistedAuth ? 'Unable to restore your session right now.' : null);
+    setBootstrapError(shouldClearPersistedAuth ? 'Unable to restore your session right now.' : null);
     setLastReadyAt(null);
-  }, []);
+    setInitializing(false);
 
-  const validationRunnerRef = useRef<((force?: boolean, retryCount?: number) => Promise<void>) | null>(null);
-  const validationInFlightRef = useRef<Promise<void> | null>(null);
-  const validationRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
-
-  const clearValidationRetryTimers = useCallback(() => {
-    validationRetryTimersRef.current.forEach(clearTimeout);
-    validationRetryTimersRef.current.clear();
-  }, []);
+    if (shouldClearPersistedAuth) {
+      await authPersistence.current.clearAuthData();
+    }
+  }, [clearSessionWatchdogTimer, clearValidationRetryTimers]);
 
   const scheduleValidationRetry = useCallback((force: boolean, retryCount: number, delayMs: number) => {
     const loopDecision = decideValidationLoop(isSignedInRef.current);
@@ -185,8 +215,17 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   // Enhanced token validation with 30-minute intervals and auto-retry. The public
   // wrapper below single-flights this function so init/foreground/interval/sign-in
   // triggers cannot configure or tear down the same bridge concurrently.
-  const performAuthValidation = useCallback(async (force: boolean = false, retryCount: number = 0): Promise<void> => {
-    if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+  const performAuthValidation = useCallback(async (
+    force: boolean,
+    retryCount: number,
+    expectedSessionEpoch: number,
+  ): Promise<void> => {
+    const isValidationCurrent = () =>
+      expectedSessionEpoch === sessionEpochRef.current &&
+      decideValidationLoop(isSignedInRef.current).shouldRun &&
+      !invalidSessionInFlightRef.current;
+
+    if (!isValidationCurrent()) {
       clearValidationRetryTimers();
       return;
     }
@@ -216,7 +255,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         return null;
       });
 
-      if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+      if (!isValidationCurrent()) {
         clearValidationRetryTimers();
         return;
       }
@@ -226,6 +265,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
           retryCount >= TOKEN_UNAVAILABLE_RETRY_LIMIT && !configuredRef.current
             ? await checkBackendReachability()
             : undefined;
+        if (!isValidationCurrent()) {
+          clearValidationRetryTimers();
+          return;
+        }
         const decision = decideBridgeFailure({
           kind: 'token_unavailable',
           retryCount,
@@ -275,7 +318,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
         const restoredFromCache = await setCachedSessionState(
           'Session token is unavailable. Continuing with cached account data while the session reconnects.',
+          undefined,
+          expectedSessionEpoch,
         );
+        if (!isValidationCurrent()) return;
         if (!restoredFromCache) {
           await clearSessionState({ clearPersistedAuth: true });
         }
@@ -287,6 +333,12 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         // Reuse the bounded token above. configureClerkSupabaseBridge also bounds the
         // exchange fetch, so every pre-ready await now has a settlement guarantee.
         await configureClerkSupabaseBridge({ getClerkToken, initialClerkToken: token });
+        if (!isValidationCurrent()) {
+          try {
+            stopClerkSupabaseBridge();
+          } catch {}
+          return;
+        }
         configuredRef.current = true;
       }
 
@@ -301,6 +353,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         log.debug('[EnhancedSessionProvider] Bridge is ready; skipping account revalidation within auth window');
         try {
           const { user: me } = await getUserLike();
+          if (!isValidationCurrent()) return;
           if (me?.id) {
             await authPersistence.current.saveAuthState({
               isAuthenticated: true,
@@ -308,20 +361,25 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
               email: me.email || userRef.current?.email || null,
               tokenExpiry: Date.now() + (30 * 60 * 1000),
             });
+            if (!isValidationCurrent()) return;
             setUser(me);
           }
         } catch (refreshErr) {
-          log.warn('[EnhancedSessionProvider] Could not refresh user from me (within auth window):', refreshErr);
+          if (isValidationCurrent()) {
+            log.warn('[EnhancedSessionProvider] Could not refresh user from me (within auth window):', refreshErr);
+          }
         }
         return;
       }
 
       log.debug('[EnhancedSessionProvider] Bridge configured. Loading user data...');
       const { user: me } = await getUserLike();
+      if (!isValidationCurrent()) return;
       const ents = await fetchUserEntitlements().catch(async (error) => {
         log.warn('[EnhancedSessionProvider] Falling back to cached entitlements:', error);
         return loadCachedEntitlements();
       });
+      if (!isValidationCurrent()) return;
 
       await authPersistence.current.saveAuthState({
         isAuthenticated: true,
@@ -329,11 +387,13 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         email: me?.email || userRef.current?.email || null,
         tokenExpiry: Date.now() + (30 * 60 * 1000),
       });
+      if (!isValidationCurrent()) return;
 
       const resolvedUser = me ?? userRef.current;
       setUser(resolvedUser);
       setEntitlements(ents);
       await persistEntitlements(ents);
+      if (!isValidationCurrent()) return;
 
       setReady(true);
       setBridgeReady(true);
@@ -344,6 +404,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       log.debug('[EnhancedSessionProvider] Session ready for user:', resolvedUser?.id);
     } catch (e) {
+      if (!isValidationCurrent()) {
+        clearValidationRetryTimers();
+        return;
+      }
       log.error('[EnhancedSessionProvider] Auth validation failed:', e);
       const decision = decideBridgeFailure({
         kind: 'configuration_failed',
@@ -381,7 +445,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
       const restoredFromCache = await setCachedSessionState(
         'Live services are unavailable right now. Continuing with cached account data.',
+        undefined,
+        expectedSessionEpoch,
       );
+      if (!isValidationCurrent()) return;
       if (!restoredFromCache) {
         await clearSessionState({ clearPersistedAuth: true });
       }
@@ -408,21 +475,29 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       return validationInFlightRef.current;
     }
 
-    const validation = performAuthValidation(force, retryCount);
+    const validation = performAuthValidation(force, retryCount, sessionEpochRef.current);
     validationInFlightRef.current = validation;
+    setValidationInFlight(true);
     try {
       await validation;
     } finally {
-      if (validationInFlightRef.current === validation) validationInFlightRef.current = null;
+      if (validationInFlightRef.current === validation) {
+        validationInFlightRef.current = null;
+        setValidationInFlight(false);
+      }
     }
   }, [clearValidationRetryTimers, performAuthValidation]);
   validationRunnerRef.current = validateAuthIfNeeded;
 
   // Initialize session from persisted state
   const initializeFromPersistedState = useCallback(async (): Promise<void> => {
+    const expectedSessionEpoch = sessionEpochRef.current;
+    const isInitializationCurrent = () =>
+      expectedSessionEpoch === sessionEpochRef.current &&
+      decideValidationLoop(isSignedInRef.current).shouldRun;
     log.debug('[EnhancedSessionProvider] Checking persisted auth state...');
 
-    if (!decideValidationLoop(isSignedInRef.current).shouldRun) {
+    if (!isInitializationCurrent()) {
       clearValidationRetryTimers();
       setInitializing(false);
       return;
@@ -430,7 +505,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
     // If the live bridge is already up, this is an effect RE-RUN (the init effect's
     // callback deps churned), not a fresh boot. Do NOT demote the session back to
-    // cached/bridgeReady=false — that, combined with the 30-min skip in
+    // cached/bridgeReady=false. That, combined with the 30-min skip in
     // validateAuthIfNeeded, left bridgeReady stuck false and bounced the app to the
     // reconnect screen over a healthy session. Re-affirm the live state and bail.
     if (configuredRef.current) {
@@ -442,6 +517,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
 
     const persistedState = await authPersistence.current.getAuthState();
     const cachedEntitlements = await loadCachedEntitlements();
+    if (!isInitializationCurrent()) return;
     
     if (persistedState?.isAuthenticated && persistedState.userId) {
       log.debug('[EnhancedSessionProvider] Found valid persisted state for user:', persistedState.userId);
@@ -475,7 +551,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       validateAuthIfNeeded(false).catch(log.error);
     } else {
       log.debug('[EnhancedSessionProvider] No valid persisted state found');
-      // Force validation for new sessions — but never block the boot forever. A stalled
+      // Force validation for new sessions, but never block the boot forever. A stalled
       // token exchange here used to strand the app on "Restoring your workspace". Cap the
       // wait at 12s and proceed; validateAuthIfNeeded keeps running in the background and
       // flips bridgeReady when it lands, and the app degrades to its reconnect/retry path.
@@ -485,6 +561,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       ]).catch(log.error);
     }
 
+    if (!isInitializationCurrent()) return;
     setInitializing(false);
   }, [clearValidationRetryTimers, loadCachedEntitlements, validateAuthIfNeeded]);
 
@@ -528,34 +605,116 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     };
   }, [clearValidationRetryTimers, initializeFromPersistedState, isSignedIn, validateAuthIfNeeded]);
 
-  // Re-bootstrap the session when Clerk transitions to signed-in. The init effect only
-  // runs on mount and AppStateManager only fires on app-foreground, so a WARM sign-in
-  // (sign out → sign back in WITHOUT killing the app, or first login from a cold-booted
-  // signed-out state) would otherwise leave the session in the cleared state that the
-  // sign-out path set (ready=false + bootstrapError="Unable to restore your session…"),
-  // stranding the app on the "Restoring your workspace" shell. We fire ONLY on a strict
-  // false→true transition (so a cold-boot signed-in session, already handled by the init
-  // effect, is not double-bootstrapped); the configuredRef guard + validateAuthIfNeeded's
-  // own guards make any redundant call a no-op.
-  const wasSignedInRef = useRef<boolean | undefined>(undefined);
+  // Every signed-out observation resets local provider state. Persisted auth is already
+  // removed by hardenedSignOut, so this reset does not wipe that cache a second time.
+  // A strict false-to-true transition always rebuilds the bridge, even if configuredRef
+  // was left stale-true by an older bundle or an interrupted teardown.
   useEffect(() => {
-    const was = wasSignedInRef.current;
-    wasSignedInRef.current = isSignedIn;
-    if (isSignedIn === false) {
-      clearValidationRetryTimers();
+    const transition = recoveryPolicyRef.current.observeSignIn(isSignedIn);
+    if (transition.action === 'reset') {
+      clearSessionState({ clearPersistedAuth: transition.clearPersistedAuth }).catch(log.error);
       return;
     }
-    if (was === false && isSignedIn === true && !configuredRef.current) {
+
+    if (transition.action !== 'bootstrap') return;
+
+    const bootstrapEpoch = sessionEpochRef.current + 1;
+    sessionEpochRef.current = bootstrapEpoch;
+    clearValidationRetryTimers();
+    clearSessionWatchdogTimer();
+    try {
+      stopClerkSupabaseBridge();
+    } catch {}
+    configuredRef.current = transition.configured;
+    invalidSessionInFlightRef.current = transition.invalidSessionInFlight;
+    setInitializing(transition.initializing);
+    setReady(transition.ready);
+    setBridgeReady(transition.bridgeReady);
+    setSessionMode(transition.sessionMode);
+    setUsingCachedSession(transition.usingCachedSession);
+    setUser(transition.user);
+    setEntitlements(transition.entitlements);
+    setBootstrapError(transition.bootstrapError);
+    setLastReadyAt(transition.lastReadyAt);
+
+    const bootstrap = async () => {
+      const staleValidation = validationInFlightRef.current;
+      if (staleValidation) await staleValidation.catch(() => undefined);
+      if (bootstrapEpoch !== sessionEpochRef.current || !isSignedInRef.current) return;
+      log.debug('[EnhancedSessionProvider] Signed-in transition; re-bootstrapping session');
+      try {
+        await validateAuthIfNeeded(transition.forceValidation);
+      } finally {
+        if (bootstrapEpoch === sessionEpochRef.current && isSignedInRef.current) {
+          setInitializing(false);
+        }
+      }
+    };
+    bootstrap().catch(log.error);
+  }, [clearSessionState, clearSessionWatchdogTimer, clearValidationRetryTimers, isSignedIn, validateAuthIfNeeded]);
+
+  // A stranded signed-in provider gets three fresh bridge rebuilds. The policy owns
+  // the 8s, 16s, and 32s budget. React owns one timer and clears it on every state
+  // change, unmount, or sign-out.
+  useEffect(() => {
+    clearSessionWatchdogTimer();
+    const decision = recoveryPolicyRef.current.observeWatchdog({
+      isSignedIn,
+      ready,
+      bootstrapError,
+      validationInFlight,
+    });
+    if (decision.action !== 'schedule') return;
+
+    sessionWatchdogTimerRef.current = setTimeout(() => {
+      sessionWatchdogTimerRef.current = null;
+      const currentDecision = recoveryPolicyRef.current.observeWatchdog({
+        isSignedIn: isSignedInRef.current,
+        ready: readyRef.current,
+        bootstrapError: bootstrapErrorRef.current,
+        validationInFlight: validationInFlightRef.current != null,
+      });
+      if (
+        currentDecision.action !== 'schedule' ||
+        currentDecision.attemptIndex !== decision.attemptIndex ||
+        !recoveryPolicyRef.current.recordWatchdogAttempt(decision.attemptIndex)
+      ) {
+        return;
+      }
+
+      clearValidationRetryTimers();
+      sessionEpochRef.current += 1;
+      try {
+        stopClerkSupabaseBridge();
+      } catch {}
+      configuredRef.current = false;
       invalidSessionInFlightRef.current = false;
-      log.debug('[EnhancedSessionProvider] Signed-in transition; (re)bootstrapping session');
-      setBootstrapError(null);
+      setBridgeReady(false);
+      log.warn(
+        `[EnhancedSessionProvider] Session watchdog bootstrap ${decision.attemptNumber}/${SESSION_WATCHDOG_MAX_ATTEMPTS}`,
+      );
       validateAuthIfNeeded(true).catch(log.error);
-    }
-  }, [clearValidationRetryTimers, isSignedIn, validateAuthIfNeeded]);
+    }, decision.delayMs);
+
+    return clearSessionWatchdogTimer;
+  }, [
+    bootstrapError,
+    clearSessionWatchdogTimer,
+    clearValidationRetryTimers,
+    isSignedIn,
+    ready,
+    validateAuthIfNeeded,
+    validationInFlight,
+  ]);
 
   const refresh = useCallback(async () => {
+    const expectedSessionEpoch = sessionEpochRef.current;
+    const isRefreshCurrent = () =>
+      expectedSessionEpoch === sessionEpochRef.current &&
+      decideValidationLoop(isSignedInRef.current).shouldRun &&
+      !invalidSessionInFlightRef.current;
     log.debug('[EnhancedSessionProvider] Manual refresh requested');
-    if (!decideValidationLoop(isSignedInRef.current).shouldRun || invalidSessionInFlightRef.current) {
+    if (!isRefreshCurrent()) {
       clearValidationRetryTimers();
       return;
     }
@@ -569,12 +728,15 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       configuredRef.current = false;
       setBridgeReady(false);
       await validateAuthIfNeeded(true);
+      if (!isRefreshCurrent()) return;
       if (!configuredRef.current) {
         throw new Error('Supabase bridge did not reconnect');
       }
 
       const { user: me } = await getUserLike();
+      if (!isRefreshCurrent()) return;
       const ents = await fetchUserEntitlements().catch(async () => loadCachedEntitlements());
+      if (!isRefreshCurrent()) return;
 
       // Update persisted state
       await authPersistence.current.saveAuthState({
@@ -582,10 +744,12 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         userId: me?.id || null,
         email: me?.email || null,
       });
+      if (!isRefreshCurrent()) return;
 
       setUser(me);
       setEntitlements(ents);
       await persistEntitlements(ents);
+      if (!isRefreshCurrent()) return;
       if (configuredRef.current) {
         setBridgeReady(true);
         setSessionMode('live');
@@ -594,10 +758,11 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setBootstrapError(null);
       setLastReadyAt(Date.now());
     } catch (error) {
+      if (!isRefreshCurrent()) return;
       log.error('[EnhancedSessionProvider] Refresh failed:', error);
       // TRANSIENT failure (getUserLike/entitlements timeout, token-rotation race,
       // network flake): do NOT demote a LIVE bridge. Demoting here bounced a healthy
-      // signed-in session to the reconnect screen and made "Try again" LOOP — each tap
+      // signed-in session to the reconnect screen and made "Try again" loop. Each tap
       // re-failed transiently and re-demoted. Genuine token loss is already handled by
       // validateAuthIfNeeded's null-token path (degrades after retries). Only surface
       // degraded if the bridge isn't actually up.

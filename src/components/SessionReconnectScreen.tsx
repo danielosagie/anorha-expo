@@ -1,6 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
+import { UPDATE_ID_FRAGMENT } from '../lib/updateIdentity';
 
 type SessionReconnectScreenProps = {
   /** Human-readable reason the live session couldn't be established. */
@@ -55,6 +56,7 @@ const SessionReconnectScreen: React.FC<SessionReconnectScreenProps> = ({
           <Text style={styles.signOutText}>Sign out</Text>
         </TouchableOpacity>
       </View>
+      <Text style={styles.updateId}>{UPDATE_ID_FRAGMENT}</Text>
     </SafeAreaView>
   );
 };
@@ -77,6 +79,7 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   signOutButton: { marginTop: 18, paddingVertical: 10, paddingHorizontal: 16 },
   signOutText: { color: '#5B5B61', fontSize: 15, fontWeight: '500' },
+  updateId: { position: 'absolute', bottom: 8, alignSelf: 'center', color: '#A0A0A6', fontSize: 10 },
 });
 
 export default SessionReconnectScreen;
