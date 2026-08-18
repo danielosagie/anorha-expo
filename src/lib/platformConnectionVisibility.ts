@@ -38,9 +38,10 @@ export interface ConnectionVisibilityFields {
 export const NOT_CONNECTED_STATUSES = new Set([
   'inactive',
   'disconnected',
-  'review',
   'error',
   'revoked',
+  'expired',
+  'failed',
   'disabled',
   'needs_reauth',
 ]);
@@ -55,11 +56,11 @@ export const DISCONNECTED_CONNECTION_STATUSES = new Set([
 // These rows still belong in the Connections list because the user can repair
 // them, but they are not healthy OAuth markers and cannot be used for work.
 export const UNHEALTHY_CONNECTION_STATUSES = new Set([
-  'review',
   'error',
-  'needs-attention',
   'needs_reauth',
   'revoked',
+  'expired',
+  'failed',
 ]);
 
 const normalize = (value?: string | null) => (value || '').toLowerCase().trim();
@@ -74,7 +75,7 @@ export function isVisiblePlatformConnection(connection: ConnectionVisibilityFiel
   return connection.IsEnabled !== false
     && !DISCONNECTED_CONNECTION_STATUSES.has(status)
     && !UNHEALTHY_CONNECTION_STATUSES.has(status)
-    && connection.SyncState !== 'needs-attention'
+    && connection.SyncState !== 'error'
     && connection.NeedsReauth !== true
     && connection.RecommendedAction !== 'reconnect';
 }
@@ -98,7 +99,7 @@ export function isDisconnectedPlatformConnection(connection: ConnectionVisibilit
 /** A current connection health failure that must lead to reconnect. */
 export function isUnhealthyPlatformConnection(connection: ConnectionVisibilityFields): boolean {
   return connection.NeedsReauth === true
-    || connection.SyncState === 'needs-attention'
+    || connection.SyncState === 'error'
     || connection.RecommendedAction === 'reconnect'
     || UNHEALTHY_CONNECTION_STATUSES.has(normalize(connection.Status));
 }

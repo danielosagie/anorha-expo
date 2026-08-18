@@ -89,16 +89,19 @@ export function derivePlatformConnectStatus(
     ? (liveConnections || []).filter((connection) => resolvePlatformKey(connection.PlatformType) === key)
     : [];
   const importing = matchingConnections.some((connection) => {
-    if (!isListedPlatformConnection(connection) || isUnhealthyPlatformConnection(connection)) return false;
     const presentation = options.presentationByConnectionId?.get(connection.Id);
+    if (!isListedPlatformConnection(connection)) return false;
+    if (presentation?.requiresReconnect ?? isUnhealthyPlatformConnection(connection)) return false;
     return presentation?.importInProgress || isActiveConnectionImportStatus(connection.Status);
   });
   const oauthConnected =
     !!key &&
     matchingConnections.some((c) => {
-      if (!isListedPlatformConnection(c) || isUnhealthyPlatformConnection(c)) return false;
+      const presentation = options.presentationByConnectionId?.get(c.Id);
+      if (!isListedPlatformConnection(c)) return false;
+      if (presentation?.requiresReconnect ?? isUnhealthyPlatformConnection(c)) return false;
       if (
-        options.presentationByConnectionId?.get(c.Id)?.importInProgress
+        presentation?.importInProgress
         || isActiveConnectionImportStatus(c.Status)
       ) return true;
       const status = (c.Status || '').toLowerCase();

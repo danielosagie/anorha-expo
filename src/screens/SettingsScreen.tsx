@@ -66,7 +66,7 @@ const SettingsScreen = () => {
     presenceUnavailable,
   } = useFacebookJobStatus();
   const computerStatusUnavailable = degraded || presenceUnavailable;
-  // Import inbox aggregate — feeds the passive "needs you" badge on Integrations.
+  // Import inbox aggregate feeds each integration row's truthful status.
   const importStatus = useImportStatus();
   const screenEnteredAtRef = useRef(Date.now());
   const firstConnectionsPaintLoggedRef = useRef(false);
@@ -87,15 +87,6 @@ const SettingsScreen = () => {
     [connections],
   );
   const platformPreview = activeConnections.slice(0, 4);
-  const activeConnectionIds = useMemo(
-    () => new Set(activeConnections.map((connection) => connection.Id)),
-    [activeConnections],
-  );
-  const integrationAttentionCount = importStatus.lanes.matches.byConnection.reduce(
-    (total, connection) => total + (activeConnectionIds.has(connection.connectionId) ? connection.count : 0),
-    0,
-  );
-
   useEffect(() => {
     if (firstConnectionsPaintLoggedRef.current || platformPreview.length === 0) return;
     firstConnectionsPaintLoggedRef.current = true;
@@ -207,11 +198,6 @@ const SettingsScreen = () => {
           onPress={() => navigation.navigate('Connections')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
-          {integrationAttentionCount > 0 && (
-            <View style={styles.needsBadge}>
-              <Text style={styles.needsBadgeText}>{integrationAttentionCount}</Text>
-            </View>
-          )}
           <View style={styles.sectionChevron}>
             <ChevronRight size={16} color="#71717A" />
           </View>
@@ -319,8 +305,6 @@ const styles = StyleSheet.create({
 
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginLeft: 4 },
   sectionTitle: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold' },
-  needsBadge: { minWidth: 22, height: 22, borderRadius: 11, backgroundColor: '#93C822', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7 },
-  needsBadgeText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 12 },
   sectionChevron: {
     width: 22, height: 22, borderRadius: 11, backgroundColor: '#ECEBE6',
     alignItems: 'center', justifyContent: 'center',
