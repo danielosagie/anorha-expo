@@ -88,6 +88,14 @@ import {
   subscribeCatalogStale,
 } from '../lib/catalogPatches';
 import { mergeInventoryLevelsByNewest } from '../lib/inventorySync';
+import {
+  DEFAULT_SHELF_STATUS_FILTER,
+  decideShelfLoad,
+  executeShelfFallback,
+  shelfItemMatchesStatus,
+  type ShelfLoadSnapshot,
+} from '../lib/shelfLoadPolicy';
+import { useProductCount } from '../context/AppDataContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createLogger } from '../utils/logger';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
@@ -166,6 +174,12 @@ const InventoryOrdersScreen = observer(() => {
   const route = useRoute<any>();
   const legendState: LegendStateObservables | null = useLegendState();
   const { currentOrg } = useOrg();
+  const {
+    productCount,
+    loading: productCountLoading,
+    error: productCountError,
+    updatedAt: productCountUpdatedAt,
+  } = useProductCount();
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const bottomSafePadding = TAB_BAR_HEIGHT + TAB_BAR_BOTTOM_OFFSET + insets.bottom + 16;
@@ -183,9 +197,9 @@ const InventoryOrdersScreen = observer(() => {
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date');
-  // Default to live/active items so drafts (which often shadow an already-published item and
-  // look like duplicates) stay out of the way until the seller explicitly filters for them.
-  const [filterStatus, setFilterStatus] = useState('active');
+  // The shelf is the full catalog by default. API-created items are unpublished, so
+  // defaulting to active made a populated fresh organization look empty.
+  const [filterStatus, setFilterStatus] = useState(DEFAULT_SHELF_STATUS_FILTER);
   const [selectedPlatformType, setSelectedPlatformType] = useState<string | null>(null);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(null);
@@ -645,6 +659,9 @@ const InventoryOrdersScreen = observer(() => {
   // Fallback state for when Legend observable is empty
   const [directFetchVariants, setDirectFetchVariants] = useState<Record<string, ProductVariantData>>({});
   const [directFetchLevels, setDirectFetchLevels] = useState<Record<string, InventoryLevel>>({});
+  const [fallbackAttempted, setFallbackAttempted] = useState(false);
+  const fallbackAttemptedRef = useRef(false);
+  const fallbackGenerationRef = useRef(0);
   const [sharedLinkQuantities, setSharedLinkQuantities] = useState<Record<string, SharedProductLinkInfo>>({});
   const [partnerOrigins, setPartnerOrigins] = useState<PartnerInventoryOrigin[]>([]);
   // PoolId -> inventoryMode from /api/pools/org/:id. Replicated ('shared'/
@@ -655,6 +672,24 @@ const InventoryOrdersScreen = observer(() => {
   const productVariantSyncPhase = legendState?.syncProgress$?.get()?.ProductVariants.phase ?? 'idle';
   const productVariantSyncPhaseRef = useRef(productVariantSyncPhase);
   productVariantSyncPhaseRef.current = productVariantSyncPhase;
+  const orgHasCatalogData =
+    !productCountLoading &&
+    !productCountError &&
+    productCountUpdatedAt != null &&
+    productCount > 0;
+
+  const resetFallbackCycle = useCallback(() => {
+    fallbackGenerationRef.current += 1;
+    fallbackAttemptedRef.current = false;
+    setFallbackAttempted(false);
+    setShelfLoadError(false);
+  }, []);
+
+  useEffect(() => {
+    resetFallbackCycle();
+    setDirectFetchVariants({});
+    setDirectFetchLevels({});
+  }, [currentOrg?.id, legendState?.userId, resetFallbackCycle]);
   const loadPartnerOrigins = useCallback(async () => {
     if (!currentOrg?.id) {
       setPartnerOrigins([]);
@@ -803,7 +838,6 @@ const InventoryOrdersScreen = observer(() => {
       Object.keys(legendState.productVariants$?.get() || {}),
       label,
     );
-    setShelfLoadError(false);
   }, [fetchSharedLinks, legendState]);
 
   // Resolve partner link metadata from the already-hydrated mirror immediately,
@@ -820,76 +854,81 @@ const InventoryOrdersScreen = observer(() => {
     );
   }, [currentOrg?.id, fetchSharedLinks, legendState, productVariantSyncPhase]);
 
+  const legendVariantCountForFallback = Object.keys(legendState?.productVariants$?.get() || {}).length;
+  const fallbackSnapshot = useMemo<ShelfLoadSnapshot>(() => ({
+    legendCount: legendVariantCountForFallback,
+    directCount: Object.keys(directFetchVariants).length,
+    syncPhase: productVariantSyncPhase,
+    orgHasDataSignal: orgHasCatalogData,
+    fallbackAttempted,
+    fallbackFailed: shelfLoadError,
+  }), [
+    directFetchVariants,
+    fallbackAttempted,
+    legendVariantCountForFallback,
+    orgHasCatalogData,
+    productVariantSyncPhase,
+    shelfLoadError,
+  ]);
+  const shelfLoadAction = decideShelfLoad(fallbackSnapshot);
+
   useEffect(() => {
-    let cancelled = false;
-    const directFetchProducts = async () => {
-      if (supabase && legendState?.userId) {
-        try {
-          // Keep the defensive direct path progressive too. Page one merges
-          // immediately; older pages fill without delaying first paint.
-          const data = await fetchAllProductVariants(legendState.userId, (page, progress) => {
-            if (cancelled) return;
-            setDirectFetchVariants((previous) => {
-              const next = progress.offset === 0 ? {} : { ...previous };
-              page.forEach((variant) => { next[variant.Id] = variant; });
-              return next;
-            });
-            if (page.length > 0) setShelfLoadError(false);
-          });
-          if (cancelled) return;
+    if (!legendState?.userId || shelfLoadAction !== 'fetch-direct' || fallbackAttemptedRef.current) return;
 
-          if (!data) {
-            log.error('[InventoryScreen - Direct Fetch] Error fetching products: empty response');
-          } else {
-            log.debug('[InventoryScreen - Direct Fetch] Successfully fetched products:', data?.length);
-            // Store in fallback state, keyed by Id
-            if (data && data.length > 0) {
-              const variantMap: Record<string, ProductVariantData> = {};
-              const variantIds: string[] = [];
-              data.forEach((v: any) => {
-                variantMap[v.Id] = v;
-                variantIds.push(v.Id);
-              });
-              setDirectFetchVariants(variantMap);
-              setShelfLoadError(false);
+    const generation = fallbackGenerationRef.current;
+    const isCurrentCycle = () => generation === fallbackGenerationRef.current;
+    fallbackAttemptedRef.current = true;
 
-              await fetchSharedLinks(variantIds, 'fallback');
-
-              // Also fetch InventoryLevels for these variants
-              if (variantIds.length > 0) {
-                const levelsData = await fetchByIdChunks(
-                  variantIds,
-                  (chunk) => supabase
-                    .from('InventoryLevels')
-                    // Production-verified schema: InventoryLevels stores quantity data, not variant price.
-                    .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
-                    .in('ProductVariantId', chunk),
-                  'inventory levels',
-                );
-                log.debug('[InventoryScreen - Direct Fetch] Fetched inventory levels:', levelsData.length);
-                const levelsMap: Record<string, InventoryLevel> = {};
-                levelsData.forEach((l: any) => {
-                  levelsMap[l.Id] = l;
-                });
-                setDirectFetchLevels(levelsMap);
-              }
-            }
-          }
-        } catch (e) {
-          if (cancelled) return;
-          log.error('[InventoryScreen - Direct Fetch] Exception during direct fetch:', e);
-          setShelfLoadError(true);
-        }
+    void executeShelfFallback(fallbackSnapshot, () => (
+      fetchAllProductVariants(legendState.userId!, (page, progress) => {
+        if (!isCurrentCycle()) return;
+        setDirectFetchVariants((previous) => {
+          const next = progress.offset === 0 ? {} : { ...previous };
+          page.forEach((variant) => { next[variant.Id] = variant; });
+          return next;
+        });
+      })
+    )).then(async (result) => {
+      if (!isCurrentCycle()) return;
+      setFallbackAttempted(true);
+      if (result.shelfLoadError || !result.rows) {
+        const message = result.error instanceof Error ? result.error.message : String(result.error || 'unknown error');
+        console.error(`[shelf] direct fetch failed: ${message}`);
+        setShelfLoadError(true);
+        return;
       }
-    };
 
-    // This path is now a true fallback instead of a second unconditional full
-    // catalog read racing Legend on every mount.
-    if (legendState?.userId && productVariantSyncPhase === 'error') {
-      directFetchProducts();
-    }
-    return () => { cancelled = true; };
-  }, [fetchAllProductVariants, fetchByIdChunks, fetchSharedLinks, legendState?.userId, productVariantSyncPhase]);
+      const variantMap: Record<string, ProductVariantData> = {};
+      const variantIds: string[] = [];
+      result.rows.forEach((variant: any) => {
+        variantMap[variant.Id] = variant;
+        variantIds.push(variant.Id);
+      });
+      setDirectFetchVariants(variantMap);
+      setShelfLoadError(false);
+      console.log(`[shelf] legend empty, served by direct fetch (${result.rows.length} items)`);
+
+      await fetchSharedLinks(variantIds, 'fallback');
+      if (!isCurrentCycle() || variantIds.length === 0) return;
+
+      const levelsData = await fetchByIdChunks(
+        variantIds,
+        (chunk) => supabase
+          .from('InventoryLevels')
+          .select('Id, ProductVariantId, PlatformConnectionId, PlatformLocationId, PoolId, OrgId, Quantity, UpdatedAt')
+          .in('ProductVariantId', chunk),
+        'inventory levels',
+      );
+      if (!isCurrentCycle()) return;
+      const levelsMap: Record<string, InventoryLevel> = {};
+      levelsData.forEach((level: any) => { levelsMap[level.Id] = level; });
+      setDirectFetchLevels(levelsMap);
+    });
+  }, [fallbackSnapshot, fetchAllProductVariants, fetchByIdChunks, fetchSharedLinks, legendState?.userId, shelfLoadAction]);
+
+  useEffect(() => () => {
+    fallbackGenerationRef.current += 1;
+  }, []);
 
   // Track if this is the first render to avoid double-fetching on initial mount
   const isFirstRender = useRef(true);
@@ -934,6 +973,7 @@ const InventoryOrdersScreen = observer(() => {
   // Pull-to-refresh uses the same bounded mirrors and exposes progress in-list.
   const [shelfRefreshing, setShelfRefreshing] = useState(false);
   const handleShelfRefresh = useCallback(async () => {
+    resetFallbackCycle();
     setShelfRefreshing(true);
     try {
       await Promise.all([loadPartnerOrigins(), syncShelfMirrors('pull-to-refresh')]);
@@ -942,7 +982,7 @@ const InventoryOrdersScreen = observer(() => {
     } finally {
       setShelfRefreshing(false);
     }
-  }, [loadPartnerOrigins, syncShelfMirrors]);
+  }, [loadPartnerOrigins, resetFallbackCycle, syncShelfMirrors]);
 
   // Stale marks refresh the mirrors immediately while the local patch overlay
   // continues to provide same-frame truth for edits and socket events.
@@ -966,7 +1006,6 @@ const InventoryOrdersScreen = observer(() => {
   const legendInventoryLevels = (legendObservables?.inventoryLevels$?.get() || {}) as Record<string, InventoryLevel>;
   const activeProductImages = (legendObservables?.productImages$?.get() || {}) as Record<string, ProductImage>;
   const activeMarketplaceListings = (legendObservables?.marketplaceListings$?.get() || {}) as Record<string, MarketplaceListing>;
-  const legendSyncProgress = legendObservables?.syncProgress$?.get();
 
   // Re-render + recompute signal for catalog patches (saves in ProductDetail,
   // socket events). Version bumps on every patch write/drain.
@@ -995,7 +1034,7 @@ const InventoryOrdersScreen = observer(() => {
   const initialShelfLoading =
     Object.keys(activeProductVariants).length === 0 &&
     !shelfLoadError &&
-    (!legendSyncProgress || legendSyncProgress.ProductVariants.phase === 'idle' || legendSyncProgress.ProductVariants.phase === 'initial');
+    (shelfLoadAction === 'wait' || shelfLoadAction === 'fetch-direct');
 
   const inventoryLevelsWithShared = useMemo(() => {
     const levels: Record<string, InventoryLevel> = { ...activeInventoryLevels };
@@ -1085,6 +1124,16 @@ const InventoryOrdersScreen = observer(() => {
       sharedLinkCount: Object.keys(sharedLinkQuantities).length,
     });
   }, [activeProductVariants, legendProductVariants, directFetchVariants, activeInventoryLevels, legendInventoryLevels, directFetchLevels, activeProductImages, activePlatformMappings, sharedLinkQuantities]);
+
+  const legendShelfReceiptRef = useRef('');
+  useEffect(() => {
+    const count = Object.keys(legendProductVariants).length;
+    if (count === 0) return;
+    const receipt = `legend:${count}`;
+    if (legendShelfReceiptRef.current === receipt) return;
+    legendShelfReceiptRef.current = receipt;
+    console.log(`[shelf] served by legend-sync (${count} items)`);
+  }, [legendProductVariants]);
 
   const enrichedProductVariants = useMemo((): EnrichedProductVariant[] => {
     const variants = activeProductVariants;
@@ -1302,7 +1351,7 @@ const InventoryOrdersScreen = observer(() => {
         const isLive = v.OnShopify === true || v.OnSquare === true || v.OnClover === true
           || v.OnAmazon === true || v.OnEbay === true || v.OnFacebook === true;
         const isPartnerShared = !!partnerOriginForVariant(variantId);
-        return filterStatus === 'active' ? (isLive || isPartnerShared) : (!isLive && !isPartnerShared);
+        return shelfItemMatchesStatus(filterStatus, isLive, isPartnerShared);
       });
     }
 
