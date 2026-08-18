@@ -52,13 +52,13 @@ import { MessageActions, type NarrationState } from '../features/liquidationConv
 import { useMessageNarration } from '../features/liquidationConversation/useMessageNarration';
 import { NarrationPlayerHost } from '../context/NarrationContext';
 import { BRAND_PRIMARY } from '../design/tokens';
-import { sproutLightTheme, type SproutTheme } from '../design/sproutTheme';
+import { sproutDarkTheme, sproutLightTheme, type SproutTheme } from '../design/sproutTheme';
 import {
   greetingForHour,
-  homeHour,
   isNightHour,
   reportTitleForHour,
 } from '../lib/sproutHomeTime';
+import { readSunThemeState, scheduleNextSunBoundary } from '../lib/sunSchedule';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -66,7 +66,7 @@ const CONVEX_TEMPLATE =
   'mobile';
 
 const BRAND = BRAND_PRIMARY;
-const THEME = sproutLightTheme;
+const HOME_CLOCK = (): Date => new Date();
 const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
 
 // 375-390pt screens leave 339-354pt after the hero's 18pt side padding.
@@ -342,7 +342,12 @@ const SproutHomeScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
-  const [currentHomeHour, setCurrentHomeHour] = useState(() => homeHour());
+  const [sunThemeState, setSunThemeState] = useState(() =>
+    readSunThemeState({ clock: HOME_CLOCK }),
+  );
+  const isDark = sunThemeState.isDark;
+  const THEME = isDark ? sproutDarkTheme : sproutLightTheme;
+  const currentHomeHour = sunThemeState.localHour;
   const { getToken } = useAuth();
   const { user } = useUser();
   const {
@@ -352,18 +357,36 @@ const SproutHomeScreen: React.FC = () => {
     loadingMessageId,
   } = useMessageNarration();
 
-  // The home surface remains light until the app has a complete theme system.
+  // Shared navigator surfaces follow the same sun-driven home theme.
   useLayoutEffect(() => {
-    navigation.setOptions({ sproutDark: false });
-  }, [navigation]);
+    navigation.setOptions({ sproutDark: isDark });
+  }, [isDark, navigation]);
 
   useEffect(() => {
     if (!isFocused) return;
 
-    const refreshHomeHour = () => setCurrentHomeHour(homeHour());
-    refreshHomeHour();
-    const interval = setInterval(refreshHomeHour, 60_000);
-    return () => clearInterval(interval);
+    let active = true;
+    let cancelBoundary: () => void = () => undefined;
+    const refreshHomeTime = () => {
+      if (active) setSunThemeState(readSunThemeState({ clock: HOME_CLOCK }));
+    };
+    const scheduleBoundary = (): void => {
+      cancelBoundary();
+      cancelBoundary = scheduleNextSunBoundary(() => {
+        if (!active) return;
+        refreshHomeTime();
+        scheduleBoundary();
+      }, { clock: HOME_CLOCK });
+    };
+
+    refreshHomeTime();
+    scheduleBoundary();
+    const interval = setInterval(refreshHomeTime, 60_000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      cancelBoundary();
+    };
   }, [isFocused]);
 
   // Name shown in the greeting. Fall through Clerk first/full name → username →
@@ -1183,13 +1206,15 @@ const SproutHomeScreen: React.FC = () => {
   return (
     <View style={[styles.screen, { backgroundColor: THEME.colors.background }]}>
       <FocusAwareStatusBar
-        barStyle="dark-content"
+        barStyle={isDark ? 'light-content' : 'dark-content'}
         backgroundColor={THEME.hero.background}
       />
 
       {/* ── Static header: edge-to-edge, pinned at top, rounded bottom ── */}
       <View style={[styles.header, { backgroundColor: THEME.hero.background, paddingTop: insets.top + 2 }]}>
-        <LinearGradient colors={[THEME.hero.gradientEnd, THEME.hero.gradientEnd]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        {!isDark && (
+          <LinearGradient colors={[THEME.hero.gradientEnd, THEME.hero.gradientEnd]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+        )}
         {/* Top bar: greeting + New on ONE line (the date-range pill was removed —
             it didn't do anything in this state). Content sits higher as a result. */}
         <View style={styles.topBarRow}>
@@ -1642,8 +1667,8 @@ const SproutHomeScreen: React.FC = () => {
                           sub={step.sub}
                           state={state}
                           onPress={step.onPress}
-                          night={false}
-                          whiteActive
+                          night={isDark}
+                          whiteActive={!isDark}
                         />
                       </Animated.View>
                     );
@@ -1655,7 +1680,7 @@ const SproutHomeScreen: React.FC = () => {
                 styles.emptyCard,
                 { backgroundColor: THEME.colors.card, borderColor: THEME.colors.border },
               ]}>
-                <View style={styles.emptyIconWrap}>
+                <View style={[styles.emptyIconWrap, isDark && { backgroundColor: 'rgba(147,200,34,0.16)' }]}>
                   <AnorhaFace size={26} />
                 </View>
                 <Text style={[styles.emptyTitle, { color: THEME.colors.text }]}>
@@ -1711,7 +1736,7 @@ const SproutHomeScreen: React.FC = () => {
       <NewClearoutSheet
         visible={createOpen}
         creating={creating}
-        dark={false}
+        dark={isDark}
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreate}
       />
@@ -1772,16 +1797,18 @@ const SproutHomeScreen: React.FC = () => {
               style={[
                 styles.selectAction,
                 styles.selectActionDone,
+                isDark && { backgroundColor: THEME.colors.primary },
                 selectedIds.size === 0 && styles.selectActionDisabled,
               ]}
               onPress={closeSelected}
               disabled={selectedIds.size === 0}
               activeOpacity={0.8}
             >
-              <Icon name="check" size={16} color="#93C822" />
+              <Icon name="check" size={16} color={isDark ? THEME.colors.onPrimary : '#93C822'} />
               <Text style={[
                 styles.selectActionText,
                 styles.selectActionDoneText,
+                isDark && { color: THEME.colors.onPrimary },
               ]}>Close clearout</Text>
             </TouchableOpacity>
           </View>
@@ -1801,6 +1828,7 @@ const CampaignCard: React.FC<{
   selected?: boolean;
   theme: SproutTheme;
 }> = React.memo(({ campaign, onPress, onLongPress, selectMode, selected, theme }) => {
+  const isDark = theme.mode === 'dark';
   const sold = campaign.stats?.soldCount || 0;
   const total = campaign.stats?.totalCount || 0;
   const negotiating = campaign.stats?.negotiating || 0;
@@ -1835,7 +1863,7 @@ const CampaignCard: React.FC<{
     return `next check ${Math.round(hrs / 24)}d`;
   }, [campaign.nextWakeAt]);
 
-  // Completed cards keep the light card skin at half opacity so they read as receipts.
+  // Completed cards keep the light skin in light mode so they read as receipts.
   const isCompleted = campaign.status === 'completed';
 
   const statusPill =
@@ -1848,12 +1876,12 @@ const CampaignCard: React.FC<{
   // First campaign item's image (backend list enrichment); green leaf fallback.
   const thumbUrl = campaign.imageUrl;
 
-  const titleColor = isCompleted ? '#09090B' : '#000000';
+  const titleColor = isDark ? theme.colors.text : isCompleted ? '#09090B' : '#000000';
   const subColor = theme.colors.textSecondary;
   // Days badge: the neutral filter-tab chip (slate text on light grey), not a
   // loud green pill — the day counter is metadata, not a status.
   const daysBadgeBg = theme.controls.idleBackground;
-  // Pending pill uses the theme's light amber treatment.
+  // Pending pill uses the active theme treatment.
   const pendingBg = theme.campaign.pendingBackground;
   // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
   // surface; the ticks are a separate gray strip to its right (no track behind).
@@ -1867,7 +1895,7 @@ const CampaignCard: React.FC<{
       style={[
         styles.card,
         { backgroundColor: theme.colors.card, borderColor: theme.colors.border },
-        isCompleted ? styles.cardCompleted : null,
+        isCompleted && !isDark ? styles.cardCompleted : null,
         isCompleted && { opacity: 0.62 },
         selected && { borderWidth: 2, borderColor: theme.campaign.selectedBorder },
       ]}
