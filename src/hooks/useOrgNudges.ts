@@ -3,6 +3,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSupabaseJwt, getSupabaseJwtState, isSupabaseBridgeWarmingUp } from '../../lib/supabase';
 import { SessionContext } from '../context/SessionContext';
 import { API_BASE_URL } from '../config/env';
+import {
+  isErrorShapedInsight,
+  resolveInsightSnapshot,
+  sanitizePersistedInsightSnapshot,
+  shouldPersistInsightSnapshot,
+} from '../lib/orgInsightCache';
 import { createLogger } from '../utils/logger';
 const log = createLogger('useOrgNudges');
 
@@ -83,6 +89,7 @@ export interface DashboardInsight {
   // present, the home card opens the report sheet directly — no chat handoff.
   report?: import('../features/liquidationConversation/types').ReportDocument;
   reportId?: string;
+  isErrorFallback?: boolean;
   dataQuality?: {
     queriesRun?: number;
     searchesRun?: number;
@@ -107,6 +114,8 @@ export interface NudgesResponse {
   recommendationId?: string;
   generatedAt?: string;
   nextRefreshAt?: string;
+  isErrorFallback?: boolean;
+  isStale?: boolean;
 }
 
 interface UseOrgNudgesReturn {
@@ -309,6 +318,7 @@ const normalizeSingleInsight = (raw: any): DashboardInsight | null => {
           }
         : undefined,
     reportId: coerceText(raw?.reportId) || undefined,
+    isErrorFallback: raw?.isErrorFallback === true || undefined,
   };
 };
 
@@ -339,42 +349,17 @@ const snapshotFromResponse = (
 });
 
 const normalizePersistedSnapshot = (raw: unknown): PersistedInsightSnapshot | null => {
-  if (!raw || typeof raw !== 'object') return null;
-  const record = raw as Partial<PersistedInsightSnapshot>;
+  const safeRecord = sanitizePersistedInsightSnapshot(raw);
+  if (!safeRecord) return null;
+  const record = safeRecord as unknown as Partial<PersistedInsightSnapshot>;
   const insight = normalizeInsight(record.insight);
-  if (!insight) return null;
+  if (!insight || isErrorShapedInsight(insight)) return null;
 
   return snapshotFromResponse(
     insight,
     normalizeIsoDate(record.generatedAt),
     normalizeIsoDate(record.nextRefreshAt),
   );
-};
-
-const resolveSnapshot = (
-  previous: PersistedInsightSnapshot | null,
-  incoming: PersistedInsightSnapshot,
-): PersistedInsightSnapshot => {
-  if (!previous) return incoming;
-
-  const previousTime = previous.generatedAt ? Date.parse(previous.generatedAt) : NaN;
-  const incomingTime = incoming.generatedAt ? Date.parse(incoming.generatedAt) : NaN;
-  if (Number.isFinite(previousTime) && Number.isFinite(incomingTime) && incomingTime < previousTime) {
-    return previous;
-  }
-
-  const identityChanged =
-    (incoming.recommendationId !== null && incoming.recommendationId !== previous.recommendationId) ||
-    incoming.contentHash !== previous.contentHash ||
-    (incoming.generatedAt !== null && incoming.generatedAt !== previous.generatedAt);
-
-  if (identityChanged) return incoming;
-
-  return {
-    ...previous,
-    generatedAt: incoming.generatedAt ?? previous.generatedAt,
-    nextRefreshAt: incoming.nextRefreshAt ?? previous.nextRefreshAt,
-  };
 };
 
 /**
@@ -441,10 +426,14 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
 
     let cancelled = false;
     AsyncStorage.getItem(persistenceKey)
-      .then((stored) => {
+      .then(async (stored) => {
         if (cancelled || activeStorageKeyRef.current !== persistenceKey || !stored) return;
         const persisted = normalizePersistedSnapshot(JSON.parse(stored));
-        if (persisted) applySnapshot(persisted);
+        if (!persisted) {
+          await AsyncStorage.removeItem(persistenceKey);
+          return;
+        }
+        if (!cancelled && activeStorageKeyRef.current === persistenceKey) applySnapshot(persisted);
       })
       .catch((storageError) => {
         log.warn('[useOrgNudges] Failed to hydrate the last good insight:', storageError);
@@ -519,6 +508,10 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         insight?: unknown;
         lastInsight?: unknown;
       };
+      if (isErrorShapedInsight(data) || isErrorShapedInsight(data?.insight)) {
+        log.warn('[useOrgNudges] Ignoring error fallback insight');
+        return;
+      }
       const carriedQuestions = normalizeSuggestedQuestions(data?.suggestedQuestions);
       const normalizedInsightBase = normalizeInsight(data?.insight);
       const normalizedLastInsightBase = normalizeInsight(data?.lastInsight);
@@ -555,7 +548,11 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         return;
       }
 
-      const rawInsight = data?.insight as { generatedAt?: unknown; nextRefreshAt?: unknown } | undefined;
+      const rawInsight = data?.insight as {
+        generatedAt?: unknown;
+        nextRefreshAt?: unknown;
+        isStale?: unknown;
+      } | undefined;
       const responseInsightId = coerceText(data?.id || data?.recommendationId);
       const identifiedInsight = responseInsightId && !normalizedInsight.id
         ? { ...normalizedInsight, id: responseInsightId }
@@ -565,9 +562,15 @@ export function useOrgNudges(orgId: string | undefined): UseOrgNudgesReturn {
         normalizeIsoDate(data?.generatedAt ?? rawInsight?.generatedAt),
         normalizeIsoDate(data?.nextRefreshAt ?? rawInsight?.nextRefreshAt),
       );
-      const resolved = resolveSnapshot(snapshotRef.current, incoming);
+      const incomingIsStale = data?.isStale === true || rawInsight?.isStale === true;
+      const resolved = resolveInsightSnapshot(snapshotRef.current, incoming, incomingIsStale);
+      if (!shouldPersistInsightSnapshot(resolved)) return;
       applySnapshot(resolved);
-      setLastInsight(normalizedLastInsight ?? identifiedInsight);
+      setLastInsight(
+        normalizedLastInsight && !isErrorShapedInsight(normalizedLastInsight)
+          ? normalizedLastInsight
+          : resolved.insight,
+      );
       setQuiet(Boolean(data?.quiet));
       setNothingNewSince(normalizeIsoDate(data?.nothingNewSince));
       const resolvedTimestamp = coerceText(data?.timestamp, identifiedInsight.timestamp || new Date().toISOString());

@@ -11,7 +11,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  useColorScheme,
   View,
 } from 'react-native';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
@@ -36,7 +35,6 @@ import { NewClearoutSheet, NewClearoutInput } from '../components/liquidation/Ne
 import { DateRangeSheet, DateRange, todayRange } from '../components/liquidation/DateRangeSheet';
 import { useOrg } from '../context/OrgContext';
 import { isSetupUnknown } from '../lib/orgResolution';
-import { useIsNight } from '../hooks/useIsNight';
 import { trackInsightAction, useOrgNudges } from '../hooks/useOrgNudges';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
@@ -54,11 +52,13 @@ import { MessageActions, type NarrationState } from '../features/liquidationConv
 import { useMessageNarration } from '../features/liquidationConversation/useMessageNarration';
 import { NarrationPlayerHost } from '../context/NarrationContext';
 import { BRAND_PRIMARY } from '../design/tokens';
+import { sproutDarkTheme, sproutLightTheme, type SproutTheme } from '../design/sproutTheme';
 import {
-  sproutDarkTheme,
-  sproutLightTheme,
-  type SproutTheme,
-} from '../design/sproutTheme';
+  greetingForHour,
+  isNightHour,
+  reportTitleForHour,
+} from '../lib/sproutHomeTime';
+import { readSunThemeState, scheduleNextSunBoundary } from '../lib/sunSchedule';
 
 const CONVEX_TEMPLATE =
   process.env.EXPO_PUBLIC_CLERK_CONVEX_JWT_TEMPLATE ||
@@ -66,6 +66,7 @@ const CONVEX_TEMPLATE =
   'mobile';
 
 const BRAND = BRAND_PRIMARY;
+const HOME_CLOCK = (): Date => new Date();
 const RECOMMENDATION_REFRESH_MS = 12 * 60 * 60 * 1000;
 
 // 375-390pt screens leave 339-354pt after the hero's 18pt side padding.
@@ -85,13 +86,6 @@ type Range = (typeof RANGES)[number];
 const FILTERS = ['All', 'Running', 'Completed'] as const;
 type Filter = (typeof FILTERS)[number];
 
-
-const greetingForHour = (hour: number): string => {
-  if (hour >= 22 || hour < 5) return 'Late night';
-  if (hour < 12) return 'Good morning';
-  if (hour < 17) return 'Good afternoon';
-  return 'Good evening';
-};
 
 const quietSincePhrase = (iso: string | null, now = new Date()): string | null => {
   const timestamp = iso ? Date.parse(iso) : NaN;
@@ -245,8 +239,7 @@ const ReportPreviewCard = ({
   subtitle?: string;
   chip: string;
   onPress: () => void;
-  // Themed so the card + its chip keep a visible outline in dark mode (the
-  // hardcoded black border vanished on the dark hero).
+  // Themed so the card and chip share the hero outline color.
   borderColor?: string;
   subdued?: boolean;
 }) => (
@@ -349,9 +342,12 @@ const SproutHomeScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const [sunThemeState, setSunThemeState] = useState(() =>
+    readSunThemeState({ clock: HOME_CLOCK }),
+  );
+  const isDark = sunThemeState.isDark;
   const THEME = isDark ? sproutDarkTheme : sproutLightTheme;
+  const currentHomeHour = sunThemeState.localHour;
   const { getToken } = useAuth();
   const { user } = useUser();
   const {
@@ -361,12 +357,37 @@ const SproutHomeScreen: React.FC = () => {
     loadingMessageId,
   } = useMessageNarration();
 
-  // The tab bar and quick-chat host are navigator siblings, so publish this
-  // screen-scoped appearance as an explicit option instead of letting either
-  // shared component read device appearance on its own.
+  // Shared navigator surfaces follow the same sun-driven home theme.
   useLayoutEffect(() => {
     navigation.setOptions({ sproutDark: isDark });
   }, [isDark, navigation]);
+
+  useEffect(() => {
+    if (!isFocused) return;
+
+    let active = true;
+    let cancelBoundary: () => void = () => undefined;
+    const refreshHomeTime = () => {
+      if (active) setSunThemeState(readSunThemeState({ clock: HOME_CLOCK }));
+    };
+    const scheduleBoundary = (): void => {
+      cancelBoundary();
+      cancelBoundary = scheduleNextSunBoundary(() => {
+        if (!active) return;
+        refreshHomeTime();
+        scheduleBoundary();
+      }, { clock: HOME_CLOCK });
+    };
+
+    refreshHomeTime();
+    scheduleBoundary();
+    const interval = setInterval(refreshHomeTime, 60_000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      cancelBoundary();
+    };
+  }, [isFocused]);
 
   // Name shown in the greeting. Fall through Clerk first/full name → username →
   // the email handle before the generic 'there', so accounts that never set a
@@ -378,7 +399,7 @@ const SproutHomeScreen: React.FC = () => {
     user?.username ||
     user?.primaryEmailAddress?.emailAddress?.split('@')[0] ||
     'there';
-  const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
+  const greeting = greetingForHour(currentHomeHour);
 
   const getTokenRef = useRef(getToken);
   useEffect(() => {
@@ -649,7 +670,7 @@ const SproutHomeScreen: React.FC = () => {
     return hours > 0 && hours <= 12 ? hours : null;
   }, [latestDigest?.nextReportAt]);
 
-  const isNight = useIsNight();
+  const isNight = isNightHour(currentHomeHour);
   // ── The hero "message" from Sprout — whatever's in the green box: the scheduled
   //    digest, else the current insight, else the honest "watching" line. It types in
   //    ONLY when genuinely new (first open, or a fresh message); on remount / navigation
@@ -950,7 +971,10 @@ const SproutHomeScreen: React.FC = () => {
   const chartWidth = Dimensions.get('window').width;
 
   // Sprout's proactive message (morning/evening recap or midday check-in).
-  const sproutMsg = useMemo(() => sproutMessageForHour(new Date().getHours(), firstName), [firstName]);
+  const sproutMsg = useMemo(
+    () => sproutMessageForHour(currentHomeHour, firstName),
+    [currentHomeHour, firstName],
+  );
 
   // Hero stats + events: demo values when previewing, real otherwise.
   const heroSold = DEMO ? 9 : soldToday;
@@ -1029,12 +1053,7 @@ const SproutHomeScreen: React.FC = () => {
           ? 'paused'
           : 'idle';
 
-  const reportTitle = useMemo(() => {
-    const h = new Date().getHours();
-    if (h < 12) return 'Morning Report';
-    if (h < 17) return 'Midday Report';
-    return 'Evening Report';
-  }, []);
+  const reportTitle = reportTitleForHour(currentHomeHour);
   const insightReportTitle = useMemo(() => {
     const source = sanitizeDisplayText(insight?.report?.title || insightHeadline || 'Report');
     return compactDisplayText(source, { maxChars: 42, maxSentences: 1 }) || 'Report';
@@ -1844,8 +1863,7 @@ const CampaignCard: React.FC<{
     return `next check ${Math.round(hrs / 24)}d`;
   }, [campaign.nextWakeAt]);
 
-  // Completed cards keep the LIGHT card skin at half opacity in both modes —
-  // per the mockup they read as receipts, not live surfaces.
+  // Completed cards keep the light skin in light mode so they read as receipts.
   const isCompleted = campaign.status === 'completed';
 
   const statusPill =
@@ -1863,7 +1881,7 @@ const CampaignCard: React.FC<{
   // Days badge: the neutral filter-tab chip (slate text on light grey), not a
   // loud green pill — the day counter is metadata, not a status.
   const daysBadgeBg = theme.controls.idleBackground;
-  // Pending pill: amber in light mode, muted olive in dark mode.
+  // Pending pill uses the active theme treatment.
   const pendingBg = theme.campaign.pendingBackground;
   // Green pill frame + fill (Figma 4607:2327/2328). The pill floats on the card
   // surface; the ticks are a separate gray strip to its right (no track behind).

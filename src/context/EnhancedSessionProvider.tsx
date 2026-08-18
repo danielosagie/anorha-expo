@@ -18,6 +18,11 @@ import { API_BASE_URL } from '../config/env';
 import { fetchUserEntitlements, UserEntitlements } from '../utils/entitlements';
 import { AuthPersistence } from '../utils/AuthPersistence';
 import { AppStateManager } from '../utils/AppStateManager';
+import {
+  logSessionDiagnostic,
+  sessionErrorProperties,
+  SessionDiagnosticEvents,
+} from '../lib/mobileFlowLogger';
 import { createLogger } from '../utils/logger';
 const log = createLogger('EnhancedSessionProvider');
 
@@ -65,6 +70,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   const validationRetryTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const sessionWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recoveryPolicyRef = useRef(new SessionRecoveryPolicy());
+  const sessionIssueRef = useRef(false);
   isSignedInRef.current = isSignedIn;
   readyRef.current = ready;
   bootstrapErrorRef.current = bootstrapError;
@@ -72,6 +78,12 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+
+  const emitSessionRecovered = useCallback(() => {
+    if (!sessionIssueRef.current) return;
+    sessionIssueRef.current = false;
+    logSessionDiagnostic(SessionDiagnosticEvents.RECOVERED);
+  }, []);
 
   const loadCachedEntitlements = useCallback(async (): Promise<UserEntitlements | null> => {
     try {
@@ -240,6 +252,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         if (configuredRef.current) {
           setBridgeReady(true);
           setReady(true);
+          emitSessionRecovered();
         }
         return;
       }
@@ -261,6 +274,10 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       }
 
       if (!token) {
+        sessionIssueRef.current = true;
+        logSessionDiagnostic(SessionDiagnosticEvents.TOKEN_UNAVAILABLE, {
+          attemptCount: retryCount + 1,
+        });
         const backendReachability =
           retryCount >= TOKEN_UNAVAILABLE_RETRY_LIMIT && !configuredRef.current
             ? await checkBackendReachability()
@@ -283,6 +300,9 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         }
 
         if (decision === 'invalid_session') {
+          logSessionDiagnostic(SessionDiagnosticEvents.INVALID_ESCAPE, {
+            classifierVerdict: decision,
+          });
           clearValidationRetryTimers();
           invalidSessionInFlightRef.current = true;
           setBridgeReady(false);
@@ -307,6 +327,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
           log.warn('[EnhancedSessionProvider] Clerk token retries exhausted; preserving the existing live bridge');
           setBridgeReady(true);
           setReady(true);
+          emitSessionRecovered();
           return;
         }
 
@@ -332,7 +353,16 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         log.debug('[EnhancedSessionProvider] Configuring Supabase bridge...');
         // Reuse the bounded token above. configureClerkSupabaseBridge also bounds the
         // exchange fetch, so every pre-ready await now has a settlement guarantee.
-        await configureClerkSupabaseBridge({ getClerkToken, initialClerkToken: token });
+        try {
+          await configureClerkSupabaseBridge({ getClerkToken, initialClerkToken: token });
+        } catch (error) {
+          sessionIssueRef.current = true;
+          logSessionDiagnostic(
+            SessionDiagnosticEvents.EXCHANGE_FAILED,
+            sessionErrorProperties(error),
+          );
+          throw error;
+        }
         if (!isValidationCurrent()) {
           try {
             stopClerkSupabaseBridge();
@@ -347,6 +377,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       setReady(true);
       setSessionMode('live');
       setUsingCachedSession(false);
+      emitSessionRecovered();
 
       if (!shouldRevalidateAccount) {
         setBootstrapError(null);
@@ -432,6 +463,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         log.warn('[EnhancedSessionProvider] Account refresh failed after bridge setup; preserving live bridge');
         setBridgeReady(true);
         setReady(true);
+        emitSessionRecovered();
         return;
       }
 
@@ -457,6 +489,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     clearSessionState,
     clearValidationRetryTimers,
     checkBackendReachability,
+    emitSessionRecovered,
     getClerkToken,
     loadCachedEntitlements,
     onInvalidSession,
@@ -693,7 +726,23 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       log.warn(
         `[EnhancedSessionProvider] Session watchdog bootstrap ${decision.attemptNumber}/${SESSION_WATCHDOG_MAX_ATTEMPTS}`,
       );
-      validateAuthIfNeeded(true).catch(log.error);
+      sessionIssueRef.current = true;
+      void validateAuthIfNeeded(true)
+        .then(() => {
+          const recovered = configuredRef.current;
+          logSessionDiagnostic(SessionDiagnosticEvents.WATCHDOG, {
+            attemptIndex: decision.attemptIndex,
+            outcome: recovered ? 'recovered' : 'unavailable',
+          });
+          if (recovered) emitSessionRecovered();
+        })
+        .catch((error) => {
+          log.error(error);
+          logSessionDiagnostic(SessionDiagnosticEvents.WATCHDOG, {
+            attemptIndex: decision.attemptIndex,
+            outcome: 'failed',
+          });
+        });
     }, decision.delayMs);
 
     return clearSessionWatchdogTimer;
@@ -701,6 +750,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
     bootstrapError,
     clearSessionWatchdogTimer,
     clearValidationRetryTimers,
+    emitSessionRecovered,
     isSignedIn,
     ready,
     validateAuthIfNeeded,
@@ -754,6 +804,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
         setBridgeReady(true);
         setSessionMode('live');
         setUsingCachedSession(false);
+        emitSessionRecovered();
       }
       setBootstrapError(null);
       setLastReadyAt(Date.now());
@@ -773,7 +824,7 @@ export const EnhancedSessionProvider: React.FC<EnhancedSessionProviderProps> = (
       }
       setBootstrapError('Refresh failed. Cached account data is still available.');
     }
-  }, [clearValidationRetryTimers, loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
+  }, [clearValidationRetryTimers, emitSessionRecovered, loadCachedEntitlements, persistEntitlements, validateAuthIfNeeded]);
 
   const value: SessionContextType = useMemo(() => ({ 
     ready: ready && !initializing, 
