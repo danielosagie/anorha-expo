@@ -13,7 +13,7 @@ import {
   Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, Rect } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
 import { useSSO, useAuth, useClerk } from '@clerk/expo';
@@ -72,11 +72,17 @@ const GoogleMark = () => (
   </Svg>
 );
 
-// The board draws Face ID as a device, not a face.
+// Founder override of the board's device glyph: Face ID reads as a face scan.
 const FaceIdMark = () => (
   <Svg width={20} height={20} viewBox="0 0 24 24">
-    <Rect x={5} y={2} width={14} height={20} rx={2} fill="none" stroke="#2A2A2A" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-    <Path d="M12 18h.01" fill="none" stroke="#2A2A2A" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+    <Path
+      d="M3 7V5a2 2 0 0 1 2-2h2 M17 3h2a2 2 0 0 1 2 2v2 M21 17v2a2 2 0 0 1-2 2h-2 M7 21H5a2 2 0 0 1-2-2v-2 M8 14s1.5 2 4 2 4-2 4-2 M9 9h.01 M15 9h.01"
+      fill="none"
+      stroke="#2A2A2A"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
   </Svg>
 );
 
