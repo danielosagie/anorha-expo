@@ -104,7 +104,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
         const compatible = await LocalAuthentication.hasHardwareAsync();
         const enrolled = await LocalAuthentication.isEnrolledAsync();
         const savedEmail = await SecureStore.getItemAsync('biometric_email');
-        setIsBiometricSupported(compatible && enrolled);
+        // Board 6-0 shows Face ID whenever the hardware exists; enrollment is
+        // checked at press so the button can explain instead of vanishing.
+        setIsBiometricSupported(compatible);
         setHasBiometricCreds(compatible && enrolled && !!savedEmail);
       } catch {
         setIsBiometricSupported(false);
@@ -191,6 +193,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ navigation, route, sessionNotic
   }, [clerk]);
 
   const handleBiometricLogin = useCallback(async () => {
+    // The button renders on hardware support alone, so an unenrolled device gets
+    // an explanation here rather than a Face ID prompt that cannot succeed.
+    try {
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!enrolled) {
+        showErrorModal('Set up Face ID', 'Turn on Face ID in Settings, then log in once with your password.', 'info');
+        return;
+      }
+    } catch {
+      showErrorModal('Set up Face ID', 'Turn on Face ID in Settings, then log in once with your password.', 'info');
+      return;
+    }
     // If this device already holds an active Clerk session, just activate it — a fresh
     // signIn.create() would be rejected with `session_exists` and leave us stuck on Auth.
     if (isSignedIn) {
