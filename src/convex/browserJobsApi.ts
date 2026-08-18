@@ -12,13 +12,13 @@
  *   - browserJobs:getForUser({ userId }) → projected jobs
  *       { _id, type, platform, operation, status, paused, pausedReason,
  *         queuePosition, nextEligibleAt, productId, variantId, listingId,
- *         listingUrl, attemptCount, maxAttempts, nextRetryAt, deadLetteredAt,
- *         updatedAt }
+ *         listingUrl, attemptCount, maxAttempts, nextRetryAt, errorCode,
+ *         deadLetteredAt, updatedAt }
  *
  * Both are PUBLIC + arg-scoped (no auth token), same posture as
- * browserJobs:getRetryable. If the backend ever renames a function, the call
- * fails silently (empty data) — keep the names HERE in one place so a rename is
- * a one-line edit and callers stay decoupled.
+ * browserJobs:getRetryable. If the backend ever renames a function, the hook
+ * exposes an unavailable state and retries. Keep the names HERE in one place
+ * so a rename is a one-line edit and callers stay decoupled.
  */
 import { anyApi } from 'convex/server';
 
@@ -51,6 +51,7 @@ export interface BrowserJobDoc {
   status: string;
   paused?: boolean;
   pausedReason?: string;
+  errorCode?: string;
   queuePosition?: number;
   nextEligibleAt?: number;
   productId?: string | null;

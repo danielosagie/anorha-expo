@@ -54,6 +54,7 @@ import { captureOrPickImageAssets } from '../utils/imageCapture';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import LinkComputerSheet from '../components/LinkComputerSheet';
 import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { capture, AnalyticsEvents } from '../lib/analytics';
@@ -286,6 +287,9 @@ const ProductDetailScreen = observer(
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
     const fbDispatch = useFacebookJobStatus();
+    const fbDispatchRef = useRef(fbDispatch);
+    fbDispatchRef.current = fbDispatch;
+    const [linkComputerOpen, setLinkComputerOpen] = useState(false);
     const insets = useSafeAreaInsets();
     const { showToast } = useToast();
     // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
@@ -2698,10 +2702,10 @@ const ProductDetailScreen = observer(
         // loadPlatformData() below refreshes the row, which shows the live dispatch
         // status (useFacebookJobStatus).
 
-        // The backend returns results[] with the true per-platform outcome. Old
-        // backends omit it, so when results[] is absent we fall back to the previous
-        // "response.ok means success" behavior.
-        const platformResults: any[] = Array.isArray(responseData?.results) ? responseData.results : [];
+        // The backend returns results[] with the true per-platform outcome. A
+        // compatibility response without a matching result is not proof of success.
+        const hasResults = Array.isArray(responseData?.results);
+        const platformResults: any[] = hasResults ? responseData.results : [];
         const thisResult = platformResults.find(
           (r: any) => (r?.platform || '').toString().toLowerCase() === platformKey.toLowerCase(),
         );
@@ -2738,6 +2742,12 @@ const ProductDetailScreen = observer(
           return;
         }
 
+        if (thisResult?.status === 'pending') {
+          showToast({ title: 'Posting soon', tone: 'neutral' });
+          await loadPlatformData();
+          return;
+        }
+
         // When results[] reports this platform failed, surface the error and DO NOT
         // show the success banner — the listing never went live.
         if (thisResult && thisResult.success === false) {
@@ -2745,6 +2755,35 @@ const ProductDetailScreen = observer(
             'Publish Failed',
             resultErrorText || `Could not publish to ${platformKey}. Please try again.`,
           );
+          await loadPlatformData();
+          return;
+        }
+
+        if (!thisResult) {
+          const browserJobId = typeof responseData?.browserJobId === 'string'
+            ? responseData.browserJobId.trim()
+            : '';
+          let observedDispatch = platformKey.toLowerCase() === 'facebook'
+            ? fbDispatchRef.current.statusForVariant(detailedItem.Id)
+            : null;
+
+          // A realtime row can land just after the HTTP response. Wait briefly
+          // for that concrete receipt before claiming the post is queued.
+          if (!browserJobId && platformKey.toLowerCase() === 'facebook' && !observedDispatch) {
+            for (let attempt = 0; attempt < 5 && !observedDispatch; attempt += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 400));
+              observedDispatch = fbDispatchRef.current.statusForVariant(detailedItem.Id);
+            }
+          }
+
+          if (browserJobId || observedDispatch) {
+            showToast({
+              title: observedDispatch?.label || 'Posting soon',
+              tone: observedDispatch?.tone === 'problem' ? 'warn' : 'neutral',
+            });
+          } else {
+            showToast({ title: 'Not confirmed yet', tone: 'neutral' });
+          }
           await loadPlatformData();
           return;
         }
@@ -4858,9 +4897,17 @@ const ProductDetailScreen = observer(
                     // Facebook posts through the user's computer (async). When a
                     // dispatch job is in flight / waiting / paused / failed, show its
                     // realtime status instead of the sync status \u2014 same dot+label idiom.
-                    const fbStatus = rawType.toLowerCase() === 'facebook'
+                    const fbJobStatus = rawType.toLowerCase() === 'facebook'
                       ? fbDispatch.statusForVariant(mapping.ProductVariantId)
                       : null;
+                    const waitingForFacebookDispatch =
+                      rawType.toLowerCase() === 'facebook' && !hasRealPlatformProductId(mapping.PlatformProductId);
+                    const fbStatus = fbJobStatus || (waitingForFacebookDispatch && (fbDispatch.degraded || fbDispatch.jobsUnavailable)
+                      ? { label: "Can't check now", color: '#71717A', dotColor: '#9CA3AF', tone: 'quiet' as const }
+                      : waitingForFacebookDispatch && !fbDispatch.jobsLoaded
+                        ? { label: 'Checking', color: '#71717A', dotColor: '#9CA3AF', tone: 'quiet' as const }
+                        : null);
+                    const canRetryDispatch = rawType.toLowerCase() === 'facebook' && !!fbStatus?.canRetry;
                     const dotColor = fbStatus ? fbStatus.dotColor : statusColor;
                     const textColor = fbStatus ? fbStatus.color : statusColor;
                     const rowStatusText = fbStatus ? fbStatus.label : statusText;
@@ -4869,10 +4916,16 @@ const ProductDetailScreen = observer(
                         <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
                         <View style={styles.alInfo}>
                           <Text style={styles.alName} numberOfLines={1}>{platformName}</Text>
-                          <View style={styles.alStatusLine}>
+                          <TouchableOpacity
+                            style={styles.alStatusLine}
+                            activeOpacity={0.7}
+                            disabled={!fbStatus?.opensComputerSheet}
+                            onPress={() => setLinkComputerOpen(true)}
+                          >
                             <View style={[styles.alDot, { backgroundColor: dotColor }]} />
                             <Text style={[styles.alStatusText, { color: textColor }]} numberOfLines={1}>{rowStatusText}</Text>
-                          </View>
+                            {fbStatus?.opensComputerSheet ? <ChevronRight size={15} color="#9CA3AF" /> : null}
+                          </TouchableOpacity>
                           {(() => {
                             const ov = overridesByConnection[mapping.PlatformConnectionId];
                             if (!ov) return null;
@@ -4897,9 +4950,22 @@ const ProductDetailScreen = observer(
                             );
                           })()}
                         </View>
-                        <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
-                          <Text style={styles.alActionOutlineText}>Delist</Text>
-                        </TouchableOpacity>
+                        <View style={styles.alActions}>
+                          {canRetryDispatch ? (
+                            <TouchableOpacity
+                              style={styles.alActionOutline}
+                              disabled={isPublishing !== null}
+                              onPress={() => handlePublishToPlatform(rawType.toLowerCase())}
+                            >
+                              {isPublishing === rawType.toLowerCase()
+                                ? <ActivityIndicator size="small" color="#6B7280" />
+                                : <Text style={styles.alActionOutlineText}>Retry</Text>}
+                            </TouchableOpacity>
+                          ) : null}
+                          <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
+                            <Text style={styles.alActionOutlineText}>Delist</Text>
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     );
                   })}
@@ -5274,6 +5340,11 @@ const ProductDetailScreen = observer(
         {/* Manual "Save changes" bar intentionally removed — autosave + the header
             chip (Saved / Saving… / Unsaved / Save failed · Retry) is the single,
             calm save model. Retry on failure lives in that header chip. */}
+        <LinkComputerSheet
+          visible={linkComputerOpen}
+          orgId={currentOrg?.id}
+          onClose={() => setLinkComputerOpen(false)}
+        />
         {/* Barcode Scanner Modal */}
         {
           scannerMounted && (
@@ -5430,6 +5501,7 @@ const styles = StyleSheet.create({
   alStatusLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   alDot: { width: 7, height: 7, borderRadius: 4 },
   alStatusText: { fontSize: 12.5, fontFamily: CHAT_FONT.semibold, fontWeight: '600', flexShrink: 1 },
+  alActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // Quiet per-platform override indicator — muted, no pill, matches the calm status line.
   overrideLine: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
   overrideText: { fontSize: 11.5, fontFamily: CHAT_FONT.regular, color: '#9CA3AF', flexShrink: 1 },

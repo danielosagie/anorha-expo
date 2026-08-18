@@ -6,7 +6,7 @@
  * that computer to THIS account. COPY = outcome, not plumbing (no-internal-leak):
  * we say "your computer", never the tray/queue/runtime.
  */
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -41,6 +41,16 @@ export default function LinkComputerScanSheet({
   const [phase, setPhase] = useState<Phase>('scan');
   const [msg, setMsg] = useState('');
   const handled = useRef(false);
+  const wasVisible = useRef(false);
+
+  useEffect(() => {
+    if (visible && !wasVisible.current) {
+      handled.current = false;
+      setMsg('');
+      setPhase('scan');
+    }
+    wasVisible.current = visible;
+  }, [visible]);
 
   const onScan = useCallback(
     async (result: { data?: string; rawValue?: string }) => {

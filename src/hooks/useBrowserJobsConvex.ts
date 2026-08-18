@@ -11,7 +11,8 @@
  * SessionContext.user.id).
  *
  * DEGRADE, NEVER CRASH: if the route 401s / 503s / returns an empty URL, we
- * return { client: null, userId: null }. Callers branch to the OAuth-only path.
+ * expose a degraded state with a null client. Callers must not interpret that
+ * as proof that the seller's computer is offline.
  *
  * The client is a process-wide singleton keyed by URL (mirrors
  * src/providers/ConvexProvider.tsx) so we never spin up more than one socket.
@@ -67,6 +68,10 @@ function getClientFor(url: string | null): ConvexReactClient | null {
 export interface BrowserJobsConvexValue {
   client: ConvexReactClient | null;
   userId: string | null;
+  /** True only while the first usable bootstrap is still resolving. */
+  loading: boolean;
+  /** True when bootstrap resolved without a usable client. */
+  degraded: boolean;
 }
 
 /**
@@ -80,6 +85,9 @@ export function useBrowserJobsConvex(
   fallbackUserId?: string | null,
 ): BrowserJobsConvexValue {
   const [bootstrap, setBootstrap] = useState<BrowserJobsBootstrap | null>(memoBootstrap);
+  const [bootstrapState, setBootstrapState] = useState<'loading' | 'ready' | 'degraded'>(
+    memoBootstrap ? 'ready' : 'loading',
+  );
 
   // Clear the cross-user module cache on sign-out so the next user can never
   // inherit the previous user's bootstrap (it is user-scoped data).
@@ -88,6 +96,7 @@ export function useBrowserJobsConvex(
     memoBootstrap = null;
     AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
     setBootstrap(null);
+    setBootstrapState('loading');
   }, [signedIn]);
 
   useEffect(() => {
@@ -95,10 +104,14 @@ export function useBrowserJobsConvex(
     let cancelled = false;
 
     const resolve = async () => {
+      let available = memoBootstrap;
+      setBootstrapState(available ? 'ready' : 'loading');
       // Drop a module memo that belongs to a DIFFERENT user before warming.
       if (memoBootstrap && fallbackUserId && memoBootstrap.userId !== fallbackUserId) {
         memoBootstrap = null;
+        available = null;
         setBootstrap(null);
+        setBootstrapState('loading');
       }
       // 1. Warm from AsyncStorage so a cold/offline start has a last-known URL —
       //    but only accept it when it belongs to the current user.
@@ -109,7 +122,9 @@ export function useBrowserJobsConvex(
             const parsed = JSON.parse(cached) as BrowserJobsBootstrap;
             if (parsed?.convexURL && (!fallbackUserId || parsed.userId === fallbackUserId)) {
               memoBootstrap = parsed;
+              available = parsed;
               setBootstrap(parsed);
+              setBootstrapState('ready');
             } else if (parsed && fallbackUserId && parsed.userId !== fallbackUserId) {
               AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
             }
@@ -128,13 +143,18 @@ export function useBrowserJobsConvex(
         if (convexURL && userId) {
           const next: BrowserJobsBootstrap = { convexURL, userId };
           memoBootstrap = next;
+          available = next;
           setBootstrap(next);
+          setBootstrapState('ready');
           AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+        } else if (!available) {
+          setBootstrapState('degraded');
         }
       } catch (e) {
         // 401 (session not ready) / 503 (CONVEX_URL unset) → degrade. Keep any
         // cached bootstrap; callers fall back to OAuth-only state if null.
         log.debug('browserJobs bootstrap unavailable — degrading to OAuth-only', e);
+        if (!available && !cancelled) setBootstrapState('degraded');
       }
     };
 
@@ -155,9 +175,15 @@ export function useBrowserJobsConvex(
       : fallbackUserId ?? null;
   const url = signedIn && resolvedUserId ? (bootstrap?.convexURL ?? null) : null;
   const client = useMemo(() => getClientFor(url), [url]);
+  const loading = signedIn && !client && bootstrapState === 'loading';
+  const degraded = signedIn && !client && !loading;
 
   return useMemo(
-    () => (signedIn ? { client, userId: resolvedUserId } : { client: null, userId: null }),
-    [signedIn, client, resolvedUserId],
+    () => (
+      signedIn
+        ? { client, userId: resolvedUserId, loading, degraded }
+        : { client: null, userId: null, loading: false, degraded: false }
+    ),
+    [signedIn, client, resolvedUserId, loading, degraded],
   );
 }

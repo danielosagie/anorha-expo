@@ -8,7 +8,7 @@ import { ChevronRight, Plus, Layers, Handshake, RefreshCw, Trash2, Monitor } fro
 import { usePlatformConnections, type PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { useFacebookJobStatus, type ConnectedComputer } from '../hooks/useFacebookJobStatus';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -135,9 +135,17 @@ const ConnectionsScreen = () => {
   }, [navigation]);
 
   // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
-  const { computers } = useFacebookJobStatus();
+  const {
+    computers,
+    degraded,
+    presenceLoaded,
+    presenceUnavailable,
+    refreshPresence,
+  } = useFacebookJobStatus();
+  const computerStatusUnavailable = degraded || presenceUnavailable;
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+  const [unlinkingWorkerId, setUnlinkingWorkerId] = useState<string | null>(null);
 
   // The global picker hands every platform to the one shared connect flow. This
   // keeps store-specific steps, such as Shopify's picker, on the same path.
@@ -168,6 +176,36 @@ const ConnectionsScreen = () => {
     setRetryConnectionId(connection.Id);
     setFlowPlatform(connection.PlatformType);
   }, []);
+
+  const unlinkComputer = useCallback((computer: ConnectedComputer) => {
+    if (!computer.workerId) {
+      Alert.alert("Can't unlink", 'This computer is missing its link details. Link it again, then try.');
+      return;
+    }
+    const workerId = computer.workerId;
+    Alert.alert(
+      'Unlink computer?',
+      'It will stop posting from this computer.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: async () => {
+            setUnlinkingWorkerId(workerId);
+            try {
+              await api.post(`/api/devices/${encodeURIComponent(workerId)}/revoke`);
+              refreshPresence();
+            } catch {
+              Alert.alert("Couldn't unlink", 'Please try again.');
+            } finally {
+              setUnlinkingWorkerId(null);
+            }
+          },
+        },
+      ],
+    );
+  }, [refreshPresence]);
 
   // Hold the latest handler in a ref so the focus effect below can stay stable.
   const startConnectRef = useRef(handleStartConnect);
@@ -493,10 +531,22 @@ const ConnectionsScreen = () => {
         <Text style={[styles.section, { marginTop: 26 }]}>Computers</Text>
         <View style={styles.card}>
           {computers.length === 0 ? (
-            <Text style={styles.empty}>No computers linked yet.</Text>
+            <Text style={styles.empty}>
+              {computerStatusUnavailable
+                ? "Can't check now"
+                : presenceLoaded
+                  ? 'No computers linked yet.'
+                  : 'Checking'}
+            </Text>
           ) : (
             computers.map((comp, i) => {
-              const color = comp.online ? '#93C822' : '#BA7517';
+              const statusKnown = presenceLoaded && !computerStatusUnavailable;
+              const color = statusKnown ? (comp.online ? '#93C822' : '#BA7517') : '#71717A';
+              const statusLabel = !statusKnown
+                ? (computerStatusUnavailable ? "Can't check now" : 'Checking')
+                : comp.online
+                  ? 'Online'
+                  : `Offline, ${lastSeenLabel(comp.lastSeenAt)}`;
               return (
                 <TouchableOpacity
                   key={comp.id}
@@ -514,11 +564,26 @@ const ConnectionsScreen = () => {
                     <View style={styles.statusRow}>
                       <View style={[styles.dot, { backgroundColor: color }]} />
                       <Text style={[styles.statusText, { color }]} numberOfLines={1}>
-                        {comp.online ? 'Online' : `Offline, ${lastSeenLabel(comp.lastSeenAt)}`}
+                        {statusLabel}
                       </Text>
                     </View>
                   </View>
-                  <ChevronRight size={20} color="#D4D4D8" />
+                  <View style={styles.computerActions}>
+                    <TouchableOpacity
+                      style={styles.manageBtn}
+                      disabled={unlinkingWorkerId !== null}
+                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                      onPress={(event: any) => {
+                        event.stopPropagation?.();
+                        unlinkComputer(comp);
+                      }}
+                    >
+                      {unlinkingWorkerId === comp.workerId
+                        ? <ActivityIndicator size="small" color="#52525B" />
+                        : <Trash2 size={16} color="#DC2626" />}
+                    </TouchableOpacity>
+                    <ChevronRight size={20} color="#D4D4D8" />
+                  </View>
                 </TouchableOpacity>
               );
             })
@@ -687,6 +752,7 @@ const styles = StyleSheet.create({
   managePillOn: { backgroundColor: '#18181B', borderColor: '#18181B' },
   managePillText: { fontSize: 13, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   manageActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  computerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   manageBtn: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F1EE',
     alignItems: 'center', justifyContent: 'center',

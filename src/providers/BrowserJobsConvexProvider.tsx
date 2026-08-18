@@ -19,8 +19,8 @@
  * every useQuery in the tree. We expose { client, userId } via context for that
  * hook to read.
  *
- * DEGRADE: when the bootstrap is unavailable, value = { client:null, userId:null }
- * and callers branch to the OAuth-only path.
+ * DEGRADE: when the bootstrap is unavailable, the context exposes degraded=true
+ * with a null client so callers can show unknown instead of claiming offline.
  */
 import React, { createContext, useContext } from 'react';
 import { SessionContext } from '../context/SessionContext';
@@ -29,6 +29,8 @@ import { useBrowserJobsConvex, BrowserJobsConvexValue } from '../hooks/useBrowse
 const BrowserJobsConvexContext = createContext<BrowserJobsConvexValue>({
   client: null,
   userId: null,
+  loading: false,
+  degraded: false,
 });
 
 /** Read the resolved browserJobs client + userId from the nearest provider. */

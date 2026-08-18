@@ -183,6 +183,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     fbDispatch.presenceLoaded &&
     !fbDispatch.computerOnline &&
     !fbDispatch.degraded &&
+    !fbDispatch.presenceUnavailable &&
     !fbAlreadyMoving;
 
   // Representative quantity for the summary line from the exact publish details.
@@ -529,22 +530,32 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 const st = failed
                   ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish' }
                   : isFb
-                    ? (fbStatus || { dotColor: '#BA7517', color: '#BA7517', label: 'Posting via your computer…' })
+                    ? (fbStatus || (fbDispatch.degraded || fbDispatch.jobsUnavailable
+                      ? { dotColor: '#9CA3AF', color: '#71717A', label: "Can't check now" }
+                      : !fbDispatch.jobsLoaded
+                        ? { dotColor: '#9CA3AF', color: '#71717A', label: 'Checking' }
+                        : { dotColor: '#9CA3AF', color: '#71717A', label: 'Posting soon' }))
                     : savedToInventory
                       ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
                       : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
+                const canRetryDispatch = isFb && !!fbStatus?.canRetry && !!publishPayload;
+                const opensComputerSheet = isFb && !!fbStatus?.opensComputerSheet;
+                // Non-owning confirmation routes do not carry publishPayload, so
+                // they have no truthful redispatch seam and must not show Retry.
                 // A real listing link → open the marketplace page. Otherwise the row still
                 // opens the in-app product (where they can manage/retry); FB without a link
                 // is inert — unless its publish failed, which must stay actionable.
-                const tappable = hasLink || !isFb || failed;
+                const tappable = hasLink || !isFb || failed || canRetryDispatch || opensComputerSheet;
                 return (
                   <TouchableOpacity
                     key={`${p}-${i}`}
                     disabled={!tappable}
                     activeOpacity={0.85}
                     onPress={() => {
-                      if (failed) {
+                      if (failed || canRetryDispatch) {
                         void runPublish([lower]);
+                      } else if (opensComputerSheet) {
+                        setLinkComputerOpen(true);
                       } else if (url) {
                         Linking.openURL(url).catch(() => undefined);
                       } else {
@@ -552,14 +563,14 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                       }
                     }}
                     style={[styles.channelRow, failed && styles.channelRowFailed]}
-                    accessibilityLabel={failed ? `Retry ${platformLabel(lower)}` : undefined}
+                    accessibilityLabel={failed || canRetryDispatch ? `Retry ${platformLabel(lower)}` : undefined}
                   >
                     <PlatformBrandChip platform={lower} size={34} />
                     <Text style={styles.channelName} numberOfLines={1}>{platformLabel(lower)}</Text>
                     <View style={styles.channelRight}>
-                      {failed ? (
+                      {failed || canRetryDispatch ? (
                         <>
-                          <Text style={styles.failedStatus}>Didn’t publish</Text>
+                          <Text style={styles.failedStatus}>{failed ? 'Didn’t publish' : st.label}</Text>
                           <View style={styles.retryAction}>
                             <Icon name="refresh" size={16} color="#8A5A12" />
                             <Text style={styles.retryActionText}>Retry</Text>
@@ -576,7 +587,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                           <Text style={[styles.statusText, { color: st.color }]} numberOfLines={2}>{st.label}</Text>
                         </>
                       )}
-                      {tappable && !hasLink && !failed ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
+                      {tappable && !hasLink && !failed && !canRetryDispatch ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
                     </View>
                   </TouchableOpacity>
                 );

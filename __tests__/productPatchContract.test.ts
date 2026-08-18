@@ -10,7 +10,7 @@ import {
 } from '../src/contracts/product-patch.contract.ts';
 
 test('vendored product patch contract has the locked backend shape', () => {
-  assert.equal(PRODUCT_PATCH_CONTRACT_VERSION, 2);
+  assert.equal(PRODUCT_PATCH_CONTRACT_VERSION, 3);
   assert.deepEqual(PRODUCT_VARIANT_TYPES, ['flat', 'base', 'option']);
   assert.deepEqual(PRODUCT_PARENT_PATCH_FIELDS, [
     'Title',

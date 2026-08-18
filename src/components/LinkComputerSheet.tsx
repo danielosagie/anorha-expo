@@ -85,10 +85,10 @@ const COPY: Record<LinkComputerState, StateCopy> = {
     primaryLabel: 'Re-check',
   },
   unknown: {
-    title: "We couldn't reach your computer",
-    body: 'That’s fine — you can set this up later.',
-    icon: 'alert-circle-outline',
-    iconColor: AMBER,
+    title: "Can't check now",
+    body: 'Try again in a moment.',
+    icon: 'information-outline',
+    iconColor: TEXT_SECONDARY,
     primaryLabel: 'Re-check',
   },
 };
@@ -149,19 +149,25 @@ export function LinkComputerBody({
   // This used to call a backend health route that was never built: the 404 was
   // swallowed, so "reachable" was permanently false and the verdict silently
   // fell back to the local canOpenURL hint alone.
-  const { computerOnline, presenceLoaded, degraded } = useFacebookJobStatus(true);
+  const {
+    computerOnline,
+    presenceLoaded,
+    degraded,
+    presenceUnavailable,
+  } = useFacebookJobStatus(true);
 
   const state = useMemo<LinkComputerState>(() => {
     // Presence is authoritative: a live heartbeat means the computer is linked,
     // and the weak local hint must never downgrade that. Wait for the first
     // presence result before trusting computerOnline=false.
     if (installed === undefined) return 'checking';
-    if (!degraded && !presenceLoaded) return 'checking';
-    if (!degraded && computerOnline) return 'installed';
+    if (degraded || presenceUnavailable) return 'unknown';
+    if (!presenceLoaded) return 'checking';
+    if (computerOnline) return 'installed';
     if (installed === true) return 'runtime_unreachable';
     if (installed === false) return 'not_installed';
     return 'unknown';
-  }, [installed, computerOnline, presenceLoaded, degraded]);
+  }, [installed, computerOnline, presenceLoaded, degraded, presenceUnavailable]);
 
   // Report transitions only. The parent may setState on every report, so firing
   // on each render would loop.

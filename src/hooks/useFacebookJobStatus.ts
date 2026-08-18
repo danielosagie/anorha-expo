@@ -10,14 +10,14 @@
  * no matter where this hook mounts. The client + userId come from
  * useBrowserJobsConvexContext.
  *
- * DEGRADE: when client/userId is null (route 401/503, signed-out, offline cold
- * start) every selector returns a quiet/empty result and computerOnline=false.
- * Nothing throws.
+ * DEGRADE: a bootstrap or subscription failure is exposed separately from the
+ * first load. Callers show a quiet unknown state and never treat it as proof
+ * that the seller's computer is offline. Nothing throws.
  *
  * PHONE-OWNED THRESHOLDS (per backend note browserJobs.ts:269-272): the phone
  * owns PRESENCE_TTL_MS and the nextEligibleAt-vs-now comparison.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConvexReactClient } from 'convex/react';
 import { useBrowserJobsConvexContext } from '../providers/BrowserJobsConvexProvider';
 import {
@@ -25,12 +25,14 @@ import {
   BrowserJobDoc,
   WorkerPresenceDoc,
 } from '../convex/browserJobsApi';
+import { getBrowserJobCopy } from '../lib/browserJobCodes';
 
 // Consumer heartbeats about every 25s; wait for two missed beats before flipping offline.
 const PRESENCE_TTL_MS = 60_000;
 // Local re-tick so the row flips offline without a new Convex push (presence
 // stops streaming when the laptop dies).
 const TICK_MS = 15_000;
+const WATCH_RETRY_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
 export type DispatchTone = 'good' | 'problem' | 'quiet';
 
@@ -69,15 +71,18 @@ function isFacebook(job: BrowserJobDoc): boolean {
  * Map one job + the computer-online signal to the dot+label vocabulary.
  * Order matters: paused/failed before terminal/in-flight states.
  */
-function mapJob(job: BrowserJobDoc, computerOnline: boolean): VariantDispatchStatus {
+function mapJob(
+  job: BrowserJobDoc,
+  presence: { computerOnline: boolean; loaded: boolean; unavailable: boolean },
+): VariantDispatchStatus {
   const status = (job.status || '').toLowerCase();
   const paused = !!job.paused || !!job.pausedReason;
   const failed = status === 'failed' || !!job.deadLetteredAt;
 
-  // 1. Paused / breaker tripped. NEVER surface pausedReason (machine code).
+  // 1. Paused. Translate the typed machine code through the seller-safe map.
   if (paused) {
     return {
-      label: 'Needs a check',
+      label: getBrowserJobCopy(job.pausedReason),
       color: AMBER,
       dotColor: AMBER,
       tone: 'problem',
@@ -85,10 +90,10 @@ function mapJob(job: BrowserJobDoc, computerOnline: boolean): VariantDispatchSta
     };
   }
 
-  // 2. Failed / dead-lettered → amber "Couldn't post" + Retry (never red).
+  // 2. Failed / dead-lettered. The free-text errorMessage is never rendered.
   if (failed) {
     return {
-      label: "Couldn't post",
+      label: getBrowserJobCopy(job.errorCode),
       color: AMBER,
       dotColor: AMBER,
       tone: 'problem',
@@ -114,7 +119,18 @@ function mapJob(job: BrowserJobDoc, computerOnline: boolean): VariantDispatchSta
 
   // 5. Pending — split on whether the computer is on.
   if (status === 'pending') {
-    if (!computerOnline) {
+    if (presence.unavailable) {
+      return {
+        label: "Can't check now",
+        color: QUIET_TEXT,
+        dotColor: QUIET_DOT,
+        tone: 'quiet',
+      };
+    }
+    if (!presence.loaded) {
+      return { label: 'Checking', color: QUIET_TEXT, dotColor: QUIET_DOT, tone: 'quiet' };
+    }
+    if (!presence.computerOnline) {
       return {
         label: "Will post when your computer's on",
         color: AMBER_GENTLE,
@@ -140,13 +156,20 @@ function mapJob(job: BrowserJobDoc, computerOnline: boolean): VariantDispatchSta
   return { label: 'Queued', color: QUIET_TEXT, dotColor: QUIET_DOT, tone: 'quiet' };
 }
 
+interface WatchedQueryResult<T> {
+  value: T | undefined;
+  unavailable: boolean;
+}
+
 /** Subscribe to a single arg-scoped query on the explicit browserJobs client. */
 function useWatchedQuery<T>(
   client: ConvexReactClient | null,
   fnName: any,
   args: Record<string, unknown> | 'skip',
-): T | undefined {
+  refreshKey: number = 0,
+): WatchedQueryResult<T> {
   const [value, setValue] = useState<T | undefined>(undefined);
+  const [unavailable, setUnavailable] = useState(false);
   // Stabilize args by value so we don't resubscribe every render.
   const argsKey = args === 'skip' ? 'skip' : JSON.stringify(args);
   const lastKey = useRef<string>('');
@@ -154,35 +177,83 @@ function useWatchedQuery<T>(
   useEffect(() => {
     if (!client || args === 'skip') {
       setValue(undefined);
+      setUnavailable(false);
       return;
     }
-    lastKey.current = argsKey;
-    let watch;
-    try {
-      watch = client.watchQuery(fnName, args as any);
-    } catch {
+    if (lastKey.current !== argsKey) {
+      lastKey.current = argsKey;
       setValue(undefined);
-      return;
+      setUnavailable(false);
     }
-    // Seed with any local result, then stream updates.
-    try {
-      const local = watch.localQueryResult();
-      if (local !== undefined) setValue(local as T);
-    } catch {
-      /* no local result yet */
-    }
-    const unsubscribe = watch.onUpdate(() => {
-      try {
-        setValue(watch!.localQueryResult() as T);
-      } catch {
-        /* transient error during update */
-      }
-    });
-    return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, argsKey]);
 
-  return value;
+    let stopped = false;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribe: (() => void) | undefined;
+
+    const clearWatch = () => {
+      if (unsubscribe) unsubscribe();
+      unsubscribe = undefined;
+    };
+
+    const subscribe = () => {
+      if (stopped) return;
+      clearWatch();
+      let watch: any;
+      try {
+        watch = client.watchQuery(fnName, args as any);
+      } catch {
+        scheduleRetry();
+        return;
+      }
+
+      const read = (): boolean => {
+        try {
+          const next = watch.localQueryResult();
+          if (next !== undefined) {
+            setValue(next as T);
+            setUnavailable(false);
+            retryAttempt = 0;
+          }
+          return true;
+        } catch {
+          scheduleRetry();
+          return false;
+        }
+      };
+
+      // Seed with any local result, then stream updates. A thrown read is a real
+      // unavailable state, not an endless loading state.
+      if (!read()) return;
+      try {
+        unsubscribe = watch.onUpdate(() => { read(); });
+      } catch {
+        scheduleRetry();
+      }
+    };
+
+    const scheduleRetry = () => {
+      if (stopped || retryTimer) return;
+      clearWatch();
+      setUnavailable(true);
+      const delay = WATCH_RETRY_MS[Math.min(retryAttempt, WATCH_RETRY_MS.length - 1)];
+      retryAttempt += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        subscribe();
+      }, delay);
+    };
+
+    subscribe();
+    return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      clearWatch();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, argsKey, refreshKey]);
+
+  return { value, unavailable };
 }
 
 /** One linked computer, derived from a worker-presence heartbeat. */
@@ -207,24 +278,49 @@ export interface FacebookJobStatus {
   statusForVariant: (variantId?: string | null) => VariantDispatchStatus | null;
   /** True when the 2nd Convex client is unavailable (degraded / OAuth-only). */
   degraded: boolean;
+  /** True when the jobs subscription failed and is retrying. */
+  jobsUnavailable: boolean;
+  /** True when the presence subscription failed and is retrying. */
+  presenceUnavailable: boolean;
+  /** True once the first jobs result lands. */
+  jobsLoaded: boolean;
   /** False while the first presence result is still in flight — callers must
    *  not read computerOnline=false as "offline" until this flips true. */
   presenceLoaded: boolean;
+  /** Reopen the presence subscription after a device-side mutation. */
+  refreshPresence: () => void;
 }
 
 export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus {
-  const { client, userId } = useBrowserJobsConvexContext();
+  const {
+    client,
+    userId,
+    loading: bootstrapLoading,
+    degraded,
+  } = useBrowserJobsConvexContext();
 
-  const jobs = useWatchedQuery<BrowserJobDoc[]>(
+  const [presenceRefreshKey, setPresenceRefreshKey] = useState(0);
+  const refreshPresence = useCallback(() => {
+    setPresenceRefreshKey((key) => key + 1);
+  }, []);
+
+  const jobsQuery = useWatchedQuery<BrowserJobDoc[]>(
     client,
     browserJobsApi.browserJobs.getForUser,
     enabled && userId ? { userId } : 'skip',
   );
-  const presence = useWatchedQuery<WorkerPresenceDoc[]>(
+  const presenceQuery = useWatchedQuery<WorkerPresenceDoc[]>(
     client,
     browserJobsApi.workerPresence.getForUser,
     enabled && userId ? { userId } : 'skip',
+    presenceRefreshKey,
   );
+  const jobs = jobsQuery.value;
+  const presence = presenceQuery.value;
+  const jobsUnavailable = enabled && (degraded || jobsQuery.unavailable);
+  const presenceUnavailable = enabled && (degraded || presenceQuery.unavailable);
+  const jobsLoaded = !enabled || jobs !== undefined || (!client && !bootstrapLoading && !degraded);
+  const presenceLoaded = !enabled || presence !== undefined || (!client && !bootstrapLoading && !degraded);
 
   // Local tick so presence-staleness flips offline without a Convex push.
   const [tick, forceTick] = useState(0);
@@ -237,13 +333,9 @@ export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus
   const computerOnline = useMemo(() => {
     if (!presence || presence.length === 0) return false;
     const now = Date.now();
-    // A heartbeat with a missing platform is a generic worker = online for all;
-    // also count an explicit facebook worker.
-    return presence.some((d) => {
-      const fresh = now - (d.lastSeenAt || 0) < PRESENCE_TTL_MS;
-      const platformOk = !d.platform || d.platform.toLowerCase().includes('facebook');
-      return fresh && platformOk;
-    });
+    // Do not filter presence.platform. One worker serves every marketplace, and
+    // the presence row carries no marketplace identity.
+    return presence.some((d) => now - (d.lastSeenAt || 0) < PRESENCE_TTL_MS);
     // `tick` forces a recompute against a fresh Date.now() every TICK_MS, so a
     // gone-stale heartbeat flips offline even with no new presence push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -278,22 +370,38 @@ export function useFacebookJobStatus(enabled: boolean = true): FacebookJobStatus
   const statusForVariant = useMemo(() => {
     return (variantId?: string | null): VariantDispatchStatus | null => {
       if (!variantId) return null;
+      if (jobsUnavailable) {
+        return {
+          label: "Can't check now",
+          color: QUIET_TEXT,
+          dotColor: QUIET_DOT,
+          tone: 'quiet',
+        };
+      }
       // Most-recent FB job for this variant (getForUser returns desc by recency).
       const job = fbJobs.find((j) => j.variantId === variantId);
       if (!job) return null;
-      return mapJob(job, computerOnline);
+      return mapJob(job, {
+        computerOnline,
+        loaded: presenceLoaded,
+        unavailable: presenceUnavailable,
+      });
     };
-  }, [fbJobs, computerOnline]);
+  }, [fbJobs, computerOnline, jobsUnavailable, presenceLoaded, presenceUnavailable]);
 
   return {
     computerOnline,
     fbNeedsCheck,
     computers,
     statusForVariant,
-    degraded: !client || !userId,
+    degraded,
+    jobsUnavailable,
+    presenceUnavailable,
+    jobsLoaded,
     // useWatchedQuery yields undefined until the first result lands — that's
     // "loading", not "no computers". (In degraded mode it never loads; treat
     // as loaded so callers fall back to their degraded handling.)
-    presenceLoaded: !enabled || presence !== undefined || !client || !userId,
+    presenceLoaded,
+    refreshPresence,
   };
 }

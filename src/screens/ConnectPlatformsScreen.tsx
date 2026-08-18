@@ -50,7 +50,13 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { currentOrg } = useOrg();
   const { connections, progressByConnectionId, refresh } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const {
+    computerOnline,
+    presenceLoaded,
+    degraded,
+    presenceUnavailable,
+  } = useFacebookJobStatus();
+  const computerStatusUnavailable = degraded || presenceUnavailable;
   const importStatus = useImportStatus();
   const presentationByConnectionId = useMemo(
     () => connectionImportPresentationsById({
@@ -74,10 +80,10 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
       derivePlatformConnectStatus(
         def.key,
         connections,
-        { computerOnline, presenceLoaded },
+        { computerOnline, presenceLoaded: presenceLoaded && !computerStatusUnavailable },
         { presentationByConnectionId },
       ),
-    [connections, computerOnline, presenceLoaded, presentationByConnectionId],
+    [connections, computerOnline, presenceLoaded, computerStatusUnavailable, presentationByConnectionId],
   );
 
   const { available, comingSoon } = useMemo(() => {
@@ -133,6 +139,11 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         <View style={styles.liveDot} />
         <Text style={styles.connectedText}>Connected</Text>
       </View>
+    ) : computerStatusUnavailable && st.oauthConnected && st.requiresComputer ? (
+      <View style={styles.connectedPill}>
+        <View style={[styles.liveDot, { backgroundColor: '#9CA3AF' }]} />
+        <Text style={[styles.connectedText, { color: '#71717A' }]}>Can’t check now</Text>
+      </View>
     ) : st.uiState === 'needs-computer' ? (
       // OAuth done but the computer isn't linked — one tap resumes the flow at
       // the link-computer step rather than restarting OAuth.
@@ -143,7 +154,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
       // OAuth done, computer status still loading — quiet neutral, never green.
       <View style={styles.connectedPill}>
         <View style={[styles.liveDot, { backgroundColor: '#9CA3AF' }]} />
-        <Text style={[styles.connectedText, { color: '#9CA3AF' }]}>Connected</Text>
+        <Text style={[styles.connectedText, { color: '#71717A' }]}>Checking</Text>
       </View>
     ) : (
       <TouchableOpacity style={styles.connectBtn} onPress={() => onConnect(def)} activeOpacity={0.85}>

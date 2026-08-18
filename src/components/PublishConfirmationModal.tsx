@@ -163,8 +163,18 @@ export function PublishConfirmationContent({
 
     // Facebook posts through the seller's own computer — give an honest, non-blocking
     // heads-up if FB is on and no computer is currently online (publishing still queues).
-    const { computerOnline, computers } = useFacebookJobStatus(active);
-    const showComputerHeadsUp = selectedPlatforms.has('facebook') && !computerOnline;
+    const {
+        computerOnline,
+        computers,
+        presenceLoaded,
+        degraded,
+        presenceUnavailable,
+    } = useFacebookJobStatus(active);
+    const facebookSelected = selectedPlatforms.has('facebook');
+    const computerStatusUnavailable = degraded || presenceUnavailable;
+    const showComputerUnknown = facebookSelected && computerStatusUnavailable;
+    const showComputerHeadsUp =
+        facebookSelected && presenceLoaded && !computerStatusUnavailable && !computerOnline;
 
     // Optional pin: with 2+ linked computers, let the seller choose WHICH one posts
     // to Facebook (default = any available). Only pinnable computers (those with a
@@ -299,10 +309,12 @@ export function PublishConfirmationContent({
                         </TouchableOpacity>
                     ) : null}
 
-                    {showComputerHeadsUp ? (
-                        <View style={styles.computerNotice}>
-                            <Icon name="monitor" size={16} color="#BA7517" style={{ marginTop: 1 }} />
-                            <Text style={styles.computerNoticeText}>Facebook posts via your computer.</Text>
+                    {showComputerUnknown || showComputerHeadsUp ? (
+                        <View style={[styles.computerNotice, showComputerUnknown && styles.computerNoticeUnknown]}>
+                            <Icon name="monitor" size={16} color={showComputerUnknown ? '#71717A' : '#BA7517'} style={{ marginTop: 1 }} />
+                            <Text style={[styles.computerNoticeText, showComputerUnknown && styles.computerNoticeTextUnknown]}>
+                                {showComputerUnknown ? "Can't check now" : 'Facebook posts via your computer.'}
+                            </Text>
                         </View>
                     ) : null}
 
@@ -397,7 +409,9 @@ const styles = StyleSheet.create({
     emptyTitle: { color: '#18181B', fontSize: 15, fontFamily: CHAT_FONT.bold, fontWeight: '700' },
     emptySub: { color: '#6B7280', fontSize: 13, fontFamily: CHAT_FONT.regular, lineHeight: 18 },
     computerNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 2, paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#FBF5EA', borderRadius: 12, borderWidth: 1, borderColor: '#F0E2C8' },
+    computerNoticeUnknown: { backgroundColor: '#F4F4F5', borderColor: '#E4E4E7' },
     computerNoticeText: { flex: 1, fontSize: 12.5, lineHeight: 17, color: '#8A5A12', fontFamily: CHAT_FONT.medium, fontWeight: '500' },
+    computerNoticeTextUnknown: { color: '#71717A' },
     pickerBlock: { marginTop: 2, gap: 8 },
     pickerLabel: { color: '#9CA3AF', fontSize: 13, fontFamily: CHAT_FONT.semibold, fontWeight: '600', paddingLeft: 2 },
     pickerRow: { flexDirection: 'row', gap: 8, paddingRight: 4 },

@@ -39,7 +39,7 @@ type Card = {
 
 const setupStatusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
   if (uiState === 'needs-computer') return { label: 'Finish setup', color: '#BA7517' };
-  return { label: 'Checking status', color: '#71717A' };
+  return { label: 'Checking', color: '#71717A' };
 };
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
@@ -59,7 +59,13 @@ const SettingsScreen = () => {
     hasResolvedConnections,
     error: connectionsError,
   } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const {
+    computerOnline,
+    presenceLoaded,
+    degraded,
+    presenceUnavailable,
+  } = useFacebookJobStatus();
+  const computerStatusUnavailable = degraded || presenceUnavailable;
   // Import inbox aggregate — feeds the passive "needs you" badge on Integrations.
   const importStatus = useImportStatus();
   const screenEnteredAtRef = useRef(Date.now());
@@ -241,13 +247,15 @@ const SettingsScreen = () => {
             platformPreview.map((c: any, i: number) => {
               const connectStatus = derivePlatformConnectStatus(c.PlatformType, [c], {
                 computerOnline,
-                presenceLoaded,
+                presenceLoaded: presenceLoaded && !computerStatusUnavailable,
               }, {
                 presentationByConnectionId,
               });
-              const st = connectStatus.uiState === 'needs-computer' || connectStatus.uiState === 'checking'
-                ? setupStatusOf(connectStatus.uiState)
-                : presentationByConnectionId.get(c.Id)!;
+              const st = computerStatusUnavailable && connectStatus.oauthConnected && connectStatus.requiresComputer
+                ? { label: "Can't check now", color: '#71717A' }
+                : connectStatus.uiState === 'needs-computer' || connectStatus.uiState === 'checking'
+                  ? setupStatusOf(connectStatus.uiState)
+                  : presentationByConnectionId.get(c.Id)!;
               return (
                 <TouchableOpacity
                   key={c.Id}
