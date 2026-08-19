@@ -222,7 +222,19 @@ export default function ConnectFlowSheet({
       importObservedRef.current = true;
       setPhase('importing');
     } else {
-      setPhase('done');
+      // Connected but idle. If the platform's last import FAILED, opening the
+      // connect flow means "make it work": land on the retry state, never on a
+      // dead "All set" (a failed eBay row + All set flash cost a real demo).
+      const failedRetryable = connections
+        .filter((connection) => platformKey(connection.PlatformType) === platformKey(platform))
+        .map((connection) => ({ id: connection.Id, presentation: presentationByConnectionId.get(connection.Id) }))
+        .find(({ presentation }) => presentation?.kind === 'failed' && presentation?.canRetryImport);
+      if (failedRetryable) {
+        setFailedConnectionId(failedRetryable.id);
+        setPhase('importFailed');
+      } else {
+        setPhase('done');
+      }
     }
   // Live stores intentionally do not belong in this open-boundary effect.
   // eslint-disable-next-line react-hooks/exhaustive-deps

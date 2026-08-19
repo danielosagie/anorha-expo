@@ -132,7 +132,9 @@ export default function ImportQuestionQueueScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation<NavType>();
   const insets = useSafeAreaInsets();
-  const { connectionId, platformName, importId } = route.params;
+  // Params can arrive undefined from a stale deep link or a mid-refactor
+  // navigate call; destructuring undefined here crashed the whole screen.
+  const { connectionId, platformName, importId } = route.params ?? ({} as RouteType['params']);
   const platform = platformLabel(platformName);
   const { result, loading, error, resolving, refresh, resolve, resolveBulk, unresolveBulk } = useResolution(connectionId, importId);
 
