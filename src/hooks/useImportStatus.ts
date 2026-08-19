@@ -12,6 +12,7 @@ import {
   isFreshActiveImportEvidence,
   resetOwnerScopedImportState,
 } from '../lib/connectionImportPresentation';
+import { reconcileVerifiedAttentionCount } from '../lib/reviewQueueTruth';
 import { deriveV7AttentionCounts } from '../components/import/questionQueue';
 import type { SyncItem } from '../types/syncItem';
 
@@ -39,6 +40,8 @@ export interface HubConnection {
   state: string;
   /** Items parked in this connection's inbox (0 ⇒ show the quiet "Synced" state). */
   needsAttention: number;
+  /** True once this count has been reconciled by the inbox refresh cycle. */
+  attentionVerified: boolean;
   /** Client receipt time for this 20-second aggregate observation. */
   observedAt: number;
   itemsSoFar?: number;
@@ -85,6 +88,7 @@ export interface InboxSummaryConnection {
   displayName: string;
   state: 'active' | 'scanning' | 'syncing' | 'live' | 'review' | 'needs-attention' | 'error';
   needsAttention: number;
+  attentionVerified?: boolean;
   observedAt: number;
   itemsSoFar?: number;
   phase?: string;
@@ -137,6 +141,7 @@ export function parseInboxSummaryPayload(
       displayName: String(c?.displayName ?? ''),
       state: String(c?.state ?? '').toLowerCase() as InboxSummaryConnection['state'],
       needsAttention: Number(c?.needsAttention ?? c?.attentionCount ?? 0) || 0,
+      attentionVerified: false,
       observedAt,
       itemsSoFar: optionalNumber(c?.itemsSoFar),
       phase: optionalString(c?.phase ?? c?.scanState),
@@ -192,7 +197,9 @@ export async function reconcileInboxAttention(
   fetchResolutionItems: (connectionId: string) => Promise<SyncItem[]>,
 ): Promise<InboxSummaryResponse> {
   const connections = await Promise.all(aggregate.connections.map(async (connection) => {
-    if (connection.needsAttention === 0) return connection;
+    if (connection.needsAttention === 0) {
+      return reconcileVerifiedAttentionCount(connection, 0);
+    }
 
     try {
       const items = await fetchResolutionItems(connection.connectionId);
@@ -201,7 +208,7 @@ export async function reconcileInboxAttention(
         platformName: connection.displayName || connection.platformType,
         items,
       }]);
-      return { ...connection, needsAttention: derived.count };
+      return reconcileVerifiedAttentionCount(connection, derived.count);
     } catch {
       return connection;
     }
@@ -304,10 +311,12 @@ function activateInboxOwner(ownerKey: string): void {
  * re-enable so the inbox numbers move WITH the connection set instead of
  * waiting for the next focus/poll. Safe to fire-and-forget.
  */
-export async function refreshInboxSummary(expectedOwnerKey = inboxStore.ownerKey): Promise<void> {
+export async function refreshInboxSummary(
+  expectedOwnerKey = inboxStore.ownerKey,
+): Promise<InboxSummaryResponse | null> {
   if (!expectedOwnerKey) {
     activateInboxOwner('');
-    return;
+    return null;
   }
   activateInboxOwner(expectedOwnerKey);
   const myId = ++inboxRefreshSeq;
@@ -319,13 +328,14 @@ export async function refreshInboxSummary(expectedOwnerKey = inboxStore.ownerKey
     token = null;
   }
   const agg = token ? await fetchInboxSummary() : null;
-  if (inboxRefreshSeq !== myId || inboxStore.ownerKey !== requestedOwnerKey) return;
+  if (inboxRefreshSeq !== myId || inboxStore.ownerKey !== requestedOwnerKey) return null;
   setInboxStore({
     summary: agg,
     error: agg ? null : 'Couldn’t verify your import status. Pull to retry.',
     loading: false,
     firstDone: true,
   });
+  return agg;
 }
 
 /**
@@ -473,6 +483,7 @@ export function useImportStatus(): ImportStatusData {
       platformType: c.platformType,
       state: c.state,
       needsAttention: c.needsAttention,
+      attentionVerified: c.attentionVerified === true,
       observedAt: c.observedAt,
       itemsSoFar: c.itemsSoFar,
       phase: c.phase,

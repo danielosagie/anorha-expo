@@ -7,21 +7,11 @@ import {
   forgetDismissedConnectImport,
   getDismissedConnectImports,
   subscribeDismissedConnectImports,
+  trackDismissedConnectImport,
 } from '../lib/connectImportDismissals';
+import { decideDismissedImportOutcome } from '../lib/dismissedImportOutcome';
+import { usePlatformConnect } from '../hooks/usePlatformConnect';
 
-const ACTIVE_STATUSES = new Set([
-  'queued',
-  'pending',
-  'in_progress',
-  'processing',
-  'scanning',
-  'syncing',
-  'reconciling',
-  'ready_to_sync',
-]);
-const SUCCESS_STATUSES = new Set(['active', 'live', 'review', 'needs-attention', 'complete', 'completed', 'success', 'succeeded']);
-const CLOCK_SKEW_MS = 30_000;
-const WATCH_TTL_MS = 30 * 60 * 1000;
 const REFRESH_MS = 5000;
 
 function normalized(value?: string | null): string {
@@ -30,11 +20,6 @@ function normalized(value?: string | null): string {
 
 function platformKey(value?: string | null): string {
   return normalized(value).replace(/[\s_-]+/g, '');
-}
-
-function timestamp(value?: string | null): number {
-  const parsed = Date.parse(String(value || ''));
-  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
 }
 
 /**
@@ -50,6 +35,7 @@ export default function ConnectImportToastWatcher() {
   );
   const { connections, progressByConnectionId, refresh } = usePlatformConnections();
   const { showToast } = useToast();
+  const { startScan } = usePlatformConnect();
   const observedActiveRef = useRef(new Set<number>());
 
   useEffect(() => {
@@ -74,52 +60,69 @@ export default function ConnectImportToastWatcher() {
 
   useEffect(() => {
     for (const importRun of imports) {
-      if (Date.now() - importRun.startedAt > WATCH_TTL_MS) {
-        observedActiveRef.current.delete(importRun.token);
-        forgetDismissedConnectImport(importRun.token);
-        continue;
-      }
-
       const expectedPlatform = platformKey(importRun.platform);
       const connection = importRun.connectionId
         ? connections.find((row) => row.Id === importRun.connectionId)
         : [...connections]
             .filter((row) => platformKey(row.PlatformType) === expectedPlatform)
-            .sort((left, right) => timestamp(right.UpdatedAt) - timestamp(left.UpdatedAt))[0];
-      if (!connection) continue;
+            .sort((left, right) => Date.parse(right.UpdatedAt) - Date.parse(left.UpdatedAt))[0];
 
-      const connectionStatus = normalized(connection.Status);
-      const progressStatus = normalized(progressByConnectionId[connection.Id]?.status);
-      const active = ACTIVE_STATUSES.has(connectionStatus) || ACTIVE_STATUSES.has(progressStatus);
-      if (active) {
+      const progress = connection ? progressByConnectionId[connection.Id] : undefined;
+      const outcome = decideDismissedImportOutcome({
+        platformLabel: importRun.platformLabel,
+        startedAt: importRun.startedAt,
+        connectionStatus: connection?.Status,
+        progressStatus: progress?.status,
+        progressReceivedAt: progress?.receivedAt,
+        lastSyncSuccessAt: connection?.LastSyncSuccessAt,
+        connectionUpdatedAt: connection?.UpdatedAt,
+        observedActive: observedActiveRef.current.has(importRun.token),
+      });
+
+      if (outcome.kind === 'active') {
         observedActiveRef.current.add(importRun.token);
         continue;
       }
+      if (outcome.kind === 'wait') continue;
 
-      const failed = connectionStatus === 'error'
-        || connectionStatus.includes('fail')
-        || progressStatus === 'error'
-        || progressStatus.includes('fail');
-      if (failed) {
+      if (outcome.kind === 'expired') {
         observedActiveRef.current.delete(importRun.token);
         forgetDismissedConnectImport(importRun.token);
         continue;
       }
 
-      const syncReceiptIsCurrent = timestamp(connection.LastSyncSuccessAt)
-        >= importRun.startedAt - CLOCK_SKEW_MS;
-      const terminalProgress = SUCCESS_STATUSES.has(progressStatus);
-      const observedThenSettled = observedActiveRef.current.has(importRun.token)
-        && SUCCESS_STATUSES.has(connectionStatus);
-      if (!syncReceiptIsCurrent && !terminalProgress && !observedThenSettled) continue;
-
       observedActiveRef.current.delete(importRun.token);
       forgetDismissedConnectImport(importRun.token);
-      if (AppState.currentState === 'active') {
-        showToast({ title: `${importRun.platformLabel} import done`, tone: 'success' });
+      if (AppState.currentState !== 'active') continue;
+
+      if (outcome.kind === 'failure' && connection) {
+        showToast({
+          title: outcome.toastTitle,
+          tone: 'danger',
+          action: {
+            label: outcome.actionLabel,
+            onPress: () => {
+              void startScan(connection.Id).then((started) => {
+                if (!started) {
+                  showToast({ title: `${importRun.platformLabel} retry failed`, tone: 'danger' });
+                  return;
+                }
+                trackDismissedConnectImport({
+                  connectionId: connection.Id,
+                  platform: importRun.platform,
+                  platformLabel: importRun.platformLabel,
+                  startedAt: Date.now(),
+                });
+                void refresh();
+              });
+            },
+          },
+        });
+      } else if (outcome.kind === 'success') {
+        showToast({ title: outcome.toastTitle, tone: 'success' });
       }
     }
-  }, [connections, imports, progressByConnectionId, showToast]);
+  }, [connections, imports, progressByConnectionId, refresh, showToast, startScan]);
 
   return null;
 }

@@ -17,7 +17,7 @@ import {
   Platform,
 } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
-import { ChevronRight } from 'lucide-react-native';
+import { ChevronRight, RefreshCw } from 'lucide-react-native';
 import { useAuth } from '@clerk/expo';
 import PageHeader from '../components/ui/PageHeader';
 import TierSelectorModal from '../components/TierSelectorModal';
@@ -27,6 +27,7 @@ import { capture, AnalyticsEvents } from '../lib/analytics';
 import { ApiError, apiJson } from '../lib/apiClient';
 import { openBillingUrl, withMobileReturn } from '../lib/billingReturn';
 import { decideTopUpPoll } from '../lib/topUpPolling';
+import { billingCheckoutFeedback, decideBillingBrowserOutcome } from '../lib/billingCheckoutOutcome';
 import {
   deriveBillingState,
   formatBillingDate,
@@ -53,7 +54,8 @@ type BillingSummaryResponse = RawBillingSummary & Record<string, any>;
 type TopUpPhase = 'idle' | 'starting' | 'waiting';
 type TopUpFeedback =
   | { kind: 'confirmed'; amountCents: number; animationKey: number }
-  | { kind: 'processing' };
+  | { kind: 'cancelled' }
+  | { kind: 'could_not_verify' };
 type TopUpCheckoutSession = {
   url: string;
   snapshot: BillingSummaryResponse | null;
@@ -187,6 +189,9 @@ export default function BillingScreen() {
   const isPartner = userRole === 'partner';
   const hasSummaryData = !!summary && typeof summary === 'object';
   const isTopUpBusy = topUpPhase !== 'idle';
+  const topUpTruthFeedback = topUpFeedback && topUpFeedback.kind !== 'confirmed'
+    ? billingCheckoutFeedback(topUpFeedback.kind)
+    : null;
 
   const refreshBillingData = useCallback(async () => {
     setIsRefreshing(true);
@@ -464,12 +469,12 @@ export default function BillingScreen() {
     setTopUpPhase('idle');
   };
 
-  const showTopUpProcessing = (session: TopUpCheckoutSession) => {
+  const showTopUpCouldNotVerify = (session: TopUpCheckoutSession) => {
     if (session.runId !== topUpRunIdRef.current) return;
     processingCheckoutRef.current = session.snapshot
       ? { snapshot: session.snapshot, amountCents: session.amountCents }
       : null;
-    setTopUpFeedback({ kind: 'processing' });
+    setTopUpFeedback({ kind: 'could_not_verify' });
     releaseTopUpLock(session.runId);
   };
 
@@ -487,7 +492,7 @@ export default function BillingScreen() {
 
         const verdict = decideTopUpPoll(session.snapshot, nextSummary);
         if (verdict === 'failed') {
-          showTopUpProcessing(session);
+          showTopUpCouldNotVerify(session);
           return;
         }
 
@@ -505,7 +510,7 @@ export default function BillingScreen() {
         }
       } catch (error) {
         log.warn('Top-up confirmation unavailable:', error);
-        showTopUpProcessing(session);
+        showTopUpCouldNotVerify(session);
         return;
       }
 
@@ -515,14 +520,26 @@ export default function BillingScreen() {
 
     if (session.runId !== topUpRunIdRef.current) return;
     if (lastSummary) setSummary(lastSummary);
-    showTopUpProcessing(session);
+    showTopUpCouldNotVerify(session);
   };
 
   const presentTopUpCheckout = async (session: TopUpCheckoutSession) => {
     try {
       // ASWebAuthenticationSession on iOS and a Custom Tab on Android share the
       // system browser session. The promise resolves for a deep-link return or close.
-      await openBillingUrl(session.url);
+      const browserResult = await openBillingUrl(session.url);
+      const browserOutcome = decideBillingBrowserOutcome(browserResult);
+      if (session.runId !== topUpRunIdRef.current) return;
+      if (browserOutcome.kind === 'cancelled') {
+        processingCheckoutRef.current = null;
+        setTopUpFeedback({ kind: 'cancelled' });
+        releaseTopUpLock(session.runId);
+        return;
+      }
+      if (!browserOutcome.shouldPoll) {
+        showTopUpCouldNotVerify(session);
+        return;
+      }
     } catch (error) {
       log.error('Checkout browser error:', error);
       if (session.runId === topUpRunIdRef.current) {
@@ -532,7 +549,6 @@ export default function BillingScreen() {
       return;
     }
 
-    if (session.runId !== topUpRunIdRef.current) return;
     await pollTopUpSummary(session);
   };
 
@@ -803,13 +819,24 @@ export default function BillingScreen() {
                       fillColor={ANORHA_GREEN}
                     />
                   </View>
-                ) : topUpFeedback?.kind === 'processing' ? (
-                  <Text
-                    accessibilityLiveRegion="polite"
-                    style={styles.topUpProcessingText}
-                  >
-                    Payment received. Credits can take a minute - pull to refresh.
+                ) : topUpFeedback?.kind === 'cancelled' ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.topUpProcessingText}>
+                    {topUpTruthFeedback?.message}
                   </Text>
+                ) : topUpFeedback?.kind === 'could_not_verify' ? (
+                  <View accessibilityLiveRegion="polite" style={styles.topUpVerificationRow}>
+                    <Text style={styles.topUpProcessingText}>{topUpTruthFeedback?.message}</Text>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="Re-check payment"
+                      disabled={isRefreshing}
+                      onPress={() => void refreshBillingData()}
+                      style={styles.topUpRecheck}
+                    >
+                      <RefreshCw size={14} color={ANORHA_GREEN} />
+                      <Text style={styles.topUpRecheckText}>Re-check</Text>
+                    </TouchableOpacity>
+                  </View>
                 ) : null}
                 <HealthBar
                   used={computeUsedCents}
@@ -1139,6 +1166,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     color: '#52525B',
     marginBottom: 8,
+  },
+  topUpVerificationRow: {
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  topUpRecheck: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  topUpRecheckText: {
+    fontSize: 13,
+    fontFamily: 'Inter_700Bold',
+    color: ANORHA_GREEN,
   },
   actionErrorText: {
     fontSize: 13,
