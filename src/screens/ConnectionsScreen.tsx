@@ -67,6 +67,7 @@ const ConnectionsScreen = () => {
     hasResolvedConnections,
     error: connectionsError,
     refresh,
+    updateConnectionLocally,
   } = usePlatformConnections();
   const overlay = usePlatformPickerOverlay();
   const { currentOrg } = useOrg();
@@ -153,6 +154,40 @@ const ConnectionsScreen = () => {
     setRetryConnectionId(connection.Id);
     setFlowPlatform(connection.PlatformType);
   }, []);
+
+  // Manage mode: the one sanctioned way to remove a connection. Restored after
+  // the row simplification removed it and left no disconnect path at all.
+  const [managing, setManaging] = useState(false);
+  const disconnectPlatform = useCallback((c: PlatformConnectionRow) => {
+    Alert.alert('Remove connection', `Disconnect "${shopLabel(c)}"? Your products stay in Anorha.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Disconnect',
+        style: 'destructive',
+        onPress: async () => {
+          updateConnectionLocally(c.Id, { IsEnabled: false, Status: 'inactive' });
+          try {
+            const token = await ensureSupabaseJwt();
+            const r = await fetch(`${API_BASE_URL}/api/platform-connections/${c.Id}/disconnect`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ cleanupStrategy: 'keep' }),
+            });
+            if (!r.ok) throw new Error(await r.text());
+            await refresh?.();
+          } catch {
+            // NEVER restore the pre-disconnect row: the backend disables the row
+            // BEFORE its cascade and leaves it disabled even on failure, so an
+            // optimistic rollback would show "connected" for a dead connection.
+            await refresh?.();
+            Alert.alert('Error', 'Failed to disconnect. Please try again.');
+          } finally {
+            void importStatus.refresh();
+          }
+        },
+      },
+    ]);
+  }, [updateConnectionLocally, refresh, importStatus]);
 
   const unlinkComputer = useCallback((computer: ConnectedComputer) => {
     if (!computer.workerId) {
@@ -276,6 +311,17 @@ const ConnectionsScreen = () => {
         {/* Selling platforms. Each row has one status and one trailing affordance. */}
         <View style={[styles.sectionHeaderRow, { marginTop: 0 }]}>
           <Text style={[styles.section, { marginBottom: 0 }]}>Selling platforms</Text>
+          {activeConnections.length > 0 && (
+            <TouchableOpacity
+              style={[styles.managePill, managing && styles.managePillOn]}
+              activeOpacity={0.8}
+              onPress={() => setManaging((v) => !v)}
+            >
+              <Text style={[styles.managePillText, managing && { color: '#FFFFFF' }]}>
+                {managing ? 'Done' : 'Manage'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         <View style={styles.card}>
           {!hasResolvedConnections && activeConnections.length === 0 && !connectionsError ? (
@@ -330,7 +376,21 @@ const ConnectionsScreen = () => {
                       </Text>
                     </View>
                   </View>
-                  {rowModel.trailing.type === 'action' ? (
+                  {managing ? (
+                    <TouchableOpacity
+                      style={styles.rowAction}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Disconnect ${title}`}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                      onPress={(event: any) => {
+                        event.stopPropagation?.();
+                        disconnectPlatform(c);
+                      }}
+                    >
+                      <Trash2 size={16} color="#DC2626" />
+                    </TouchableOpacity>
+                  ) : rowModel.trailing.type === 'action' ? (
                     <TouchableOpacity
                       style={styles.rowAction}
                       activeOpacity={0.7}
@@ -584,6 +644,9 @@ const styles = StyleSheet.create({
 
   section: { fontSize: 13, color: '#71717A', fontFamily: 'Inter_600SemiBold', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginLeft: 4 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 26, marginBottom: 10 },
+  managePill: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999, borderWidth: 1, borderColor: '#E4E4E7', backgroundColor: '#FFFFFF' },
+  managePillOn: { backgroundColor: '#18181B', borderColor: '#18181B' },
+  managePillText: { fontSize: 13, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   card: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: '#ECEBE6' },
   loadingRow: { paddingVertical: 26, alignItems: 'center' },
   empty: { paddingVertical: 22, textAlign: 'center', color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingHorizontal: 8, lineHeight: 19 },
