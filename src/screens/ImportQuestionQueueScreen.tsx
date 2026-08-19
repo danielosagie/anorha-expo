@@ -13,9 +13,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useUser } from '@clerk/expo';
 
 import type { AppStackParamList } from '../navigation/AppNavigator';
 import { useResolution } from '../hooks/useResolution';
+import { refreshInboxSummary } from '../hooks/useImportStatus';
+import { usePlatformConnections } from '../context/PlatformConnectionsContext';
+import { useOrg } from '../context/OrgContext';
 import { supabase } from '../lib/supabase';
 import {
   fetchImportCandidateDetails,
@@ -72,6 +76,7 @@ import type {
   SyncItem,
 } from '../types/syncItem';
 import { buildImportFrontDoorRows, importFrontDoorAction } from '../lib/importFrontDoor';
+import { decideReviewQueueCompletion } from '../lib/reviewQueueTruth';
 
 const log = createLogger('ImportQuestionQueue');
 const SURFACE = '#F5F5F7';
@@ -81,7 +86,7 @@ const GREY = '#9CA3AF';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportQuestionQueue'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportQuestionQueue'>;
-type Stage = 'loading' | 'explainer' | 'front' | 'queue' | 'handoff' | 'receipt' | 'list';
+type Stage = 'loading' | 'explainer' | 'front' | 'queue' | 'handoff' | 'updating' | 'receipt' | 'list';
 type LedgerEntry = V7ReviewLedgerEntry;
 type LedgerOutcome = V7ReviewOutcome;
 
@@ -132,6 +137,9 @@ export default function ImportQuestionQueueScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation<NavType>();
   const insets = useSafeAreaInsets();
+  const { user } = useUser();
+  const { currentOrg } = useOrg();
+  const { refresh: refreshConnections } = usePlatformConnections();
   // Params can arrive undefined from a stale deep link or a mid-refactor
   // navigate call; destructuring undefined here crashed the whole screen.
   const { connectionId, platformName, importId } = route.params ?? ({} as RouteType['params']);
@@ -159,6 +167,7 @@ export default function ImportQuestionQueueScreen() {
   const [listError, setListError] = useState<string | null>(null);
   const [syncRules, setSyncRules] = useState<ConnectionSyncRules | null>(null);
   const [syncRulesReady, setSyncRulesReady] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const finishRef = useRef(false);
   const returnToListRef = useRef(false);
@@ -363,18 +372,59 @@ export default function ImportQuestionQueueScreen() {
     setStage('front');
   }, [connectionId]);
 
+  const ownerKey = user?.id
+    ? `${user.id}:${currentOrg?.id || 'personal'}`
+    : '';
+
   const finishQueue = useCallback(async () => {
     if (finishRef.current) return;
     finishRef.current = true;
+    setStage('updating');
+    setUpdateError(null);
     try {
-      await refresh();
+      const resolution = await refresh();
+      const remainingQuestionCount = resolution
+        ? v7QuestionItemCount(resolution.needsAttention ?? [])
+        : null;
+      if (remainingQuestionCount !== 0) {
+        const decision = decideReviewQueueCompletion({
+          remainingQuestionCount,
+          inboxSummaryRefreshed: false,
+          connectionsRefreshed: false,
+        });
+        if (decision === 'questions_remain') {
+          setQueueStartCount(Math.max(remainingQuestionCount || 0, 1));
+          setStage('queue');
+        } else {
+          setUpdateError('Couldn’t verify the connection. Try again.');
+        }
+        return;
+      }
+
+      const [refreshedInboxSummary, refreshedConnections] = await Promise.all([
+        refreshInboxSummary(ownerKey),
+        refreshConnections(),
+      ]);
+      const refreshedInboxConnection = refreshedInboxSummary?.connections.find(
+        (connection) => connection.connectionId === connectionId,
+      );
+      const decision = decideReviewQueueCompletion({
+        remainingQuestionCount,
+        inboxSummaryRefreshed: refreshedInboxConnection?.attentionVerified === true
+          && refreshedInboxConnection.needsAttention === 0,
+        connectionsRefreshed: refreshedConnections !== null,
+      });
+      if (decision !== 'receipt') {
+        setUpdateError('Couldn’t verify the connection. Try again.');
+        return;
+      }
       await AsyncStorage.removeItem(activeKey(connectionId));
       setTargetCardId(null);
       setStage('receipt');
     } finally {
       finishRef.current = false;
     }
-  }, [connectionId, refresh]);
+  }, [connectionId, ownerKey, refresh, refreshConnections]);
 
   const startQueue = useCallback(() => {
     if (mainCards.length === 0) {
@@ -771,7 +821,7 @@ export default function ImportQuestionQueueScreen() {
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
           <PillButton
             label={frontDoorCta.label}
-            onPress={frontDoorCta.opensQuestions ? beginQuestions : () => navigation.goBack()}
+            onPress={frontDoorCta.opensQuestions ? beginQuestions : () => void finishQueue()}
           />
           {frontDoorCta.showLater ? (
             <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />
@@ -795,6 +845,28 @@ export default function ImportQuestionQueueScreen() {
             onKeepShowing={keepShowing}
           />
         </QuestionScroll>
+      </View>
+    );
+  }
+
+  if (stage === 'updating') {
+    return (
+      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}> 
+        <InboxHeader onBack={() => navigation.goBack()} />
+        <View style={styles.center}>
+          {updateError ? (
+            <MaterialCommunityIcons name="alert-circle-outline" size={38} color={AMBER} />
+          ) : (
+            <ActivityIndicator color={IC.accent} />
+          )}
+          <Text style={styles.doneTitle}>Updating connection</Text>
+          <Text style={styles.screenSubtitle}>
+            {updateError || 'Checking that review is clear.'}
+          </Text>
+          {updateError ? (
+            <PillButton label="Retry" onPress={() => void finishQueue()} style={styles.retryButton} />
+          ) : null}
+        </View>
       </View>
     );
   }
