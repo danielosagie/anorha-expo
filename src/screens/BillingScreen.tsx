@@ -6,7 +6,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator,
   RefreshControl,
   Linking,
   Modal,
@@ -26,7 +25,8 @@ import { API_BASE_URL } from '../config/env';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { capture, AnalyticsEvents } from '../lib/analytics';
 import { ApiError, apiJson } from '../lib/apiClient';
-import { openBillingUrl } from '../lib/billingReturn';
+import { openBillingUrl, withMobileReturn } from '../lib/billingReturn';
+import { decideTopUpPoll } from '../lib/topUpPolling';
 import {
   deriveBillingState,
   formatBillingDate,
@@ -45,8 +45,21 @@ const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
 
 const ANORHA_GREEN = BRAND_PRIMARY;
 const WHITE_BG = '#FFFFFF';
+const TOP_UP_POLL_INTERVAL_MS = 2_000;
+const TOP_UP_POLL_TIMEOUT_MS = 30_000;
+const TOP_UP_SUMMARY_REQUEST_TIMEOUT_MS = 5_000;
 
 type BillingSummaryResponse = RawBillingSummary & Record<string, any>;
+type TopUpPhase = 'idle' | 'starting' | 'waiting';
+type TopUpFeedback =
+  | { kind: 'confirmed'; amountCents: number; animationKey: number }
+  | { kind: 'processing' };
+type TopUpCheckoutSession = {
+  url: string;
+  snapshot: BillingSummaryResponse | null;
+  amountCents: number;
+  runId: number;
+};
 
 function safeNumber(value: any, fallback = 0): number {
   const num = typeof value === 'string' ? Number(value) : value;
@@ -56,6 +69,13 @@ function safeNumber(value: any, fallback = 0): number {
 function formatCurrency(value: number): string {
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
+
+function formatTopUpAmount(cents: number): string {
+  return cents % 100 === 0 ? `$${cents / 100}` : formatCurrency(cents / 100);
+}
+
+const wait = (milliseconds: number) =>
+  new Promise<void>(resolve => setTimeout(resolve, milliseconds));
 
 // Raw usage keys → plain-English, transparent labels. Deliberately contains NO internal
 // tool/vendor names (model providers, search/scrape services, …) so none can be recovered
@@ -153,12 +173,20 @@ export default function BillingScreen() {
   const [showTierSelector, setShowTierSelector] = useState(false);
   const [showCreditsModal, setShowCreditsModal] = useState(false);
   const [selectedCreditAmount, setSelectedCreditAmount] = useState<number | null>(50);
-  const [isTopUpLoading, setIsTopUpLoading] = useState(false);
+  const [topUpPhase, setTopUpPhase] = useState<TopUpPhase>('idle');
+  const [topUpFeedback, setTopUpFeedback] = useState<TopUpFeedback | null>(null);
   const [isAddingPaymentMethod, setIsAddingPaymentMethod] = useState(false);
-  const pendingCheckoutUrlRef = React.useRef<string | null>(null);
+  const topUpLockedRef = React.useRef(false);
+  const topUpRunIdRef = React.useRef(0);
+  const pendingCheckoutRef = React.useRef<TopUpCheckoutSession | null>(null);
+  const processingCheckoutRef = React.useRef<{
+    snapshot: BillingSummaryResponse;
+    amountCents: number;
+  } | null>(null);
 
   const isPartner = userRole === 'partner';
   const hasSummaryData = !!summary && typeof summary === 'object';
+  const isTopUpBusy = topUpPhase !== 'idle';
 
   const refreshBillingData = useCallback(async () => {
     setIsRefreshing(true);
@@ -182,8 +210,18 @@ export default function BillingScreen() {
       ]);
 
       if (summaryRes?.ok) {
-        const newSummary = await summaryRes.json();
+        const newSummary = await summaryRes.json() as BillingSummaryResponse;
         setSummary(newSummary);
+        const processingCheckout = processingCheckoutRef.current;
+        if (processingCheckout
+          && decideTopUpPoll(processingCheckout.snapshot, newSummary) === 'confirmed') {
+          processingCheckoutRef.current = null;
+          setTopUpFeedback({
+            kind: 'confirmed',
+            amountCents: processingCheckout.amountCents,
+            animationKey: Date.now(),
+          });
+        }
       }
       if (invoicesRes?.ok) {
         const newInvoices = await invoicesRes.json();
@@ -223,6 +261,11 @@ export default function BillingScreen() {
     return () => sub.remove();
   }, [refreshBillingData]);
 
+  useEffect(() => () => {
+    topUpRunIdRef.current += 1;
+    topUpLockedRef.current = false;
+  }, []);
+
   const planFromSummary =
     summary?.subscription?.CurrentPlan || summary?.subscription?.current_plan;
   const planName = (planFromSummary as 'Growth' | 'Teams' | undefined) || undefined;
@@ -231,7 +274,9 @@ export default function BillingScreen() {
     || billingState.subscription.state === 'canceled_paid_through';
 
   const computeAllowanceCents = safeNumber(
-    summary?.compute_allowance_cents ?? summary?.ai_allowance_cents ?? summary?.ai_credits_cents,
+    // RW10's combined credit balance includes remaining top-ups. Prefer it so the
+    // existing animated usage bar responds immediately after fulfillment.
+    summary?.ai_credits_cents ?? summary?.compute_allowance_cents ?? summary?.ai_allowance_cents,
     planName === 'Teams' ? 600 : 200,
   );
   const teamMembersCount = safeNumber(summary?.team_members_count);
@@ -413,57 +458,155 @@ export default function BillingScreen() {
     }
   };
 
-  const handleAddCredits = async () => {
-    if (!selectedCreditAmount) return;
-    setIsTopUpLoading(true);
-    try {
-      const token = await getToken();
-      if (!token) return;
-      const res = await fetch(`${API_BASE}/billing/allowance/topup`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amountCents: selectedCreditAmount * 100 }),
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data?.success && data.checkoutUrl) {
-        // iOS: presenting SFSafariViewController while the RN Modal is mid-dismissal
-        // fails silently (dead modal host). Stash the URL and let the Modal's
-        // onDismiss (fires when dismissal truly completes) present the browser.
-        // A fixed delay is a timing bet that loses under CPU load.
-        pendingCheckoutUrlRef.current = data.checkoutUrl;
-        setShowCreditsModal(false);
-        if (Platform.OS !== 'ios') {
-          // Android Custom Tabs are activities; no UIKit presentation race.
-          const url = pendingCheckoutUrlRef.current;
-          pendingCheckoutUrlRef.current = null;
-          if (url) {
-            await openBillingUrl(url);
-            refreshBillingData();
-          }
+  const releaseTopUpLock = (runId: number) => {
+    if (runId !== topUpRunIdRef.current) return;
+    topUpLockedRef.current = false;
+    setTopUpPhase('idle');
+  };
+
+  const showTopUpProcessing = (session: TopUpCheckoutSession) => {
+    if (session.runId !== topUpRunIdRef.current) return;
+    processingCheckoutRef.current = session.snapshot
+      ? { snapshot: session.snapshot, amountCents: session.amountCents }
+      : null;
+    setTopUpFeedback({ kind: 'processing' });
+    releaseTopUpLock(session.runId);
+  };
+
+  const pollTopUpSummary = async (session: TopUpCheckoutSession) => {
+    const deadline = Date.now() + TOP_UP_POLL_TIMEOUT_MS;
+    let lastSummary: BillingSummaryResponse | null = null;
+
+    while (session.runId === topUpRunIdRef.current && Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      try {
+        const nextSummary = await apiJson<BillingSummaryResponse>('/api/billing/summary', {
+          timeoutMs: Math.min(TOP_UP_SUMMARY_REQUEST_TIMEOUT_MS, remainingMs),
+        });
+        if (session.runId !== topUpRunIdRef.current) return;
+
+        const verdict = decideTopUpPoll(session.snapshot, nextSummary);
+        if (verdict === 'failed') {
+          showTopUpProcessing(session);
+          return;
         }
-      } else {
-        Alert.alert('Credits', data?.error || 'Could not start checkout. Try again.');
+
+        lastSummary = nextSummary;
+        if (verdict === 'confirmed') {
+          processingCheckoutRef.current = null;
+          setSummary(nextSummary);
+          setTopUpFeedback({
+            kind: 'confirmed',
+            amountCents: session.amountCents,
+            animationKey: Date.now(),
+          });
+          releaseTopUpLock(session.runId);
+          return;
+        }
+      } catch (error) {
+        log.warn('Top-up confirmation unavailable:', error);
+        showTopUpProcessing(session);
+        return;
+      }
+
+      const delayMs = Math.min(TOP_UP_POLL_INTERVAL_MS, deadline - Date.now());
+      if (delayMs > 0) await wait(delayMs);
+    }
+
+    if (session.runId !== topUpRunIdRef.current) return;
+    if (lastSummary) setSummary(lastSummary);
+    showTopUpProcessing(session);
+  };
+
+  const presentTopUpCheckout = async (session: TopUpCheckoutSession) => {
+    try {
+      // ASWebAuthenticationSession on iOS and a Custom Tab on Android share the
+      // system browser session. The promise resolves for a deep-link return or close.
+      await openBillingUrl(session.url);
+    } catch (error) {
+      log.error('Checkout browser error:', error);
+      if (session.runId === topUpRunIdRef.current) {
+        Alert.alert('Credits', 'Could not open checkout. Try again.');
+        releaseTopUpLock(session.runId);
+      }
+      return;
+    }
+
+    if (session.runId !== topUpRunIdRef.current) return;
+    await pollTopUpSummary(session);
+  };
+
+  const handleAddCredits = async () => {
+    if (!selectedCreditAmount || topUpLockedRef.current) return;
+
+    const amountCents = selectedCreditAmount * 100;
+    const runId = topUpRunIdRef.current + 1;
+    topUpRunIdRef.current = runId;
+    topUpLockedRef.current = true;
+    processingCheckoutRef.current = null;
+    setTopUpFeedback(null);
+    setTopUpPhase('starting');
+
+    let snapshot = summary;
+    try {
+      snapshot = await apiJson<BillingSummaryResponse>('/api/billing/summary', {
+        timeoutMs: TOP_UP_SUMMARY_REQUEST_TIMEOUT_MS,
+      });
+      if (runId !== topUpRunIdRef.current) return;
+      setSummary(snapshot);
+    } catch (error) {
+      // Checkout can still proceed with the screen's last known summary. If there is
+      // no safe baseline, the poll helper will choose the honest processing state.
+      log.warn('Fresh pre-checkout billing summary unavailable:', error);
+    }
+
+    try {
+      const successUrl = withMobileReturn('https://app.anorha.app/billing?success=true');
+      const cancelUrl = withMobileReturn('https://app.anorha.app/billing?canceled=true');
+      const data = await apiJson<{
+        success?: boolean;
+        checkoutUrl?: string;
+        error?: string;
+      }>('/api/billing/allowance/topup', {
+        method: 'POST',
+        body: { amountCents, successUrl, cancelUrl },
+      });
+
+      if (runId !== topUpRunIdRef.current) return;
+      if (!data?.success || !data.checkoutUrl) {
+        throw new Error(data?.error || 'Checkout redirect unavailable');
+      }
+
+      const session: TopUpCheckoutSession = {
+        url: data.checkoutUrl,
+        snapshot,
+        amountCents,
+        runId,
+      };
+      setTopUpPhase('waiting');
+
+      // iOS cannot present its auth browser while the React Native Modal is still
+      // dismissing. onDismiss is the deterministic hand-off point.
+      pendingCheckoutRef.current = session;
+      setShowCreditsModal(false);
+      if (Platform.OS !== 'ios') {
+        pendingCheckoutRef.current = null;
+        await presentTopUpCheckout(session);
       }
     } catch (error) {
       log.error('Top-up error:', error);
-      Alert.alert('Credits', 'Could not start checkout. Try again.');
-    } finally {
-      setIsTopUpLoading(false);
+      if (runId === topUpRunIdRef.current) {
+        Alert.alert('Credits', 'Could not start checkout. Try again.');
+        releaseTopUpLock(runId);
+      }
     }
   };
 
-  const handleCreditsModalDismiss = useCallback(async () => {
-    const url = pendingCheckoutUrlRef.current;
-    pendingCheckoutUrlRef.current = null;
-    if (!url) return;
-    try {
-      await openBillingUrl(url);
-      refreshBillingData();
-    } catch (error) {
-      log.error('Checkout browser error:', error);
-      Alert.alert('Credits', 'Could not open checkout. Try again.');
-    }
-  }, [refreshBillingData]);
+  const handleCreditsModalDismiss = async () => {
+    const session = pendingCheckoutRef.current;
+    pendingCheckoutRef.current = null;
+    if (session) await presentTopUpCheckout(session);
+  };
 
   const openInvoiceUrl = (inv: any) => {
     const url = inv.hosted_invoice_url || inv.hosted_url || inv.url;
@@ -519,6 +662,13 @@ export default function BillingScreen() {
         style={styles.scroll}
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={(
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={refreshBillingData}
+            tintColor={ANORHA_GREEN}
+          />
+        )}
       >
         <PageHeader title="Billing" onBack={() => navigation.goBack()} />
 
@@ -641,7 +791,31 @@ export default function BillingScreen() {
                   <Text style={styles.listValue}>AI usage</Text>
                   <Text style={styles.listSubValue}>{computeUsagePercent}% used</Text>
                 </View>
-                <HealthBar used={computeUsedCents} limit={computeAllowanceCents} fillColor={ANORHA_GREEN} />
+                {topUpFeedback?.kind === 'confirmed' ? (
+                  <View style={styles.topUpConfirmation} accessibilityLiveRegion="polite">
+                    <Text style={styles.topUpConfirmedText}>
+                      {formatTopUpAmount(topUpFeedback.amountCents)} added
+                    </Text>
+                    <HealthBar
+                      key={`confirmed-${topUpFeedback.animationKey}`}
+                      used={topUpFeedback.amountCents}
+                      limit={topUpFeedback.amountCents}
+                      fillColor={ANORHA_GREEN}
+                    />
+                  </View>
+                ) : topUpFeedback?.kind === 'processing' ? (
+                  <Text
+                    accessibilityLiveRegion="polite"
+                    style={styles.topUpProcessingText}
+                  >
+                    Payment received. Credits can take a minute - pull to refresh.
+                  </Text>
+                ) : null}
+                <HealthBar
+                  used={computeUsedCents}
+                  limit={computeAllowanceCents}
+                  fillColor={ANORHA_GREEN}
+                />
                 {aiOverageDollars > 0 && <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {formatCurrency(aiOverageDollars)} overage</Text>}
               </View>
               <View style={styles.separator} />
@@ -655,7 +829,12 @@ export default function BillingScreen() {
               </View>
               <View style={styles.separator} />
               <TouchableOpacity style={styles.listItemAction} onPress={() => setShowCreditsModal(true)}>
-                <Text style={styles.listValue}>Add credits</Text>
+                <View>
+                  <Text style={styles.listValue}>Add credits</Text>
+                  {isTopUpBusy ? (
+                    <Text style={styles.listSubValue}>Waiting on payment...</Text>
+                  ) : null}
+                </View>
                 <ChevronRight size={20} color="#D4D4D8" />
               </TouchableOpacity>
             </View>
@@ -802,7 +981,9 @@ export default function BillingScreen() {
         visible={showCreditsModal}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setShowCreditsModal(false)}
+        onRequestClose={() => {
+          if (topUpPhase !== 'starting') setShowCreditsModal(false);
+        }}
         onDismiss={handleCreditsModalDismiss}
       >
         <View style={styles.creditsOverlay}>
@@ -814,8 +995,13 @@ export default function BillingScreen() {
               {[5, 10, 25, 50].map(amount => (
                 <TouchableOpacity
                   key={amount}
-                  style={[styles.creditsChip, selectedCreditAmount === amount && styles.creditsChipSelected]}
+                  style={[
+                    styles.creditsChip,
+                    selectedCreditAmount === amount && styles.creditsChipSelected,
+                    isTopUpBusy && styles.disabledAction,
+                  ]}
                   onPress={() => setSelectedCreditAmount(amount)}
+                  disabled={isTopUpBusy}
                 >
                   <Text style={[styles.creditsChipText, selectedCreditAmount === amount && styles.creditsChipTextSelected]}>
                     ${amount}
@@ -824,17 +1010,23 @@ export default function BillingScreen() {
               ))}
             </View>
             <TouchableOpacity
-              style={styles.creditsButton}
+              style={[styles.creditsButton, isTopUpBusy && styles.creditsButtonDisabled]}
               onPress={handleAddCredits}
-              disabled={isTopUpLoading || !selectedCreditAmount}
+              disabled={isTopUpBusy || !selectedCreditAmount}
             >
-              {isTopUpLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
+              {topUpPhase === 'starting' ? (
+                <Text style={styles.creditsButtonText}>Opening checkout...</Text>
+              ) : topUpPhase === 'waiting' ? (
+                <Text style={styles.creditsButtonText}>Waiting on payment...</Text>
               ) : (
                 <Text style={styles.creditsButtonText}>Continue</Text>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.creditsCancel} onPress={() => setShowCreditsModal(false)}>
+            <TouchableOpacity
+              style={[styles.creditsCancel, topUpPhase === 'starting' && styles.disabledAction]}
+              onPress={() => setShowCreditsModal(false)}
+              disabled={topUpPhase === 'starting'}
+            >
               <Text style={styles.creditsCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -932,6 +1124,22 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: ANORHA_GREEN,
   },
+  topUpConfirmation: {
+    marginBottom: 12,
+  },
+  topUpConfirmedText: {
+    fontSize: 14,
+    fontFamily: 'Inter_700Bold',
+    color: '#4D7C0F',
+    marginBottom: 8,
+  },
+  topUpProcessingText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Inter_500Medium',
+    color: '#52525B',
+    marginBottom: 8,
+  },
   actionErrorText: {
     fontSize: 13,
     fontFamily: 'Inter_500Medium',
@@ -1015,6 +1223,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: ANORHA_GREEN,
+  },
+  creditsButtonDisabled: {
+    opacity: 0.65,
   },
   creditsButtonText: {
     color: '#FFFFFF',
