@@ -29,7 +29,6 @@ import {
   latestImportsByConnection,
   listSellingPlatformConnections,
 } from '../lib/connectionImportPresentation';
-import { isUnhealthyPlatformConnection } from '../lib/platformConnectionVisibility';
 import { useTheme } from '../context/ThemeContext';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -368,12 +367,12 @@ const ConnectionsScreen = () => {
               const recentImport = recentImportByConnection.get(c.Id);
               const st = presentationByConnectionId.get(c.Id)!;
               const importInProgress = st.importInProgress;
-              const needsReconnect = isUnhealthyPlatformConnection(c);
-              const attn = attentionByConn[c.Id] || 0;
+              const needsReconnect = st.requiresReconnect;
+              const attn = Math.max(attentionByConn[c.Id] || 0, st.attentionCount);
               const title = shopLabel(c);
               const started = importDateLabel(st.occurredAt || undefined);
               const secondaryFailureDate = importDateLabel(st.secondaryFailure?.occurredAt);
-              const statusColor = needsReconnect ? theme.colors.error : st.color;
+              const statusColor = st.color;
               const statusParts = [st.label];
               if (importInProgress && attn > 0) statusParts.push(`${attn} pending`);
               if (started) {
@@ -392,6 +391,14 @@ const ConnectionsScreen = () => {
                     }
                     if (st.kind === 'failed' && st.canRetryImport) {
                       openImportRetry(c);
+                      return;
+                    }
+                    if (st.kind === 'review') {
+                      navigation.navigate('ImportQuestionQueue', {
+                        connectionId: c.Id,
+                        importId: recentImport?.importId,
+                        platformName: c.PlatformType,
+                      });
                       return;
                     }
                     if (importInProgress) {
@@ -419,7 +426,7 @@ const ConnectionsScreen = () => {
                       </Text>
                     </View>
                     {managing && st.failureReason ? (
-                      <Text style={[styles.failureReason, { color: theme.colors.error }]}>{st.failureReason}</Text>
+                      <Text style={[styles.failureReason, { color: st.color }]}>{st.failureReason}</Text>
                     ) : null}
                     {st.secondaryFailure && st.canRetryImport ? (
                       <TouchableOpacity
@@ -488,6 +495,10 @@ const ConnectionsScreen = () => {
             })
           )}
         </View>
+
+        {importStatus.error ? (
+          <Text style={styles.importStatusError}>Couldn't check imports. Pull to retry.</Text>
+        ) : null}
 
         <TouchableOpacity style={styles.connectBtn} onPress={() => overlay.show()} activeOpacity={0.85}>
           <Plus size={18} color="#FFFFFF" />
@@ -679,15 +690,11 @@ const ConnectionsScreen = () => {
           setFlowPlatform(null);
           setRetryConnectionId(null);
         }}
-        onConnected={(connectionId) => {
+        onConnected={(connectionId, attentionCount) => {
           const platformName = flowPlatform || 'Platform';
           setFlowPlatform(null);
           setRetryConnectionId(null);
-          refresh?.();
-          // New store, new inbox work: refresh the shared summary too so the
-          // "needs you" counts move with the connect, not on the next focus.
-          void importStatus.refresh();
-          if (connectionId) {
+          if (connectionId && (attentionCount || 0) > 0) {
             navigation.navigate('ImportQuestionQueue', { connectionId, platformName });
           }
         }}
@@ -723,6 +730,7 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: '#ECEBE6' },
   loadingRow: { paddingVertical: 26, alignItems: 'center' },
   empty: { paddingVertical: 22, textAlign: 'center', color: '#9CA3AF', fontFamily: 'Inter_500Medium', fontSize: 13, paddingHorizontal: 8, lineHeight: 19 },
+  importStatusError: { color: '#71717A', fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 8, marginLeft: 4 },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
   rowBorder: { borderTopWidth: 1, borderTopColor: '#F1F1EE' },

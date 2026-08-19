@@ -50,7 +50,7 @@ export default function ConnectAccountsStep({
   orgName?: string;
   onDone: () => void;
 }) {
-  const { connections, progressByConnectionId, refresh } = usePlatformConnections();
+  const { connections, progressByConnectionId } = usePlatformConnections();
   const { computerOnline, presenceLoaded } = useFacebookJobStatus();
   const importStatus = useImportStatus();
   const presentationByConnectionId = useMemo(
@@ -145,8 +145,6 @@ export default function ConnectAccountsStep({
         onCancel={() => setFlowPlatform(null)}
         onConnected={() => {
           setFlowPlatform(null);
-          refresh?.();
-          setTimeout(() => refresh?.(), 2500);
         }}
       />
     </Animated.View>

@@ -6,18 +6,15 @@
 
 import { useCallback } from 'react';
 import * as WebBrowser from 'expo-web-browser';
-import { supabase, ensureSupabaseJwt } from '../lib/supabase';
-import { API_BASE_URL } from '../config/env';
+import { supabase } from '../lib/supabase';
 import { getPlatform } from '../config/platforms';
 import { apiJson, ApiError } from '../lib/apiClient';
-
-// Match useResolution/useImportStatus: endpoint paths below are relative to the
-// normalized `/api` base, regardless of whether runtime configuration already
-// includes that suffix.
-const API_BASE = (() => {
-  const trimmed = API_BASE_URL.replace(/\/$/, '');
-  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
-})();
+import {
+  CONNECT_FALLBACK_COPY,
+  connectErrorCopy,
+  isConnectErrorCode,
+  type ConnectErrorCode,
+} from '../lib/connectErrorCopy';
 
 export type ConnectablePlatform = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook';
 
@@ -26,10 +23,9 @@ export interface ConnectResult {
   success: boolean;
   /** present for platforms that return it on the deep-link callback (Square/Clover). */
   connectionId?: string;
-  /** Whether the server confirmed that the import scan is queued or running. */
-  scanStarted?: boolean;
   /** user backed out of the browser sheet — not an error worth surfacing loudly. */
   cancelled?: boolean;
+  errorCode?: ConnectErrorCode;
   errorMessage?: string;
 }
 
@@ -43,7 +39,12 @@ interface ConnectIntentResponse {
   expiresIn: number;
 }
 
-const parseCallback = (url: string): { status: string | null; connectionId?: string; message?: string } => {
+const parseCallback = (url: string): {
+  status: string | null;
+  connectionId?: string;
+  code?: string;
+  message?: string;
+} => {
   // Strip any hash fragment (e.g. "#_=_") before reading query params.
   const noHash = url.split('#')[0];
   const query = noHash.split('?')[1] || '';
@@ -51,24 +52,29 @@ const parseCallback = (url: string): { status: string | null; connectionId?: str
   return {
     status: params.get('status'),
     connectionId: params.get('connectionId') || undefined,
+    code: params.get('code') || undefined,
     message: params.get('message') || undefined,
   };
 };
 
+let activePlatformAuthSessions = 0;
+let platformCallbackClaimedUntil = 0;
+
+/** App.tsx uses this to leave an in-flight auth-session callback to its owner. */
+export function isPlatformAuthCallbackClaimed(): boolean {
+  return activePlatformAuthSessions > 0 || Date.now() < platformCallbackClaimedUntil;
+}
+
 export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
-  // Start (or reuse) the server-owned scan. OAuth authorization and import
-  // queueing are separate outcomes, so callers can render a retry when this
-  // returns false instead of claiming inventory is importing.
+  // Redundant, bounded kick. OAuth callbacks already autoqueue supported
+  // providers server-side, so this result is reconciliation evidence only.
   const startScan = useCallback(async (connectionId: string): Promise<boolean> => {
     try {
-      const token = await ensureSupabaseJwt();
-      if (!token) return false;
-      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-      const response = await fetch(`${API_BASE}/sync/connections/${connectionId}/start-scan`, {
+      await apiJson(`/api/sync/connections/${encodeURIComponent(connectionId)}/start-scan`, {
         method: 'POST',
-        headers,
+        timeoutMs: 18000,
       });
-      return response.ok;
+      return true;
     } catch {
       return false;
     }
@@ -136,10 +142,14 @@ export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
       }
 
       let result: WebBrowser.WebBrowserAuthSessionResult;
+      activePlatformAuthSessions += 1;
       try {
         result = await WebBrowser.openAuthSessionAsync(url, finalRedirectUri, { showInRecents: true });
       } catch {
         return { success: false, errorMessage: 'Could not open the connection window.' };
+      } finally {
+        activePlatformAuthSessions = Math.max(0, activePlatformAuthSessions - 1);
+        platformCallbackClaimedUntil = Date.now() + 5000;
       }
 
       if (result.type === 'cancel' || result.type === 'dismiss') {
@@ -147,26 +157,35 @@ export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
       }
 
       if (result.type === 'success' && result.url) {
-        const { status, connectionId, message } = parseCallback(result.url);
-        if (status === 'error') {
-          return { success: false, errorMessage: message || 'Connection failed. Please try again.' };
+        const { status, connectionId, code, message } = parseCallback(result.url);
+        const callbackError = connectErrorCopy({ code, message });
+        const knownCode = isConnectErrorCode(code) ? code : undefined;
+
+        if (callbackError.kind === 'success_already') {
+          return { success: true, connectionId };
+        }
+        if (callbackError.kind === 'cancelled') {
+          return { success: false, cancelled: true };
+        }
+        if (status === 'error' || knownCode) {
+          return {
+            success: false,
+            errorCode: knownCode,
+            errorMessage: callbackError.message,
+          };
         }
         // Require an affirmative signal — an explicit success status OR a
         // connectionId. A callback with neither (malformed/stale/replayed deep
         // link) is NOT a real connection, so don't report success.
         if (status !== 'success' && !connectionId) {
-          return { success: false, errorMessage: 'The connection did not complete. Please try again.' };
+          return { success: false, errorMessage: CONNECT_FALLBACK_COPY };
         }
-        let scanStarted: boolean | undefined;
-        if (connectionId) {
-          scanStarted = await startScan(connectionId);
-        }
-        return { success: true, connectionId, scanStarted };
+        return { success: true, connectionId };
       }
 
-      return { success: false, errorMessage: 'The connection did not complete. Please try again.' };
+      return { success: false, errorMessage: CONNECT_FALLBACK_COPY };
     },
-    [startScan],
+    [],
   );
 
   return { connect, startScan };

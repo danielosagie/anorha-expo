@@ -51,6 +51,9 @@ import {
   loadActiveFlowCheckpoint,
   saveActiveFlowCheckpoint,
 } from './src/utils/activeFlowPersistence';
+import { isPlatformAuthCallbackClaimed } from './src/hooks/usePlatformConnect';
+import { connectErrorCopy } from './src/lib/connectErrorCopy';
+import ConnectImportToastWatcher from './src/components/ConnectImportToastWatcher';
 
 // Crash visibility. Empty/missing DSN no-ops cleanly so dev builds are
 // unaffected. Must run at module load, before the app renders.
@@ -288,14 +291,21 @@ const AppLifecycleEffects: React.FC = () => {
         try {
           // Handle auth callback
           if (url.startsWith('anorhaapp://auth-callback') || url.startsWith('anorhaapp://auth/callback')) {
+            // openAuthSessionAsync owns callbacks for an active connect flow.
+            // Consuming the same URL here would dismiss its surface, alert, and
+            // reset navigation before ConnectFlowSheet can reconcile the import.
+            if (isPlatformAuthCallbackClaimed()) return;
             const urlObject = new URL(url);
             const status = urlObject.searchParams.get('status');
             const platform = urlObject.searchParams.get('connection') || urlObject.searchParams.get('platform') || 'platform';
-            const errorMessage = urlObject.searchParams.get('message');
+            const callbackResolution = connectErrorCopy({
+              code: urlObject.searchParams.get('code'),
+              message: urlObject.searchParams.get('message'),
+            });
 
             console.log(`[App] Auth callback received: platform=${platform}, status=${status}`);
 
-            if (status === 'success') {
+            if (status === 'success' || callbackResolution.kind === 'success_already') {
               // Show brief success message
               Alert.alert('Success', `${platform.charAt(0).toUpperCase() + platform.slice(1)} connected successfully!`);
               // Navigate to Profile with a unique refresh timestamp to trigger data reload
@@ -316,8 +326,8 @@ const AppLifecycleEffects: React.FC = () => {
                   }],
                 })
               );
-            } else if (status === 'error') {
-              Alert.alert('Connection Failed', errorMessage || `Failed to connect ${platform}. Please try again.`);
+            } else if (status === 'error' && callbackResolution.kind === 'error') {
+              Alert.alert('Connection Failed', callbackResolution.message);
               // Still navigate to Profile to show the connection attempt result
               navigationRef.current?.navigate('AppStack', { screen: 'TabNavigator', params: { screen: 'Profile' } });
             }
@@ -774,6 +784,7 @@ const AppLifecycleEffects: React.FC = () => {
 
     return (
       <PlatformConnectionsProvider>
+        <ConnectImportToastWatcher />
         <PlatformPickerOverlayProvider>
           <NavigationContainer
             theme={APP_NAVIGATION_THEME}

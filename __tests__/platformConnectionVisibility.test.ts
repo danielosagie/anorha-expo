@@ -31,12 +31,18 @@ test('error connection is not usable for work', () => {
   assert.equal(isVisiblePlatformConnection({ IsEnabled: true, Status: 'error' }), false);
 });
 
-test('review connection is repairable, not usable', () => {
+test('review connection is repairable and remains usable because attention is non-blocking', () => {
   const connection = { IsEnabled: true, Status: 'review' };
 
-  assert.equal(isVisiblePlatformConnection(connection), false);
+  assert.equal(isVisiblePlatformConnection(connection), true);
   assert.equal(isListedPlatformConnection(connection), true);
-  assert.equal(isUnhealthyPlatformConnection(connection), true);
+  assert.equal(isUnhealthyPlatformConnection(connection), false);
+});
+
+test('needs-attention SyncState is non-blocking but explicit reauth is unhealthy', () => {
+  assert.equal(isVisiblePlatformConnection({ IsEnabled: true, Status: 'active', SyncState: 'needs-attention' }), true);
+  assert.equal(isUnhealthyPlatformConnection({ IsEnabled: true, Status: 'active', SyncState: 'needs-attention' }), false);
+  assert.equal(isUnhealthyPlatformConnection({ IsEnabled: true, Status: 'active', NeedsReauth: true }), true);
 });
 
 test('mid-import statuses are visible', () => {
