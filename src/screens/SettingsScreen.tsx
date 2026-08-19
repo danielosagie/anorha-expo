@@ -20,12 +20,11 @@ import PlatformAvatar from '../components/PlatformAvatar';
 import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import { normalizeDisplayName } from '../config/platforms';
 import { useImportStatus } from '../hooks/useImportStatus';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
-import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import {
   connectionImportPresentationsById,
   listSellingPlatformConnections,
 } from '../lib/connectionImportPresentation';
+import { connectionRowModel } from '../lib/connectionRowModel';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('SettingsScreen');
@@ -35,11 +34,6 @@ type Card = {
   label: string;
   icon: React.ReactNode;
   onPress: () => void;
-};
-
-const setupStatusOf = (uiState: ReturnType<typeof derivePlatformConnectStatus>['uiState']): { label: string; color: string } => {
-  if (uiState === 'needs-computer') return { label: 'Finish setup', color: '#BA7517' };
-  return { label: 'Checking', color: '#71717A' };
 };
 
 /** "myshop.myshopify.com" → "myshop"; resolves known platforms to their label. */
@@ -59,13 +53,6 @@ const SettingsScreen = () => {
     hasResolvedConnections,
     error: connectionsError,
   } = usePlatformConnections();
-  const {
-    computerOnline,
-    presenceLoaded,
-    degraded,
-    presenceUnavailable,
-  } = useFacebookJobStatus();
-  const computerStatusUnavailable = degraded || presenceUnavailable;
   // Import inbox aggregate feeds each integration row's truthful status.
   const importStatus = useImportStatus();
   const screenEnteredAtRef = useRef(Date.now());
@@ -231,33 +218,41 @@ const SettingsScreen = () => {
             )
           ) : (
             platformPreview.map((c: any, i: number) => {
-              const connectStatus = derivePlatformConnectStatus(c.PlatformType, [c], {
-                computerOnline,
-                presenceLoaded: presenceLoaded && !computerStatusUnavailable,
-              }, {
-                presentationByConnectionId,
-              });
-              const st = computerStatusUnavailable && connectStatus.oauthConnected && connectStatus.requiresComputer
-                ? { label: "Can't check now", color: '#71717A' }
-                : connectStatus.uiState === 'needs-computer' || connectStatus.uiState === 'checking'
-                  ? setupStatusOf(connectStatus.uiState)
-                  : presentationByConnectionId.get(c.Id)!;
+              const rowModel = connectionRowModel(presentationByConnectionId.get(c.Id)!);
+              const platformName = shopLabel(c);
+              const openConnections = () => navigation.navigate('Connections');
               return (
                 <TouchableOpacity
                   key={c.Id}
                   style={[styles.platformRow, i > 0 && styles.platformRowBorder]}
                   activeOpacity={0.7}
-                  onPress={() => navigation.navigate('Connections')}
+                  onPress={openConnections}
                 >
                   <PlatformAvatar platformType={(c.PlatformType || '').toLowerCase()} size="medium" />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.platformName} numberOfLines={1}>{shopLabel(c)}</Text>
+                    <Text style={styles.platformName} numberOfLines={1}>{platformName}</Text>
                     <View style={styles.statusRow}>
-                      <View style={[styles.dot, { backgroundColor: st.color }]} />
-                      <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
+                      <View style={[styles.dot, { backgroundColor: rowModel.status.color }]} />
+                      <Text style={[styles.statusText, { color: rowModel.status.color }]}>{rowModel.status.label}</Text>
                     </View>
                   </View>
-                  <ChevronRight size={20} color="#D4D4D8" />
+                  {rowModel.trailing.type === 'action' ? (
+                    <TouchableOpacity
+                      style={styles.platformAction}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${rowModel.trailing.label} ${platformName}`}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                      onPress={(event: any) => {
+                        event.stopPropagation?.();
+                        openConnections();
+                      }}
+                    >
+                      <Text style={styles.platformActionText}>{rowModel.trailing.label}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <ChevronRight size={20} color="#D4D4D8" />
+                  )}
                 </TouchableOpacity>
               );
             })
@@ -315,6 +310,8 @@ const styles = StyleSheet.create({
   },
   platformRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 13 },
   platformRowBorder: { borderTopWidth: 1, borderTopColor: '#F1F1EE' },
+  platformAction: { minWidth: 52, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' },
+  platformActionText: { color: '#52525B', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   platformName: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   dot: { width: 7, height: 7, borderRadius: 4 },
