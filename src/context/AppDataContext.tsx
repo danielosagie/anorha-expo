@@ -153,10 +153,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         body: JSON.stringify({ featureKey, quantity }),
       });
 
-      const payload = response.ok
-        ? await response.json()
-        : await response.json().catch(() => null);
-      const normalized = normalizeBillingGateResponse(payload, featureKey);
+      const payload = await response.json().catch(() => null);
+      const normalized = normalizeBillingGateResponse(response.ok ? payload : {
+        code: 'billing_status_unavailable',
+        message: typeof payload?.message === 'string'
+          ? payload.message
+          : `Billing status request failed (${response.status}).`,
+        featureKey,
+        blockingState: 'billing_status_unavailable',
+        canProceed: false,
+      }, featureKey);
       setBillingGate(normalized);
       setBillingGateUpdatedAt(Date.now());
       return normalized;

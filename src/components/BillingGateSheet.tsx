@@ -39,7 +39,7 @@ export default function BillingGateSheet({
       ? 'This scan can continue'
       : "You're out of free scans";
   const body = unavailable
-    ? 'Check your connection, then try the scan again.'
+    ? gate.message
     : invoiceable
       ? 'You can finish this scan now or review billing first.'
       : typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number'
