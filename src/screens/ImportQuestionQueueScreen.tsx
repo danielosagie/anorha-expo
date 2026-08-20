@@ -670,7 +670,7 @@ export default function ImportQuestionQueueScreen() {
   const busy = resolving != null;
   const hasQuestions = cards.length > 0;
   const pendingCommitCount = summary?.pendingCommit ?? 0;
-  const needsLookCount = result?.needsAttention.length ?? 0;
+  const needsLookCount = result?.needsAttention?.length ?? 0;
   const goHome = () => navigation.navigate('TabNavigator' as any, { screen: 'Clearouts' });
 
   useEffect(() => {

@@ -53,7 +53,16 @@ export function useResolution(connectionId: string | null | undefined, importId?
       const query = importId ? `?importId=${encodeURIComponent(importId)}` : '';
       const res = await apiFetch(`/api/sync/connections/${connectionId}/resolution${query}`);
       if (!res.ok) throw new Error(`Failed to load inbox: ${res.status}`);
-      const payload = (await res.json()) as ResolveResult;
+      const raw = await res.json();
+      // Normalize at the boundary: the server contract says needsAttention is
+      // always present, but a payload without it crashes every render site
+      // downstream (the whole app, since no per-screen error boundary exists).
+      const payload: ResolveResult = {
+        ...raw,
+        needsAttention: Array.isArray(raw?.needsAttention)
+          ? raw.needsAttention.map((it: any) => ({ ...it, resolution: it?.resolution ?? { kind: 'create' } }))
+          : [],
+      };
       setResult(payload);
     } catch (err: any) {
       const msg = err?.name === 'AbortError' || err?.message === 'Request timed out'
