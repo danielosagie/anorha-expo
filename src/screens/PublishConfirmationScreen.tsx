@@ -18,6 +18,14 @@ import { AppStackParamList } from '../navigation/AppNavigator';
 import { useOptimizerQueues } from '../hooks/useOptimizerQueues';
 import { IC, InboxHeader, SuccessBlock, PillButton, SectionCaption } from '../components/importinbox/InboxKit';
 import { createLogger } from '../utils/logger';
+import {
+  countProvenPublishSuccesses,
+  decidePublishStart,
+  initializePublishOutcomes,
+  publishOutcomeClaim,
+  reconcilePublishOutcomes,
+  type PublishOutcomeMap,
+} from '../lib/publishOutcomes';
 const log = createLogger('PublishConfirmationScreen');
 
 type UnknownRecord = Record<string, unknown>;
@@ -202,14 +210,25 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // When we arrive in 'publishing' mode this screen OWNS the POST: a calm "Publishing…"
   // state shows while it runs, then resolves to "Published!" only on a real 2xx. On failure
   // it shows an inline error + Retry — never a false success, never an abrupt pop-back.
-  const [phase, setPhase] = useState<'publishing' | 'done' | 'error'>(mode === 'publishing' ? 'publishing' : 'done');
-  const [errorMsg, setErrorMsg] = useState('');
+  const initialPublishDecision = mode === 'publishing'
+    ? decidePublishStart(publishPayloadRecord !== null)
+    : 'publishing';
+  const [phase, setPhase] = useState<'publishing' | 'done' | 'error'>(
+    mode === 'publishing' ? initialPublishDecision : 'done',
+  );
+  const [errorMsg, setErrorMsg] = useState(
+    mode === 'publishing' && initialPublishDecision === 'error'
+      ? 'Publishing details are missing. Go back and try again.'
+      : '',
+  );
   // Per-platform "open the live listing" URLs. Seeded from params (for non-owning callers),
   // then filled from the publish response so channel rows deep-link to the real marketplace page.
   const [liveUrls, setLiveUrls] = useState<Record<string, any>>(params.liveUrls || {});
-  // Per-platform outcome from the publish response's `results` array (keyed lowercase).
-  // Absent for older backends / non-owning callers — rows then read as before.
-  const [publishResults, setPublishResults] = useState<Record<string, { success: boolean; error?: string }>>({});
+  // Complete by construction: every requested channel exists as pending before
+  // the request. Only an explicit successful result can make it green.
+  const [publishResults, setPublishResults] = useState<PublishOutcomeMap>(() => (
+    initializePublishOutcomes(publishedPlatforms)
+  ));
   const [imageFailed, setImageFailed] = useState(false);
   const ranRef = useRef(false);
   // ONE base idempotency key per full-publish intent. This screen is mounted fresh per
@@ -226,22 +245,31 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   const activePublishIdemKeyRef = useRef(publishIdemKeyRef.current);
 
   const runPublish = useCallback(async (platformSubset?: string[]) => {
-    if (!publishPayload) { setPhase('done'); return; }
-    if (platformSubset) {
-      activePublishSubsetRef.current = platformSubset;
-      const subsetIdentity = platformSubset.map((platform) => platform.toLowerCase()).sort().join(',');
+    if (!publishPayloadRecord) {
+      setErrorMsg('Publishing details are missing. Go back and try again.');
+      setPhase('error');
+      return;
+    }
+    const normalizedSubset = platformSubset?.map((platform) => platform.toLowerCase());
+    if (normalizedSubset) {
+      activePublishSubsetRef.current = normalizedSubset;
+      const subsetIdentity = [...normalizedSubset].sort().join(',');
       activePublishIdemKeyRef.current = `${publishIdemKeyRef.current}-subset-${subsetIdentity}`;
     }
-    const requestedPlatforms = activePublishSubsetRef.current;
+    const requestedPlatforms = activePublishSubsetRef.current || publishedPlatforms;
     const requestPayload = requestedPlatforms
       ? {
-        ...publishPayload,
+        ...publishPayloadRecord,
         selectedPlatformsToPublish: requestedPlatforms,
         connectionIds: Object.fromEntries(
-          Object.entries(publishPayload.connectionIds || {}).filter(([platform]) => requestedPlatforms.includes(platform)),
+          Object.entries(asRecord(publishPayloadRecord.connectionIds) || {}).filter(([platform]) => requestedPlatforms.includes(platform.toLowerCase())),
         ),
       }
-      : publishPayload;
+      : publishPayloadRecord;
+    setPublishResults((previous) => ({
+      ...previous,
+      ...initializePublishOutcomes(requestedPlatforms),
+    }));
     setPhase('publishing');
     setErrorMsg('');
     try {
@@ -265,11 +293,11 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
             ? `“${j.details.sku}” is already used by another product. Change the SKU and try again.`
             : (j.message || text);
         } catch { /* keep raw text */ }
-        if (requestedPlatforms) {
+        if (activePublishSubsetRef.current) {
           setPublishResults((previous) => {
             const next = { ...previous };
             requestedPlatforms.forEach((platform) => {
-              next[platform] = { success: false, error: msg || 'Couldn’t publish this channel.' };
+              next[platform] = { status: 'failed', error: msg || 'Couldn’t publish this channel.' };
             });
             return next;
           });
@@ -289,32 +317,26 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
       // The endpoint returns 202 even when platforms fail — the truth is in `results`.
       // Every platform failed → this is an error, not a "Published!"; partial failures
       // stay on the summary but mark their rows honestly.
+      const map = reconcilePublishOutcomes(
+        requestedPlatforms,
+        Array.isArray(body?.results) ? body.results : [],
+      );
+      setPublishResults((previous) => activePublishSubsetRef.current
+        ? { ...previous, ...map }
+        : map);
       if (Array.isArray(body?.results) && body.results.length) {
-        const map: Record<string, { success: boolean; error?: string }> = {};
-        for (const r of body.results) {
-          if (r?.platform) map[String(r.platform).toLowerCase()] = { success: r.success !== false, error: r.error };
-        }
-        setPublishResults((previous) => requestedPlatforms ? { ...previous, ...map } : map);
         const entries = Object.values(map);
-        if (entries.length && entries.every((r) => !r.success)) {
-          if (requestedPlatforms) {
+        if (entries.length && entries.every((result) => result.status === 'failed')) {
+          if (activePublishSubsetRef.current) {
             setPhase('done');
           } else {
-            setErrorMsg(entries.find((r) => r.error)?.error || 'None of your channels accepted the listing.');
+            setErrorMsg(entries.find((result) => result.error)?.error || 'None of your channels accepted the listing.');
             setPhase('error');
           }
           return;
         }
-      } else if (requestedPlatforms) {
-        setPublishResults((previous) => {
-          const next = { ...previous };
-          requestedPlatforms.forEach((platform) => {
-            next[platform] = { success: true };
-          });
-          return next;
-        });
       }
-      setPhase('done'); // success → resolves to the calm "Published!" summary
+      setPhase('done');
     } catch (e: any) {
       log.error('[PublishConfirmation] Publish error:', e);
       // A client timeout (ApiError status 0, "Request timed out") reads calmer as a
@@ -323,11 +345,11 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         e instanceof ApiError && e.status === 0
           ? 'This is taking longer than expected. Please try again.'
           : 'Something went wrong while publishing. Please try again.';
-      if (requestedPlatforms) {
+      if (activePublishSubsetRef.current) {
         setPublishResults((previous) => {
           const next = { ...previous };
           requestedPlatforms.forEach((platform) => {
-            next[platform] = { success: false, error: msg };
+            next[platform] = { status: 'failed', error: msg };
           });
           return next;
         });
@@ -337,7 +359,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         setPhase('error');
       }
     }
-  }, [publishPayload]);
+  }, [publishPayloadRecord, publishedPlatforms]);
 
   useEffect(() => {
     if (mode !== 'publishing' || ranRef.current) return;
@@ -348,7 +370,8 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // True once at least one channel has resolved a real live-listing link.
   const anyLiveLink = (publishedPlatforms.length ? publishedPlatforms : ['shopify']).some((p: string) => {
     const l: any = (liveUrls || {})[String(p).toLowerCase()];
-    return typeof l === 'string' ? !!l : !!l?.url;
+    const hasUrl = typeof l === 'string' ? !!l : !!l?.url;
+    return hasUrl && publishResults[String(p).toLowerCase()]?.status === 'success';
   });
 
   const goBack = useCallback(() => {
@@ -426,17 +449,17 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
   // then resolves into the Avec "Published!" summary: green check, a muted summary line,
   // and per-channel calm rows (live deep-links + every dispatch nuance preserved).
   const channelKeys: string[] = publishedPlatforms.length ? publishedPlatforms : ['shopify'];
-  const failedChannelCount = channelKeys.filter((platform) => publishResults[platform]?.success === false).length;
-  const hasPublishOutcomes = Object.keys(publishResults).length > 0;
-  const successfulChannelCount = hasPublishOutcomes
-    ? channelKeys.filter((platform) => publishResults[platform]?.success === true).length
-    : channelKeys.length;
+  const failedChannelCount = channelKeys.filter((platform) => publishResults[platform]?.status === 'failed').length;
+  const unknownChannelCount = channelKeys.filter((platform) => publishResults[platform]?.status === 'confirmation_unknown').length;
+  const successfulChannelCount = countProvenPublishSuccesses(channelKeys, publishResults);
   const isPartialPublish = !savedToInventory && failedChannelCount > 0 && successfulChannelCount > 0;
   const doneTitle = savedToInventory
     ? 'Saved to inventory'
-    : isPartialPublish
+    : successfulChannelCount === channelKeys.length && channelKeys.length > 0
+      ? 'Published!'
+      : successfulChannelCount > 0
       ? `Published to ${successfulChannelCount} of ${channelKeys.length}`
-      : 'Published!';
+      : `${successfulChannelCount} of ${channelKeys.length} confirmed`;
   const summaryLine = [
     receiptTitle ? String(receiptTitle) : null,
     channelKeys.length ? `${channelKeys.length} channel${channelKeys.length === 1 ? '' : 's'}` : null,
@@ -460,7 +483,9 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
           </View>
           <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
             <PillButton label="Back to editor" variant="secondary" onPress={goBack} />
-            <PillButton label="Try again" onPress={() => { void runPublish(); }} />
+            {publishPayloadRecord ? (
+              <PillButton label="Try again" onPress={() => { void runPublish(); }} />
+            ) : null}
           </View>
         </>
       ) : phase === 'publishing' ? (
@@ -473,7 +498,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
         <>
           <ScrollView contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
             <View style={{ paddingTop: 28, paddingBottom: 14 }}>
-              {isPartialPublish ? (
+              {isPartialPublish || unknownChannelCount > 0 ? (
                 <View style={styles.partialBlock}>
                   <View style={styles.partialCircle}>
                     <Icon name="alert-outline" size={32} color="#6B7280" />
@@ -526,9 +551,15 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 // vocabulary (queued / posting / waiting-for-computer / needs-a-check /
                 // couldn't-post); everything else without a link reads a quiet "Live" —
                 // unless this was an inventory-only save, where nothing is live yet.
-                const failed = publishResults[lower]?.success === false;
+                const outcome = publishResults[lower];
+                const failed = outcome?.status === 'failed';
+                const confirmationUnknown = outcome?.status === 'confirmation_unknown';
+                const provenSuccess = outcome?.status === 'success';
+                const outcomeClaim = publishOutcomeClaim(outcome, platformLabel(lower));
                 const st = failed
-                  ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish' }
+                  ? { dotColor: '#BA7517', color: '#BA7517', label: outcomeClaim.label }
+                  : confirmationUnknown
+                    ? { dotColor: '#9CA3AF', color: '#71717A', label: outcomeClaim.label }
                   : isFb
                     ? (fbStatus || (fbDispatch.degraded || fbDispatch.jobsUnavailable
                       ? { dotColor: '#9CA3AF', color: '#71717A', label: "Can't check now" }
@@ -537,7 +568,9 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                         : { dotColor: '#9CA3AF', color: '#71717A', label: 'Posting soon' }))
                     : savedToInventory
                       ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
-                      : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
+                      : provenSuccess
+                        ? { dotColor: IC.accent, color: IC.accent, label: outcomeClaim.label }
+                        : { dotColor: '#9CA3AF', color: '#71717A', label: outcomeClaim.label };
                 const canRetryDispatch = isFb && !!fbStatus?.canRetry && !!publishPayload;
                 const opensComputerSheet = isFb && !!fbStatus?.opensComputerSheet;
                 // Non-owning confirmation routes do not carry publishPayload, so
@@ -545,14 +578,14 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                 // A real listing link → open the marketplace page. Otherwise the row still
                 // opens the in-app product (where they can manage/retry); FB without a link
                 // is inert — unless its publish failed, which must stay actionable.
-                const tappable = hasLink || !isFb || failed || canRetryDispatch || opensComputerSheet;
+                const tappable = confirmationUnknown || hasLink || !isFb || failed || canRetryDispatch || opensComputerSheet;
                 return (
                   <TouchableOpacity
                     key={`${p}-${i}`}
                     disabled={!tappable}
                     activeOpacity={0.85}
                     onPress={() => {
-                      if (failed || canRetryDispatch) {
+                      if (failed || confirmationUnknown || canRetryDispatch) {
                         void runPublish([lower]);
                       } else if (opensComputerSheet) {
                         setLinkComputerOpen(true);
@@ -562,21 +595,25 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                         handleReviewInInventory();
                       }
                     }}
-                    style={[styles.channelRow, failed && styles.channelRowFailed]}
-                    accessibilityLabel={failed || canRetryDispatch ? `Retry ${platformLabel(lower)}` : undefined}
+                    style={[styles.channelRow, (failed || confirmationUnknown) && styles.channelRowFailed]}
+                    accessibilityLabel={confirmationUnknown
+                      ? `Re-check ${platformLabel(lower)}`
+                      : failed || canRetryDispatch
+                        ? `Retry ${platformLabel(lower)}`
+                        : undefined}
                   >
                     <PlatformBrandChip platform={lower} size={34} />
                     <Text style={styles.channelName} numberOfLines={1}>{platformLabel(lower)}</Text>
                     <View style={styles.channelRight}>
-                      {failed || canRetryDispatch ? (
+                      {failed || confirmationUnknown || canRetryDispatch ? (
                         <>
-                          <Text style={styles.failedStatus}>{failed ? 'Didn’t publish' : st.label}</Text>
+                          <Text style={styles.failedStatus}>{st.label}</Text>
                           <View style={styles.retryAction}>
                             <Icon name="refresh" size={16} color="#8A5A12" />
-                            <Text style={styles.retryActionText}>Retry</Text>
+                            <Text style={styles.retryActionText}>{confirmationUnknown ? 'Re-check' : 'Retry'}</Text>
                           </View>
                         </>
-                      ) : hasLink ? (
+                      ) : hasLink && provenSuccess ? (
                         <View style={styles.liveLink}>
                           <Text style={styles.liveLinkText}>Live</Text>
                           <Icon name="arrow-top-right" size={15} color={IC.accent} />
@@ -587,7 +624,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                           <Text style={[styles.statusText, { color: st.color }]} numberOfLines={2}>{st.label}</Text>
                         </>
                       )}
-                      {tappable && !hasLink && !failed && !canRetryDispatch ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
+                      {tappable && !hasLink && !failed && !confirmationUnknown && !canRetryDispatch ? <Icon name="chevron-right" size={20} color={IC.muted} /> : null}
                     </View>
                   </TouchableOpacity>
                 );

@@ -80,7 +80,7 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
-export function parseBillingSummaryResponse(
+export function parseBillingSummaryPayload(
   payload: unknown,
 ): BillingPayloadResult<BillingSummaryPayload> {
   if (!isRecord(payload)) return invalid('summary');
@@ -94,7 +94,9 @@ export function parseBillingSummaryResponse(
   }
 
   if (isRecord(payload.subscription)) {
-    if (typeof payload.subscription.CurrentPlan !== 'string') {
+    const currentPlan = payload.subscription.CurrentPlan
+      ?? payload.subscription.current_plan;
+    if (typeof currentPlan !== 'string') {
       return invalid('summary.subscription.CurrentPlan');
     }
     if (typeof payload.subscription.Status !== 'string') {
@@ -202,6 +204,12 @@ export function parseBillingSummaryResponse(
       billing_state: payload.billing_state as RawBillingState,
     },
   };
+}
+
+export function parseBillingSummaryResponse(
+  payload: unknown,
+): BillingPayloadResult<BillingSummaryPayload> {
+  return parseBillingSummaryPayload(payload);
 }
 
 export function parseBillingInvoicesResponse(

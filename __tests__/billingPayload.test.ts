@@ -143,6 +143,21 @@ test('parses the exact billing summary usage and cost contract', () => {
   assert.equal(result.value.total_cost_cents, 2000);
 });
 
+test('accepts the alternate contracted plan-name field', () => {
+  const result = parseBillingSummaryResponse(billingSummary({
+    subscription: {
+      current_plan: 'Teams',
+      Status: 'active',
+      CurrentPeriodEnd: '2026-09-19T12:00:00.000Z',
+      CanceledAt: null,
+    },
+  }));
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.subscription?.current_plan, 'Teams');
+});
+
 test('parses the optional credit balance contract', () => {
   const result = parseBillingSummaryResponse(billingSummary({
     ai_credits_cents: 9000,

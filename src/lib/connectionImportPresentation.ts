@@ -201,6 +201,7 @@ export function deriveConnectionImportPresentation({
   aggregateState,
   aggregateObservedAt,
   aggregateAttentionCount = 0,
+  aggregateAttentionVerified = false,
   aggregateItemsSoFar,
   aggregatePhase,
   aggregateStartedAt,
@@ -230,6 +231,7 @@ export function deriveConnectionImportPresentation({
   aggregateState?: string | null;
   aggregateObservedAt?: number | null;
   aggregateAttentionCount?: number | null;
+  aggregateAttentionVerified?: boolean;
   aggregateItemsSoFar?: number | null;
   aggregatePhase?: string | null;
   aggregateStartedAt?: string | null;
@@ -276,6 +278,7 @@ export function deriveConnectionImportPresentation({
     ? { label: 'Import failed', occurredAt: failedAt }
     : null;
   const attentionCount = finiteNonNegativeNumber(aggregateAttentionCount) || 0;
+  const hasVerifiedZeroAttention = aggregateAttentionVerified && attentionCount === 0;
   const itemsSoFar = newestTime(
     finiteNonNegativeNumber(progressItemsSoFar) ?? Number.NEGATIVE_INFINITY,
     finiteNonNegativeNumber(aggregateItemsSoFar) ?? Number.NEGATIVE_INFINITY,
@@ -456,13 +459,18 @@ export function deriveConnectionImportPresentation({
     });
   }
 
-  const hasReviewEvidence = ATTENTION_STATUSES.has(connection)
+  // A reconciled zero is authoritative for item-review obligations. It retires
+  // stale aggregate, connection, run, and recommendation review signals, while
+  // credential failures above (NeedsReauth/error/reconnect) remain authoritative.
+  const hasReviewEvidence = !hasVerifiedZeroAttention && (
+    ATTENTION_STATUSES.has(connection)
     || syncState === 'needs-attention'
     || ATTENTION_STATUSES.has(aggregate)
     || ATTENTION_STATUSES.has(latestStatus)
     || recommendedAction === 'rescan'
     || recommendedAction === 'fix_resume'
-    || recommendedAction === 'manage';
+    || recommendedAction === 'manage'
+  );
   if (hasReviewEvidence) {
     return withFailureReason({
       kind: 'review',
@@ -481,6 +489,16 @@ export function deriveConnectionImportPresentation({
       occurredAt: latestSuccessAt,
       importInProgress: false,
     }, { allowRetry: !!secondaryFailure });
+  }
+
+  if (hasVerifiedZeroAttention && HEALTHY_CONNECTION_STATUSES.has(aggregate)) {
+    return withFailureReason({
+      kind: 'synced',
+      label: 'Synced',
+      color: '#93C822',
+      occurredAt: connectionUpdatedAt || null,
+      importInProgress: false,
+    });
   }
 
   // A healthy row is itself enough to say Synced. This is also the new backend's
@@ -518,6 +536,7 @@ export interface ConnectionImportAggregateState {
   connectionId: string;
   state?: string | null;
   needsAttention?: number | null;
+  attentionVerified?: boolean;
   observedAt?: number | null;
   itemsSoFar?: number | null;
   phase?: string | null;
@@ -581,6 +600,7 @@ export function connectionImportPresentationsById({
       aggregateState: aggregate?.state,
       aggregateObservedAt: aggregate?.observedAt,
       aggregateAttentionCount: aggregate?.needsAttention,
+      aggregateAttentionVerified: aggregate?.attentionVerified === true,
       aggregateItemsSoFar: aggregate?.itemsSoFar,
       aggregatePhase: aggregate?.phase,
       aggregateStartedAt: aggregate?.startedAt,
