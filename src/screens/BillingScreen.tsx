@@ -162,6 +162,13 @@ export default function BillingScreen() {
   const navigation = useNavigation();
   const route = useRoute<any>();
   const { getToken } = useAuth();
+  // Clerk's getToken can be a new function each render (see App.tsx getClerkToken).
+  // Read it through a ref so refreshBillingData keeps a stable identity: with the raw
+  // getToken in its deps, the useFocusEffect below re-fired on EVERY render while
+  // focused, and its setIsRefreshing(true) caused that render, hanging the JS thread
+  // in an unbounded effect/render/network loop (the frozen-app bug).
+  const getTokenRef = React.useRef(getToken);
+  getTokenRef.current = getToken;
   const insets = useSafeAreaInsets();
 
   const [summary, setSummary] = useState<BillingSummaryPayload | null>(null);
@@ -190,7 +197,7 @@ export default function BillingScreen() {
     setIsRefreshing(true);
     setActionError(null);
     try {
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token) {
         log.error('No auth token available');
         setSummary(null);
@@ -261,7 +268,7 @@ export default function BillingScreen() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [getToken, isPartner]);
+  }, [isPartner]);
 
   useFocusEffect(useCallback(() => {
     void refreshBillingData();
@@ -431,7 +438,7 @@ export default function BillingScreen() {
   const handleAddPartnerPaymentMethod = async () => {
     setIsAddingPaymentMethod(true);
     try {
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token) return;
       const response = await fetch(`${API_BASE}/billing/partner/payment-method`, {
         method: 'POST',
@@ -452,7 +459,7 @@ export default function BillingScreen() {
     if (!selectedCreditAmount) return;
     setIsTopUpLoading(true);
     try {
-      const token = await getToken();
+      const token = await getTokenRef.current();
       if (!token) return;
       const res = await fetch(`${API_BASE}/billing/allowance/topup`, {
         method: 'POST',
