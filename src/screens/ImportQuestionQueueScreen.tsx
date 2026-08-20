@@ -705,7 +705,10 @@ export default function ImportQuestionQueueScreen() {
   const summary = result?.summary;
   const questionItemCount = v7QuestionItemCount(result?.needsAttention ?? []);
   const frontDoorRows = buildImportFrontDoorRows(summary);
-  const frontDoorCta = importFrontDoorAction(questionItemCount);
+  const frontDoorCta = importFrontDoorAction(
+    questionItemCount,
+    (result?.needsAttention ?? []).length,
+  );
   const remainingCount = questionItemCount;
   const progressTotal = Math.max(queueStartCount, remainingCount, 1);
   const progressPct = ((progressTotal - remainingCount) / progressTotal) * 100;
@@ -781,7 +784,13 @@ export default function ImportQuestionQueueScreen() {
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
           <PillButton
             label={frontDoorCta.label}
-            onPress={frontDoorCta.opensQuestions ? beginQuestions : () => navigation.goBack()}
+            onPress={
+              frontDoorCta.opensQuestions
+                ? beginQuestions
+                : frontDoorCta.opensList
+                  ? () => setStage('list')
+                  : () => navigation.goBack()
+            }
           />
           {frontDoorCta.showLater ? (
             <PillButton label="Later" variant="secondary" onPress={() => navigation.goBack()} />

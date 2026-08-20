@@ -30,18 +30,29 @@ test('zero skipped and needs-look buckets stay hidden', () => {
   assert.deepEqual(rows.map((row) => row.label), ['Linked', 'Added']);
 });
 
-test('zero questions produces Done with no Later action', () => {
+test('zero questions and zero needs-look produces Done with no Later action', () => {
   assert.deepEqual(importFrontDoorAction(0), {
     label: 'Done',
     opensQuestions: false,
+    opensList: false,
     showLater: false,
   });
 });
 
+test('zero questions with needs-look items routes to the review list, never a dead end', () => {
+  assert.deepEqual(importFrontDoorAction(0, 6), {
+    label: 'Review',
+    opensQuestions: false,
+    opensList: true,
+    showLater: true,
+  });
+});
+
 test('owed questions keep the questions and Later actions', () => {
-  assert.deepEqual(importFrontDoorAction(2), {
+  assert.deepEqual(importFrontDoorAction(2, 6), {
     label: '2 more questions',
     opensQuestions: true,
+    opensList: false,
     showLater: true,
   });
 });

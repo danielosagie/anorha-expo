@@ -31,17 +31,25 @@ export function buildImportFrontDoorRows(
   return rows;
 }
 
-export function importFrontDoorAction(questionCount: number): {
+export function importFrontDoorAction(questionCount: number, needsLookCount = 0): {
   label: string;
   opensQuestions: boolean;
+  opensList: boolean;
   showLater: boolean;
 } {
   if (questionCount < 1) {
-    return { label: 'Done', opensQuestions: false, showLater: false };
+    // Attention items that build no question card are still the user's work.
+    // "Done" over a nonzero NEEDS A LOOK row was a dead end: the flagged
+    // items were unreachable from this screen. Route them to the review list.
+    if (needsLookCount > 0) {
+      return { label: 'Review', opensQuestions: false, opensList: true, showLater: true };
+    }
+    return { label: 'Done', opensQuestions: false, opensList: false, showLater: false };
   }
   return {
     label: `${questionCount} more ${questionCount === 1 ? 'question' : 'questions'}`,
     opensQuestions: true,
+    opensList: false,
     showLater: true,
   };
 }
