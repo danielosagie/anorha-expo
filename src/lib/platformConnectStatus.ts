@@ -92,7 +92,9 @@ export function derivePlatformConnectStatus(
     const presentation = options.presentationByConnectionId?.get(connection.Id);
     if (!isListedPlatformConnection(connection)) return false;
     if (presentation?.requiresReconnect ?? isUnhealthyPlatformConnection(connection)) return false;
-    return presentation?.importInProgress || isActiveConnectionImportStatus(connection.Status);
+    return presentation
+      ? presentation.importInProgress
+      : isActiveConnectionImportStatus(connection.Status);
   });
   const oauthConnected =
     !!key &&

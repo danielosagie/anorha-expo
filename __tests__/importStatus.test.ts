@@ -37,7 +37,11 @@ registerHooks({
   },
 });
 
-const { parseInboxSummaryPayload, reconcileInboxAttention } = await import('../src/hooks/useImportStatus.ts');
+const {
+  parseInboxSummaryPayload,
+  preserveImportEvidenceObservedAt,
+  reconcileInboxAttention,
+} = await import('../src/hooks/useImportStatus.ts');
 
 function syncItem(platformId: string, attention: AttentionReason): SyncItem {
   return {
@@ -155,4 +159,32 @@ test('additive import progress fields parse without breaking the old receipt sha
   assert.equal(parsed?.connections[0]?.itemsSoFar, 14, `expected itemsSoFar=14, got ${parsed?.connections[0]?.itemsSoFar}`);
   assert.equal(parsed?.connections[0]?.phase, 'committing', `expected phase=committing, got ${parsed?.connections[0]?.phase}`);
   assert.equal(parsed?.recentImports[0]?.itemsCommitted, 14, `expected RW3 itemsCommitted fallback=14, got ${parsed?.recentImports[0]?.itemsCommitted}`);
+});
+
+test('unchanged server evidence keeps its original observed time', () => {
+  const first = parseInboxSummaryPayload({
+    totalNeedsAttention: 0,
+    connections: [{ connectionId: 'square', state: 'syncing', phase: 'matching', itemsSoFar: 4 }],
+  }, 1_000)!;
+  const repeated = parseInboxSummaryPayload({
+    totalNeedsAttention: 0,
+    connections: [{ connectionId: 'square', state: 'syncing', phase: 'matching', itemsSoFar: 4 }],
+  }, 21_000)!;
+
+  const preserved = preserveImportEvidenceObservedAt(first, repeated);
+  assert.equal(preserved.connections[0]?.observedAt, 1_000);
+});
+
+test('changed server evidence receives the new observed time', () => {
+  const first = parseInboxSummaryPayload({
+    totalNeedsAttention: 0,
+    connections: [{ connectionId: 'square', state: 'syncing', phase: 'matching', itemsSoFar: 4 }],
+  }, 1_000)!;
+  const changed = parseInboxSummaryPayload({
+    totalNeedsAttention: 0,
+    connections: [{ connectionId: 'square', state: 'syncing', phase: 'committing', itemsSoFar: 5 }],
+  }, 21_000)!;
+
+  const preserved = preserveImportEvidenceObservedAt(first, changed);
+  assert.equal(preserved.connections[0]?.observedAt, 21_000);
 });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ACTIVE_IMPORT_EVIDENCE_TTL_MS,
   connectionImportPresentationsById,
+  connectionImportPhaseLabel,
   deriveConnectionImportPresentation,
   latestImportsByConnection,
   type RecentImportOutcome,
@@ -126,7 +127,7 @@ test('truth: review is suppressed by fresh active import evidence', () => {
     now,
   }, {
     kind: 'importing',
-    label: 'Importing items',
+    label: 'Importing',
     color: '#A2611A',
     blocking: false,
     importInProgress: true,
@@ -145,7 +146,7 @@ test('truth: transient needs-attention SyncState is suppressed mid-import', () =
     now,
   }, {
     kind: 'scanning',
-    label: 'Scanning items',
+    label: 'Finding items',
     color: '#A2611A',
     blocking: false,
     importInProgress: true,
@@ -305,7 +306,7 @@ test('a finished run never renders as scanning even when its status was not fina
   assert.equal(presentation.importInProgress, false);
 });
 
-test('run history can bridge polling briefly but cannot stay active past realtime retention', () => {
+test('stale active run history becomes checking after realtime retention', () => {
   const presentation = deriveConnectionImportPresentation({
     enabled: true,
     connectionStatus: 'active',
@@ -313,7 +314,8 @@ test('run history can bridge polling briefly but cannot stay active past realtim
     now: Date.parse('2026-08-16T12:02:01.000Z'),
   });
 
-  assert.equal(presentation.kind, 'synced');
+  assert.equal(presentation.kind, 'checking');
+  assert.equal(presentation.label, 'Checking');
   assert.equal(presentation.importInProgress, false);
 });
 
@@ -394,12 +396,56 @@ test('an active run cannot revive a disconnected connection', () => {
   assert.equal(presentation.importInProgress, false);
 });
 
-test('a raw pending first-import status is importing before the run map arrives', () => {
+test('a fresh pending first-import status is importing before the run map arrives', () => {
+  const now = Date.parse('2026-08-16T12:00:00.000Z');
   const presentation = deriveConnectionImportPresentation({
     enabled: false,
     connectionStatus: 'pending',
+    connectionUpdatedAt: new Date(now).toISOString(),
+    now,
   });
 
   assert.equal(presentation.kind, 'scanning');
+  assert.equal(presentation.label, 'Finding items');
+  assert.equal(presentation.importInProgress, true);
+});
+
+test('stale connection and aggregate evidence resolve to checking', () => {
+  const now = Date.parse('2026-08-16T12:05:00.000Z');
+  const staleAt = now - ACTIVE_IMPORT_EVIDENCE_TTL_MS - 1;
+  const presentation = deriveConnectionImportPresentation({
+    enabled: true,
+    connectionStatus: 'scanning',
+    connectionUpdatedAt: new Date(staleAt).toISOString(),
+    aggregateState: 'syncing',
+    aggregateObservedAt: staleAt,
+    now,
+  });
+
+  assert.equal(presentation.kind, 'checking');
+  assert.equal(presentation.label, 'Checking');
+  assert.equal(presentation.importInProgress, false);
+});
+
+test('phase labels distinguish pull, match, commit, and unknown', () => {
+  assert.equal(connectionImportPhaseLabel('pull'), 'Finding items');
+  assert.equal(connectionImportPhaseLabel('matching'), 'Matching');
+  assert.equal(connectionImportPhaseLabel('committing'), 'Importing');
+  assert.equal(connectionImportPhaseLabel('mystery'), 'Checking');
+});
+
+test('fresh progress phase takes precedence over a coarse connection status', () => {
+  const now = Date.parse('2026-08-16T12:00:00.000Z');
+  const presentation = deriveConnectionImportPresentation({
+    enabled: true,
+    connectionStatus: 'scanning',
+    connectionUpdatedAt: new Date(now).toISOString(),
+    progressStatus: 'syncing',
+    progressPhase: 'matching',
+    progressReceivedAt: now,
+    now,
+  });
+
+  assert.equal(presentation.label, 'Matching');
   assert.equal(presentation.importInProgress, true);
 });

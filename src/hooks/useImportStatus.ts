@@ -39,7 +39,7 @@ export interface HubConnection {
   state: string;
   /** Items parked in this connection's inbox (0 ⇒ show the quiet "Synced" state). */
   needsAttention: number;
-  /** Client receipt time for this 20-second aggregate observation. */
+  /** Time when the import evidence last changed. */
   observedAt: number;
   itemsSoFar?: number;
   phase?: string;
@@ -185,6 +185,36 @@ export interface InboxSummaryResponse {
   recentImports: InboxRecentImport[];
 }
 
+function connectionEvidenceSignature(connection: InboxSummaryConnection): string {
+  return JSON.stringify([
+    connection.state,
+    connection.itemsSoFar ?? null,
+    connection.phase ?? null,
+    connection.startedAt ?? null,
+    connection.jobId ?? null,
+  ]);
+}
+
+export function preserveImportEvidenceObservedAt(
+  previous: InboxSummaryResponse | null | undefined,
+  next: InboxSummaryResponse,
+): InboxSummaryResponse {
+  if (!previous) return next;
+  const previousById = new Map(
+    previous.connections.map((connection) => [connection.connectionId, connection]),
+  );
+  return {
+    ...next,
+    connections: next.connections.map((connection) => {
+      const prior = previousById.get(connection.connectionId);
+      if (!prior || connectionEvidenceSignature(prior) !== connectionEvidenceSignature(connection)) {
+        return connection;
+      }
+      return { ...connection, observedAt: prior.observedAt };
+    }),
+  };
+}
+
 // A malformed or unavailable aggregate payload is an error state. Resolution
 // failures preserve only that connection's server count.
 export async function reconcileInboxAttention(
@@ -217,14 +247,17 @@ export async function reconcileInboxAttention(
   };
 }
 
-async function fetchInboxSummary(): Promise<InboxSummaryResponse | null> {
+async function fetchInboxSummary(
+  previous: InboxSummaryResponse | null,
+): Promise<InboxSummaryResponse | null> {
   try {
     const res = await apiFetch('/api/sync/inbox/summary');
     if (!res.ok) return null; // 404 (not shipped yet) or any non-2xx → fall back
     const aggregate = parseInboxSummaryPayload(await res.json());
     if (!aggregate) return null; // malformed body → fall back
 
-    return reconcileInboxAttention(aggregate, async (connectionId) => {
+    const ageBoundAggregate = preserveImportEvidenceObservedAt(previous, aggregate);
+    return reconcileInboxAttention(ageBoundAggregate, async (connectionId) => {
       const resolution = await apiFetch(
         `/api/sync/connections/${encodeURIComponent(connectionId)}/resolution`,
       );
@@ -318,7 +351,7 @@ export async function refreshInboxSummary(expectedOwnerKey = inboxStore.ownerKey
   } catch {
     token = null;
   }
-  const agg = token ? await fetchInboxSummary() : null;
+  const agg = token ? await fetchInboxSummary(inboxStore.summary) : null;
   if (inboxRefreshSeq !== myId || inboxStore.ownerKey !== requestedOwnerKey) return;
   setInboxStore({
     summary: agg,
@@ -430,7 +463,7 @@ export function useImportStatus(): ImportStatusData {
     () => connectionRows.some((connection) => isImportingConnectionStatus(connection.Status))
       || Object.values(progressByConnectionId).some((progress) => isFreshActiveImportEvidence({
         status: progress.status,
-        phase: typeof progress.details?.phase === 'string' ? progress.details.phase : null,
+        phase: progress.phase || (typeof progress.details?.phase === 'string' ? progress.details.phase : null),
         receivedAt: progress.receivedAt,
       })),
     [connectionRows, progressByConnectionId],

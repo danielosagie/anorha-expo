@@ -40,6 +40,10 @@ test('terminal shared-store runs advance to done or failed', () => {
   expectPhase({ oauthSucceeded: true, terminalRunStatus: 'error' }, 'importFailed');
 });
 
+test('lost evidence stays in checking instead of claiming completion', () => {
+  expectPhase({ oauthSucceeded: true, terminalRunStatus: 'checking' }, 'checking');
+});
+
 test('an unsuccessful OAuth result stays on consent', () => {
   expectPhase({ oauthSucceeded: false, connectionId: 'connection-1' }, 'consent');
 });

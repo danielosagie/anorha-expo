@@ -88,7 +88,18 @@ test('disconnected detection: either disabled flag or dead status counts', () =>
 // ── isImportingConnectionStatus — keeps the 20s poll honest ─────────────────
 
 test('every in-flight import status keeps the poll alive', () => {
-  for (const s of ['pending', 'scanning', 'syncing', 'reconciling', 'ready_to_sync']) {
+  for (const s of [
+    'queued',
+    'pending',
+    'in_progress',
+    'processing',
+    'scanning',
+    'syncing',
+    'reconciling',
+    'ready_to_sync',
+    'importing',
+    'running',
+  ]) {
     assert.equal(isImportingConnectionStatus(s), true, s);
   }
 });

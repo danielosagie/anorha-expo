@@ -23,6 +23,8 @@ export interface ConnectResult {
   success: boolean;
   /** present for platforms that return it on the deep-link callback (Square/Clover). */
   connectionId?: string;
+  jobId?: string;
+  scanState?: string;
   /** user backed out of the browser sheet — not an error worth surfacing loudly. */
   cancelled?: boolean;
   errorCode?: ConnectErrorCode;
@@ -42,6 +44,8 @@ interface ConnectIntentResponse {
 const parseCallback = (url: string): {
   status: string | null;
   connectionId?: string;
+  jobId?: string;
+  scanState?: string;
   code?: string;
   message?: string;
 } => {
@@ -52,6 +56,8 @@ const parseCallback = (url: string): {
   return {
     status: params.get('status'),
     connectionId: params.get('connectionId') || undefined,
+    jobId: params.get('jobId') || undefined,
+    scanState: params.get('scanState') || undefined,
     code: params.get('code') || undefined,
     message: params.get('message') || undefined,
   };
@@ -157,12 +163,12 @@ export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
       }
 
       if (result.type === 'success' && result.url) {
-        const { status, connectionId, code, message } = parseCallback(result.url);
+        const { status, connectionId, jobId, scanState, code, message } = parseCallback(result.url);
         const callbackError = connectErrorCopy({ code, message });
         const knownCode = isConnectErrorCode(code) ? code : undefined;
 
         if (callbackError.kind === 'success_already') {
-          return { success: true, connectionId };
+          return { success: true, connectionId, jobId, scanState };
         }
         if (callbackError.kind === 'cancelled') {
           return { success: false, cancelled: true };
@@ -180,7 +186,7 @@ export function usePlatformConnect(_opts: { orgId?: string | null } = {}) {
         if (status !== 'success' && !connectionId) {
           return { success: false, errorMessage: CONNECT_FALLBACK_COPY };
         }
-        return { success: true, connectionId };
+        return { success: true, connectionId, jobId, scanState };
       }
 
       return { success: false, errorMessage: CONNECT_FALLBACK_COPY };

@@ -24,7 +24,7 @@ const STATUS_BY_KIND: Record<ConnectionImportKind, { label: string; color: strin
   synced: { label: 'Synced', color: '#93C822' },
   review: { label: 'Needs review', color: '#A2611A' },
   failed: { label: 'Import failed', color: '#DC2626' },
-  scanning: { label: 'Importing', color: '#A2611A' },
+  scanning: { label: 'Finding items', color: '#A2611A' },
   importing: { label: 'Importing', color: '#A2611A' },
   checking: { label: 'Checking', color: '#71717A' },
 };
@@ -136,4 +136,24 @@ test('healthy attention is one Review action with no count in the row model', ()
     trailing: { type: 'action', label: 'Review' },
   });
   assert.equal(JSON.stringify(model).includes('12'), false);
+});
+
+test('active import uses its phase label and exposes Cancel only where requested', () => {
+  const presentation = {
+    kind: 'scanning' as const,
+    label: 'Matching',
+    importInProgress: true,
+    requiresReconnect: false,
+    canRetryImport: false,
+    attentionCount: 0,
+  };
+
+  assert.deepEqual(connectionRowModel(presentation), {
+    status: { label: 'Matching', color: '#A2611A' },
+    trailing: { type: 'chevron' },
+  });
+  assert.deepEqual(connectionRowModel(presentation, { showCancelImport: true }), {
+    status: { label: 'Matching', color: '#A2611A' },
+    trailing: { type: 'action', label: 'Cancel' },
+  });
 });

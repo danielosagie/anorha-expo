@@ -46,6 +46,11 @@ type SyncProgressUpdate = {
   description?: string;
   status?: string;
   jobId?: string;
+  phase?: string;
+  processed?: number;
+  total?: number;
+  itemsSoFar?: number;
+  startedAt?: string;
   elapsedSeconds?: number;
   details?: Record<string, any>;
   receivedAt: number;
@@ -75,6 +80,26 @@ const TERMINAL_STATUS_SET = new Set(['active', 'review', 'error', 'inactive']);
 const PROGRESS_OVERRIDE_TTL_MS = ACTIVE_IMPORT_EVIDENCE_TTL_MS;
 
 const normalizeStatus = (value?: string) => (value || '').toLowerCase().trim();
+
+function finiteCount(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function progressCounts(data: Omit<SyncProgressUpdate, 'receivedAt'>): {
+  processed?: number;
+  total?: number;
+  itemsSoFar?: number;
+} {
+  const details = data.details || {};
+  const descriptionMatch = String(data.description || '').match(/\b(\d+)\s*\/\s*(\d+)\b/);
+  const processed = finiteCount(data.processed ?? details.processed ?? details.itemsProcessed)
+    ?? finiteCount(descriptionMatch?.[1]);
+  const total = finiteCount(data.total ?? details.total ?? details.itemsTotal)
+    ?? finiteCount(descriptionMatch?.[2]);
+  const itemsSoFar = finiteCount(data.itemsSoFar ?? details.itemsSoFar) ?? processed;
+  return { processed, total, itemsSoFar };
+}
 
 export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isLoaded: clerkLoaded, user: clerkUser } = useUser();
@@ -235,9 +260,17 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     const onSyncProgress = (data: Omit<SyncProgressUpdate, 'receivedAt'>) => {
       if (!data?.connectionId) return;
       const receivedAt = Date.now();
+      const details = data.details || {};
+      const counts = progressCounts(data);
       setProgressByConnectionId(prev => ({
         ...prev,
-        [data.connectionId]: { ...data, receivedAt },
+        [data.connectionId]: {
+          ...data,
+          ...counts,
+          phase: data.phase || (typeof details.phase === 'string' ? details.phase : undefined),
+          startedAt: data.startedAt || (typeof details.startedAt === 'string' ? details.startedAt : undefined),
+          receivedAt,
+        },
       }));
 
       const status = normalizeStatus(data.status);
@@ -266,6 +299,9 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
             patch.IsEnabled = false;
           }
           if (data.platformType && !conn.PlatformType) patch.PlatformType = data.platformType;
+          const stateChanged = normalizeStatus(conn.Status) !== status
+            || (typeof data.isEnabled === 'boolean' && conn.IsEnabled !== data.isEnabled);
+          if (stateChanged) patch.UpdatedAt = data.timestamp || new Date().toISOString();
           return { ...conn, ...patch };
         })
       );

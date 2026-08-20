@@ -1,7 +1,7 @@
 // Connections: selling platforms, computers, pools, and partners in one place.
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, InteractionManager, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, InteractionManager, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronRight, Plus, Layers, Handshake, Trash2, Monitor } from 'lucide-react-native';
@@ -94,6 +94,16 @@ const ConnectionsScreen = () => {
   // CSV pick/parse failures surface in an ErrorModal (native Alert stays for the
   // pre-existing platform flows).
   const [importError, setImportError] = useState<{ title: string; message: string } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refreshConnections = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.allSettled([refresh(), importStatus.refresh()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [importStatus.refresh, refresh]);
 
   // Pick + parse a CSV, then hand off to the column-mapping screen via the shared
   // util's documented contract. Replaces the old "CSV lives under Profile" alert.
@@ -270,6 +280,14 @@ const ConnectionsScreen = () => {
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={refreshConnections}
+            tintColor="#93C822"
+            colors={['#93C822']}
+          />
+        )}
       >
         <PageHeader title="Connections" onBack={() => navigation.goBack()} />
 
@@ -290,7 +308,7 @@ const ConnectionsScreen = () => {
             activeConnections.map((c, i) => {
               const recentImport = recentImportByConnection.get(c.Id);
               const st = presentationByConnectionId.get(c.Id)!;
-              const rowModel = connectionRowModel(st);
+              const rowModel = connectionRowModel(st, { showCancelImport: true });
               const importInProgress = st.importInProgress;
               const title = shopLabel(c);
               const openConnection = () => {
@@ -339,7 +357,11 @@ const ConnectionsScreen = () => {
                       hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                       onPress={(event: any) => {
                         event.stopPropagation?.();
-                        openConnection();
+                        if (rowModel.trailing.type === 'action' && rowModel.trailing.label === 'Cancel') {
+                          cancelImport(c);
+                        } else {
+                          openConnection();
+                        }
                       }}
                     >
                       <Text style={styles.rowActionText}>{rowModel.trailing.label}</Text>

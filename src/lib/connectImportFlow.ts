@@ -1,4 +1,4 @@
-export type ConnectImportPhaseDecision = 'consent' | 'importing' | 'importFailed' | 'done';
+export type ConnectImportPhaseDecision = 'consent' | 'importing' | 'checking' | 'importFailed' | 'done';
 
 const SUCCESS_STATUSES = new Set(['complete', 'completed', 'success', 'succeeded']);
 
@@ -30,6 +30,7 @@ export function decideConnectImportPhase({
   const terminal = normalizedStatus(terminalRunStatus);
   if (terminal === 'error' || terminal.includes('fail')) return 'importFailed';
   if (SUCCESS_STATUSES.has(terminal)) return 'done';
+  if (terminal === 'checking') return 'checking';
 
   if (hasImportEvidence) return 'importing';
   if (startScanResult === false && graceExpired) return 'importFailed';

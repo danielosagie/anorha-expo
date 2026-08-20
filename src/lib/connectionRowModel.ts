@@ -13,7 +13,7 @@ type ConnectionRowStatus = {
   color: string;
 };
 
-export type ConnectionRowAction = 'Reconnect' | 'Retry' | 'Review';
+export type ConnectionRowAction = 'Cancel' | 'Reconnect' | 'Retry' | 'Review';
 
 export type ConnectionRowTrailing =
   | { type: 'action'; label: ConnectionRowAction }
@@ -29,7 +29,7 @@ const STATUS_BY_KIND = {
   synced: { label: 'Synced', color: GREEN },
   review: { label: 'Needs review', color: AMBER },
   failed: { label: 'Import failed', color: RED },
-  scanning: { label: 'Importing', color: AMBER },
+  scanning: { label: 'Finding items', color: AMBER },
   importing: { label: 'Importing', color: AMBER },
   checking: { label: 'Checking', color: GRAY },
 } satisfies Record<ConnectionImportKind, ConnectionRowStatus>;
@@ -47,7 +47,11 @@ export function connectionRowModel(
   presentation: Pick<
     ConnectionImportPresentation,
     'kind' | 'requiresReconnect' | 'canRetryImport' | 'attentionCount'
-  >,
+  > & Partial<Pick<
+    ConnectionImportPresentation,
+    'importInProgress' | 'label'
+  >>,
+  options: { showCancelImport?: boolean } = {},
 ): ConnectionRowModel {
   if (presentation.requiresReconnect) {
     return {
@@ -56,7 +60,13 @@ export function connectionRowModel(
     };
   }
 
-  const status = STATUS_BY_KIND[presentation.kind];
+  const status = presentation.importInProgress && presentation.label
+    ? { label: presentation.label, color: presentation.kind === 'checking' ? GRAY : AMBER }
+    : STATUS_BY_KIND[presentation.kind];
+
+  if (presentation.importInProgress && options.showCancelImport) {
+    return { status, trailing: { type: 'action', label: 'Cancel' } };
+  }
 
   if (presentation.kind === 'failed' && presentation.canRetryImport) {
     return { status, trailing: { type: 'action', label: 'Retry' } };

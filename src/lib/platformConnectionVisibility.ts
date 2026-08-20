@@ -65,6 +65,19 @@ export const UNHEALTHY_CONNECTION_STATUSES = new Set([
 
 const normalize = (value?: string | null) => (value || '').toLowerCase().trim();
 
+export const ACTIVE_IMPORT_CONNECTION_STATUSES = new Set([
+  'queued',
+  'pending',
+  'in_progress',
+  'processing',
+  'scanning',
+  'syncing',
+  'reconciling',
+  'ready_to_sync',
+  'importing',
+  'running',
+]);
+
 /**
  * Usable for work: enabled and not soft-disconnected. Publish pickers, the
  * optimizer, setup/checklist logic, and account-stage classification use this.
@@ -111,6 +124,5 @@ export function isUnhealthyPlatformConnection(connection: ConnectionVisibilityFi
  * never only the aggregate.
  */
 export function isImportingConnectionStatus(status?: string | null): boolean {
-  const s = normalize(status);
-  return s === 'pending' || s === 'scanning' || s === 'syncing' || s === 'reconciling' || s === 'ready_to_sync';
+  return ACTIVE_IMPORT_CONNECTION_STATUSES.has(normalize(status));
 }

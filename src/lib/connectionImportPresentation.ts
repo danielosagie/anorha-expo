@@ -1,4 +1,5 @@
 import {
+  ACTIVE_IMPORT_CONNECTION_STATUSES,
   DISCONNECTED_CONNECTION_STATUSES,
   isListedPlatformConnection,
   UNHEALTHY_CONNECTION_STATUSES,
@@ -42,6 +43,8 @@ export interface ConnectionImportPresentation {
   attentionCount: number;
   attentionColor: string | null;
   itemsSoFar: number | null;
+  processed: number | null;
+  total: number | null;
   phase: string | null;
   startedAt: string | null;
   p50DurationMs: number | null;
@@ -61,6 +64,8 @@ type ConnectionImportPresentationBase = Omit<
   | 'attentionCount'
   | 'attentionColor'
   | 'itemsSoFar'
+  | 'processed'
+  | 'total'
   | 'phase'
   | 'startedAt'
   | 'p50DurationMs'
@@ -69,18 +74,7 @@ type ConnectionImportPresentationBase = Omit<
 >;
 
 const SUCCESS_STATUSES = new Set(['active', 'complete', 'completed', 'success', 'succeeded']);
-const ACTIVE_STATUSES = new Set([
-  'queued',
-  'pending',
-  'in_progress',
-  'processing',
-  'scanning',
-  'syncing',
-  'reconciling',
-  'ready_to_sync',
-  'importing',
-  'running',
-]);
+const ACTIVE_STATUSES = ACTIVE_IMPORT_CONNECTION_STATUSES;
 const HEALTHY_CONNECTION_STATUSES = new Set(['active', 'live']);
 const ATTENTION_STATUSES = new Set(['review', 'needs-attention', 'needs_attention']);
 const AMBER = '#A2611A';
@@ -108,6 +102,23 @@ function normalizedStatus(value?: string | null): string {
 
 export function isActiveConnectionImportStatus(value?: string | null): boolean {
   return ACTIVE_STATUSES.has(normalizedStatus(value));
+}
+
+export function connectionImportPhaseLabel(
+  phase?: string | null,
+  status?: string | null,
+): 'Finding items' | 'Matching' | 'Importing' | 'Checking' {
+  const evidence = `${normalizedStatus(phase)} ${normalizedStatus(status)}`.replace(/[_-]+/g, ' ');
+  if (/\b(match|matching|suggest|suggesting|reconcile|reconciling)\b/.test(evidence)) {
+    return 'Matching';
+  }
+  if (/\b(commit|committing|import|importing|sync|syncing|ready_to_sync)\b/.test(evidence)) {
+    return 'Importing';
+  }
+  if (/\b(pull|pulling|fetch|fetching|catalog|find|finding|scan|scanning|queue|queued|pending)\b/.test(evidence)) {
+    return 'Finding items';
+  }
+  return 'Checking';
 }
 
 export function isFreshActiveImportEvidence({
@@ -182,13 +193,10 @@ function fallbackPresentation(rawStatus: string): Omit<ConnectionImportPresentat
   if (isFailed(status) || status.includes('expired') || status.includes('revoked')) {
     return { kind: 'failed', label: 'Import failed', color: RED, importInProgress: false };
   }
-  if (status === 'pending' || status === 'scanning') {
-    return { kind: 'scanning', label: 'Scanning items', color: AMBER, importInProgress: true };
-  }
   if (ACTIVE_STATUSES.has(status)) {
-    return { kind: 'importing', label: 'Importing items', color: AMBER, importInProgress: true };
+    return { kind: 'checking', label: 'Checking', color: '#71717A', importInProgress: false };
   }
-  return { kind: 'checking', label: 'Checking status', color: '#71717A', importInProgress: false };
+  return { kind: 'checking', label: 'Checking', color: '#71717A', importInProgress: false };
 }
 
 export function deriveConnectionImportPresentation({
@@ -212,6 +220,8 @@ export function deriveConnectionImportPresentation({
   progressStatus,
   progressReceivedAt,
   progressItemsSoFar,
+  progressProcessed,
+  progressTotal,
   progressPhase,
   progressStartedAt,
   progressP50DurationMs,
@@ -241,6 +251,8 @@ export function deriveConnectionImportPresentation({
   progressStatus?: string | null;
   progressReceivedAt?: number | null;
   progressItemsSoFar?: number | null;
+  progressProcessed?: number | null;
+  progressTotal?: number | null;
   progressPhase?: string | null;
   progressStartedAt?: string | null;
   progressP50DurationMs?: number | null;
@@ -276,13 +288,13 @@ export function deriveConnectionImportPresentation({
     ? { label: 'Import failed', occurredAt: failedAt }
     : null;
   const attentionCount = finiteNonNegativeNumber(aggregateAttentionCount) || 0;
-  const itemsSoFar = newestTime(
-    finiteNonNegativeNumber(progressItemsSoFar) ?? Number.NEGATIVE_INFINITY,
-    finiteNonNegativeNumber(aggregateItemsSoFar) ?? Number.NEGATIVE_INFINITY,
-    finiteNonNegativeNumber(latestImport?.itemsSoFar) ?? Number.NEGATIVE_INFINITY,
-    finiteNonNegativeNumber(latestImport?.itemsCommitted) ?? Number.NEGATIVE_INFINITY,
-  );
-  const presentedItemsSoFar = itemsSoFar === Number.NEGATIVE_INFINITY ? null : itemsSoFar;
+  const presentedItemsSoFar = finiteNonNegativeNumber(progressItemsSoFar)
+    ?? finiteNonNegativeNumber(aggregateItemsSoFar)
+    ?? finiteNonNegativeNumber(latestImport?.itemsSoFar)
+    ?? finiteNonNegativeNumber(latestImport?.itemsCommitted);
+  const presentedProcessed = finiteNonNegativeNumber(progressProcessed);
+  const presentedTotal = finiteNonNegativeNumber(progressTotal)
+    ?? finiteNonNegativeNumber(latestImport?.itemsTotal);
   const presentedPhase = progressPhase || aggregatePhase || latestImport?.phase || null;
   const presentedStartedAt = progressStartedAt
     || aggregateStartedAt
@@ -301,6 +313,7 @@ export function deriveConnectionImportPresentation({
       blocking?: boolean;
       requiresReconnect?: boolean;
       showAttention?: boolean;
+      phaseOverride?: string | null;
     } = {},
   ): ConnectionImportPresentation => ({
     ...presentation,
@@ -311,7 +324,9 @@ export function deriveConnectionImportPresentation({
     attentionCount,
     attentionColor: options.showAttention || attentionCount > 0 ? AMBER : null,
     itemsSoFar: presentedItemsSoFar,
-    phase: presentedPhase,
+    processed: presentedProcessed,
+    total: presentedTotal,
+    phase: 'phaseOverride' in options ? options.phaseOverride ?? null : presentedPhase,
     startedAt: presentedStartedAt,
     p50DurationMs: presentedP50DurationMs,
     jobId: presentedJobId,
@@ -368,9 +383,8 @@ export function deriveConnectionImportPresentation({
   const evidenceMustBeNewerThan = newestTime(latestSuccessTime, latestFailureTime);
 
   // Every active source carries attempt timing. Realtime progress without a
-  // receipt timestamp is deliberately ignored; it can no longer stay fresh
-  // forever. Aggregate observations are timestamped by each 20-second poll, so
-  // they bridge imports longer than the two-minute realtime retention window.
+  // receipt timestamp is deliberately ignored. Aggregate observations retain
+  // the timestamp of the last changed server payload.
   const progressTime = typeof progressReceivedAt === 'number'
     ? progressReceivedAt
     : Number.NEGATIVE_INFINITY;
@@ -408,29 +422,64 @@ export function deriveConnectionImportPresentation({
     && latestImport?.completedAt == null
     && latestRunStartedAt > evidenceMustBeNewerThan
     && now - latestRunStartedAt <= ACTIVE_IMPORT_EVIDENCE_TTL_MS;
-  const rawConnectionIsActive = ACTIVE_STATUSES.has(connection)
-    && (
-      connectionStatusAt === Number.NEGATIVE_INFINITY
-      || connectionStatusAt >= evidenceMustBeNewerThan
-    );
-  const activeStatus = rawConnectionIsActive
-    ? connection
-    : progressIsFresh
-      ? progressActiveStatus
-      : aggregateIsFresh
-        ? aggregateActiveStatus
+  const rawConnectionIsActive = isFreshActiveImportEvidence({
+    status: connection,
+    receivedAt: connectionStatusAt,
+    now,
+  }) && connectionStatusAt >= evidenceMustBeNewerThan;
+  const activeStatus = progressIsFresh
+    ? progressActiveStatus
+    : aggregateIsFresh
+      ? aggregateActiveStatus
+      : rawConnectionIsActive
+        ? connection
       : historyIsActive
         ? latestStatus
         : null;
   if (activeStatus) {
-    const scanning = activeStatus === 'pending' || activeStatus === 'scanning';
+    const activePhase = progressIsFresh
+      ? progressPhaseStatus || progress
+      : aggregateIsFresh
+        ? aggregatePhaseStatus || aggregate
+        : rawConnectionIsActive
+          ? connection
+          : latestImport?.phase || latestStatus;
+    const label = connectionImportPhaseLabel(activePhase, activeStatus);
+    const checking = label === 'Checking';
+    const importing = label === 'Importing';
     return withFailureReason({
-      kind: scanning ? 'scanning' : 'importing',
-      label: scanning ? 'Scanning items' : 'Importing items',
-      color: AMBER,
+      kind: checking ? 'checking' : importing ? 'importing' : 'scanning',
+      label,
+      color: checking ? '#71717A' : AMBER,
       occurredAt: presentedStartedAt || connectionUpdatedAt || null,
       importInProgress: true,
-    });
+    }, { phaseOverride: activePhase });
+  }
+
+  const staleConnectionEvidence = ACTIVE_STATUSES.has(connection)
+    && (
+      connectionStatusAt === Number.NEGATIVE_INFINITY
+        ? evidenceMustBeNewerThan === Number.NEGATIVE_INFINITY
+        : connectionStatusAt >= evidenceMustBeNewerThan
+    );
+  const staleProgressEvidence = !!progressActiveStatus && progressTime > evidenceMustBeNewerThan;
+  const staleAggregateEvidence = !!aggregateActiveStatus && aggregateTime > evidenceMustBeNewerThan;
+  const staleHistoryEvidence = ACTIVE_STATUSES.has(latestStatus)
+    && latestImport?.completedAt == null
+    && latestRunStartedAt > evidenceMustBeNewerThan;
+  if (
+    staleConnectionEvidence
+    || staleProgressEvidence
+    || staleAggregateEvidence
+    || staleHistoryEvidence
+  ) {
+    return withFailureReason({
+      kind: 'checking',
+      label: 'Checking',
+      color: '#71717A',
+      occurredAt: null,
+      importInProgress: false,
+    }, { phaseOverride: null });
   }
 
   const healthFailureIsOlderThanSuccess = healthFailureTime !== Number.NEGATIVE_INFINITY
@@ -530,6 +579,8 @@ export interface ConnectionImportProgressState {
   status?: string | null;
   receivedAt?: number | null;
   itemsSoFar?: number | null;
+  processed?: number | null;
+  total?: number | null;
   phase?: string | null;
   startedAt?: string | null;
   p50DurationMs?: number | null;
@@ -572,35 +623,39 @@ export function connectionImportPresentationsById({
       const progress = progressByConnectionId[connection.Id];
       const progressDetails = progress?.details;
       return deriveConnectionImportPresentation({
-      enabled: connection.IsEnabled !== false,
-      needsReauth: connection.NeedsReauth === true,
-      connectionStatus: connection.Status,
-      syncState: connection.SyncState,
-      recommendedAction: connection.RecommendedAction,
-      failureReason: connection.FailureReason ?? null,
-      aggregateState: aggregate?.state,
-      aggregateObservedAt: aggregate?.observedAt,
-      aggregateAttentionCount: aggregate?.needsAttention,
-      aggregateItemsSoFar: aggregate?.itemsSoFar,
-      aggregatePhase: aggregate?.phase,
-      aggregateStartedAt: aggregate?.startedAt,
-      aggregateP50DurationMs: aggregate?.p50DurationMs,
-      aggregateJobId: aggregate?.jobId,
-      latestImport: latestByConnectionId.get(connection.Id),
-      latestSuccessfulImport: successfulByConnectionId.get(connection.Id),
-      latestFailedImport: failedByConnectionId.get(connection.Id),
-      progressStatus: progress?.status || progress?.scanState || String(progressDetails?.scanState || ''),
-      progressReceivedAt: progress?.receivedAt,
-      progressItemsSoFar: progress?.itemsSoFar
-        ?? finiteNonNegativeNumber(progressDetails?.itemsSoFar),
-      progressPhase: progress?.phase || String(progressDetails?.phase || ''),
-      progressStartedAt: progress?.startedAt || String(progressDetails?.startedAt || ''),
-      progressP50DurationMs: progress?.p50DurationMs
-        ?? finiteNonNegativeNumber(progressDetails?.p50DurationMs),
-      progressJobId: progress?.jobId || String(progressDetails?.jobId || ''),
-      lastSyncSuccessAt: connection.LastSyncSuccessAt,
-      connectionUpdatedAt: connection.UpdatedAt,
-      canRetryImport: connection.IsEnabled !== false,
+        enabled: connection.IsEnabled !== false,
+        needsReauth: connection.NeedsReauth === true,
+        connectionStatus: connection.Status,
+        syncState: connection.SyncState,
+        recommendedAction: connection.RecommendedAction,
+        failureReason: connection.FailureReason ?? null,
+        aggregateState: aggregate?.state,
+        aggregateObservedAt: aggregate?.observedAt,
+        aggregateAttentionCount: aggregate?.needsAttention,
+        aggregateItemsSoFar: aggregate?.itemsSoFar,
+        aggregatePhase: aggregate?.phase,
+        aggregateStartedAt: aggregate?.startedAt,
+        aggregateP50DurationMs: aggregate?.p50DurationMs,
+        aggregateJobId: aggregate?.jobId,
+        latestImport: latestByConnectionId.get(connection.Id),
+        latestSuccessfulImport: successfulByConnectionId.get(connection.Id),
+        latestFailedImport: failedByConnectionId.get(connection.Id),
+        progressStatus: progress?.status || progress?.scanState || String(progressDetails?.scanState || ''),
+        progressReceivedAt: progress?.receivedAt,
+        progressItemsSoFar: progress?.itemsSoFar
+          ?? finiteNonNegativeNumber(progressDetails?.itemsSoFar),
+        progressProcessed: progress?.processed
+          ?? finiteNonNegativeNumber(progressDetails?.processed),
+        progressTotal: progress?.total
+          ?? finiteNonNegativeNumber(progressDetails?.total),
+        progressPhase: progress?.phase || String(progressDetails?.phase || ''),
+        progressStartedAt: progress?.startedAt || String(progressDetails?.startedAt || ''),
+        progressP50DurationMs: progress?.p50DurationMs
+          ?? finiteNonNegativeNumber(progressDetails?.p50DurationMs),
+        progressJobId: progress?.jobId || String(progressDetails?.jobId || ''),
+        lastSyncSuccessAt: connection.LastSyncSuccessAt,
+        connectionUpdatedAt: connection.UpdatedAt,
+        canRetryImport: connection.IsEnabled !== false,
       });
     })(),
   ]));

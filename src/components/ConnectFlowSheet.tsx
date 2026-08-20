@@ -4,7 +4,9 @@
  * modal so OAuth chrome never lingers over server-owned background work.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigation } from '@react-navigation/native';
 import {
+  ActivityIndicator,
   Pressable,
   StyleSheet,
   Text,
@@ -23,6 +25,10 @@ import { usePlatformConnections } from '../context/PlatformConnectionsContext';
 import { getPlatform, connectStepsFor, type ConnectStepKind } from '../config/platforms';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { useImportStatus, refreshInboxSummary } from '../hooks/useImportStatus';
+import {
+  IMPORT_SOCKET_QUIET_MS,
+  useImportJobProgress,
+} from '../hooks/useImportJobProgress';
 import { usePlatformConnect, type ConnectablePlatform } from '../hooks/usePlatformConnect';
 import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { connectErrorCopy } from '../lib/connectErrorCopy';
@@ -30,6 +36,7 @@ import { decideConnectImportPhase } from '../lib/connectImportFlow';
 import { trackDismissedConnectImport } from '../lib/connectImportDismissals';
 import {
   connectionImportPresentationsById,
+  connectionImportPhaseLabel,
   latestImportsByConnection,
 } from '../lib/connectionImportPresentation';
 
@@ -38,6 +45,7 @@ type FlowPhase =
   | 'shopifyPicker'
   | 'connecting'
   | 'importing'
+  | 'checking'
   | 'importFailed'
   | 'linkComputer'
   | 'done';
@@ -71,12 +79,6 @@ function platformKey(value?: string | null): string {
   return normalized(value).replace(/[\s_-]+/g, '');
 }
 
-function elapsedLabel(startedAt: number | null, now: number): string {
-  const elapsedSeconds = Math.max(0, Math.floor((now - (startedAt || now)) / 1000));
-  const minutes = Math.floor(elapsedSeconds / 60);
-  return `${minutes}:${String(elapsedSeconds % 60).padStart(2, '0')}`;
-}
-
 export default function ConnectFlowSheet({
   visible,
   platform,
@@ -85,6 +87,7 @@ export default function ConnectFlowSheet({
   onConnected,
   retryConnectionId = null,
 }: Props) {
+  const navigation = useNavigation<any>();
   const { connect, startScan } = usePlatformConnect({ orgId });
   const { connections, progressByConnectionId, refresh } = usePlatformConnections();
   const importStatus = useImportStatus();
@@ -117,8 +120,8 @@ export default function ConnectFlowSheet({
   const [connectError, setConnectError] = useState<string | null>(null);
   const [failedConnectionId, setFailedConnectionId] = useState<string | null>(null);
   const [activeConnectionId, setActiveConnectionId] = useState<string | undefined>(undefined);
+  const [activeJobId, setActiveJobId] = useState<string | undefined>(undefined);
   const [scanOpen, setScanOpen] = useState(false);
-  const [clockNow, setClockNow] = useState(Date.now());
   const [, setReconcileVersion] = useState(0);
 
   const importStartedAtRef = useRef<number | null>(null);
@@ -192,6 +195,7 @@ export default function ConnectFlowSheet({
     setConnectError(null);
     setFailedConnectionId(null);
     setActiveConnectionId(retryConnectionId || undefined);
+    setActiveJobId(undefined);
     setScanOpen(false);
     importStartedAtRef.current = null;
     importObservedRef.current = false;
@@ -208,21 +212,35 @@ export default function ConnectFlowSheet({
       setPhase('consent');
     } else if (currentStatus.requiresComputer && !currentStatus.computerOnline) {
       setPhase('linkComputer');
-    } else if (currentStatus.importing) {
-      const activePresentation = connections
-        .filter((connection) => platformKey(connection.PlatformType) === platformKey(platform))
-        .map((connection) => presentationByConnectionId.get(connection.Id))
-        .find((presentation) => presentation?.importInProgress);
-      importStartedAtRef.current = Math.max(
-        0,
-        timestamp(activePresentation?.occurredAt) === Number.NEGATIVE_INFINITY
-          ? Date.now()
-          : timestamp(activePresentation?.occurredAt),
-      );
-      importObservedRef.current = true;
-      setPhase('importing');
     } else {
-      setPhase('done');
+      const activeConnection = connections
+        .filter((connection) => platformKey(connection.PlatformType) === platformKey(platform))
+        .find((connection) => {
+          const presentation = presentationByConnectionId.get(connection.Id);
+          return presentation?.importInProgress || presentation?.kind === 'checking';
+        });
+      const activePresentation = activeConnection
+        ? presentationByConnectionId.get(activeConnection.Id)
+        : undefined;
+      if (activeConnection) setActiveConnectionId(activeConnection.Id);
+      if (currentStatus.importing) {
+        importStartedAtRef.current = Math.max(
+          0,
+          timestamp(activePresentation?.occurredAt) === Number.NEGATIVE_INFINITY
+            ? Date.now()
+            : timestamp(activePresentation?.occurredAt),
+        );
+        importObservedRef.current = true;
+        setActiveJobId(activePresentation?.jobId || undefined);
+        setPhase('importing');
+      } else if (activePresentation?.kind === 'checking') {
+        importStartedAtRef.current = Date.now();
+        importObservedRef.current = true;
+        setActiveJobId(activePresentation.jobId || undefined);
+        setPhase('checking');
+      } else {
+        setPhase('done');
+      }
     }
   // Live stores intentionally do not belong in this open-boundary effect.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -276,29 +294,52 @@ export default function ConnectFlowSheet({
   const importPresentation = resolvedConnectionId
     ? presentationByConnectionId.get(resolvedConnectionId)
     : undefined;
+  const socketProgress = resolvedConnectionId
+    ? progressByConnectionId[resolvedConnectionId]
+    : undefined;
+  const observedJobId = socketProgress?.jobId
+    || importPresentation?.jobId
+    || latestAttemptRun?.jobId
+    || undefined;
+  useEffect(() => {
+    if (observedJobId && observedJobId !== activeJobId) setActiveJobId(observedJobId);
+  }, [activeJobId, observedJobId]);
+
+  const { progress: jobProgress } = useImportJobProgress({
+    jobId: activeJobId || observedJobId,
+    enabled: visible && (phase === 'importing' || phase === 'checking'),
+    lastSocketAt: socketProgress?.receivedAt,
+  });
   const presentationBelongsToAttempt = !!importPresentation?.occurredAt
     && timestamp(importPresentation.occurredAt)
       >= (importStartedAtRef.current || Date.now()) - ATTEMPT_CLOCK_SKEW_MS;
-  const importIsActive = status.importing || importPresentation?.importInProgress === true;
-  const hasImportEvidence = !!latestAttemptRun
-    || importIsActive
+  const importIsActive = status.importing
+    || importPresentation?.importInProgress === true
+    || jobProgress?.state === 'active';
+  const hasImportEvidence = importIsActive
+    || jobProgress?.state === 'active'
     || (presentationBelongsToAttempt && importPresentation?.kind !== 'checking');
   const runStatus = normalized(latestAttemptRun?.status);
   const runFailed = runStatus === 'error' || runStatus.includes('fail');
   const runSucceeded = TERMINAL_SUCCESS.has(runStatus);
-  const terminalRunStatus = runFailed || runSucceeded || latestAttemptRun?.completedAt
+  const terminalRunStatus = jobProgress?.state === 'failed'
+    ? 'failed'
+    : jobProgress?.state === 'completed'
+      ? 'completed'
+      : runFailed || runSucceeded || latestAttemptRun?.completedAt
     ? (runFailed ? runStatus : 'completed')
     : presentationBelongsToAttempt && importPresentation?.kind === 'failed'
       ? 'failed'
-      : importObservedRef.current && !importIsActive && !latestAttemptRun
-        ? 'completed'
+      : importObservedRef.current && !importIsActive
+        ? 'checking'
         : undefined;
 
   const receiptItemCount = useMemo(() => {
-    if (!latestAttemptRun) return null;
-    const count = Math.max(latestAttemptRun.itemsCommitted, latestAttemptRun.itemsTotal);
+    const count = jobProgress?.state === 'completed'
+      ? jobProgress.processed ?? jobProgress.total ?? 0
+      : latestAttemptRun?.itemsCommitted ?? 0;
     return count > 0 ? count : null;
-  }, [latestAttemptRun]);
+  }, [jobProgress, latestAttemptRun]);
 
   const attentionCountFor = useCallback((connectionId?: string): number => {
     if (!connectionId) return 0;
@@ -337,7 +378,7 @@ export default function ConnectFlowSheet({
   }, [clearReconcileTimers, enterDone, refreshSharedStores]);
 
   useEffect(() => {
-    if (phase !== 'importing') return;
+    if (phase !== 'importing' && phase !== 'checking') return;
     if (importIsActive || hasImportEvidence) importObservedRef.current = true;
 
     const decision = decideConnectImportPhase({
@@ -355,6 +396,8 @@ export default function ConnectFlowSheet({
       setPhase('importFailed');
     } else if (decision === 'done') {
       completeImport();
+    } else if (decision !== phase) {
+      setPhase(decision);
     }
   }, [
     clearReconcileTimers,
@@ -365,15 +408,6 @@ export default function ConnectFlowSheet({
     resolvedConnectionId,
     terminalRunStatus,
   ]);
-
-  // The modal's receipt line ticks only while it is visible. The import and its
-  // reconciliation continue after dismissal without keeping a render timer up.
-  useEffect(() => {
-    if (!visible || phase !== 'importing') return;
-    setClockNow(Date.now());
-    const timer = setInterval(() => setClockNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [phase, visible]);
 
   // Completion remains visible long enough to register, then the parent gets
   // the exact connection attention count from the shared summary.
@@ -417,6 +451,7 @@ export default function ConnectFlowSheet({
         // callback-success action: no scan or refresh await may precede it.
         importStartedAtRef.current = Date.now();
         setActiveConnectionId(result.connectionId);
+        setActiveJobId(result.jobId);
         setFailedConnectionId(null);
         setConnectError(null);
         setPhase(decideConnectImportPhase({
@@ -439,6 +474,7 @@ export default function ConnectFlowSheet({
       });
       if (safeError.kind === 'success_already') {
         importStartedAtRef.current = Date.now();
+        setActiveJobId(result.jobId);
         setPhase('importing');
         beginImportReconciliation(result.connectionId);
       } else if (safeError.kind === 'cancelled') {
@@ -469,13 +505,14 @@ export default function ConnectFlowSheet({
     if (!failedConnectionId) return;
     importStartedAtRef.current = Date.now();
     setActiveConnectionId(failedConnectionId);
+    setActiveJobId(undefined);
     setConnectError(null);
     setPhase('importing');
     beginImportReconciliation(failedConnectionId);
   }, [beginImportReconciliation, failedConnectionId]);
 
   const closeFlow = useCallback(() => {
-    if (phase === 'importing') {
+    if (phase === 'importing' || phase === 'checking') {
       dismissedDuringImportRef.current = true;
       trackDismissedConnectImport({
         connectionId: resolvedConnectionId,
@@ -492,6 +529,13 @@ export default function ConnectFlowSheet({
     onCancel();
   }, [clearReconcileTimers, onCancel, phase, platform, resolvedConnectionId]);
 
+  const viewStatus = useCallback(() => {
+    importAttemptIdRef.current += 1;
+    clearReconcileTimers();
+    onCancel();
+    navigation.navigate('Connections');
+  }, [clearReconcileTimers, navigation, onCancel]);
+
   if (!activePlatform || !def) return null;
 
   const currentKind: ConnectStepKind | null =
@@ -503,10 +547,38 @@ export default function ConnectFlowSheet({
   const stepIndex = currentKind ? steps.indexOf(currentKind) : -1;
   const showStepCount = steps.length > 1 && stepIndex >= 0;
   const bottomPhase = phase === 'consent' || phase === 'connecting' || phase === 'linkComputer';
-  const importPhase = phase === 'importing' || phase === 'importFailed' || phase === 'done';
-  const itemLine = receiptItemCount
-    ? `${receiptItemCount} item${receiptItemCount === 1 ? '' : 's'} so far`
-    : elapsedLabel(importStartedAtRef.current, clockNow);
+  const importPhase = phase === 'importing'
+    || phase === 'checking'
+    || phase === 'importFailed'
+    || phase === 'done';
+  const socketIsRecent = typeof socketProgress?.receivedAt === 'number'
+    && Date.now() - socketProgress.receivedAt <= IMPORT_SOCKET_QUIET_MS;
+  const primaryProgress = socketIsRecent ? socketProgress : jobProgress;
+  const fallbackProgress = socketIsRecent ? jobProgress : socketProgress;
+  const liveProcessed = primaryProgress?.processed ?? fallbackProgress?.processed ?? null;
+  const liveTotal = primaryProgress?.total
+    ?? fallbackProgress?.total
+    ?? (latestAttemptRun && latestAttemptRun.itemsTotal > 0 ? latestAttemptRun.itemsTotal : null);
+  const liveItems = primaryProgress?.itemsSoFar
+    ?? primaryProgress?.processed
+    ?? fallbackProgress?.itemsSoFar
+    ?? fallbackProgress?.processed
+    ?? latestAttemptRun?.itemsSoFar
+    ?? (latestAttemptRun && latestAttemptRun.itemsCommitted > 0
+      ? latestAttemptRun.itemsCommitted
+      : null);
+  const livePhase = primaryProgress?.phase
+    || fallbackProgress?.phase
+    || importPresentation?.phase;
+  const itemLine = liveTotal != null && liveProcessed != null
+    ? `${liveProcessed} of ${liveTotal}`
+    : liveItems != null && liveItems > 0
+      ? `${liveItems} item${liveItems === 1 ? '' : 's'}`
+      : liveTotal != null && liveTotal > 0
+        ? `${liveTotal} item${liveTotal === 1 ? '' : 's'} found`
+        : connectionImportPhaseLabel(livePhase, primaryProgress === socketProgress
+          ? socketProgress?.status
+          : importPresentation?.phase);
 
   return (
     <>
@@ -580,13 +652,27 @@ export default function ConnectFlowSheet({
             </View>
             <Text style={styles.importTitle}>Importing items</Text>
             <Text style={styles.liveLine}>{itemLine}</Text>
-            <Text style={styles.importSubline}>Safe to close. Keeps going.</Text>
+            <Text style={styles.importSubline}>Safe to close.</Text>
             <Pressable
               accessibilityRole="button"
               onPress={closeFlow}
               style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
             >
-              <Text style={styles.secondaryButtonText}>Come back later</Text>
+              <Text style={styles.secondaryButtonText}>Close</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {phase === 'checking' ? (
+          <View style={styles.importBody}>
+            <ActivityIndicator color={BRAND_PRIMARY} />
+            <Text style={styles.importTitle}>Checking</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={viewStatus}
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.secondaryButtonText}>View status</Text>
             </Pressable>
           </View>
         ) : null}
@@ -595,7 +681,6 @@ export default function ConnectFlowSheet({
           <View style={styles.importBody}>
             <Icon name="alert-circle-outline" size={42} color="#BA7517" />
             <Text style={styles.importTitle}>Import stopped</Text>
-            <Text style={styles.importSubline}>Try again.</Text>
             <Pressable
               accessibilityRole="button"
               onPress={retryImport}
@@ -608,7 +693,7 @@ export default function ConnectFlowSheet({
               onPress={closeFlow}
               style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
             >
-              <Text style={styles.secondaryButtonText}>Come back later</Text>
+              <Text style={styles.secondaryButtonText}>Close</Text>
             </Pressable>
           </View>
         ) : null}
@@ -618,7 +703,7 @@ export default function ConnectFlowSheet({
             <Icon name="check-circle" size={48} color={BRAND_PRIMARY} />
             <Text style={styles.importTitle}>All set</Text>
             {receiptItemCount ? (
-              <Text style={styles.importSubline}>
+              <Text style={styles.liveLine}>
                 {receiptItemCount} item{receiptItemCount === 1 ? '' : 's'} imported
               </Text>
             ) : null}
