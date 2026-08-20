@@ -182,7 +182,14 @@ export default function PartnershipDetailScreen() {
                 contentContainerStyle={styles.listContent}
                 // A real pull-to-refresh — the old `<ActivityIndicator>` here was
                 // not a RefreshControl, so pulling never refetched anything.
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+                refreshControl={(
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#93C822"
+                        colors={['#93C822']}
+                    />
+                )}
                 ListEmptyComponent={loading ? (
                     <ActivityIndicator style={styles.emptyState} color="#93C822" />
                 ) : (

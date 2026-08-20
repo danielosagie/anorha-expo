@@ -297,7 +297,15 @@ const PoolDetailScreen = () => {
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor="#93C822" />}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void onRefresh()}
+            progressViewOffset={insets.top}
+            tintColor="#93C822"
+            colors={['#93C822']}
+          />
+        )}
       >
         <PageHeader
           title={poolName}

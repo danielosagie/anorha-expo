@@ -284,6 +284,7 @@ const ConnectionsScreen = () => {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={refreshConnections}
+            progressViewOffset={insets.top}
             tintColor="#93C822"
             colors={['#93C822']}
           />

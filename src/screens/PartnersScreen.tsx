@@ -651,7 +651,15 @@ export default function PartnersScreen() {
             <ScrollView
                 contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
                 showsVerticalScrollIndicator={false}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND_PRIMARY} />}
+                refreshControl={(
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        progressViewOffset={insets.top}
+                        tintColor={BRAND_PRIMARY}
+                        colors={[BRAND_PRIMARY]}
+                    />
+                )}
             >
                 <PageHeader
                     title="Partners"

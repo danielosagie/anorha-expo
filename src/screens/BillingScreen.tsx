@@ -574,7 +574,9 @@ export default function BillingScreen() {
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={() => void refreshBillingData()}
+            progressViewOffset={insets.top}
             tintColor={ANORHA_GREEN}
+            colors={[ANORHA_GREEN]}
           />
         )}
       >

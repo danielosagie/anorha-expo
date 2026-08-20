@@ -410,7 +410,13 @@ export default function TeamScreen() {
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[ANORHA_GREEN]} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            progressViewOffset={insets.top}
+            tintColor={ANORHA_GREEN}
+            colors={[ANORHA_GREEN]}
+          />
         }
       >
         <PageHeader

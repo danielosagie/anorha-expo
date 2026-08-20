@@ -379,7 +379,14 @@ export default function BackupsScreen() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={refresh}
+            tintColor={ANORHA_GREEN}
+            colors={[ANORHA_GREEN]}
+          />
+        )}
       >
         <View style={[styles.section, { backgroundColor: theme.colors.surface }]}>
           <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Backup frequency</Text>

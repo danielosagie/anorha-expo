@@ -933,7 +933,12 @@ const ActivityFeedScreen = observer(() => {
             }
             keyExtractor={(item) => item.key}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor="#93C822"
+                colors={['#93C822']}
+              />
             }
             onEndReached={loadMore}
             onEndReachedThreshold={0.5}
