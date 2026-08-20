@@ -32,8 +32,19 @@ import {
   formatBillingDate,
   formatBillingTimestamp,
   isCheckoutBlocked,
-  type RawBillingSummary,
 } from '../utils/billingState';
+import {
+  getInvoiceReceiptUrl,
+  parseBillingInvoicesResponse,
+  parseBillingSummaryResponse,
+  parsePartnerPaymentMethodResponse,
+  parseUpcomingInvoiceResponse,
+  type BillingInvoicePayload,
+  type BillingPayloadResult,
+  type BillingSummaryPayload,
+  type PartnerPaymentMethodPayload,
+  type UpcomingInvoicePayload,
+} from '../utils/billingPayload';
 import { createLogger } from '../utils/logger';
 const log = createLogger('BillingScreen');
 
@@ -46,15 +57,24 @@ const API_BASE = API_BASE_RAW.replace(/\/$/, '').endsWith('/api')
 const ANORHA_GREEN = BRAND_PRIMARY;
 const WHITE_BG = '#FFFFFF';
 
-type BillingSummaryResponse = RawBillingSummary & Record<string, any>;
+type BillingResourceStatus = 'loading' | 'ready' | 'error';
 
-function safeNumber(value: any, fallback = 0): number {
-  const num = typeof value === 'string' ? Number(value) : value;
-  return Number.isFinite(num) ? num : fallback;
+function formatCurrency(value: number, currency = 'USD'): string {
+  return value.toLocaleString('en-US', { style: 'currency', currency });
 }
 
-function formatCurrency(value: number): string {
-  return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+async function fetchBillingResource<T>(
+  url: string,
+  headers: Record<string, string>,
+  parse: (payload: unknown) => BillingPayloadResult<T>,
+): Promise<BillingPayloadResult<T>> {
+  try {
+    const response = await fetch(url, { headers });
+    if (!response.ok) return { ok: false, field: `http.${response.status}` };
+    return parse(await response.json());
+  } catch {
+    return { ok: false, field: 'request' };
+  }
 }
 
 // Raw usage keys → plain-English, transparent labels. Deliberately contains NO internal
@@ -130,21 +150,27 @@ const HealthBar = ({ used, limit, fillColor }: { used: number, limit: number, fi
   );
 };
 
+const BillingMessageCard = ({ label }: { label: string }) => (
+  <View style={styles.cardGroup}>
+    <View style={styles.listItem}>
+      <Text style={styles.listSubValue}>{label}</Text>
+    </View>
+  </View>
+);
+
 export default function BillingScreen() {
   const navigation = useNavigation();
   const route = useRoute<any>();
   const { getToken } = useAuth();
   const insets = useSafeAreaInsets();
 
-  const [summary, setSummary] = useState<BillingSummaryResponse | null>(null);
-  const [invoices, setInvoices] = useState<any>(null);
-  const [upcoming, setUpcoming] = useState<any>({ upcoming: null });
-  const [partnerPaymentMethod, setPartnerPaymentMethod] = useState<{
-    hasPaymentMethod: boolean;
-    lastFour?: string;
-    brand?: string;
-    expiresAt?: string;
-  } | null>(null);
+  const [summary, setSummary] = useState<BillingSummaryPayload | null>(null);
+  const [summaryStatus, setSummaryStatus] = useState<BillingResourceStatus>('loading');
+  const [invoices, setInvoices] = useState<BillingInvoicePayload[]>([]);
+  const [invoicesStatus, setInvoicesStatus] = useState<BillingResourceStatus>('loading');
+  const [upcoming, setUpcoming] = useState<UpcomingInvoicePayload | null>(null);
+  const [upcomingStatus, setUpcomingStatus] = useState<BillingResourceStatus>('loading');
+  const [partnerPaymentMethod, setPartnerPaymentMethod] = useState<PartnerPaymentMethodPayload | null>(null);
   const [userRole, setUserRole] = useState<'owner' | 'employee' | 'partner' | 'org:admin' | undefined>(undefined);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -158,7 +184,7 @@ export default function BillingScreen() {
   const pendingCheckoutUrlRef = React.useRef<string | null>(null);
 
   const isPartner = userRole === 'partner';
-  const hasSummaryData = !!summary && typeof summary === 'object';
+  const hasSummaryData = summaryStatus === 'ready' && summary !== null;
 
   const refreshBillingData = useCallback(async () => {
     setIsRefreshing(true);
@@ -167,6 +193,12 @@ export default function BillingScreen() {
       const token = await getToken();
       if (!token) {
         log.error('No auth token available');
+        setSummary(null);
+        setSummaryStatus('error');
+        setInvoices([]);
+        setInvoicesStatus('error');
+        setUpcoming(null);
+        setUpcomingStatus('error');
         return;
       }
       const headers = {
@@ -174,31 +206,58 @@ export default function BillingScreen() {
         'Content-Type': 'application/json',
       };
 
-      const [summaryRes, invoicesRes, upcomingRes, partnerPaymentRes] = await Promise.all([
-        fetch(`${API_BASE}/billing/summary`, { headers }),
-        fetch(`${API_BASE}/billing/invoices?limit=12`, { headers }),
-        fetch(`${API_BASE}/billing/upcoming`, { headers }),
-        isPartner ? fetch(`${API_BASE}/billing/partner/payment-method`, { headers }) : Promise.resolve(null),
+      const [summaryResult, invoicesResult, upcomingResult, partnerPaymentResult] = await Promise.all([
+        fetchBillingResource(`${API_BASE}/billing/summary`, headers, parseBillingSummaryResponse),
+        fetchBillingResource(`${API_BASE}/billing/invoices?limit=12`, headers, parseBillingInvoicesResponse),
+        fetchBillingResource(`${API_BASE}/billing/upcoming`, headers, parseUpcomingInvoiceResponse),
+        isPartner
+          ? fetchBillingResource(
+              `${API_BASE}/billing/partner/payment-method`,
+              headers,
+              parsePartnerPaymentMethodResponse,
+            )
+          : Promise.resolve(null),
       ]);
 
-      if (summaryRes?.ok) {
-        const newSummary = await summaryRes.json();
-        setSummary(newSummary);
+      if (summaryResult.ok) {
+        setSummary(summaryResult.value);
+        setSummaryStatus('ready');
+      } else {
+        log.error(`Billing summary unavailable at ${summaryResult.field}`);
+        setSummary(null);
+        setSummaryStatus('error');
       }
-      if (invoicesRes?.ok) {
-        const newInvoices = await invoicesRes.json();
-        setInvoices(newInvoices);
+      if (invoicesResult.ok) {
+        setInvoices(invoicesResult.value);
+        setInvoicesStatus('ready');
+      } else {
+        log.error(`Billing invoices unavailable at ${invoicesResult.field}`);
+        setInvoices([]);
+        setInvoicesStatus('error');
       }
-      if (upcomingRes?.ok) {
-        const newUpcoming = await upcomingRes.json();
-        setUpcoming(newUpcoming);
+      if (upcomingResult.ok) {
+        setUpcoming(upcomingResult.value);
+        setUpcomingStatus('ready');
+      } else {
+        log.error(`Upcoming invoice unavailable at ${upcomingResult.field}`);
+        setUpcoming(null);
+        setUpcomingStatus('error');
       }
-      if (partnerPaymentRes?.ok) {
-        const data = await partnerPaymentRes.json();
-        setPartnerPaymentMethod(data);
+      if (partnerPaymentResult?.ok) {
+        setPartnerPaymentMethod(partnerPaymentResult.value);
+      } else if (partnerPaymentResult) {
+        log.error(`Partner payment method unavailable at ${partnerPaymentResult.field}`);
+        setPartnerPaymentMethod(null);
+        setActionError('Payment unavailable.');
       }
     } catch (error) {
       log.error('Failed to refresh billing data:', error);
+      setSummary(null);
+      setSummaryStatus('error');
+      setInvoices([]);
+      setInvoicesStatus('error');
+      setUpcoming(null);
+      setUpcomingStatus('error');
     } finally {
       setIsRefreshing(false);
     }
@@ -223,46 +282,29 @@ export default function BillingScreen() {
     return () => sub.remove();
   }, [refreshBillingData]);
 
-  const planFromSummary =
-    summary?.subscription?.CurrentPlan || summary?.subscription?.current_plan;
-  const planName = (planFromSummary as 'Growth' | 'Teams' | undefined) || undefined;
+  const planName = summary?.subscription?.CurrentPlan as 'Growth' | 'Teams' | undefined;
   const billingState = deriveBillingState(summary, new Date());
-  const hasActiveSubscription = billingState.subscription.state === 'active'
-    || billingState.subscription.state === 'canceled_paid_through';
 
-  const computeAllowanceCents = safeNumber(
-    summary?.compute_allowance_cents ?? summary?.ai_allowance_cents ?? summary?.ai_credits_cents,
-    planName === 'Teams' ? 600 : 200,
-  );
-  const teamMembersCount = safeNumber(summary?.team_members_count);
-  const teamMembersIncluded = safeNumber(summary?.team_members_included);
-  const teamMembersExtra = Math.max(0, safeNumber(summary?.team_members_extra));
-  const teamMembersCost = safeNumber(summary?.team_members_cost);
+  const computeAllowanceCents = summary?.compute_allowance_cents ?? 0;
+  const teamMembersCount = summary?.team_members_count ?? 0;
+  const teamMembersIncluded = summary?.team_members_included ?? 0;
+  const teamMembersExtra = Math.max(0, summary?.team_members_extra ?? 0);
+  const teamMembersCost = summary?.team_members_cost ?? 0;
 
-  let planTitle = summary?.subscription === null ? 'No active plan' : 'Plan details';
-  let basePrice = 0;
-  if (planName === 'Growth') {
-    planTitle = 'Growth · $20/month';
-    basePrice = 20;
-  } else if (planName === 'Teams') {
-    planTitle = 'Teams · $60/month';
-    basePrice = 60;
-  }
+  const planTitle = summary?.subscription === null
+    ? 'No active plan'
+    : planName || 'Plan details';
+  const aiOverageCents = summary?.ai_overage_cents ?? 0;
+  const basePrice = Math.max(0, (summary?.total_cost_cents ?? 0) - aiOverageCents) / 100;
 
-  const featureUsage = summary?.usage || {};
-  const featureEntries = Object.entries(featureUsage || {});
+  const featureEntries = Object.entries(summary?.usage ?? {});
   // Group by the friendly label (always derived from the key, never the backend's raw
   // displayName) so vendor names can't leak and synonyms collapse into one clean line.
   const usageHistoryEntries = Object.values(
-    featureEntries.reduce((acc, [key, value]: [string, any]) => {
-      const totalCostCents = safeNumber(value?.totalCost ?? value?.total_cost ?? value?.total_cost_cents);
-      const internalCostCents = safeNumber(
-        value?.internalCost ?? value?.internal_cost ?? value?.internal_cost_cents,
-        totalCostCents,
-      );
-      const totalQuantity = safeNumber(
-        value?.totalQuantity ?? value?.total_quantity ?? value?.quantity ?? value?.count
-      );
+    featureEntries.reduce((acc, [key, value]) => {
+      const totalCostCents = value.totalCost;
+      const internalCostCents = value.internalCost;
+      const totalQuantity = value.totalQuantity;
       if (totalCostCents <= 0 && totalQuantity <= 0) return acc;
       const displayName = getFeatureDisplayName(key);
       const existing = acc[displayName];
@@ -277,20 +319,13 @@ export default function BillingScreen() {
     }, {} as Record<string, { key: string; displayName: string; totalCostCents: number; internalCostCents: number; totalQuantity: number }>)
   ).sort((a, b) => b.internalCostCents - a.internalCostCents);
 
-  const totalUsageHistoryCents = usageHistoryEntries.reduce((sum, entry) => sum + entry.internalCostCents, 0);
-  const computeUsedCents = Math.max(
-    safeNumber(summary?.compute_used_cents ?? summary?.ai_used_cents),
-    totalUsageHistoryCents,
-  );
+  const computeUsedCents = summary?.compute_used_cents ?? 0;
   const computeUsagePercent = computeAllowanceCents > 0
     ? Math.max(0, Math.round((computeUsedCents / computeAllowanceCents) * 100))
     : 0;
-  const aiOverageCents = safeNumber(
-    summary?.ai_overage_cents ?? summary?.ai_credits_overage_cents,
-    0,
-  );
   const aiOverageDollars = aiOverageCents / 100;
-  const totalCostEstimate = basePrice + teamMembersCost + aiOverageDollars;
+  const totalCostEstimate = ((summary?.total_cost_cents ?? 0) / 100) + teamMembersCost;
+  const hasCostBreakdown = basePrice > 0 || teamMembersCost > 0 || aiOverageDollars > 0;
 
   const openBillingSupport = () => {
     (navigation as any).navigate('BillingSupport', {
@@ -465,9 +500,18 @@ export default function BillingScreen() {
     }
   }, [refreshBillingData]);
 
-  const openInvoiceUrl = (inv: any) => {
-    const url = inv.hosted_invoice_url || inv.hosted_url || inv.url;
-    if (url) Linking.openURL(url);
+  const openInvoiceUrl = async (invoice: BillingInvoicePayload) => {
+    const url = getInvoiceReceiptUrl(invoice);
+    if (!url) {
+      Alert.alert('Receipt unavailable');
+      return;
+    }
+    try {
+      await Linking.openURL(url);
+    } catch (error) {
+      log.error('Failed to open invoice receipt:', error);
+      Alert.alert('Receipt unavailable');
+    }
   };
 
   const periodEndLabel = formatBillingDate(billingState.subscription.currentPeriodEnd);
@@ -519,6 +563,13 @@ export default function BillingScreen() {
         style={styles.scroll}
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 18, paddingBottom: insets.bottom + 120 }}
         showsVerticalScrollIndicator={false}
+        refreshControl={(
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => void refreshBillingData()}
+            tintColor={ANORHA_GREEN}
+          />
+        )}
       >
         <PageHeader title="Billing" onBack={() => navigation.goBack()} />
 
@@ -527,7 +578,13 @@ export default function BillingScreen() {
           <View style={styles.listItem}>
             <View>
               <Text style={styles.listLabel}>Current Plan</Text>
-              <Text style={styles.listValue}>{planTitle.split('·')[0].trim() || 'Free Trial'}</Text>
+              <Text style={styles.listValue}>
+                {summaryStatus === 'loading'
+                  ? 'Loading'
+                  : summaryStatus === 'error'
+                    ? 'Unavailable'
+                    : planTitle}
+              </Text>
               {subscriptionLabel ? <Text style={styles.listSubValue}>{subscriptionLabel}</Text> : null}
             </View>
           </View>
@@ -632,83 +689,97 @@ export default function BillingScreen() {
           <Text style={styles.actionErrorText}>{actionError}</Text>
         ) : null}
 
-        {hasSummaryData && (
-          <>
-            <Text style={styles.sectionHeader}>Usage this month</Text>
-            <View style={styles.cardGroup}>
-              <View style={styles.usageItem}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={styles.listValue}>AI usage</Text>
-                  <Text style={styles.listSubValue}>{computeUsagePercent}% used</Text>
-                </View>
-                <HealthBar used={computeUsedCents} limit={computeAllowanceCents} fillColor={ANORHA_GREEN} />
-                {aiOverageDollars > 0 && <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {formatCurrency(aiOverageDollars)} overage</Text>}
+        <Text style={styles.sectionHeader}>Usage this month</Text>
+        {hasSummaryData ? (
+          <View style={styles.cardGroup}>
+            <View style={styles.usageItem}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={styles.listValue}>AI usage</Text>
+                <Text style={styles.listSubValue}>{computeUsagePercent}% used</Text>
               </View>
-              <View style={styles.separator} />
-              <View style={styles.usageItem}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={styles.listValue}>Team Members</Text>
-                  <Text style={styles.listSubValue}>{teamMembersCount} / {teamMembersIncluded} spots</Text>
-                </View>
-                <HealthBar used={teamMembersCount} limit={teamMembersIncluded} fillColor={'#3B82F6'} />
-                {teamMembersExtra > 0 && <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 8, fontFamily: 'Inter_500Medium' }}>+ {teamMembersExtra} extra member(s) ({formatCurrency(teamMembersCost)})</Text>}
-              </View>
-              <View style={styles.separator} />
-              <TouchableOpacity style={styles.listItemAction} onPress={() => setShowCreditsModal(true)}>
-                <Text style={styles.listValue}>Add credits</Text>
-                <ChevronRight size={20} color="#D4D4D8" />
-              </TouchableOpacity>
+              <HealthBar used={computeUsedCents} limit={computeAllowanceCents} fillColor={ANORHA_GREEN} />
+              {aiOverageDollars > 0 ? (
+                <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontFamily: 'Inter_500Medium' }}>
+                  + {formatCurrency(aiOverageDollars)} overage
+                </Text>
+              ) : null}
             </View>
-
-            {usageHistoryEntries.length > 0 && (
-              <>
-                <Text style={styles.sectionHeader}>Usage by feature</Text>
-                <View style={styles.cardGroup}>
-                  {usageHistoryEntries.map((entry, idx) => (
-                    <React.Fragment key={entry.key}>
-                      {idx > 0 && <View style={styles.separator} />}
-                      <View style={styles.listItem}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <Text style={styles.listValue}>{entry.displayName}</Text>
-                          <Text style={styles.listValue}>
-                            {computeAllowanceCents > 0
-                              ? `${Math.max(0, Math.round((entry.internalCostCents / computeAllowanceCents) * 100))}%`
-                              : '0%'}
-                          </Text>
-                        </View>
-                        <Text style={styles.listSubValue}>
-                          {entry.totalQuantity} {entry.totalQuantity === 1 ? 'use' : 'uses'}
-                        </Text>
-                      </View>
-                    </React.Fragment>
-                  ))}
-                </View>
-              </>
-            )}
-          </>
+            <View style={styles.separator} />
+            <View style={styles.usageItem}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={styles.listValue}>Team Members</Text>
+                <Text style={styles.listSubValue}>{teamMembersCount} / {teamMembersIncluded} spots</Text>
+              </View>
+              <HealthBar used={teamMembersCount} limit={teamMembersIncluded} fillColor={'#3B82F6'} />
+              {teamMembersExtra > 0 ? (
+                <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 8, fontFamily: 'Inter_500Medium' }}>
+                  + {teamMembersExtra} extra member(s) ({formatCurrency(teamMembersCost)})
+                </Text>
+              ) : null}
+            </View>
+            <View style={styles.separator} />
+            <TouchableOpacity style={styles.listItemAction} onPress={() => setShowCreditsModal(true)}>
+              <Text style={styles.listValue}>Add credits</Text>
+              <ChevronRight size={20} color="#D4D4D8" />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <BillingMessageCard label={summaryStatus === 'loading' ? 'Loading' : 'Usage unavailable'} />
         )}
 
-        {hasActiveSubscription && (
-          <>
-            <Text style={styles.sectionHeader}>Cost Breakdown</Text>
+        <Text style={styles.sectionHeader}>Usage by feature</Text>
+        {hasSummaryData ? (
+          usageHistoryEntries.length > 0 ? (
+            <View style={styles.cardGroup}>
+              {usageHistoryEntries.map((entry, idx) => (
+                <React.Fragment key={entry.key}>
+                  {idx > 0 ? <View style={styles.separator} /> : null}
+                  <View style={styles.listItem}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={styles.listValue}>{entry.displayName}</Text>
+                      <Text style={styles.listValue}>
+                        {computeAllowanceCents > 0
+                          ? `${Math.max(0, Math.round((entry.internalCostCents / computeAllowanceCents) * 100))}%`
+                          : '0%'}
+                      </Text>
+                    </View>
+                    <Text style={styles.listSubValue}>
+                      {entry.totalQuantity} {entry.totalQuantity === 1 ? 'use' : 'uses'}
+                    </Text>
+                  </View>
+                </React.Fragment>
+              ))}
+            </View>
+          ) : (
+            <BillingMessageCard label="No usage" />
+          )
+        ) : (
+          <BillingMessageCard label={summaryStatus === 'loading' ? 'Loading' : 'Usage unavailable'} />
+        )}
+
+        <Text style={styles.sectionHeader}>Cost Breakdown</Text>
+        {hasSummaryData ? (
+          hasCostBreakdown ? (
             <View style={styles.cardGroup}>
               <View style={styles.listItem}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={styles.listValue}>Base Plan ({planTitle.split('·')[0].trim()})</Text>
-                  <Text style={styles.listValue}>{formatCurrency(basePrice)}</Text>
-                </View>
-                {teamMembersCost > 0 && (
+                {basePrice > 0 ? (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={styles.listValue}>Base Plan ({planTitle})</Text>
+                    <Text style={styles.listValue}>{formatCurrency(basePrice)}</Text>
+                  </View>
+                ) : null}
+                {teamMembersCost > 0 ? (
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={styles.listValue}>Extra Team Members</Text>
                     <Text style={styles.listValue}>{formatCurrency(teamMembersCost)}</Text>
                   </View>
-                )}
-                {aiOverageDollars > 0 && (
+                ) : null}
+                {aiOverageDollars > 0 ? (
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={styles.listValue}>AI Overage</Text>
                     <Text style={styles.listValue}>{formatCurrency(aiOverageDollars)}</Text>
                   </View>
-                )}
+                ) : null}
                 <View style={{ height: 1, backgroundColor: '#F1F1EE', marginVertical: 8 }} />
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                   <Text style={styles.listValueBold}>Estimated Total</Text>
@@ -716,71 +787,79 @@ export default function BillingScreen() {
                 </View>
               </View>
             </View>
-          </>
+          ) : (
+            <BillingMessageCard label="No charges" />
+          )
+        ) : (
+          <BillingMessageCard label={summaryStatus === 'loading' ? 'Loading' : 'Costs unavailable'} />
         )}
 
-        {/* Upcoming Invoice */}
-        {(() => {
-          const invData = upcoming?.upcoming || upcoming;
-          if (!invData || (!invData.amount_due && !invData.total)) return null;
-          const dateStr = invData.next_payment_attempt || invData.period_end || invData.created_at || invData.created;
-          const d = typeof dateStr === 'string' ? new Date(dateStr) : new Date((dateStr || 0) * 1000);
-          const amt = invData.amount_due || invData.total || 0;
-          return (
-            <>
-              <Text style={styles.sectionHeader}>Upcoming Invoice</Text>
-              <View style={styles.cardGroup}>
-                <View style={styles.listItem}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={styles.listValue}>Amount Due</Text>
-                    <Text style={styles.listValue}>{formatCurrency(amt / 100)}</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={styles.listSubValue}>Next Payment</Text>
-                    <Text style={styles.listSubValue}>{d.toLocaleDateString()}</Text>
-                  </View>
-                </View>
+        <Text style={styles.sectionHeader}>Upcoming Invoice</Text>
+        {upcomingStatus === 'loading' ? (
+          <BillingMessageCard label="Loading" />
+        ) : upcomingStatus === 'error' ? (
+          <BillingMessageCard label="Invoice unavailable" />
+        ) : upcoming ? (
+          <View style={styles.cardGroup}>
+            <View style={styles.listItem}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Text style={styles.listValue}>Amount Due</Text>
+                <Text style={styles.listValue}>{formatCurrency(upcoming.total / 100, upcoming.currency)}</Text>
               </View>
-            </>
-          );
-        })()}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={styles.listSubValue}>Next Payment</Text>
+                <Text style={styles.listSubValue}>
+                  {new Date(upcoming.due_date).toLocaleDateString()}
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : (
+          <BillingMessageCard label="No upcoming invoice" />
+        )}
 
-        {/* Invoices List */}
-        {(() => {
-          const arr = invoices?.data || invoices;
-          if (!Array.isArray(arr) || arr.length === 0) return null;
-          return (
-            <>
-              <Text style={styles.sectionHeader}>Invoices</Text>
-              <View style={styles.cardGroup}>
-                {arr.slice(0, 5).map((inv: any, idx: number) => {
-                  const dateStr = inv.created || inv.created_at;
-                  const d = typeof dateStr === 'string' ? new Date(dateStr) : new Date((dateStr || 0) * 1000);
-                  const amt = inv.amount_paid ?? inv.total ?? 0;
-                  return (
-                    <React.Fragment key={inv.id || idx}>
-                      {idx > 0 && <View style={styles.separator} />}
-                      <TouchableOpacity style={styles.listItemAction} onPress={() => openInvoiceUrl(inv)}>
-                        <View>
-                          <Text style={styles.listValue}>
-                            {d.toLocaleDateString()}
-                          </Text>
-                          <Text style={styles.listSubValue}>{(inv.status || 'paid').toUpperCase()}</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Text style={[styles.listValue, { marginRight: 8 }]}>
-                            {formatCurrency(amt / 100)}
-                          </Text>
-                          <ChevronRight size={20} color="#D4D4D8" />
-                        </View>
-                      </TouchableOpacity>
-                    </React.Fragment>
-                  );
-                })}
-              </View>
-            </>
-          );
-        })()}
+        <Text style={styles.sectionHeader}>Invoices</Text>
+        {invoicesStatus === 'loading' ? (
+          <BillingMessageCard label="Loading" />
+        ) : invoicesStatus === 'error' ? (
+          <BillingMessageCard label="Invoices unavailable" />
+        ) : invoices.length === 0 ? (
+          <BillingMessageCard label="No invoices" />
+        ) : (
+          <View style={styles.cardGroup}>
+            {invoices.map((invoice, idx) => {
+              const receiptUrl = getInvoiceReceiptUrl(invoice);
+              return (
+                <React.Fragment key={invoice.id}>
+                  {idx > 0 ? <View style={styles.separator} /> : null}
+                  <TouchableOpacity
+                    style={styles.listItemAction}
+                    onPress={() => void openInvoiceUrl(invoice)}
+                    disabled={!receiptUrl}
+                    accessibilityState={{ disabled: !receiptUrl }}
+                  >
+                    <View>
+                      <Text style={styles.listValue}>
+                        {new Date(invoice.created * 1000).toLocaleDateString()}
+                      </Text>
+                      <Text style={styles.listSubValue}>{invoice.status.toUpperCase()}</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={[styles.listValue, { marginRight: 8 }]}>
+                        {formatCurrency(invoice.total / 100, invoice.currency)}
+                      </Text>
+                      {receiptUrl ? (
+                        <ChevronRight size={20} color="#D4D4D8" />
+                      ) : (
+                        <Text style={styles.listSubValue}>No receipt</Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                </React.Fragment>
+              );
+            })}
+          </View>
+        )}
 
         <Text style={styles.sectionHeader}>Support</Text>
         <View style={styles.cardGroup}>
