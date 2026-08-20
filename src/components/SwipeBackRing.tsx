@@ -103,9 +103,19 @@ export const SwipeBackRing: React.FC<Props> = ({
     return () => progress.removeListener(id);
   }, [progress]);
 
+  // True only while a back-pull is actually driving the page. The slide-mode
+  // transform is attached to the page layer ONLY during a pull: a resting
+  // transform (even identity) on the ScrollView's ancestor suppresses native
+  // UIRefreshControl on every wrapped screen (measured: shipped TeamScreen's
+  // pull-to-refresh never engaged; unwrapped screens' did).
+  const [pulling, setPulling] = useState(false);
+
   const snapBack = () => {
     stageRef.current = 0;
-    Animated.spring(progress, { toValue: 0, useNativeDriver: false, bounciness: 6, speed: 14 }).start();
+    Animated.spring(progress, { toValue: 0, useNativeDriver: false, bounciness: 6, speed: 14 })
+      .start(({ finished }) => {
+        if (finished) setPulling(false);
+      });
   };
 
   // Snap the ring fully back to rest and re-arm the gesture. Used after a commit and on
@@ -115,6 +125,7 @@ export const SwipeBackRing: React.FC<Props> = ({
     progress.setValue(0);
     stageRef.current = 0;
     committingRef.current = false;
+    setPulling(false);
   };
 
   const commit = () => {
@@ -141,7 +152,12 @@ export const SwipeBackRing: React.FC<Props> = ({
     PanResponder.create({
       onMoveShouldSetPanResponder: (_e, g) =>
         !committingRef.current && g.dx > 8 && Math.abs(g.dy) < Math.abs(g.dx),
-      onPanResponderGrant: (e) => setGrabY(e.nativeEvent.pageY),
+      onPanResponderGrant: (e) => {
+        setGrabY(e.nativeEvent.pageY);
+        // Attach the page transform for the duration of this pull only (see
+        // `pulling`). Same element stays mounted, so no screen remount.
+        setPulling(true);
+      },
       // Once the user is actively pulling the ring, don't surrender the touch to the
       // native gesture-handler stack underneath (GestureHandlerRootView / PanGestureHandler
       // on the camera screen). Without this the RNGH stack can cancel the pull mid-gesture.
@@ -250,7 +266,15 @@ export const SwipeBackRing: React.FC<Props> = ({
 
   return (
     <View style={[styles.root, { backgroundColor: surface }]}>
-      <Animated.View style={[styles.page, { backgroundColor: surface, transform: [{ translateX: pageShift }] }]}>
+      <Animated.View
+        style={[
+          styles.page,
+          { backgroundColor: surface },
+          // Transform only while pulling: a resting transform on this layer
+          // kills UIRefreshControl in every descendant ScrollView.
+          pulling ? { transform: [{ translateX: pageShift }] } : null,
+        ]}
+      >
         {children}
       </Animated.View>
 
