@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:f608af251557)
+// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:9e44eb309b44)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * MATCH PIPELINE CONTRACT — single source of truth for the mobile↔backend match seam.
@@ -242,6 +242,14 @@ export const zMatchJobResult = z.object({
   enrichedFrom: z.enum(['ebay']).nullable().optional(),
   ebayEnrichment: z.object({ ebayMatch: z.any(), identityQuery: z.string() }).optional(),
   error: z.string().optional(),
+  /** Durable client recovery receipt for failures that are safe to retry. */
+  retry: z
+    .object({
+      retryable: z.literal(true),
+      action: z.enum(['retry_scan', 'resubmit_assist']),
+      message: z.string(),
+    })
+    .optional(),
 });
 export type MatchJobResult = z.infer<typeof zMatchJobResult>;
 
@@ -342,5 +350,12 @@ export const zMatchAssistResponseResponse = z.object({
   pendingUserAssistCount: z.number(),
   updatedResult: zMatchJobResult,
   autoGenerateJobId: z.string().optional(),
+  retry: z
+    .object({
+      retryable: z.literal(true),
+      action: z.enum(['retry_scan', 'resubmit_assist']),
+      message: z.string(),
+    })
+    .optional(),
 });
 export type MatchAssistResponseResponse = z.infer<typeof zMatchAssistResponseResponse>;
