@@ -185,6 +185,7 @@ const SettingsScreen = () => {
           onPress={() => navigation.navigate('Connections')}
         >
           <Text style={styles.sectionTitle}>Integrations</Text>
+          <Text style={styles.secondaryActionText}>Manage</Text>
           <View style={styles.sectionChevron}>
             <ChevronRight size={16} color="#71717A" />
           </View>
@@ -248,7 +249,7 @@ const SettingsScreen = () => {
                         openConnections();
                       }}
                     >
-                      <Text style={styles.platformActionText}>{rowModel.trailing.label}</Text>
+                      <Text style={styles.secondaryActionText}>{rowModel.trailing.label}</Text>
                     </TouchableOpacity>
                   ) : (
                     <ChevronRight size={20} color="#D4D4D8" />
@@ -299,7 +300,8 @@ const styles = StyleSheet.create({
   org: { fontSize: 14, color: '#71717A', fontFamily: 'Inter_400Regular', marginTop: 1 },
 
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginLeft: 4 },
-  sectionTitle: { fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  sectionTitle: { flex: 1, fontSize: 17, color: '#18181B', fontFamily: 'Inter_700Bold' },
+  secondaryActionText: { color: '#52525B', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   sectionChevron: {
     width: 22, height: 22, borderRadius: 11, backgroundColor: '#ECEBE6',
     alignItems: 'center', justifyContent: 'center',
@@ -311,7 +313,6 @@ const styles = StyleSheet.create({
   platformRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 13 },
   platformRowBorder: { borderTopWidth: 1, borderTopColor: '#F1F1EE' },
   platformAction: { minWidth: 52, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' },
-  platformActionText: { color: '#52525B', fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   platformName: { fontSize: 16, color: '#18181B', fontFamily: 'Inter_600SemiBold' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
   dot: { width: 7, height: 7, borderRadius: 4 },

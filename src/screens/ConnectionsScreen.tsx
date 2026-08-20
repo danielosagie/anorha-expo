@@ -30,6 +30,7 @@ import {
   listSellingPlatformConnections,
 } from '../lib/connectionImportPresentation';
 import { connectionRowModel } from '../lib/connectionRowModel';
+import { shouldOpenImportQuestionQueue } from '../lib/connectionImportRoute';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -321,7 +322,10 @@ const ConnectionsScreen = () => {
                   openImportRetry(c);
                   return;
                 }
-                if (st.kind === 'review' || importInProgress || st.attentionCount > 0) {
+                if (shouldOpenImportQuestionQueue({
+                  importInProgress,
+                  attentionCount: st.attentionCount,
+                })) {
                   navigation.navigate('ImportQuestionQueue', {
                     connectionId: c.Id,
                     importId: recentImport?.importId,
@@ -574,7 +578,13 @@ const ConnectionsScreen = () => {
           const platformName = flowPlatform || 'Platform';
           setFlowPlatform(null);
           setRetryConnectionId(null);
-          if (connectionId && (attentionCount || 0) > 0) {
+          const presentation = connectionId
+            ? presentationByConnectionId.get(connectionId)
+            : undefined;
+          if (connectionId && shouldOpenImportQuestionQueue({
+            importInProgress: presentation?.importInProgress === true,
+            attentionCount,
+          })) {
             navigation.navigate('ImportQuestionQueue', { connectionId, platformName });
           }
         }}

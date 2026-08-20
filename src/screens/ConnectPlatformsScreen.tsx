@@ -23,6 +23,7 @@ import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
 import { useImportStatus } from '../hooks/useImportStatus';
 import { connectionImportPresentationsById } from '../lib/connectionImportPresentation';
+import { shouldOpenImportQuestionQueue } from '../lib/connectionImportRoute';
 type Props = StackScreenProps<AppStackParamList, 'ConnectPlatforms'>;
 
 // One-line "what you get" per platform — plain, calm, verb-first.
@@ -260,7 +261,13 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         onConnected={(connectionId, attentionCount) => {
           const platformName = flowPlatform ?? 'Platform';
           setFlowPlatform(null);
-          if (connectionId && (attentionCount || 0) > 0) {
+          const presentation = connectionId
+            ? presentationByConnectionId.get(connectionId)
+            : undefined;
+          if (connectionId && shouldOpenImportQuestionQueue({
+            importInProgress: presentation?.importInProgress === true,
+            attentionCount,
+          })) {
             navigation.navigate('ImportQuestionQueue', {
               connectionId,
               platformName,
