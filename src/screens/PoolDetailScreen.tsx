@@ -345,7 +345,9 @@ const PoolDetailScreen = () => {
             <Text style={styles.empty}>No locations in this pool yet.</Text>
           ) : (
             locations.map((loc, i) => (
-              <View key={loc.platformLocationId} style={[styles.row, i > 0 && styles.rowBorder]}>
+              // Key carries the index too: the backend dedupes one remote id
+              // per pool, but a misbehaving payload must never collapse rows.
+              <View key={`${loc.platformLocationId}-${i}`} style={[styles.row, i > 0 && styles.rowBorder]}>
                 <PlatformAvatar platformType={(loc.platformConnection?.platformType || '').toLowerCase()} size="medium" />
                 <View style={styles.rowInfo}>
                   <Text style={styles.rowTitle} numberOfLines={1}>{loc.locationName}</Text>
