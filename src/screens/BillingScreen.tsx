@@ -150,6 +150,56 @@ const HealthBar = ({ used, limit, fillColor }: { used: number, limit: number, fi
   );
 };
 
+const SegmentedCreditBar = ({
+  total,
+  planTotal,
+  used,
+  remaining,
+  topupRemaining,
+  topupTotal,
+}: {
+  total: number;
+  planTotal: number;
+  used: number;
+  remaining: number;
+  topupRemaining: number;
+  topupTotal: number;
+}) => {
+  const safeTotal = Math.max(0, total);
+  const safeUsed = Math.min(safeTotal, Math.max(0, used));
+  const safeRemaining = Math.min(safeTotal - safeUsed, Math.max(0, remaining));
+  const safeTopupRemaining = Math.min(
+    safeRemaining,
+    Math.max(0, topupTotal),
+    Math.max(0, topupRemaining),
+  );
+  const safePlanRemaining = Math.min(
+    Math.max(0, planTotal),
+    Math.max(0, safeRemaining - safeTopupRemaining),
+  );
+  const unaccounted = Math.max(
+    0,
+    safeTotal - safeUsed - safePlanRemaining - safeTopupRemaining,
+  );
+
+  return (
+    <View style={[styles.progressTrack, styles.segmentedCreditTrack]}>
+      {safeUsed > 0 ? (
+        <View style={[styles.creditSegment, styles.creditUsed, { flexGrow: safeUsed }]} />
+      ) : null}
+      {safePlanRemaining > 0 ? (
+        <View style={[styles.creditSegment, styles.creditPlan, { flexGrow: safePlanRemaining }]} />
+      ) : null}
+      {safeTopupRemaining > 0 ? (
+        <View style={[styles.creditSegment, styles.creditTopup, { flexGrow: safeTopupRemaining }]} />
+      ) : null}
+      {unaccounted > 0 ? (
+        <View style={[styles.creditSegment, { flexGrow: unaccounted }]} />
+      ) : null}
+    </View>
+  );
+};
+
 const BillingMessageCard = ({ label }: { label: string }) => (
   <View style={styles.cardGroup}>
     <View style={styles.listItem}>
@@ -330,6 +380,21 @@ export default function BillingScreen() {
   const computeUsagePercent = computeAllowanceCents > 0
     ? Math.max(0, Math.round((computeUsedCents / computeAllowanceCents) * 100))
     : 0;
+  const creditBalance = summary?.ai_credits_cents !== undefined
+    && summary.ai_allowance_cents !== undefined
+    && summary.ai_used_cents !== undefined
+    && summary.ai_remaining_cents !== undefined
+    && summary.ai_topup_remaining_cents !== undefined
+    && summary.ai_topup_total_cents !== undefined
+    ? {
+        total: summary.ai_credits_cents,
+        planTotal: summary.ai_allowance_cents,
+        used: summary.ai_used_cents,
+        remaining: summary.ai_remaining_cents,
+        topupRemaining: summary.ai_topup_remaining_cents,
+        topupTotal: summary.ai_topup_total_cents,
+      }
+    : null;
   const aiOverageDollars = aiOverageCents / 100;
   const totalCostEstimate = ((summary?.total_cost_cents ?? 0) / 100) + teamMembersCost;
   const hasCostBreakdown = basePrice > 0 || teamMembersCost > 0 || aiOverageDollars > 0;
@@ -700,17 +765,63 @@ export default function BillingScreen() {
         {hasSummaryData ? (
           <View style={styles.cardGroup}>
             <View style={styles.usageItem}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                <Text style={styles.listValue}>AI usage</Text>
-                <Text style={styles.listSubValue}>{computeUsagePercent}% used</Text>
-              </View>
-              <HealthBar used={computeUsedCents} limit={computeAllowanceCents} fillColor={ANORHA_GREEN} />
+              {creditBalance ? (
+                <>
+                  <View style={styles.creditMetrics}>
+                    <View style={styles.creditMetric}>
+                      <Text style={styles.listLabel}>Credits</Text>
+                      <Text style={styles.listValue} numberOfLines={1} adjustsFontSizeToFit>
+                        {formatCurrency(creditBalance.total / 100)}
+                      </Text>
+                    </View>
+                    <View style={[styles.creditMetric, styles.creditMetricCenter]}>
+                      <Text style={styles.listLabel}>Used</Text>
+                      <Text style={styles.listValue} numberOfLines={1} adjustsFontSizeToFit>
+                        {formatCurrency(creditBalance.used / 100)}
+                      </Text>
+                    </View>
+                    <View style={[styles.creditMetric, styles.creditMetricEnd]}>
+                      <Text style={styles.listLabel}>Remaining</Text>
+                      <Text style={styles.listValue} numberOfLines={1} adjustsFontSizeToFit>
+                        {formatCurrency(creditBalance.remaining / 100)}
+                      </Text>
+                    </View>
+                  </View>
+                  <SegmentedCreditBar
+                    total={creditBalance.total}
+                    planTotal={creditBalance.planTotal}
+                    used={creditBalance.used}
+                    remaining={creditBalance.remaining}
+                    topupRemaining={creditBalance.topupRemaining}
+                    topupTotal={creditBalance.topupTotal}
+                  />
+                </>
+              ) : (
+                <>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <Text style={styles.listValue}>AI usage</Text>
+                    <Text style={styles.listSubValue}>{computeUsagePercent}% used</Text>
+                  </View>
+                  <HealthBar used={computeUsedCents} limit={computeAllowanceCents} fillColor={ANORHA_GREEN} />
+                </>
+              )}
               {aiOverageDollars > 0 ? (
                 <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, fontFamily: 'Inter_500Medium' }}>
                   + {formatCurrency(aiOverageDollars)} overage
                 </Text>
               ) : null}
             </View>
+            {creditBalance !== null && creditBalance.topupRemaining > 0 ? (
+              <>
+                <View style={styles.separator} />
+                <View style={styles.listItemAction}>
+                  <Text style={styles.listLabel}>Added credits</Text>
+                  <Text style={[styles.listValue, styles.creditTopupValue]}>
+                    {formatCurrency(creditBalance.topupRemaining / 100)}
+                  </Text>
+                </View>
+              </>
+            ) : null}
             <View style={styles.separator} />
             <View style={styles.usageItem}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -971,6 +1082,39 @@ const styles = StyleSheet.create({
   },
   usageItem: {
     paddingVertical: 14,
+  },
+  creditMetrics: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  creditMetric: {
+    flex: 1,
+  },
+  creditMetricCenter: {
+    alignItems: 'center',
+  },
+  creditMetricEnd: {
+    alignItems: 'flex-end',
+  },
+  segmentedCreditTrack: {
+    flexDirection: 'row',
+  },
+  creditSegment: {
+    flexBasis: 0,
+    height: '100%',
+  },
+  creditUsed: {
+    backgroundColor: ANORHA_GREEN,
+  },
+  creditPlan: {
+    backgroundColor: '#DCE9C1',
+  },
+  creditTopup: {
+    backgroundColor: '#3B82F6',
+  },
+  creditTopupValue: {
+    color: '#3B82F6',
   },
   listLabel: {
     fontSize: 13,
