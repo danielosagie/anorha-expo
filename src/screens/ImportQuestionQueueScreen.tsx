@@ -72,6 +72,7 @@ import type {
   SyncItem,
 } from '../types/syncItem';
 import { buildImportFrontDoorRows, importFrontDoorAction } from '../lib/importFrontDoor';
+import { importActionErrorCopy } from '../lib/importErrorCopy';
 
 const log = createLogger('ImportQuestionQueue');
 const SURFACE = '#F5F5F7';
@@ -81,7 +82,7 @@ const GREY = '#9CA3AF';
 
 type RouteType = RouteProp<AppStackParamList, 'ImportQuestionQueue'>;
 type NavType = StackNavigationProp<AppStackParamList, 'ImportQuestionQueue'>;
-type Stage = 'loading' | 'explainer' | 'front' | 'queue' | 'handoff' | 'receipt' | 'list';
+type Stage = 'loading' | 'front' | 'queue' | 'handoff' | 'receipt' | 'list';
 type LedgerEntry = V7ReviewLedgerEntry;
 type LedgerOutcome = V7ReviewOutcome;
 
@@ -94,8 +95,8 @@ interface HandoffState {
   decisionLabel: string;
 }
 
-const seenKey = (connectionId: string) => `@anorha/question-queue/seen/${connectionId}`;
 const activeKey = (connectionId: string) => `@anorha/question-queue/active/${connectionId}`;
+const queueStartKey = (connectionId: string) => `@anorha/question-queue/start-count/${connectionId}`;
 const ledgerKey = (connectionId: string) => `@anorha/question-queue/ledger/${connectionId}`;
 
 function safeLedger(value: string | null): LedgerEntry[] {
@@ -118,10 +119,6 @@ function platformLabel(value: string): string {
 
 function isSettled(result: BulkResolveResult): boolean {
   return result.status === 'ok' || result.status === 'alreadyResolved';
-}
-
-function displayError(_error: unknown, fallback = 'That answer did not save. Try again.'): string {
-  return fallback;
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -195,19 +192,23 @@ export default function ImportQuestionQueueScreen() {
   useEffect(() => {
     let alive = true;
     void Promise.all([
-      AsyncStorage.getItem(seenKey(connectionId)),
       AsyncStorage.getItem(activeKey(connectionId)),
       AsyncStorage.getItem(ledgerKey(connectionId)),
-    ]).then(([seen, active, savedLedger]) => {
+      AsyncStorage.getItem(queueStartKey(connectionId)),
+    ]).then(([active, savedLedger, savedQueueStart]) => {
       if (!alive) return;
       setLedger(safeLedger(savedLedger));
+      const savedCount = Number(savedQueueStart);
+      if (active === '1' && Number.isInteger(savedCount) && savedCount > 0) {
+        setQueueStartCount(savedCount);
+      }
       if (route.params.startAt === 'list') setStage('list');
       else if (route.params.startAt === 'front') setStage('front');
       else if (active === '1') setStage('queue');
-      else setStage(seen === '1' ? 'front' : 'explainer');
+      else setStage('front');
     }).catch(() => {
       if (!alive) return;
-      setStage(route.params.startAt === 'front' ? 'front' : 'explainer');
+      setStage(route.params.startAt === 'list' ? 'list' : 'front');
     });
     return () => {
       alive = false;
@@ -237,6 +238,57 @@ export default function ImportQuestionQueueScreen() {
   const [incomingDetails, setIncomingDetails] = useState<Record<string, ReturnType<typeof incomingItemDetailsFromPayload>>>({});
   const [candidateDetails, setCandidateDetails] = useState<Record<string, CanonicalRef>>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
+  type CardHydration = {
+    incoming: Record<string, ReturnType<typeof incomingItemDetailsFromPayload>>;
+    candidates: Record<string, CanonicalRef>;
+  };
+  const hydrationCacheRef = useRef<Map<string, CardHydration>>(new Map());
+  const hydrationInFlightRef = useRef<Map<string, Promise<CardHydration>>>(new Map());
+
+  useEffect(() => {
+    hydrationCacheRef.current.clear();
+    hydrationInFlightRef.current.clear();
+  }, [connectionId, platform]);
+
+  const hydrateCard = useCallback((card: QuestionCardModel): Promise<CardHydration> => {
+    const cached = hydrationCacheRef.current.get(card.id);
+    if (cached) return Promise.resolve(cached);
+    const inFlight = hydrationInFlightRef.current.get(card.id);
+    if (inFlight) return inFlight;
+
+    const initialIncoming = Object.fromEntries(
+      card.items.map((item) => [item.platformId, incomingItemDetailsFromPayload(item, platform)]),
+    );
+    const candidateIds = Array.from(new Set(card.items.flatMap((item) => [
+      ...(item.candidates ?? []).map((candidate) => candidate.id),
+      item.resolution.kind === 'link' ? item.resolution.canonical.id : '',
+    ]).filter(Boolean)));
+    const incomingHydration = platform.toLowerCase() === 'csv'
+      ? Promise.resolve(Object.entries(initialIncoming))
+      : Promise.all(card.items.map(async (item) => {
+          try {
+            return [item.platformId, await fetchImportIncomingItemDetails(item, platform)] as const;
+          } catch (hydrateError) {
+            log.warn('incoming hydration failed', item.platformId, hydrateError);
+            return [item.platformId, incomingItemDetailsFromPayload(item, platform)] as const;
+          }
+        }));
+    const promise = Promise.all([
+      incomingHydration,
+      fetchImportCandidateDetails(candidateIds, platform).catch((hydrateError) => {
+        log.warn('candidate hydration failed', hydrateError);
+        return {};
+      }),
+    ]).then(([incoming, candidates]) => {
+      const hydrated = { incoming: Object.fromEntries(incoming), candidates };
+      hydrationCacheRef.current.set(card.id, hydrated);
+      return hydrated;
+    }).finally(() => {
+      hydrationInFlightRef.current.delete(card.id);
+    });
+    hydrationInFlightRef.current.set(card.id, promise);
+    return promise;
+  }, [platform]);
 
   useEffect(() => {
     let alive = true;
@@ -250,39 +302,25 @@ export default function ImportQuestionQueueScreen() {
     const initialIncoming = Object.fromEntries(
       items.map((item) => [item.platformId, incomingItemDetailsFromPayload(item, platform)]),
     );
-    setIncomingDetails(initialIncoming);
-    const candidateIds = Array.from(new Set(items.flatMap((item) => [
-      ...(item.candidates ?? []).map((candidate) => candidate.id),
-      item.resolution.kind === 'link' ? item.resolution.canonical.id : '',
-    ]).filter(Boolean)));
-    setDetailsLoading(true);
-    const incomingHydration = platform.toLowerCase() === 'csv'
-      ? Promise.resolve(Object.entries(initialIncoming))
-      : Promise.all(items.map(async (item) => {
-        try {
-          return [item.platformId, await fetchImportIncomingItemDetails(item, platform)] as const;
-        } catch (hydrateError) {
-          log.warn('incoming hydration failed', item.platformId, hydrateError);
-          return [item.platformId, incomingItemDetailsFromPayload(item, platform)] as const;
-        }
-      }));
-    void Promise.all([
-      incomingHydration,
-      fetchImportCandidateDetails(candidateIds, platform).catch((hydrateError) => {
-        log.warn('candidate hydration failed', hydrateError);
-        return {};
-      }),
-    ]).then(([incoming, candidates]) => {
+    const cached = hydrationCacheRef.current.get(currentCard.id);
+    setIncomingDetails(cached?.incoming ?? initialIncoming);
+    setCandidateDetails(cached?.candidates ?? {});
+    setDetailsLoading(!cached);
+    void hydrateCard(currentCard).then(({ incoming, candidates }) => {
       if (!alive) return;
-      setIncomingDetails(Object.fromEntries(incoming));
+      setIncomingDetails(incoming);
       setCandidateDetails(candidates);
     }).finally(() => {
       if (alive) setDetailsLoading(false);
     });
+
+    const currentIndex = mainCards.findIndex((card) => card.id === currentCard.id);
+    const nextCard = currentIndex >= 0 ? mainCards[currentIndex + 1] : undefined;
+    if (nextCard) void hydrateCard(nextCard);
     return () => {
       alive = false;
     };
-  }, [currentCard?.id, platform]);
+  }, [currentCard?.id, hydrateCard, mainCards, platform]);
 
   const hydratedItems = useMemo(() => (currentCard?.items ?? []).map((item) => {
     const details = incomingDetails[item.platformId] ?? incomingItemDetailsFromPayload(item, platform);
@@ -356,17 +394,15 @@ export default function ImportQuestionQueueScreen() {
     });
   }, [connectionId]);
 
-  const markSeen = useCallback(() => {
-    void AsyncStorage.setItem(seenKey(connectionId), '1');
-    setStage('front');
-  }, [connectionId]);
-
   const finishQueue = useCallback(async () => {
     if (finishRef.current) return;
     finishRef.current = true;
     try {
       await refresh();
-      await AsyncStorage.removeItem(activeKey(connectionId));
+      await Promise.all([
+        AsyncStorage.removeItem(activeKey(connectionId)),
+        AsyncStorage.removeItem(queueStartKey(connectionId)),
+      ]);
       setTargetCardId(null);
       setStage('receipt');
     } finally {
@@ -379,9 +415,15 @@ export default function ImportQuestionQueueScreen() {
       void finishQueue();
       return;
     }
-    setQueueStartCount(remainingItemCount(mainCards));
+    const startCount = remainingItemCount(mainCards);
+    setQueueStartCount(startCount);
     setLastAnswer(null);
-    void AsyncStorage.setItem(activeKey(connectionId), '1');
+    void Promise.all([
+      AsyncStorage.setItem(activeKey(connectionId), '1'),
+      AsyncStorage.setItem(queueStartKey(connectionId), String(startCount)),
+    ]).catch((storageError) => {
+      log.warn('queue progress persistence failed', storageError);
+    });
     setStage('queue');
   }, [connectionId, finishQueue, mainCards]);
 
@@ -479,7 +521,7 @@ export default function ImportQuestionQueueScreen() {
       streakRef.current = null;
       setStage('queue');
     } catch (undoError) {
-      setActionError(displayError(undoError, 'That answer could not be taken back.'));
+      setActionError(importActionErrorCopy(undoError, 'That answer could not be taken back.'));
     } finally {
       setUndoBusy(false);
     }
@@ -530,7 +572,7 @@ export default function ImportQuestionQueueScreen() {
 
       if (otherCards.length === 0) await finishQueue();
     } catch (resolveError) {
-      setActionError(displayError(resolveError));
+      setActionError(importActionErrorCopy(resolveError));
     }
   }, [currentCard, finishQueue, mainCards, offerHandoffAfter, resolveOne, returnAfterTarget]);
 
@@ -548,7 +590,7 @@ export default function ImportQuestionQueueScreen() {
       if (offerHandoffAfter(card, answer, otherCards)) return;
       if (otherCards.length === 0) await finishQueue();
     } catch (resolveError) {
-      setActionError(displayError(resolveError));
+      setActionError(importActionErrorCopy(resolveError));
     }
   }, [currentCard, finishQueue, mainCards, offerHandoffAfter, resolveOne, returnAfterTarget, selectedCandidateId]);
 
@@ -567,7 +609,7 @@ export default function ImportQuestionQueueScreen() {
       if (failed === 0 && otherClasses.length === 0) await finishQueue();
       else setStage('queue');
     } catch (bulkError) {
-      setHandoffError(displayError(bulkError, 'Those items are back in the queue.'));
+      setHandoffError(importActionErrorCopy(bulkError, 'Those items are back in the queue.'));
     }
   }, [finishQueue, handoff, importId, mainCards, recordDecisions, resolveBulk, undoableFromResults]);
 
@@ -605,7 +647,7 @@ export default function ImportQuestionQueueScreen() {
         );
         await refresh();
       } catch (changeError) {
-        setListError(displayError(changeError, 'That change could not be saved.'));
+        setListError(importActionErrorCopy(changeError, 'That change could not be saved.'));
       }
       return;
     }
@@ -624,7 +666,7 @@ export default function ImportQuestionQueueScreen() {
       recordDecisions([itemDecision], [entry.item]);
       await refresh();
     } catch (changeError) {
-      setListError(displayError(changeError, 'That change could not be saved.'));
+      setListError(importActionErrorCopy(changeError, 'That change could not be saved.'));
     }
   }, [importId, recordDecisions, refresh, resolve]);
 
@@ -649,7 +691,7 @@ export default function ImportQuestionQueueScreen() {
       recordDecisions([itemDecision], [item], undefined, decisionLabel);
       await refresh();
     } catch (retryError) {
-      setListError(displayError(retryError, 'This item still needs a look.'));
+      setListError(importActionErrorCopy(retryError, 'This item still needs a look.'));
     }
   }, [importId, openNeedsItem, recordDecisions, refresh, resolve, syncRules]);
 
@@ -679,19 +721,25 @@ export default function ImportQuestionQueueScreen() {
       if (commitStalled) setCommitStalled(false);
       return;
     }
-    if (commitStalled) return; // deadline hit, stop paying for polls
-    if (stallRef.current.count === pendingCommitCount) {
-      stallRef.current.polls += 1;
-      if (stallRef.current.polls >= 8) {
-        setCommitStalled(true);
-        return;
+    if (commitStalled) return;
+    stallRef.current = { count: pendingCommitCount, polls: 0 };
+    const timer = setInterval(() => {
+      void refresh();
+      if (stallRef.current.count === pendingCommitCount) {
+        stallRef.current.polls += 1;
+        if (stallRef.current.polls >= 8) setCommitStalled(true);
+      } else {
+        stallRef.current = { count: pendingCommitCount, polls: 0 };
       }
-    } else {
-      stallRef.current = { count: pendingCommitCount, polls: 0 };
-    }
-    const timer = setTimeout(() => void refresh(), 1500);
-    return () => clearTimeout(timer);
+    }, 1500);
+    return () => clearInterval(timer);
   }, [commitStalled, pendingCommitCount, refresh, stage]);
+
+  const retryCommitPoll = useCallback(() => {
+    stallRef.current = { count: pendingCommitCount, polls: 0 };
+    setCommitStalled(false);
+    void refresh();
+  }, [pendingCommitCount, refresh]);
 
   if ((stage === 'loading' || (loading && !result)) && !error) {
     return (
@@ -707,42 +755,6 @@ export default function ImportQuestionQueueScreen() {
         <Text style={styles.errorTitle}>Couldn’t load this import</Text>
         <Text style={styles.errorText}>Try again.</Text>
         <PillButton label="Retry" onPress={refresh} style={styles.retryButton} />
-      </View>
-    );
-  }
-
-  if (stage === 'explainer') {
-    return (
-      <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
-        <InboxHeader onBack={() => navigation.goBack()} />
-        <ScrollView contentContainerStyle={styles.explainerScroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.explainerTitleBlock}>
-            <Text style={styles.screenTitle}>Let's bring in your {platform} items.</Text>
-          </View>
-          <View style={styles.steps}>
-            {[
-              ['1', 'We bring everything in', null],
-              ['2', "We match what we're sure of", null],
-              ['3', 'We ask you about the rest', 'Usually just a few questions'],
-            ].map(([number, title, caption]) => (
-              <View key={number} style={styles.stepRow}>
-                <View style={styles.stepNumber}><Text style={styles.stepNumberText}>{number}</Text></View>
-                <View style={styles.stepCopy}>
-                  <Text style={styles.stepTitle}>{title}</Text>
-                  {caption ? <Text style={styles.stepCaption}>{caption}</Text> : null}
-                </View>
-              </View>
-            ))}
-          </View>
-          <View style={styles.reassurance}>
-            <MaterialCommunityIcons name="lock-outline" size={21} color={IC.ink} />
-            <Text style={styles.reassuranceText}>Nothing changes on {platform}.</Text>
-          </View>
-        </ScrollView>
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
-          <PillButton label="Start" onPress={markSeen} />
-          <Text style={styles.footerCaption}>You can leave &amp; come back anytime</Text>
-        </View>
       </View>
     );
   }
@@ -802,7 +814,12 @@ export default function ImportQuestionQueueScreen() {
       <View style={[styles.screen, { paddingTop: insets.top + 4 }]}>
         <QueueHeader
           onBack={() => {
-            void AsyncStorage.setItem(activeKey(connectionId), '1');
+            void Promise.all([
+              AsyncStorage.setItem(activeKey(connectionId), '1'),
+              AsyncStorage.setItem(queueStartKey(connectionId), String(progressTotal)),
+            ]).catch((storageError) => {
+              log.warn('queue progress persistence failed', storageError);
+            });
             navigation.goBack();
           }}
           pct={progressPct}
@@ -848,14 +865,11 @@ export default function ImportQuestionQueueScreen() {
         <InboxHeader onBack={goHome} />
         <View style={styles.center}>
           <ActivityIndicator color={IC.accent} />
-          <Text style={styles.doneTitle}>Finishing your import</Text>
-          <Text style={styles.screenSubtitle}>
-            {countLabel(pendingCommitCount, 'item')} still being added to your catalog.
-          </Text>
+          <Text style={styles.doneTitle}>Finishing import</Text>
+          <Text style={styles.catalogTotal}>{pendingCommitCount} remaining</Text>
         </View>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
           <PillButton label="Home" onPress={goHome} />
-          <Text style={styles.footerCaption}>You can leave &amp; come back anytime</Text>
         </View>
       </View>
     );
@@ -866,8 +880,14 @@ export default function ImportQuestionQueueScreen() {
     return (
       <View style={[styles.screen, styles.receiptScreen, { paddingTop: insets.top + 34 }]}>
         <ScrollView contentContainerStyle={styles.receiptScroll} showsVerticalScrollIndicator={false}>
-          <SuccessCheck size={72} />
-          <Text style={styles.doneTitle}>Done</Text>
+          {commitStalled && pendingCommitCount > 0 ? (
+            <MaterialCommunityIcons name="alert-circle-outline" size={72} color={AMBER} />
+          ) : (
+            <SuccessCheck size={72} />
+          )}
+          <Text style={styles.doneTitle}>
+            {commitStalled && pendingCommitCount > 0 ? 'Import stuck' : 'Done'}
+          </Text>
           <Text style={styles.catalogTotal}>{catalogTotal} in your catalog</Text>
           <View style={styles.receiptCard}>
             <ReceiptRow label="Linked" count={summary?.autoLinked ?? 0} />
@@ -887,9 +907,19 @@ export default function ImportQuestionQueueScreen() {
             <MaterialCommunityIcons name="chevron-right" size={22} color={IC.muted} />
           </Pressable>
           {commitStalled && pendingCommitCount > 0 ? (
-            <Text style={styles.screenSubtitle}>
-              {countLabel(pendingCommitCount, 'item')} will finish in the background.
-            </Text>
+            <View style={styles.stallNotice}>
+              <Text style={styles.stallText}>
+                {pendingCommitCount === 1 ? '1 item is stuck.' : `${pendingCommitCount} items are stuck.`}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={retryCommitPoll}
+                hitSlop={10}
+                style={({ pressed }) => pressed ? styles.pressed : null}
+              >
+                <Text style={styles.stallRetry}>Retry</Text>
+              </Pressable>
+            </View>
           ) : null}
         </ScrollView>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 18 }]}>
@@ -1129,22 +1159,6 @@ const styles = StyleSheet.create({
   retryButton: { alignSelf: 'stretch', marginTop: 22 },
   pressed: { opacity: 0.58 },
   footer: { paddingHorizontal: 20, paddingTop: 10, gap: 10, backgroundColor: SURFACE },
-  footerCaption: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 13, textAlign: 'center', marginBottom: 2 },
-
-  explainerScroll: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 26, paddingBottom: 28 },
-  explainerTitleBlock: { gap: 8, marginBottom: 34 },
-  screenTitle: { color: IC.ink, fontFamily: 'Inter_800ExtraBold', fontSize: 30, lineHeight: 37, letterSpacing: -0.8 },
-  screenSubtitle: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 17, lineHeight: 23 },
-  steps: { gap: 20 },
-  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  stepNumber: { width: 38, height: 38, borderRadius: 19, backgroundColor: CARD, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E4E4E7' },
-  stepNumberText: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 16 },
-  stepCopy: { flex: 1, minWidth: 0 },
-  stepTitle: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 16, lineHeight: 22 },
-  stepCaption: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 13, marginTop: 2 },
-  reassurance: { flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: CARD, borderRadius: 18, padding: 17, marginTop: 34, borderWidth: 1, borderColor: '#E7E7EA' },
-  reassuranceText: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15, flex: 1 },
-
   frontScroll: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 0, paddingBottom: 30 },
   countCard: { backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 16 },
   countRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
@@ -1160,6 +1174,9 @@ const styles = StyleSheet.create({
   doneTitle: { color: IC.ink, fontFamily: 'Inter_800ExtraBold', fontSize: 30, letterSpacing: -0.7, marginTop: 18 },
   catalogTotal: { color: IC.muted, fontFamily: 'Inter_500Medium', fontSize: 17, marginTop: 6 },
   receiptCard: { alignSelf: 'stretch', backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: '#E7E7EA', paddingHorizontal: 16, marginTop: 30 },
+  stallNotice: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 16 },
+  stallText: { color: AMBER, fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+  stallRetry: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 14 },
   receiptRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   receiptLabel: { color: IC.ink, fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   receiptValue: { color: IC.ink, fontFamily: 'Inter_700Bold', fontSize: 16 },

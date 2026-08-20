@@ -139,7 +139,7 @@ export function PairQuestionCard({
       </View>
       <ControlRow
         primary="Yes, same thing"
-        secondary="No, its new"
+        secondary="No, it's new"
         onPrimary={() => onAnswer('primary')}
         onSecondary={() => onAnswer('secondary')}
         onBack={onBack}
@@ -171,8 +171,6 @@ export function WhichOneQuestionCard({
   onBack?: () => void;
   backDisabled?: boolean;
 }) {
-  const selectedIndex = candidates.slice(0, 2).findIndex((candidate) => candidate.id === selectedId);
-  const selectedLabel = selectedIndex >= 0 ? String.fromCharCode(65 + selectedIndex) : '';
   const incomingMeta = money(item.price)
     ? `in ${platformName} · ${money(item.price)}`
     : `in ${platformName}`;
@@ -185,10 +183,7 @@ export function WhichOneQuestionCard({
         <Text style={styles.heroMeta}>{incomingMeta}</Text>
       </View>
 
-      <View style={styles.titleBlock}>
-        <Text style={styles.questionTitle}>You have two like it.</Text>
-        <Text style={styles.questionSubtitle}>Tap the one it matches.</Text>
-      </View>
+      <Text style={styles.questionTitle}>You have two like it.</Text>
 
       <View style={styles.pairRow}>
         {candidates.slice(0, 2).map((candidate, index) => {
@@ -222,8 +217,8 @@ export function WhichOneQuestionCard({
       </View>
 
       <ControlRow
-        primary={selectedLabel ? `Yes, it's (${selectedLabel})` : "Yes, it's"}
-        secondary="No, its new"
+        primary={selectedId ? 'Yes, same thing' : 'Yes'}
+        secondary="No, it's new"
         onPrimary={() => onAnswer('primary')}
         onSecondary={() => onAnswer('secondary')}
         onBack={onBack}
@@ -262,10 +257,7 @@ export function HandoffCard({
           </View>
         ))}
       </View>
-      <View style={styles.titleBlock}>
-        <Text style={styles.questionTitle}>The next {count} look just like those.</Text>
-        <Text style={styles.questionSubtitle}>Want us to answer them the same way?</Text>
-      </View>
+      <Text style={styles.questionTitle}>The next {count} look just like those.</Text>
       {error ? <Text style={styles.inlineError}>{error}</Text> : null}
       <View style={styles.handoffActions}>
         <PillButton label="Yes, finish them" onPress={onFinish} loading={busy} disabled={busy} />
@@ -309,14 +301,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.7,
     textAlign: 'center',
   },
-  questionSubtitle: {
-    color: IC.muted,
-    fontFamily: 'Inter_500Medium',
-    fontSize: 16,
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  titleBlock: { gap: 5 },
   pairRow: { flexDirection: 'row', gap: 12, alignItems: 'stretch' },
   productCard: {
     flex: 1,

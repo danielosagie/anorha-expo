@@ -11,25 +11,8 @@ import type { SyncItem, AttentionReason } from '../../types/syncItem';
 // the resolver flagged without a specific reason.
 export type GroupKey = AttentionReason | 'other';
 
-// Human labels the owner approved (Avec "Review the rest" copy). Bold group
-// label on the left of each soft-card row.
-export const REASON_LABELS: Record<GroupKey, string> = {
-  // commit_failed leads: a failed import outranks every open question.
-  commit_failed: 'Didn’t import · retry',
-  multiple_candidates: 'Could match something you have',
-  weak_match: 'Loose matches, double-check',
-  look_alike_group: 'Look-alikes',
-  duplicate_target: 'Possible duplicates',
-  field_conflict: 'Details disagree',
-  bundle: 'Bundles / multi-packs',
-  stale_link: 'Links to re-confirm',
-  title_quality: 'Titles to write',
-  other: 'Other',
-};
-
 export interface AttentionGroup {
   key: GroupKey;
-  label: string;
   items: SyncItem[];
 }
 
@@ -38,12 +21,18 @@ export function reasonKeyOf(item: SyncItem): GroupKey {
   return item.attention ?? 'other';
 }
 
-// Deterministic tiebreak when two groups have equal counts, so the list doesn't
-// reshuffle between renders. Derived from REASON_LABELS' declaration order (a
-// hand-kept parallel array could silently drift from GroupKey, and a missing key
-// → indexOf -1 would corrupt the order) — so REASON_LABELS is the single source
-// of order. Its declaration keeps 'other' last, which keeps that bucket sinking.
-const TIE_ORDER: GroupKey[] = Object.keys(REASON_LABELS) as GroupKey[];
+const TIE_ORDER: GroupKey[] = [
+  'commit_failed',
+  'multiple_candidates',
+  'weak_match',
+  'look_alike_group',
+  'duplicate_target',
+  'field_conflict',
+  'bundle',
+  'stale_link',
+  'title_quality',
+  'other',
+];
 
 // Group items by reason, largest bucket first (stable tiebreak by TIE_ORDER).
 // Empty buckets are never emitted, so callers can render one row per group.
@@ -57,7 +46,7 @@ export function groupItems(items: SyncItem[]): AttentionGroup[] {
   }
   const groups: AttentionGroup[] = [];
   for (const [key, arr] of buckets) {
-    groups.push({ key, label: REASON_LABELS[key], items: arr });
+    groups.push({ key, items: arr });
   }
   groups.sort((a, b) => {
     // Status loud: a failed import outranks every open question, whatever the

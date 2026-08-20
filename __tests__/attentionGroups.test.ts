@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { groupItems, itemsForGroup, reasonKeyOf, REASON_LABELS } from '../src/components/import/attentionGroups.ts';
+import { groupItems, itemsForGroup, reasonKeyOf } from '../src/components/import/attentionGroups.ts';
 import type { SyncItem, AttentionReason } from '../src/types/syncItem.ts';
 
 // Minimal SyncItem factory — only the fields the grouping helpers read matter.
@@ -56,12 +56,6 @@ test('groupItems orders by count desc with a stable tiebreak', () => {
     groups.map((g) => g.key),
     ['multiple_candidates', 'weak_match', 'bundle'],
   );
-});
-
-test('groupItems labels each group from REASON_LABELS', () => {
-  const [g] = groupItems([item('a', 'look_alike_group')]);
-  assert.equal(g.label, REASON_LABELS.look_alike_group);
-  assert.equal(g.label, 'Look-alikes');
 });
 
 test('itemsForGroup returns exactly one bucket, including "other"', () => {
