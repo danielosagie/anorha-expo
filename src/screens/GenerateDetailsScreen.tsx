@@ -1162,18 +1162,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     [currentItemId],
   );
   const carriedPricingResearch = useMemo(() => {
-    const selectedCandidateIndex = currentCartItem?.match?.jobResult?.selectedCandidateIndex
-      ?? currentCartItem?.match?.confirmed?.preSelectedIndices?.[0]
-      ?? 0;
     return selectStoredPricingResearch([
       (effectiveResult as any)?.pricingSnapshot,
-      (effectiveResult as any)?.pricingResearch,
-      currentCartItem?.pricing,
       currentCartItem?.match?.jobResult?.pricingSnapshot,
-      currentCartItem?.match?.response?.rankedCandidates?.[selectedCandidateIndex],
-      currentCartItem?.match?.matchRows?.[selectedCandidateIndex],
     ]);
   }, [currentCartItem, effectiveResult]);
+  const embeddedPricingResearch = selectStoredPricingResearch(
+    Object.values(displayedPlatforms || {}),
+  );
   const [fetchedPricingResearch, setFetchedPricingResearch] = useState<unknown | null>(null);
   const storedMatchJobId = currentCartItem?.generateMatchJobId
     || items.find((item) => item.index === currentProductIndex)?.matchJobId
@@ -1182,7 +1178,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   useEffect(() => {
     let active = true;
     setFetchedPricingResearch(null);
-    if (carriedPricingResearch || !storedMatchJobId) return () => { active = false; };
+    if (carriedPricingResearch || embeddedPricingResearch || !storedMatchJobId) {
+      return () => { active = false; };
+    }
 
     const productIndex = (effectiveResult?.productIndex as number | undefined) ?? currentProductIndex;
     void (async () => {
@@ -1193,11 +1191,8 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         const result = Array.isArray(payload?.results)
           ? payload.results.find((row: any) => row?.productIndex === productIndex)
           : null;
-        const selectedCandidateIndex = result?.selectedCandidateIndex ?? 0;
         const research = selectStoredPricingResearch([
           result?.pricingSnapshot,
-          result?.rerankedResults?.[selectedCandidateIndex],
-          result?.matchRows?.[selectedCandidateIndex],
         ]);
         if (active && research) setFetchedPricingResearch(research);
       } catch (error) {
@@ -1206,9 +1201,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     })();
 
     return () => { active = false; };
-  }, [carriedPricingResearch, currentProductIndex, effectiveResult?.productIndex, storedMatchJobId]);
+  }, [carriedPricingResearch, currentProductIndex, effectiveResult?.productIndex, embeddedPricingResearch, storedMatchJobId]);
 
-  const storedPricingResearch = carriedPricingResearch || fetchedPricingResearch;
+  const storedPricingResearch = carriedPricingResearch
+    || embeddedPricingResearch
+    || fetchedPricingResearch;
   const enrichmentStatus = effectiveResult?.enrichment?.status
     ?? (effectiveResult?.draftReady && status !== 'completed' ? 'pending' : undefined);
   const enrichmentStateLabel = enrichmentLabel(enrichmentStatus);
@@ -3086,6 +3083,10 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
                   onRemovePlatform={removeTargetPlatform}
                   generatingPlatformKeys={generatingPlatformKeys}
                   isGenerationMode={true}
+                  productId={(route.params as any)?.productId || effectiveResult?.productId}
+                  canonicalVariantId={(route.params as any)?.variantId || effectiveResult?.variantId}
+                  priceSessionKey={editorSessionKey}
+                  storedPricingResearch={storedPricingResearch}
                 />
               </View>
               )}
@@ -3484,6 +3485,9 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           onRemovePlatform: removeTargetPlatform,
           generatingPlatformKeys,
           isGenerationMode: true,
+          productId: (route.params as any)?.productId || effectiveResult?.productId,
+          canonicalVariantId: (route.params as any)?.variantId || effectiveResult?.variantId,
+          priceSessionKey: editorSessionKey,
           storedPricingResearch,
         }}
         onClose={() => {

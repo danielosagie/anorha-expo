@@ -66,6 +66,16 @@ export interface PricingGuidanceCardProps {
   headers?: 'screen' | 'none';
   /** Pricing research is still in flight — show a "Finding comps…" state instead of blank dashes. */
   loading?: boolean;
+  /** Show current value and the suggested-range slider in a compact sheet. */
+  showRange?: boolean;
+  /** Hide the distribution chart when a compact comp list is enough. */
+  showDistribution?: boolean;
+  /** Limit rendered comp rows without discarding samples used for aggregates. */
+  maxComps?: number;
+  /** Keep compact sheets to one-line comp rows when secondary metadata is not needed. */
+  showCompMeta?: boolean;
+  /** Empty copy for surfaces with a more specific evidence contract. */
+  emptyLabel?: string;
 }
 
 const money = (n?: number | null) => {
@@ -90,13 +100,22 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   currentPrice,
   headers = 'screen',
   loading = false,
+  showRange = false,
+  showDistribution = true,
+  maxComps,
+  showCompMeta = true,
+  emptyLabel = 'No recent comps found',
 }) => {
   const p = pricing ?? {};
   const samples = (p.samples ?? []).filter((sample) => usablePrice(sample.price) !== undefined);
+  const visibleSamples = typeof maxComps === 'number' && maxComps >= 0
+    ? samples.slice(0, maxComps)
+    : samples;
   // Modals (headers="none") render the stripped-down sheet: sold avg/median + the
   // three price chips, then history/comps. The full preview screen keeps the
   // richer breakdown (current value + suggested-range slider).
   const compact = headers === 'none';
+  const wantsRange = !compact || showRange;
 
   const low = usablePrice(p.low) ?? usablePrice(p.livePricing?.low);
   const high = usablePrice(p.high) ?? usablePrice(p.livePricing?.high);
@@ -111,6 +130,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
 
   // Slider band: pad the suggested [low, high] range outward for context.
   const hasRange = typeof low === 'number' && typeof high === 'number';
+  const showsRange = wantsRange && hasRange;
   const sliderMin = hasRange ? Math.round(low! * 0.8) : 0;
   const sliderMax = hasRange ? Math.round(high! * 1.2) : 0;
   const span = Math.max(1, sliderMax - sliderMin);
@@ -203,7 +223,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
           ) : (
             <>
               <Icon name="tag-search-outline" size={22} color="#C7C7CC" />
-              <Text style={styles.emptyText}>No recent comps found</Text>
+              <Text style={styles.emptyText}>{emptyLabel}</Text>
             </>
           )}
         </View>
@@ -216,14 +236,14 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
       {headers === 'screen' ? <Text style={styles.sectionHeader}>Pricing guidance</Text> : null}
 
       <View style={styles.priceCard}>
-        {!compact ? (
+        {showsRange ? (
           <>
             <Text style={styles.kicker}>CURRENT VALUE</Text>
             <Text style={styles.bigValue}>{rangeText(low, high)}</Text>
           </>
         ) : null}
 
-        <View style={[styles.metricRow, compact && styles.metricRowFirst]}>
+        <View style={[styles.metricRow, !showsRange && styles.metricRowFirst]}>
           <View style={styles.metricCol}>
             <Text style={styles.kicker}>SOLD AVG</Text>
             <Text style={styles.metricValue}>{money(average)}</Text>
@@ -234,7 +254,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
           </View>
         </View>
 
-        {!compact ? (
+        {showsRange ? (
           <>
             <View style={styles.divider} />
 
@@ -289,7 +309,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
         {/* Sold-comp distribution from the real comps (price × how many sold × how fast),
             draggable for a per-band tooltip. Falls back to the median sparkline only when
             there aren't enough priced comps to chart. */}
-        {(() => {
+        {showDistribution ? (() => {
           const pricedCount = samples.filter((s) => typeof s.price === 'number' && (s.price as number) > 0).length;
           if (pricedCount >= 3) {
             return (
@@ -308,11 +328,11 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
             );
           }
           return null;
-        })()}
+        })() : null}
       </View>
 
       {/* Recent comps */}
-      {samples.length > 0 && (
+      {visibleSamples.length > 0 && (
         <>
           {headers === 'screen' ? (
             <Text style={styles.sectionHeader}>{p.isSimilar ? "Couldn't find exact — similar item comps" : `Recent comps (${sampleCount})`}</Text>
@@ -320,7 +340,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
             <Text style={styles.compsKicker}>{p.isSimilar ? `SIMILAR ITEM COMPS (${sampleCount})` : `RECENT COMPS (${sampleCount})`}</Text>
           )}
           <View style={styles.compsCard}>
-            {samples.map((c, i) => {
+            {visibleSamples.map((c, i) => {
               const imageUri = resolveImageUri(c);
               return (
                 <TouchableOpacity
@@ -330,7 +350,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
                     if (onOpenComp) onOpenComp(c, i);
                     else if (c.url) Linking.openURL(c.url).catch(() => undefined);
                   }}
-                  style={[styles.compRow, i < samples.length - 1 && styles.compRowDivider]}
+                  style={[styles.compRow, i < visibleSamples.length - 1 && styles.compRowDivider]}
                 >
                   {imageUri ? (
                     <Image source={{ uri: imageUri }} style={styles.compThumb} resizeMode="cover" />
@@ -343,15 +363,17 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
                     <Text style={styles.compTitle} numberOfLines={1}>
                       {c.title || 'Listing'}
                     </Text>
-                    <Text style={styles.compSub} numberOfLines={1}>
-                      {[
-                        c.marketplace,
-                        c.condition,
-                        typeof c.estimatedDaysToSell === 'number' ? `~${Math.round(c.estimatedDaysToSell)}d to sell` : null,
-                      ]
-                        .filter(Boolean)
-                        .join('  •  ')}
-                    </Text>
+                    {showCompMeta ? (
+                      <Text style={styles.compSub} numberOfLines={1}>
+                        {[
+                          c.marketplace,
+                          c.condition,
+                          typeof c.estimatedDaysToSell === 'number' ? `~${Math.round(c.estimatedDaysToSell)}d to sell` : null,
+                        ]
+                          .filter(Boolean)
+                          .join('  •  ')}
+                      </Text>
+                    ) : null}
                   </View>
                   <Text style={styles.compPrice}>{money(c.price)}</Text>
                   <Icon name="chevron-right" size={22} color="#5A5A5E" />

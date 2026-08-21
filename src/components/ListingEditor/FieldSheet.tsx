@@ -42,6 +42,7 @@ export interface FieldSheetProps {
   title: string;
   badge?: string;
   badgeTone?: 'brand' | 'neutral';
+  headerAccessory?: ReactNode;
   onClose: () => void;
   onInfo?: () => void;
   onSave?: () => void;
@@ -60,6 +61,7 @@ export default function FieldSheet({
   title,
   badge,
   badgeTone = 'neutral',
+  headerAccessory,
   onClose,
   onInfo,
   onSave,
@@ -172,6 +174,7 @@ export default function FieldSheet({
                   )}
                 </View>
                 <View style={styles.headerActions}>
+                  {headerAccessory}
                   {!!onInfo && (
                     <TouchableOpacity style={styles.closeCircle} onPress={onInfo} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                       <Info size={17} color={CHAT_COLORS.dim} />

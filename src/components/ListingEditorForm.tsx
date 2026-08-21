@@ -20,6 +20,7 @@ import { AppMenuSelect } from './ui/AppMenuSelect';
 import { CollapsibleSection, StickyActionBar, ModernInput, SectionHeader, SimpleQuantityInput, ChipsField, LocationDropdown } from './ListingEditor';
 import FieldSheet from './ListingEditor/FieldSheet';
 import FieldRow from './ListingEditor/FieldRow';
+import GeneratePriceFieldSheet, { type GeneratePriceChannel } from './ListingEditor/GeneratePriceFieldSheet';
 import SheetTextField from './ListingEditor/SheetTextField';
 import { getRequiredFieldUnion } from '../utils/fieldVisibility';
 import InteractiveMapModal from './InteractiveMapModal';
@@ -263,6 +264,10 @@ export type ListingEditorFormProps = {
   inlinePlatform?: string;
   /** Canonical ProductVariant ID for the editor's virtual base row. */
   canonicalVariantId?: string;
+  /** Canonical Product ID used to persist per-channel price overrides. */
+  productId?: string;
+  /** Stable identity for resetting price-sheet draft state between generated items. */
+  priceSessionKey?: string;
   /** Persist quantity directly without arming the generic product autosave. */
   onUpdateInventoryQuantity?: (
     variantId: string,
@@ -408,7 +413,7 @@ export const PRESET_OPTIONS = [
   }
 ];
 
-function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform, canonicalVariantId, onUpdateInventoryQuantity, onInventoryUpdateError, storedPricingResearch }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
+function ListingEditorFormInner({ platforms, updateCounter, images, pendingImages = [], platformLocations, onChangePlatforms, onChangeImages, onOpenBarcodeScanner, onOpenImageCapture, onAddMissingField, getMissingFieldsCount, onGeneratePlatform, onToggleIgnorePlatform, isPlatformIgnored, onRemovePlatform, isGenerationMode = false, externalUpdates, onAdoptExternalUpdate, generatingPlatformKeys, highlightedField, highlightedPlatform, onScrollToOffset, allMissingCount, inlineField, inlinePlatform, canonicalVariantId, productId, priceSessionKey, onUpdateInventoryQuantity, onInventoryUpdateError, storedPricingResearch }: ListingEditorFormProps, ref: React.Ref<ListingEditorFormRef>) {
   const latestPlatformsRef = useRef(platforms);
   latestPlatformsRef.current = platforms;
   const isFocused = useIsFocused();
@@ -631,6 +636,30 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
     return null;
   }, [platformKeys, platforms]);
   const titleForPricingResearch = pricingResearchInput?.title ?? '';
+  const generatePriceChannels = useMemo<GeneratePriceChannel[]>(() => {
+    const seen = new Set<string>();
+    return platformKeys.flatMap((platformKey) => {
+      const locations = platformLocations?.[platformKey]
+        ?? platformLocations?.[platformKey.toLowerCase()]
+        ?? [];
+      const candidates = locations.length > 0 ? locations : [{
+        connectionId: undefined,
+        connectionName: undefined,
+      }];
+      return candidates.flatMap((location) => {
+        const connectionId = location.connectionId || undefined;
+        const id = connectionId ? `connection:${connectionId}` : `platform:${platformKey}`;
+        if (seen.has(id)) return [];
+        seen.add(id);
+        return [{
+          id,
+          connectionId,
+          label: location.connectionName?.trim() || getPlatform(platformKey)?.label || platformKey,
+          platformKey,
+        }];
+      });
+    });
+  }, [platformKeys, platformLocations]);
   const storedPricingSummary = useMemo(
     () => formatStoredPricingSummary(storedPricingResearch),
     [storedPricingResearch],
@@ -1015,7 +1044,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   // The standalone price field can refresh sold comps from the network. The
   // publish flow passes stored scan-time research and never starts a request.
   useEffect(() => {
-    if (openField === 'price' && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
+    if (!isGenerationMode && openField === 'price' && titleForPricingResearch && !pricingResearchResult && !pricingResearchLoading) {
       void fetchPricingResearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2378,14 +2407,29 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
           <ChipsField label="Tags" hideLabel valueArray={(activeData as any).tags} onChangeArray={(arr) => patchField('tags', arr)} refilled={refilledIncludes('tags')} />
         </FieldSheet>
 
-        {/* Price — number + sold-comps research (never a bare number to defend) */}
-        <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
-          <View style={rowStyles.priceInputWrap}>
-            <Text style={rowStyles.priceCurrency}>$</Text>
-            <TextInput style={rowStyles.priceInput} value={String((activeData as any).price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
-          </View>
-          {renderPricingGuidance(currentPrice)}
-        </FieldSheet>
+        {/* Generate owns scope + frozen sold evidence in one price sheet. */}
+        {isGenerationMode ? (
+          <GeneratePriceFieldSheet
+            visible={openField === 'price'}
+            platforms={platforms}
+            canonicalKey={canonicalKey}
+            channels={generatePriceChannels}
+            productId={productId}
+            sessionKey={priceSessionKey}
+            canonicalVariantId={canonicalVariantId}
+            storedPricingResearch={storedPricingResearch}
+            onChangePlatforms={onChangePlatforms}
+            onClose={() => setOpenField(null)}
+          />
+        ) : (
+          <FieldSheet visible={openField === 'price'} title="Price" badge={platformBadge} onClose={() => setOpenField(null)} onSave={() => setOpenField(null)}>
+            <View style={rowStyles.priceInputWrap}>
+              <Text style={rowStyles.priceCurrency}>$</Text>
+              <TextInput style={rowStyles.priceInput} value={String((activeData as any).price ?? '')} onChangeText={(t) => patchField('price', t)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={CHAT_COLORS.faint} autoFocus />
+            </View>
+            {renderPricingGuidance(currentPrice)}
+          </FieldSheet>
+        )}
 
         {/* Category — AI ranked best-match + alternates (shared with the wizard). */}
         {supportsTaxonomy && (
