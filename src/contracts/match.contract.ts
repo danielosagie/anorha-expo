@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:9e44eb309b44)
+// @generated from sssync-bknd/src/contracts/match.contract.ts (sha256:aeaae9cba0d4)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * MATCH PIPELINE CONTRACT — single source of truth for the mobile↔backend match seam.
@@ -213,11 +213,13 @@ export const zMatchJobResult = z.object({
   itemIdentity: zItemIdentity.optional(),
   /** True same-product marketplace evidence. */
   exactMatches: z.array(zExactMatch).optional(),
-  /** Related pricing evidence; never identity evidence. */
+  /** Related/unverified match-deck alternatives; never pricing or identity evidence. */
   similarComps: z.array(zSimilarComp).optional(),
   /** Frozen pricing result; Generate must not search or refresh it. */
   pricingSnapshot: zPricingSnapshot.optional(),
   confidence: z.enum(['high', 'medium', 'low']),
+  /** Additive label disambiguating match confidence from item condition/grade. */
+  confidenceKind: z.literal('match').optional(),
   vectorSearchFoundResults: z.boolean(),
   originalTargetImage: z.string(),
   processingTimeMs: z.number(),

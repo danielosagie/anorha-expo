@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/item-identity.contract.ts (sha256:5a8aa2aae0b9)
+// @generated from sssync-bknd/src/contracts/item-identity.contract.ts (sha256:da294fb4ba55)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * Canonical product identity boundary shared by Match and Generate.
@@ -53,7 +53,7 @@ export const zExactMatch = zMarketplaceEvidenceBase.extend({
 }).catchall(z.any());
 export type ExactMatch = z.infer<typeof zExactMatch>;
 
-/** Related/look-alike item. Pricing evidence only; it can never rename ItemIdentity. */
+/** Related/look-alike match-deck item. It can neither rename nor price ItemIdentity. */
 export const zSimilarComp = zMarketplaceEvidenceBase.extend({
   kind: z.literal('similar'),
   comparedToCanonicalKey: z.string().min(1),
