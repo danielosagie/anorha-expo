@@ -14,7 +14,7 @@
  * children in a `convex/react` ConvexProvider. That matters: `useQuery` binds to
  * the NEAREST ConvexProvider, so wrapping the (app-wide) subtree here would
  * hijack the chat screens' reads away from the OUTER agent-chat client. Instead
- * the only consumer, useFacebookJobStatus, subscribes to this client EXPLICITLY
+ * the only consumer, useComputerJobStatus, subscribes to this client explicitly
  * via client.watchQuery(...), so the agent-chat provider stays authoritative for
  * every useQuery in the tree. We expose { client, userId } via context for that
  * hook to read.

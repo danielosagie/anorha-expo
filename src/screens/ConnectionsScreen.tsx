@@ -8,7 +8,7 @@ import { ChevronRight, Plus, Layers, Handshake, Trash2, Monitor } from 'lucide-r
 import { usePlatformConnections, type PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import LinkComputerScanSheet from '../components/LinkComputerScanSheet';
-import { useFacebookJobStatus, type ConnectedComputer } from '../hooks/useFacebookJobStatus';
+import { useComputerJobStatus, type ConnectedComputer } from '../hooks/useComputerJobStatus';
 import { usePlatformPickerOverlay } from '../context/PlatformPickerOverlayContext';
 import { useOrg } from '../context/OrgContext';
 import { ensureSupabaseJwt } from '../lib/supabase';
@@ -122,14 +122,14 @@ const ConnectionsScreen = () => {
     }
   }, [navigation]);
 
-  // Connected computers (the desktop[s] that post to Facebook) + the link/manage sheet.
+  // Connected computers used by registry platforms with computer-mediated writes.
   const {
     computers,
     degraded,
     presenceLoaded,
     presenceUnavailable,
     refreshPresence,
-  } = useFacebookJobStatus();
+  } = useComputerJobStatus();
   const computerStatusUnavailable = degraded || presenceUnavailable;
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
@@ -421,7 +421,7 @@ const ConnectionsScreen = () => {
           </>
         ) : null}
 
-        {/* Computers are the linked desktops that post to Facebook for you. Tap a
+        {/* Computers are the linked desktops that post for computer-written channels. Tap a
             row (or "Link a computer") to check status / set one up. */}
         <Text style={[styles.section, { marginTop: 26 }]}>Computers</Text>
         <View style={styles.card}>

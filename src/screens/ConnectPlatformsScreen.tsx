@@ -18,7 +18,7 @@ import PlatformLogo from '../components/PlatformLogo';
 import ConnectFlowSheet from '../components/ConnectFlowSheet';
 import { listPlatforms, getPlatformAvailability, PlatformDef, PlatformKey } from '../config/platforms';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { useComputerJobStatus } from '../hooks/useComputerJobStatus';
 import { derivePlatformConnectStatus } from '../lib/platformConnectStatus';
 import { useOrg } from '../context/OrgContext';
 import { useImportStatus } from '../hooks/useImportStatus';
@@ -56,7 +56,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
     presenceLoaded,
     degraded,
     presenceUnavailable,
-  } = useFacebookJobStatus();
+  } = useComputerJobStatus();
   const computerStatusUnavailable = degraded || presenceUnavailable;
   const importStatus = useImportStatus();
   const presentationByConnectionId = useMemo(
@@ -105,7 +105,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
   // that post through the computer (Facebook), skipping any step already done.
   const onConnect = useCallback((def: PlatformDef) => {
     if (!def.connect && def.capabilities.writeVia !== 'computer') return;
-    setFlowPlatform(def.key);
+    setFlowPlatform(def.key as PlatformKey);
   }, []);
 
   // CSV is an import, not an OAuth connect: pick a file, parse, hand off to
@@ -170,7 +170,7 @@ export default function ConnectPlatformsScreen({ navigation }: Props) {
         <View style={{ flex: 1, gap: 2 }}>
           <Text style={styles.name}>{def.label}</Text>
           <Text style={styles.blurb} numberOfLines={2}>
-            {BLURB[def.key] ?? ''}
+            {BLURB[def.key as PlatformKey] ?? ''}
           </Text>
         </View>
         {trailing}

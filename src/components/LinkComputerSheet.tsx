@@ -23,8 +23,9 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import BaseModal from './BaseModal';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { useComputerJobStatus } from '../hooks/useComputerJobStatus';
 import { BRAND_PRIMARY } from '../design/tokens';
+import { computerPostingSetupCopy } from '../lib/computerPlatformCopy';
 
 // Companion-app deep link (probe only — never shown to the user).
 const COMPANION_URL_SCHEME = 'ponder://';
@@ -70,8 +71,7 @@ const COPY: Record<LinkComputerState, StateCopy> = {
   },
   not_installed: {
     title: 'Link your computer',
-    body:
-      'Posting to Facebook happens through your own computer and Facebook account, so it stays safe. Set it up once and we’ll handle the rest.',
+    body: '',
     icon: 'alert-circle-outline',
     iconColor: AMBER,
     primaryLabel: 'Get the app',
@@ -96,6 +96,8 @@ const COPY: Record<LinkComputerState, StateCopy> = {
 // ─────────────────────────── Shared body ───────────────────────────
 
 interface BodyProps {
+  /** Registry platform whose listings are posted through the computer. */
+  platform?: string;
   /**
    * Accepted for call-site compatibility, no longer read: liveness now comes
    * from the signed-in user's own worker-presence heartbeat, which is already
@@ -119,6 +121,7 @@ interface BodyProps {
  * Runs the install + reachability probe on mount and exposes a re-check.
  */
 export function LinkComputerBody({
+  platform,
   orgId,
   hideSkip,
   skipLabel = 'Skip for now',
@@ -154,7 +157,7 @@ export function LinkComputerBody({
     presenceLoaded,
     degraded,
     presenceUnavailable,
-  } = useFacebookJobStatus(true);
+  } = useComputerJobStatus(true);
 
   const state = useMemo<LinkComputerState>(() => {
     // Presence is authoritative: a live heartbeat means the computer is linked,
@@ -178,7 +181,9 @@ export function LinkComputerBody({
     onStateChange?.(state);
   }, [state, onStateChange]);
 
-  const copy = COPY[state];
+  const copy = state === 'not_installed'
+    ? { ...COPY[state], body: computerPostingSetupCopy(platform) }
+    : COPY[state];
 
   const onPrimary = useCallback(() => {
     if (state === 'not_installed') {
@@ -233,11 +238,12 @@ export function LinkComputerBody({
 
 interface SheetProps {
   visible: boolean;
+  platform?: string;
   orgId?: string;
   onClose: () => void;
 }
 
-export default function LinkComputerSheet({ visible, orgId, onClose }: SheetProps) {
+export default function LinkComputerSheet({ visible, platform, orgId, onClose }: SheetProps) {
   return (
     <BaseModal visible={visible} onClose={onClose} position="bottom" containerStyle={styles.sheet}>
       <View style={styles.handle} />
@@ -252,7 +258,7 @@ export default function LinkComputerSheet({ visible, orgId, onClose }: SheetProp
         </TouchableOpacity>
       </View>
 
-      <LinkComputerBody orgId={orgId} onSkip={onClose} onDone={onClose} />
+      <LinkComputerBody platform={platform} orgId={orgId} onSkip={onClose} onDone={onClose} />
     </BaseModal>
   );
 }

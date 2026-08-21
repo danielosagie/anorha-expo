@@ -7,7 +7,10 @@
 import { useCallback } from 'react';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabase';
-import { getPlatform } from '../config/platforms';
+import {
+  getPlatform,
+  type ConnectablePlatform as RegistryConnectablePlatform,
+} from '../config/platforms';
 import { apiJson, ApiError } from '../lib/apiClient';
 import {
   CONNECT_FALLBACK_COPY,
@@ -16,7 +19,7 @@ import {
   type ConnectErrorCode,
 } from '../lib/connectErrorCopy';
 
-export type ConnectablePlatform = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook';
+export type ConnectablePlatform = RegistryConnectablePlatform;
 
 export interface ConnectResult {
   /** true when the platform was connected (a PlatformConnection now exists). */

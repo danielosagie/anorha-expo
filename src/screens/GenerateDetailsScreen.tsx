@@ -113,7 +113,7 @@ type GeneratedResult = {
 
 // Platform field schema for hierarchical structure
 // Platform field schema extracted to separate file for maintainability
-import { PLATFORM_FIELD_SCHEMA } from '../utils/platformSchemas';
+import { getPlatformFieldSchema } from '../utils/platformSchemas';
 import { createLogger } from '../utils/logger';
 import { saveStarted } from '../context/saveStatusStore';
 const log = createLogger('GenerateDetailsScreen');
@@ -1614,7 +1614,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   // Helper: get missing fields for a platform
   const getMissingFields = (platformKey: string) => {
-    const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
+    const schema = getPlatformFieldSchema(platformKey);
     const currentData = displayedPlatforms[platformKey] || {};
     const missing: Array<{ path: string; label: string; type: string; required?: boolean }> = [];
 
@@ -1657,7 +1657,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
 
   // Helper: search and filter fields
   const getFilteredFields = (platformKey: string) => {
-    const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
+    const schema = getPlatformFieldSchema(platformKey);
     const query = fieldSearchQuery.toLowerCase();
     const filtered: Array<{ path: string; label: string; type: string; required?: boolean; group?: string }> = [];
 
@@ -1694,7 +1694,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   // Helper: add field to platform
   const addFieldToPlatform = (platformKey: string, fieldPath: string) => {
     const pathParts = fieldPath.split('.');
-    const schema = PLATFORM_FIELD_SCHEMA[platformKey] || {};
+    const schema = getPlatformFieldSchema(platformKey);
 
     // Navigate to the field definition
     let fieldDef = schema;
@@ -2162,7 +2162,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
   };
 
   const confirmAndPublish = async (opts: { selectedPlatforms: string[]; targetWorkerId?: string }) => {
-    let facebookRequested = false;
     try {
       log.debug('[confirmAndPublish] Starting publish...');
       // Keep the publish sheet up (with its spinner) through prep — closing it here, then
@@ -2233,7 +2232,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       if (platformsToPublish.length !== opts.selectedPlatforms.length) {
         throw new Error('A selected channel no longer has an active connection.');
       }
-      facebookRequested = platformsToPublish.map(p => p.toLowerCase()).includes('facebook');
 
       const publishPayload = {
         productId,
@@ -2243,7 +2241,7 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         media: payload.media,
         selectedPlatformsToPublish: platformsToPublish,
         connectionIds: actualConnectionIds,
-        // Optional pin from the publish sheet — routes the Facebook job to one
+        // Optional pin from the publish sheet routes a computer-written job to one
         // chosen computer. Omitted = any available device (the default).
         ...(opts?.targetWorkerId ? { targetWorkerId: opts.targetWorkerId } : {}),
       };
@@ -2318,7 +2316,6 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
           ...navigationParams,
           mode: 'publishing',
           publishPayload,
-          facebookRequested,
         } as any);
       };
       // Dismiss the native modal first. iOS calls onDismiss after its host view is

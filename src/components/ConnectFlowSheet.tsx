@@ -622,7 +622,7 @@ export default function ConnectFlowSheet({
 
         {phase === 'linkComputer' ? (
           <View>
-            <LinkComputerBody orgId={orgId || undefined} hideSkip onDone={advanceAfterSetup} />
+            <LinkComputerBody platform={platform ?? undefined} orgId={orgId || undefined} hideSkip onDone={advanceAfterSetup} />
             <TouchableOpacity
               style={styles.scanBtn}
               onPress={() => setScanOpen(true)}

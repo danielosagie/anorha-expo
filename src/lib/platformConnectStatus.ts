@@ -37,7 +37,7 @@ export {
   isImportingConnectionStatus,
 } from './platformConnectionVisibility';
 
-/** Live computer-presence signal (from useFacebookJobStatus). */
+/** Live computer-presence signal (from useComputerJobStatus). */
 export interface ComputerPresence {
   computerOnline: boolean;
   /** False while the first presence result is still loading. Do not read

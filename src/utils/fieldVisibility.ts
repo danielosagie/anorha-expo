@@ -8,7 +8,7 @@
 
 import { getPlatformRequirements } from './platformRequirements';
 import { getPlatform } from '../config/platforms';
-import { PLATFORM_FIELD_SCHEMA } from './platformSchemas';
+import { getPlatformFieldSchema } from './platformSchemas';
 
 /**
  * Money-movers — always shown regardless of platform.
@@ -68,7 +68,7 @@ export function getRequiredFieldUnion(selectedKeys: string[]): RequiredFieldUnio
   //     that is NOT already a required/money-mover row.
   const optionalSet = new Set<string>();
   for (const key of keys) {
-    const schema: Record<string, any> = (PLATFORM_FIELD_SCHEMA as any)[key] ?? {};
+    const schema: Record<string, any> = getPlatformFieldSchema(key);
     for (const [fieldKey, def] of Object.entries<any>(schema)) {
       if (!def?.required && !requiredSet.has(fieldKey)) optionalSet.add(fieldKey);
     }

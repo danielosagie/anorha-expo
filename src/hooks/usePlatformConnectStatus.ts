@@ -2,13 +2,13 @@
 //
 // Wires the two live sources (platform connections + computer presence) so a
 // single consumer (the connect flow, a connected-platform row) gets one truthful
-// status. In a LIST, prefer calling useFacebookJobStatus() + usePlatformConnections()
+// status. In a list, prefer useComputerJobStatus() + usePlatformConnections()
 // once at the screen and mapping rows through derivePlatformConnectStatus, to
 // avoid one presence subscription per row.
 
 import { useMemo } from 'react';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
-import { useFacebookJobStatus } from './useFacebookJobStatus';
+import { useComputerJobStatus } from './useComputerJobStatus';
 import {
   derivePlatformConnectStatus,
   type PlatformConnectStatus,
@@ -20,7 +20,7 @@ export function usePlatformConnectStatus(
   options: PlatformConnectStatusOptions = {},
 ): PlatformConnectStatus {
   const { liveConnections } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const { computerOnline, presenceLoaded } = useComputerJobStatus();
   return useMemo(
     () => derivePlatformConnectStatus(
       platform,

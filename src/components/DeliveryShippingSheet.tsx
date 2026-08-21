@@ -11,7 +11,7 @@
  *   The rate is written to the platform's `shippingCost`; it flows through the publish
  *   payload (GenerateDetailsScreen → platformDetails.ebay) into the eBay adapter's
  *   dynamic fulfillment policy. Free shipping leaves shippingCost empty (ships free).
- * - Facebook pickup-location trigger (Facebook tab, when pickup is enabled).
+ * - Registry-capable pickup-location trigger when pickup is enabled.
  * - Package dimensions/weight inputs. These are shared physical values, so edits are
  *   written to every platform so the canonical Weight/WeightUnit the publish payload
  *   carries stays in sync (Shopify/eBay both read them).
@@ -48,12 +48,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 /* ── Platform brand logos ───────────────────────────────────── */
 import PlatformLogo from './PlatformLogo';
-import { listPlatforms, getPlatform } from '../config/platforms';
-
-/* Platforms that support shipping / delivery settings (from the registry). */
-const SHIPPING_PLATFORMS = new Set<string>(
-    listPlatforms().filter((d) => d.capabilities.shipping).map((d) => d.key),
-);
+import { getPlatform, platformSupportsPickupLocation } from '../config/platforms';
 
 const STORAGE_KEY = '@anorha/shipping_prefs';
 
@@ -150,7 +145,7 @@ const accordionStyles = StyleSheet.create({
 export interface DeliveryShippingSheetProps {
     visible: boolean;
     onClose: () => void;
-    /** The currently connected platform keys (e.g. ['ebay','facebook','shopify']) */
+    /** The currently connected platform keys. */
     platformKeys: string[];
     /** Full platforms data object */
     platforms: Record<string, any>;
@@ -213,7 +208,7 @@ export default function DeliveryShippingSheet({
 }: DeliveryShippingSheetProps) {
     /* ── Platform tabs ────────────────────────────────────────── */
     const shippingCapablePlatforms = useMemo(
-        () => platformKeys.filter((k) => SHIPPING_PLATFORMS.has(k.toLowerCase())),
+        () => platformKeys.filter((key) => getPlatform(key)?.capabilities.shipping),
         [platformKeys],
     );
 
@@ -263,8 +258,7 @@ export default function DeliveryShippingSheet({
                 for (const [pk, pref] of Object.entries(prefs)) {
                     if (!nextPlatforms[pk]) continue;
                     const data = nextPlatforms[pk];
-                    const key = pk.toLowerCase();
-                    if (key === 'facebook') {
+                    if (platformSupportsPickupLocation(pk)) {
                         if (!data.pickupLocation?.deliveryMethod && pref.deliveryMethod) {
                             nextPlatforms[pk] = {
                                 ...data,
@@ -302,8 +296,7 @@ export default function DeliveryShippingSheet({
             for (const pk of platformKeys) {
                 const data = sourcePlatforms[pk];
                 if (!data) continue;
-                const key = pk.toLowerCase();
-                if (key === 'facebook') {
+                if (platformSupportsPickupLocation(pk)) {
                     prefs[pk] = { deliveryMethod: data.pickupLocation?.deliveryMethod };
                 } else {
                     prefs[pk] = {
@@ -323,8 +316,9 @@ export default function DeliveryShippingSheet({
     /* ── Active tab data ──────────────────────────────────────── */
     const tabData = useMemo(() => getActiveData(selectedTab), [selectedTab, platforms]);
     const tabKeyLower = selectedTab.toLowerCase();
+    const tabUsesPickupLocation = platformSupportsPickupLocation(tabKeyLower);
 
-    const currentDeliveryMethod = tabKeyLower === 'facebook'
+    const currentDeliveryMethod = tabUsesPickupLocation
         ? tabData?.pickupLocation?.deliveryMethod
         : tabData?.deliveryMethod;
 
@@ -370,7 +364,7 @@ export default function DeliveryShippingSheet({
     const handleDeliveryMethodChange = (method: 'in_person' | 'shipping' | 'both') => {
         const next = { ...platforms };
         const data = { ...(next[selectedTab] || {}) };
-        if (tabKeyLower === 'facebook') {
+        if (tabUsesPickupLocation) {
             data.pickupLocation = { ...data.pickupLocation, deliveryMethod: method };
         } else {
             data.deliveryMethod = method;
@@ -571,7 +565,7 @@ export default function DeliveryShippingSheet({
                         <View style={s.optionsCard}>
                             {/* Fulfillment */}
                             <TouchableOpacity style={s.optionRow} activeOpacity={0.7} onPress={() => setExpandedRow((rr) => rr === 'fulfillment' ? null : 'fulfillment')}>
-                                <Text style={s.optionLabel}>{tabKeyLower === 'facebook' ? 'Handoff' : 'Fulfillment'}</Text>
+                                <Text style={s.optionLabel}>{tabUsesPickupLocation ? 'Handoff' : 'Fulfillment'}</Text>
                                 <View style={{ flex: 1 }} />
                                 <Text style={s.optionValue} numberOfLines={1}>
                                     {selectedShippingOption?.name || (currentDeliveryMethod === 'in_person' ? 'Pickup' : currentDeliveryMethod === 'both' ? 'Both (Ship + Pickup)' : 'Ship')}
@@ -593,7 +587,7 @@ export default function DeliveryShippingSheet({
                                             );
                                         })}
                                     </View>
-                                    {platformShippingOptions.length > 0 && tabKeyLower !== 'facebook' && (
+                                    {platformShippingOptions.length > 0 && !tabUsesPickupLocation && (
                                         <View style={{ marginTop: 14 }}>
                                             <Text style={s.dimLabel}>Platform shipping option</Text>
                                             <View style={{ marginTop: 6, gap: 8 }}>
@@ -625,7 +619,7 @@ export default function DeliveryShippingSheet({
                                             </View>
                                         </View>
                                     )}
-                                    {tabKeyLower === 'facebook' && showsPickup && (
+                                    {tabUsesPickupLocation && showsPickup && (
                                         <TouchableOpacity activeOpacity={0.8} style={[s.locationCard, { marginTop: 12 }]} onPress={onOpenLocationPicker}>
                                             <View style={s.locationIconBg}><MapPin size={18} color={BRAND_PRIMARY} /></View>
                                             <View style={{ flex: 1 }}>

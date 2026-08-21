@@ -9,7 +9,7 @@ import BaseModal from './BaseModal';
 import DeliveryShippingSheet from './DeliveryShippingSheet';
 import { VoiceRecorder } from './VoiceRecorder';
 import PlatformLogo from './PlatformLogo';
-import { getPlatform } from '../config/platforms';
+import { getPlatform, platformSupportsPickupLocation } from '../config/platforms';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Boxes, X, Sparkles, Car, MapPin, Truck, Scale, RefreshCw, ChevronRight, ChevronDown, Plus, Check } from 'lucide-react-native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
@@ -626,6 +626,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
   }, [canonicalKey, platformKeys, activeTab]);
   const activePlatformKey = activeTab === 'all' ? canonicalKey : activeTab;
   const activePlatformKeyLower = activePlatformKey.toLowerCase();
+  const activeSupportsPickupLocation = platformSupportsPickupLocation(activePlatformKeyLower);
   const activeData = useMemo<PlatformState>(() => (platforms[activePlatformKey] || {}) as PlatformState, [activePlatformKey, platforms, updateCounter]);
   const pricingResearchInput = useMemo(() => {
     for (const pk of platformKeys) {
@@ -3214,7 +3215,7 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
             visible={locationPickerVisible}
             onClose={() => setLocationPickerVisible(false)}
             onSelect={(loc) => {
-              if (activePlatformKeyLower === 'facebook') {
+              if (activeSupportsPickupLocation) {
                 patchField('pickupLocation', {
                   ...activeData.pickupLocation,
                   locationName: loc.name,
@@ -3224,8 +3225,8 @@ function ListingEditorFormInner({ platforms, updateCounter, images, pendingImage
               }
               setLocationPickerVisible(false);
             }}
-            initialLat={activePlatformKeyLower === 'facebook' ? activeData.pickupLocation?.latitude : undefined}
-            initialLng={activePlatformKeyLower === 'facebook' ? activeData.pickupLocation?.longitude : undefined}
+            initialLat={activeSupportsPickupLocation ? activeData.pickupLocation?.latitude : undefined}
+            initialLng={activeSupportsPickupLocation ? activeData.pickupLocation?.longitude : undefined}
           />
         </View>
       )}

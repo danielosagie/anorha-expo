@@ -4,8 +4,12 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PlatformLogo from '../components/PlatformLogo';
 import PlatformBrandChip from '../components/PlatformBrandChip';
-import { normalizeDisplayName } from '../config/platforms';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import {
+  getPlatformLabel,
+  normalizeDisplayName,
+  platformRequiresComputer,
+} from '../config/platforms';
+import { useComputerJobStatus } from '../hooks/useComputerJobStatus';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import ConnectFlowSheet from '../components/ConnectFlowSheet';
 import { usePlatformConnections } from '../context/PlatformConnectionsContext';
@@ -150,41 +154,50 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     .find((value): value is number => value !== null)
     ?? finiteNumber(price);
 
-  // Facebook posts asynchronously through the user's computer — show its live
-  // dispatch status here instead of implying a synchronous "Published!".
-  const fbDispatch = useFacebookJobStatus();
+  // Computer-written channels publish asynchronously. Show their live dispatch
+  // status instead of implying a synchronous "Published!".
+  const computerDispatch = useComputerJobStatus();
   const { liveConnections } = usePlatformConnections();
-  const fbSelected = publishedPlatforms.includes('facebook');
-  const fbStatus = fbSelected ? fbDispatch.statusForVariant(variantId) : null;
-  // State A: is Facebook connected (OAuth marker exists)? This is distinct from
+  const computerPlatform = publishedPlatforms.find(platformRequiresComputer);
+  const computerPlatformLabel = getPlatformLabel(computerPlatform);
+  const computerStatus = computerPlatform
+    ? computerDispatch.statusForVariant(variantId, computerPlatform)
+    : null;
+  // State A: is the channel connected (OAuth marker exists)? This is distinct from
   // the computer being offline (State B). Publishing needs the connection first,
   // so a user with no connection should be told to connect, not to link a computer.
-  const fbConnected = derivePlatformConnectStatus('facebook', liveConnections, {
-    computerOnline: fbDispatch.computerOnline,
-    presenceLoaded: fbDispatch.presenceLoaded,
-  }).oauthConnected;
-  // Pre-flight: Facebook posts through the user's computer. If none is online we
-  // still queue the job (it posts when a computer comes on) — but say so calmly
-  // and up front, with a one-tap way to link one, instead of surfacing it as an
-  // after-the-fact "problem" once the receipt has already printed.
+  const computerPlatformConnected = computerPlatform
+    ? derivePlatformConnectStatus(computerPlatform, liveConnections, {
+      computerOnline: computerDispatch.computerOnline,
+      presenceLoaded: computerDispatch.presenceLoaded,
+    }).oauthConnected
+    : false;
+  // If no computer is online, the job still queues. Say so up front with a
+  // one-tap way to link one instead of surfacing a problem after the receipt.
   const { currentOrg } = useOrg();
   const [linkComputerOpen, setLinkComputerOpen] = useState(false);
+  const [linkComputerPlatform, setLinkComputerPlatform] = useState<string | undefined>();
   const [connectFlowOpen, setConnectFlowOpen] = useState(false);
   // Only warn once presence has actually loaded (else it flashes on mount while
-  // the query is in flight), only when the FB job isn't already live/posting
+  // the query is in flight), only when the job isn't already live/posting
   // (a posted listing shouldn't say "posts when your computer's on"), and never
   // in degraded mode where onlineness is unknown.
-  const fbAlreadyMoving = fbStatus?.tone === 'good' || fbStatus?.label === 'Live';
-  // No Facebook connection yet → prompt to connect (State A), never "computer offline".
-  const showConnectFacebook = fbSelected && !fbConnected;
+  const computerJobAlreadyMoving = computerStatus?.tone === 'good' || computerStatus?.label === 'Live';
+  // No channel connection yet means prompt to connect, never "computer offline".
+  const showConnectComputerPlatform = !!computerPlatform && !computerPlatformConnected;
   const showComputerPreflight =
-    fbSelected &&
-    fbConnected &&
-    fbDispatch.presenceLoaded &&
-    !fbDispatch.computerOnline &&
-    !fbDispatch.degraded &&
-    !fbDispatch.presenceUnavailable &&
-    !fbAlreadyMoving;
+    !!computerPlatform &&
+    computerPlatformConnected &&
+    computerDispatch.presenceLoaded &&
+    !computerDispatch.computerOnline &&
+    !computerDispatch.degraded &&
+    !computerDispatch.presenceUnavailable &&
+    !computerJobAlreadyMoving;
+
+  const openComputerSheet = (platform?: string) => {
+    setLinkComputerPlatform(platform ?? computerPlatform);
+    setLinkComputerOpen(true);
+  };
 
   // Representative quantity for the summary line from the exact publish details.
   const summaryQty = (() => {
@@ -407,7 +420,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
     const primaryPlatform = (platforms[0] || sourcePlatform || '').toLowerCase();
     return (
       <View style={[styles.image, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', flexDirection: 'row', gap: 10 }]}>
-        {primaryPlatform ? renderPlatformSvg(primaryPlatform, 22) : null}
+        {primaryPlatform ? <PlatformLogo type={primaryPlatform} size={22} /> : null}
         {/* Anorha mark - reuse a square icon */}
         <Icon name="shape" size={22} color="#111" />
       </View>
@@ -516,36 +529,39 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
               {channelKeys.map((p: string, i: number) => {
                 const lower = String(p).toLowerCase();
-                const isFb = lower === 'facebook';
+                const requiresComputer = platformRequiresComputer(lower);
+                const dispatchStatus = requiresComputer
+                  ? computerDispatch.statusForVariant(variantId, lower)
+                  : null;
                 // Live URL may arrive as a {url,id} object (new) or a bare string (legacy param).
                 const live: any = (liveUrls || {})[lower];
                 const url: string | undefined = typeof live === 'string' ? live : live?.url;
                 const hasLink = !!url;
                 // A per-platform failure from the publish response overrides everything —
-                // that row must not read "Live". Otherwise FB keeps its full dispatch
+                // that row must not read "Live". Computer-written channels keep the dispatch
                 // vocabulary (queued / posting / waiting-for-computer / needs-a-check /
                 // couldn't-post); everything else without a link reads a quiet "Live" —
                 // unless this was an inventory-only save, where nothing is live yet.
                 const failed = publishResults[lower]?.success === false;
                 const st = failed
                   ? { dotColor: '#BA7517', color: '#BA7517', label: 'Didn’t publish' }
-                  : isFb
-                    ? (fbStatus || (fbDispatch.degraded || fbDispatch.jobsUnavailable
+                  : requiresComputer
+                    ? (dispatchStatus || (computerDispatch.degraded || computerDispatch.jobsUnavailable
                       ? { dotColor: '#9CA3AF', color: '#71717A', label: "Can't check now" }
-                      : !fbDispatch.jobsLoaded
+                      : !computerDispatch.jobsLoaded
                         ? { dotColor: '#9CA3AF', color: '#71717A', label: 'Checking' }
                         : { dotColor: '#9CA3AF', color: '#71717A', label: 'Posting soon' }))
                     : savedToInventory
                       ? { dotColor: IC.muted, color: IC.muted, label: 'In inventory' }
                       : { dotColor: IC.accent, color: IC.accent, label: 'Live' };
-                const canRetryDispatch = isFb && !!fbStatus?.canRetry && !!publishPayload;
-                const opensComputerSheet = isFb && !!fbStatus?.opensComputerSheet;
+                const canRetryDispatch = requiresComputer && !!dispatchStatus?.canRetry && !!publishPayload;
+                const opensComputerSheet = requiresComputer && !!dispatchStatus?.opensComputerSheet;
                 // Non-owning confirmation routes do not carry publishPayload, so
                 // they have no truthful redispatch seam and must not show Retry.
                 // A real listing link → open the marketplace page. Otherwise the row still
-                // opens the in-app product (where they can manage/retry); FB without a link
+                // opens the in-app product (where they can manage/retry); a computer-written row without a link
                 // is inert — unless its publish failed, which must stay actionable.
-                const tappable = hasLink || !isFb || failed || canRetryDispatch || opensComputerSheet;
+                const tappable = hasLink || !requiresComputer || failed || canRetryDispatch || opensComputerSheet;
                 return (
                   <TouchableOpacity
                     key={`${p}-${i}`}
@@ -555,7 +571,7 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
                       if (failed || canRetryDispatch) {
                         void runPublish([lower]);
                       } else if (opensComputerSheet) {
-                        setLinkComputerOpen(true);
+                        openComputerSheet(lower);
                       } else if (url) {
                         Linking.openURL(url).catch(() => undefined);
                       } else {
@@ -595,23 +611,23 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
               <Text style={styles.channelHint}>{anyLiveLink ? 'Tap a channel to open the live listing.' : 'Tap a channel to manage it.'}</Text>
 
-              {showConnectFacebook ? (
+              {showConnectComputerPlatform ? (
                 <TouchableOpacity activeOpacity={0.7} onPress={() => setConnectFlowOpen(true)} style={[styles.preflightCard, { marginTop: 6 }]}>
-                  <Icon name="facebook" size={20} color="#BA7517" />
+                  <PlatformLogo type={computerPlatform} size={20} color="#BA7517" />
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.preflightTitle}>Connect Facebook first</Text>
-                    <Text style={styles.preflightBody}>Link your Facebook account to post here. It only takes a moment.</Text>
+                    <Text style={styles.preflightTitle}>Connect {computerPlatformLabel}</Text>
+                    <Text style={styles.preflightBody}>Link your {computerPlatformLabel} account to post here. It only takes a moment.</Text>
                   </View>
                   <Icon name="chevron-right" size={18} color="#C4C8CE" />
                 </TouchableOpacity>
               ) : null}
 
               {showComputerPreflight ? (
-                <TouchableOpacity activeOpacity={0.7} onPress={() => setLinkComputerOpen(true)} style={[styles.preflightCard, { marginTop: 6 }]}>
+                <TouchableOpacity activeOpacity={0.7} onPress={() => openComputerSheet()} style={[styles.preflightCard, { marginTop: 6 }]}>
                   <Icon name="laptop" size={20} color="#BA7517" />
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.preflightTitle}>Posts when your computer’s on</Text>
-                    <Text style={styles.preflightBody}>Facebook goes live through your Mac. It’ll post automatically once Anorha is open, or link a computer now.</Text>
+                    <Text style={styles.preflightTitle}>Computer offline</Text>
+                    <Text style={styles.preflightBody}>{computerPlatformLabel} goes live through your computer. It’ll post automatically once Anorha is open, or link a computer now.</Text>
                   </View>
                   <Icon name="chevron-right" size={18} color="#C4C8CE" />
                 </TouchableOpacity>
@@ -628,12 +644,13 @@ const PublishConfirmationScreen: React.FC<Props> = ({ route, navigation }) => {
 
       <LinkComputerSheet
         visible={linkComputerOpen}
+        platform={linkComputerPlatform}
         orgId={currentOrg?.id}
         onClose={() => setLinkComputerOpen(false)}
       />
       <ConnectFlowSheet
         visible={connectFlowOpen}
-        platform="facebook"
+        platform={computerPlatform ?? ''}
         orgId={currentOrg?.id}
         onCancel={() => setConnectFlowOpen(false)}
         onConnected={() => setConnectFlowOpen(false)}
@@ -746,22 +763,6 @@ function platformLabel(key: string): string {
   return normalizeDisplayName(key);
 }
 
-function platformIconName(key: string): string {
-  // MaterialCommunityIcons names; simple mapping to avoid extra assets
-  switch (key) {
-    case 'ebay': return 'shopping';
-    case 'clover': return 'leaf';
-    case 'shopify': return 'shopping';
-    case 'amazon': return 'amazon';
-    case 'square': return 'square-outline';
-    default: return 'shopping-outline';
-  }
-}
-
-function renderPlatformSvg(key: string, size: number = 16) {
-  return <PlatformLogo type={key} size={size} fallbackIcon={platformIconName(key)} />;
-}
-
 const styles = StyleSheet.create({
   // Logo square used by the legacy renderLogoSquare helper.
   image: { width: '100%', height: '100%' },
@@ -808,7 +809,7 @@ const styles = StyleSheet.create({
   retryActionText: { fontSize: 13, fontWeight: '800', color: '#8A5A12' },
   channelHint: { fontSize: 13, color: IC.muted, marginTop: 8, marginBottom: 2, marginLeft: 4 },
 
-  // Facebook pre-flight prompts (connect / computer-offline) — warm attention cards.
+  // Computer-platform pre-flight prompts use warm attention cards.
   preflightCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FDF6EC', borderColor: '#F0E2CC', borderWidth: 1, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14 },
   preflightTitle: { color: '#7A5210', fontSize: 14, fontWeight: '700', letterSpacing: -0.2 },
   preflightBody: { color: '#9A7A45', fontSize: 12, lineHeight: 17 },

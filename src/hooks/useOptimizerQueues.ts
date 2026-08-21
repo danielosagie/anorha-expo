@@ -218,7 +218,7 @@ export function useOptimizerQueues(options: UseOptimizerQueuesOptions = {}) {
       byConn.set(c.Id, def.key);
       if (isVisiblePlatformConnection(c)) {
         keys.add(def.key);
-        reqs[def.key] = def.capabilities.requiredFields;
+        reqs[def.key] = [...def.capabilities.requiredFields];
       }
     }
     return { connectedKeys: Array.from(keys), keyByConnectionId: byConn, requiredFieldsByKey: reqs };

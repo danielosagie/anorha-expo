@@ -8,17 +8,22 @@ import {
 } from '../src/lib/browserJobCodes.ts';
 
 test('browser job codes resolve to seller-safe copy with one generic fallback', () => {
-  assert.deepEqual(BROWSER_JOB_COPY, {
-    TTL_EXPIRED: 'Posting window ended',
-    AUTH_REQUIRED: 'Sign in on your computer',
-    CAPTCHA: 'Facebook needs a check',
-    PHANTOM_CREATE: "Couldn't confirm the post",
-    WORKER_LOST: 'Computer connection lost',
-    VELOCITY_PAUSED: 'Posting paused briefly',
-    SIGNED_OUT: 'Sign in on your computer',
-    FACEBOOK_CHECKPOINT: 'Facebook needs a check on your computer',
-    EXECUTION_FAILED: "Couldn't post",
-  });
+  assert.deepEqual(Object.keys(BROWSER_JOB_COPY), [
+    'TTL_EXPIRED',
+    'AUTH_REQUIRED',
+    'CAPTCHA',
+    'PHANTOM_CREATE',
+    'WORKER_LOST',
+    'VELOCITY_PAUSED',
+    'SIGNED_OUT',
+    'FACEBOOK_CHECKPOINT',
+    'EXECUTION_FAILED',
+  ]);
+  assert.equal(getBrowserJobCopy('CAPTCHA', 'facebook'), 'Facebook needs a check');
+  assert.equal(
+    getBrowserJobCopy('FACEBOOK_CHECKPOINT', 'facebook'),
+    'Facebook needs a check on your computer',
+  );
   assert.equal(getBrowserJobCopy(undefined), DEFAULT_BROWSER_JOB_COPY);
   assert.equal(getBrowserJobCopy('UNRECOGNIZED_INTERNAL_DETAIL'), DEFAULT_BROWSER_JOB_COPY);
 });

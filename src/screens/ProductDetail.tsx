@@ -10,7 +10,12 @@ import { useTheme } from '../context/ThemeContext';
 import Button from '../components/Button';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformLogo from '../components/PlatformLogo';
-import { getPlatform, normalizeDisplayName } from '../config/platforms';
+import {
+  getPlatform,
+  getPlatformLabel,
+  normalizeDisplayName,
+  platformRequiresComputer,
+} from '../config/platforms';
 import ListingEditorForm, { ListingEditorFormRef } from '../components/ListingEditorForm';
 import FieldRow from '../components/ListingEditor/FieldRow';
 import { CHAT_COLORS, CHAT_FONT } from '../design/chatGlass';
@@ -53,7 +58,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { captureOrPickImageAssets } from '../utils/imageCapture';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useCollaboration } from '../hooks/useCollaboration';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import { useComputerJobStatus } from '../hooks/useComputerJobStatus';
 import LinkComputerSheet from '../components/LinkComputerSheet';
 import { useOrg } from '../context/OrgContext';
 import LoadingOverlay from '../components/LoadingOverlay';
@@ -63,6 +68,7 @@ import { createLogger } from '../utils/logger';
 import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 import { useToast } from '../context/ToastContext';
 import { saveStarted } from '../context/saveStatusStore';
+import { getVariantPlatforms } from '../lib/platforms';
 const log = createLogger('ProductDetail');
 
 
@@ -286,10 +292,11 @@ const ProductDetailScreen = observer(
     const passedItem = route.params?.item ? toProductDetailItem(route.params.item) : undefined;
     const productId = route.params?.productId || passedItem?.Id;
     const { currentOrg } = useOrg();
-    const fbDispatch = useFacebookJobStatus();
-    const fbDispatchRef = useRef(fbDispatch);
-    fbDispatchRef.current = fbDispatch;
+    const computerDispatch = useComputerJobStatus();
+    const computerDispatchRef = useRef(computerDispatch);
+    computerDispatchRef.current = computerDispatch;
     const [linkComputerOpen, setLinkComputerOpen] = useState(false);
+    const [linkComputerPlatform, setLinkComputerPlatform] = useState<string | undefined>();
     const insets = useSafeAreaInsets();
     const { showToast } = useToast();
     // Bottom "Save changes" bar removed — autosave (1.2s debounce) + the header
@@ -1704,16 +1711,7 @@ const ProductDetailScreen = observer(
       // Also surface every platform the PRODUCT is enabled on (On{Platform}), even without a
       // connected account, so the seller can set price/stock for each enabled channel — not
       // just Shopify.
-      const enabledFlags: Record<string, boolean> = {
-        shopify: !!(detailedItem as any)?.OnShopify,
-        square: !!(detailedItem as any)?.OnSquare,
-        clover: !!(detailedItem as any)?.OnClover,
-        amazon: !!(detailedItem as any)?.OnAmazon,
-        ebay: !!(detailedItem as any)?.OnEbay,
-        facebook: !!(detailedItem as any)?.OnFacebook,
-      };
-      Object.entries(enabledFlags).forEach(([platform, on]) => {
-        if (!on) return;
+      getVariantPlatforms(detailedItem as any).forEach((platform) => {
         if (locsByPlatform[platform] && locsByPlatform[platform].length > 0) return;
         const conn = connections.find(c => c.PlatformType?.toLowerCase() === platform);
         const label = platform.charAt(0).toUpperCase() + platform.slice(1);
@@ -2538,7 +2536,7 @@ const ProductDetailScreen = observer(
 
     // Publish product to a new platform
     const [isPublishing, setIsPublishing] = useState<string | null>(null);
-    // FB dispatch status is now realtime (useFacebookJobStatus) — no local poll state.
+    // Computer dispatch status is realtime, with no local poll state.
 
     const handlePublishToPlatform = useCallback(async (platformKey: string) => {
       if (!detailedItem?.Id || isPublishing) return;
@@ -2697,10 +2695,10 @@ const ProductDetailScreen = observer(
           throw new Error(responseData.message || `Publish failed: ${response.status}`);
         }
 
-        // Facebook posts asynchronously through the user's computer — no blocking
+        // Computer-written platforms post asynchronously, so there is no blocking
         // reconcile poll here (it delayed the UI ~10s for an unrendered result).
         // loadPlatformData() below refreshes the row, which shows the live dispatch
-        // status (useFacebookJobStatus).
+        // status (useComputerJobStatus).
 
         // The backend returns results[] with the true per-platform outcome. A
         // compatibility response without a matching result is not proof of success.
@@ -2763,16 +2761,16 @@ const ProductDetailScreen = observer(
           const browserJobId = typeof responseData?.browserJobId === 'string'
             ? responseData.browserJobId.trim()
             : '';
-          let observedDispatch = platformKey.toLowerCase() === 'facebook'
-            ? fbDispatchRef.current.statusForVariant(detailedItem.Id)
+          let observedDispatch = platformRequiresComputer(platformKey)
+            ? computerDispatchRef.current.statusForVariant(detailedItem.Id, platformKey)
             : null;
 
           // A realtime row can land just after the HTTP response. Wait briefly
           // for that concrete receipt before claiming the post is queued.
-          if (!browserJobId && platformKey.toLowerCase() === 'facebook' && !observedDispatch) {
+          if (!browserJobId && platformRequiresComputer(platformKey) && !observedDispatch) {
             for (let attempt = 0; attempt < 5 && !observedDispatch; attempt += 1) {
               await new Promise((resolve) => setTimeout(resolve, 400));
-              observedDispatch = fbDispatchRef.current.statusForVariant(detailedItem.Id);
+              observedDispatch = computerDispatchRef.current.statusForVariant(detailedItem.Id, platformKey);
             }
           }
 
@@ -2823,7 +2821,8 @@ const ProductDetailScreen = observer(
             ]
           );
         } else {
-          if (platformKey.toLowerCase() === 'facebook' && targetConnection?.Id && detailedItem?.Id) {
+          if (platformRequiresComputer(platformKey) && targetConnection?.Id && detailedItem?.Id) {
+            const platformLabel = getPlatformLabel(platformKey);
             Alert.alert(
               'Publish Failed',
               error.message || 'Could not publish to platform',
@@ -2838,9 +2837,9 @@ const ProductDetailScreen = observer(
                         method: 'POST',
                         body: { connectionId: targetConnection.Id, variantId: detailedItem.Id },
                       });
-                      showToast({ title: 'Facebook sync requested', tone: 'neutral' });
+                      showToast({ title: `${platformLabel} sync requested`, tone: 'neutral' });
                     } catch (syncErr: any) {
-                      showToast({ title: 'Facebook sync failed', tone: 'danger' });
+                      showToast({ title: `${platformLabel} sync failed`, tone: 'danger' });
                     }
                   }
                 },
@@ -4894,23 +4893,24 @@ const ProductDetailScreen = observer(
                         ? `Out of sync${parsedSyncMs ? ` \u00b7 ${relTime(parsedSyncMs)}` : ''}`
                         : `Live \u00b7 synced ${relTime(parsedSyncMs)}`;
                     }
-                    // Facebook posts through the user's computer (async). When a
+                    // Computer-written platforms post asynchronously. When a
                     // dispatch job is in flight / waiting / paused / failed, show its
                     // realtime status instead of the sync status \u2014 same dot+label idiom.
-                    const fbJobStatus = rawType.toLowerCase() === 'facebook'
-                      ? fbDispatch.statusForVariant(mapping.ProductVariantId)
+                    const requiresComputer = platformRequiresComputer(rawType);
+                    const computerJobStatus = requiresComputer
+                      ? computerDispatch.statusForVariant(mapping.ProductVariantId, rawType)
                       : null;
-                    const waitingForFacebookDispatch =
-                      rawType.toLowerCase() === 'facebook' && !hasRealPlatformProductId(mapping.PlatformProductId);
-                    const fbStatus = fbJobStatus || (waitingForFacebookDispatch && (fbDispatch.degraded || fbDispatch.jobsUnavailable)
+                    const waitingForComputerDispatch =
+                      requiresComputer && !hasRealPlatformProductId(mapping.PlatformProductId);
+                    const computerStatus = computerJobStatus || (waitingForComputerDispatch && (computerDispatch.degraded || computerDispatch.jobsUnavailable)
                       ? { label: "Can't check now", color: '#71717A', dotColor: '#9CA3AF', tone: 'quiet' as const }
-                      : waitingForFacebookDispatch && !fbDispatch.jobsLoaded
+                      : waitingForComputerDispatch && !computerDispatch.jobsLoaded
                         ? { label: 'Checking', color: '#71717A', dotColor: '#9CA3AF', tone: 'quiet' as const }
                         : null);
-                    const canRetryDispatch = rawType.toLowerCase() === 'facebook' && !!fbStatus?.canRetry;
-                    const dotColor = fbStatus ? fbStatus.dotColor : statusColor;
-                    const textColor = fbStatus ? fbStatus.color : statusColor;
-                    const rowStatusText = fbStatus ? fbStatus.label : statusText;
+                    const canRetryDispatch = requiresComputer && !!computerStatus?.canRetry;
+                    const dotColor = computerStatus ? computerStatus.dotColor : statusColor;
+                    const textColor = computerStatus ? computerStatus.color : statusColor;
+                    const rowStatusText = computerStatus ? computerStatus.label : statusText;
                     return (
                       <View key={mapping.Id} style={styles.alRow}>
                         <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
@@ -4919,12 +4919,15 @@ const ProductDetailScreen = observer(
                           <TouchableOpacity
                             style={styles.alStatusLine}
                             activeOpacity={0.7}
-                            disabled={!fbStatus?.opensComputerSheet}
-                            onPress={() => setLinkComputerOpen(true)}
+                            disabled={!computerStatus?.opensComputerSheet}
+                            onPress={() => {
+                              setLinkComputerPlatform(rawType);
+                              setLinkComputerOpen(true);
+                            }}
                           >
                             <View style={[styles.alDot, { backgroundColor: dotColor }]} />
                             <Text style={[styles.alStatusText, { color: textColor }]} numberOfLines={1}>{rowStatusText}</Text>
-                            {fbStatus?.opensComputerSheet ? <ChevronRight size={15} color="#9CA3AF" /> : null}
+                            {computerStatus?.opensComputerSheet ? <ChevronRight size={15} color="#9CA3AF" /> : null}
                           </TouchableOpacity>
                           {(() => {
                             const ov = overridesByConnection[mapping.PlatformConnectionId];
@@ -5342,6 +5345,7 @@ const ProductDetailScreen = observer(
             calm save model. Retry on failure lives in that header chip. */}
         <LinkComputerSheet
           visible={linkComputerOpen}
+          platform={linkComputerPlatform}
           orgId={currentOrg?.id}
           onClose={() => setLinkComputerOpen(false)}
         />

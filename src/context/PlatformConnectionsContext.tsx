@@ -17,12 +17,10 @@ import {
   type PlatformConnectionSyncState,
 } from '../lib/platformConnectionVisibility';
 import { ACTIVE_IMPORT_EVIDENCE_TTL_MS } from '../lib/connectionImportPresentation';
+import type { PlatformKey } from '../config/platforms';
 const log = createLogger('PlatformConnectionsContext');
 
-
-// Mirrors the canonical registry key set (src/config/platforms.ts). 'etsy' was a
-// ghost. It was never in the registry, had no adapter, and had no column.
-export type PlatformKey = 'shopify' | 'square' | 'clover' | 'ebay' | 'facebook' | 'amazon' | 'depop' | 'whatnot';
+export type { PlatformKey } from '../config/platforms';
 
 export interface PlatformConnectionRow {
   Id: string;

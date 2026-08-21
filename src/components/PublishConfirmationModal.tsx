@@ -14,18 +14,25 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import PlatformBrandChip from './PlatformBrandChip';
-import { normalizeDisplayName } from '../config/platforms';
-import { PLATFORM_META } from '../utils/platformConstants';
-import { useFacebookJobStatus } from '../hooks/useFacebookJobStatus';
+import {
+    getPlatformLabel,
+    normalizeDisplayName,
+    platformIsStorefront,
+    platformRequiresComputer,
+} from '../config/platforms';
+import { useComputerJobStatus } from '../hooks/useComputerJobStatus';
+import { computerPostsViaCopy } from '../lib/computerPlatformCopy';
 import { createLogger } from '../utils/logger';
 import { isVisiblePlatformConnection } from '../lib/platformConnectStatus';
 const log = createLogger('PublishConfirmationModal');
 
-const labelFor = (p: string) => (PLATFORM_META as any)[p]?.label || (p.charAt(0).toUpperCase() + p.slice(1));
+const labelFor = (platform: string) => getPlatformLabel(
+    platform,
+    platform.charAt(0).toUpperCase() + platform.slice(1),
+);
 
 // One-word context under each channel name: your own store vs. an open marketplace.
-const STORE_PLATFORMS = new Set(['shopify', 'square', 'clover', 'woocommerce']);
-const subtitleFor = (p: string) => (STORE_PLATFORMS.has(p) ? 'Your store' : 'Marketplace');
+const subtitleFor = (platform: string) => (platformIsStorefront(platform) ? 'Your store' : 'Marketplace');
 
 const optimizationPrompt = (detail: string): string => {
     const firstGap = detail.split('·')[0]?.trim().toLowerCase();
@@ -161,26 +168,27 @@ export function PublishConfirmationContent({
     }, [selectedConnectionIds, selectedPlatforms, platformGroups]);
     const hasSelection = selectedPlatformKeys.length > 0;
 
-    // Facebook posts through the seller's own computer — give an honest, non-blocking
-    // heads-up if FB is on and no computer is currently online (publishing still queues).
+    // Computer-written platforms get an honest, non-blocking heads-up when no
+    // computer is currently online. Publishing still queues.
     const {
         computerOnline,
         computers,
         presenceLoaded,
         degraded,
         presenceUnavailable,
-    } = useFacebookJobStatus(active);
-    const facebookSelected = selectedPlatforms.has('facebook');
+    } = useComputerJobStatus(active);
+    const computerPlatform = selectedPlatformKeys.find(platformRequiresComputer);
+    const computerPlatformSelected = !!computerPlatform;
     const computerStatusUnavailable = degraded || presenceUnavailable;
-    const showComputerUnknown = facebookSelected && computerStatusUnavailable;
+    const showComputerUnknown = computerPlatformSelected && computerStatusUnavailable;
     const showComputerHeadsUp =
-        facebookSelected && presenceLoaded && !computerStatusUnavailable && !computerOnline;
+        computerPlatformSelected && presenceLoaded && !computerStatusUnavailable && !computerOnline;
 
     // Optional pin: with 2+ linked computers, let the seller choose WHICH one posts
-    // to Facebook (default = any available). Only pinnable computers (those with a
+    // to the selected channel (default = any available). Only computers with a
     // workerId) are offered; the choice rides the publish body as targetWorkerId.
     const pinnable = React.useMemo(() => computers.filter((c) => !!c.workerId), [computers]);
-    const showComputerPicker = selectedPlatforms.has('facebook') && pinnable.length >= 2;
+    const showComputerPicker = computerPlatformSelected && pinnable.length >= 2;
     const [targetWorker, setTargetWorker] = React.useState<string | null>(null);
     useEffect(() => { if (active) setTargetWorker(null); }, [active]);
 
@@ -261,7 +269,7 @@ export function PublishConfirmationContent({
                     {hasNoConnections ? (
                         <View style={styles.emptyCard}>
                             <Text style={styles.emptyTitle}>No channels connected</Text>
-                            <Text style={styles.emptySub}>Connect Shopify, eBay, or Facebook to publish. You can also save to inventory.</Text>
+                            <Text style={styles.emptySub}>Connect a channel to publish, or save to inventory.</Text>
                         </View>
                     ) : (
                         platforms.map((platform) => {
@@ -313,7 +321,7 @@ export function PublishConfirmationContent({
                         <View style={[styles.computerNotice, showComputerUnknown && styles.computerNoticeUnknown]}>
                             <Icon name="monitor" size={16} color={showComputerUnknown ? '#71717A' : '#BA7517'} style={{ marginTop: 1 }} />
                             <Text style={[styles.computerNoticeText, showComputerUnknown && styles.computerNoticeTextUnknown]}>
-                                {showComputerUnknown ? "Can't check now" : 'Facebook posts via your computer.'}
+                                {showComputerUnknown ? "Can't check now" : computerPostsViaCopy(computerPlatform)}
                             </Text>
                         </View>
                     ) : null}

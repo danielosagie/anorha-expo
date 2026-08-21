@@ -19,7 +19,7 @@ import { listPlatforms } from '../../config/platforms';
 
 import { type ConnectablePlatform } from '../../hooks/usePlatformConnect';
 import { usePlatformConnections } from '../../context/PlatformConnectionsContext';
-import { useFacebookJobStatus } from '../../hooks/useFacebookJobStatus';
+import { useComputerJobStatus } from '../../hooks/useComputerJobStatus';
 import { useImportStatus } from '../../hooks/useImportStatus';
 import { derivePlatformConnectStatus } from '../../lib/platformConnectStatus';
 import { connectionImportPresentationsById } from '../../lib/connectionImportPresentation';
@@ -51,7 +51,7 @@ export default function ConnectAccountsStep({
   onDone: () => void;
 }) {
   const { connections, progressByConnectionId } = usePlatformConnections();
-  const { computerOnline, presenceLoaded } = useFacebookJobStatus();
+  const { computerOnline, presenceLoaded } = useComputerJobStatus();
   const importStatus = useImportStatus();
   const presentationByConnectionId = useMemo(
     () => connectionImportPresentationsById({

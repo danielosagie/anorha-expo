@@ -4,7 +4,7 @@ export type RequirementMap = Record<string, string[]>;
 
 // Per-platform required fields come from the central registry's capabilities.
 const DEFAULT_REQUIREMENTS: RequirementMap = Object.fromEntries(
-  listPlatforms().map((d) => [d.key, d.capabilities.requiredFields]),
+  listPlatforms().map((d) => [d.key, [...d.capabilities.requiredFields]]),
 );
 
 /** The registry's required-field list for a platform (falls back to title+price). */
@@ -95,7 +95,6 @@ export function getMissingPlatformFields(platformData: any, platformKey: string)
 }
 
 export { DEFAULT_REQUIREMENTS };
-
 
 
 

@@ -62,7 +62,7 @@ import { useProductVariantRealtime, useInventoryLevelsRealtime } from '../hooks/
 import { useOrg } from '../context/OrgContext';
 import { parseFilterQuery } from '../utils/parseFilterQuery';
 import { logFlowEvent, FlowEvents, startTrace, getTraceHeaders } from '../lib/mobileFlowLogger';
-import { getVariantPlatforms } from '../lib/platforms';
+import { getPlatformFlagColumn, getVariantPlatforms } from '../lib/platforms';
 import { api, apiFetch } from '../lib/apiClient';
 import {
   buildProductBulkArchiveActions,
@@ -1305,25 +1305,9 @@ const InventoryOrdersScreen = observer(() => {
         const variant = variants[variantId];
         if (!variant) return false;
 
-        switch (platformFilter) {
-          case 'shopify':
-            if (variant.OnShopify !== undefined) return variant.OnShopify === true;
-            break;
-          case 'square':
-            if (variant.OnSquare !== undefined) return variant.OnSquare === true;
-            break;
-          case 'clover':
-            if (variant.OnClover !== undefined) return variant.OnClover === true;
-            break;
-          case 'amazon':
-            if (variant.OnAmazon !== undefined) return variant.OnAmazon === true;
-            break;
-          case 'ebay':
-            if (variant.OnEbay !== undefined) return variant.OnEbay === true;
-            break;
-          case 'facebook':
-            if (variant.OnFacebook !== undefined) return variant.OnFacebook === true;
-            break;
+        const flagColumn = getPlatformFlagColumn(platformFilter);
+        if (flagColumn && (variant as any)[flagColumn] !== undefined) {
+          return (variant as any)[flagColumn] === true;
         }
 
         const relevantConnectionIds = platformConnections
@@ -1348,8 +1332,7 @@ const InventoryOrdersScreen = observer(() => {
       productVariantIdsToDisplay = productVariantIdsToDisplay.filter(variantId => {
         const v = variants[variantId] as any;
         if (!v) return false;
-        const isLive = v.OnShopify === true || v.OnSquare === true || v.OnClover === true
-          || v.OnAmazon === true || v.OnEbay === true || v.OnFacebook === true;
+        const isLive = getVariantPlatforms(v).length > 0;
         const isPartnerShared = !!partnerOriginForVariant(variantId);
         return shelfItemMatchesStatus(filterStatus, isLive, isPartnerShared);
       });

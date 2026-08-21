@@ -23,14 +23,8 @@ import Animated, {
 import { ArrowRight } from 'lucide-react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { AnorhaFace } from '../components/brand/AnorhaFace';
-
-import ShopifySvg from '../assets/shopify.svg';
-import AmazonSvg from '../assets/amazon.svg';
-import EbaySvg from '../assets/ebay.svg';
-import CloverSvg from '../assets/clover.svg';
-import SquareSvg from '../assets/square.svg';
-import FacebookSvg from '../assets/facebook.svg';
-import DepopSvg from '../assets/depop-icon.svg';
+import PlatformLogo from '../components/PlatformLogo';
+import { listPlatforms, platformRequiresComputer } from '../config/platforms';
 
 const { width } = Dimensions.get('window');
 
@@ -41,6 +35,20 @@ const MUTED = '#9CA3AF';
 const GREEN = '#93C822';
 const STAGE = '#F4F4F2';
 const HAIRLINE = '#ECEBE6';
+
+const SYNC_HERO_PLATFORMS = listPlatforms()
+  .filter((def) => def.onboarding?.syncOrder !== undefined)
+  .sort((a, b) => (a.onboarding?.syncOrder ?? 0) - (b.onboarding?.syncOrder ?? 0));
+const LIST_HERO_PLATFORMS = listPlatforms()
+  .filter((def) => def.onboarding?.listOrder !== undefined)
+  .sort((a, b) => (a.onboarding?.listOrder ?? 0) - (b.onboarding?.listOrder ?? 0));
+const COMPUTER_HERO_PLATFORMS = listPlatforms().filter((def) => platformRequiresComputer(def.key));
+const SYNC_CHIP_POSITIONS = [
+  { top: 26, left: 24 },
+  { top: 96, right: 22 },
+  { bottom: 30, left: 36 },
+  { bottom: 78, right: 40 },
+];
 
 // ───────────────────────────────────────────────────────────────────────────
 //  Hero 1 — "Sync everywhere": dot grid + floating platform chips + sync packet
@@ -103,22 +111,12 @@ const HeroSync = memo(() => {
       <DotGrid />
       <Animated.View style={[styles.packet, packet]} pointerEvents="none" />
       <View style={styles.chipLayer} pointerEvents="none">
-        <FloatChip delay={0} style={{ top: 26, left: 24 }}>
-          <ShopifySvg width={22} height={22} />
-          <Text style={styles.chipText}>Shopify</Text>
-        </FloatChip>
-        <FloatChip delay={500} style={{ top: 96, right: 22 }}>
-          <SquareSvg width={22} height={22} />
-          <Text style={styles.chipText}>Square</Text>
-        </FloatChip>
-        <FloatChip delay={1000} style={{ bottom: 30, left: 36 }}>
-          <EbaySvg width={24} height={24} />
-          <Text style={styles.chipText}>eBay</Text>
-        </FloatChip>
-        <FloatChip delay={1500} style={{ bottom: 78, right: 40 }}>
-          <CloverSvg width={22} height={22} />
-          <Text style={styles.chipText}>Clover</Text>
-        </FloatChip>
+        {SYNC_HERO_PLATFORMS.map((platform, index) => (
+          <FloatChip key={platform.key} delay={index * 500} style={SYNC_CHIP_POSITIONS[index]}>
+            <PlatformLogo type={platform.key} size={index === 2 ? 24 : 22} />
+            <Text style={styles.chipText}>{platform.label}</Text>
+          </FloatChip>
+        ))}
       </View>
     </View>
   );
@@ -185,30 +183,12 @@ const TagPill = ({ label, accent = false }: { label: string; accent?: boolean })
 const HeroList = memo(() => (
   <View style={[styles.heroFill, { justifyContent: 'center', gap: 14 }]}>
     <Marquee speed={34}>
-      <Pill>
-        <ShopifySvg width={18} height={18} />
-        <Text style={styles.pillText}>Shopify</Text>
-      </Pill>
-      <Pill>
-        <AmazonSvg width={18} height={18} />
-        <Text style={styles.pillText}>Amazon</Text>
-      </Pill>
-      <Pill>
-        <EbaySvg width={20} height={20} />
-        <Text style={styles.pillText}>eBay</Text>
-      </Pill>
-      <Pill>
-        <SquareSvg width={18} height={18} />
-        <Text style={styles.pillText}>Square</Text>
-      </Pill>
-      <Pill>
-        <CloverSvg width={18} height={18} />
-        <Text style={styles.pillText}>Clover</Text>
-      </Pill>
-      <Pill>
-        <DepopSvg width={18} height={18} />
-        <Text style={styles.pillText}>Depop</Text>
-      </Pill>
+      {LIST_HERO_PLATFORMS.map((platform) => (
+        <Pill key={platform.key}>
+          <PlatformLogo type={platform.key} size={18} />
+          <Text style={styles.pillText}>{platform.label}</Text>
+        </Pill>
+      ))}
     </Marquee>
 
     <Marquee reverse speed={30}>
@@ -222,10 +202,12 @@ const HeroList = memo(() => (
     </Marquee>
 
     <Marquee speed={40}>
-      <Pill>
-        <FacebookSvg width={18} height={18} />
-        <Text style={styles.pillText}>Facebook</Text>
-      </Pill>
+      {COMPUTER_HERO_PLATFORMS.map((platform) => (
+        <Pill key={platform.key}>
+          <PlatformLogo type={platform.key} size={18} />
+          <Text style={styles.pillText}>{platform.label}</Text>
+        </Pill>
+      ))}
       <Pill>
         <Icon name="storefront-outline" size={18} color={INK} />
         <Text style={styles.pillText}>Whatnot</Text>

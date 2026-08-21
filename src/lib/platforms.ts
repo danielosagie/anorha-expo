@@ -1,49 +1,59 @@
 /**
- * Track B (v2) — platforms-as-data seam.
- *
- * Variant platform-membership is currently stored as six `On*` boolean columns on
- * ProductVariants. This file is the SINGLE place that knows that. When membership moves to
- * the `PlatformProductMappings` table (see docs/V2_ARCHITECTURE_PLAN.md), only this file
- * changes — every caller keeps using `getVariantPlatforms()` / `isVariantOnPlatform()`, and
- * adding a new platform stops being a schema change threaded through screens.
+ * Track B (v2): variant membership still uses registry-declared `On*` columns.
+ * The public compatibility names below are all derived from that capability.
  */
 
-export type PlatformType = 'shopify' | 'square' | 'clover' | 'amazon' | 'ebay' | 'facebook';
+import {
+  getPlatform,
+  listPlatforms,
+  type PlatformFlagColumn,
+  type VariantPlatformKey,
+} from '../config/platforms.ts';
 
-export const PLATFORM_TYPES: readonly PlatformType[] = [
-  'shopify',
-  'square',
-  'clover',
-  'amazon',
-  'ebay',
-  'facebook',
-] as const;
+export type PlatformType = VariantPlatformKey;
+export type VariantPlatformFlags = Partial<Record<PlatformFlagColumn, boolean | null>>;
 
-/** Maps a platform to its current `On*` boolean column. The only reference to those names. */
-export const PLATFORM_FLAG_COLUMN: Record<PlatformType, keyof VariantPlatformFlags> = {
-  shopify: 'OnShopify',
-  square: 'OnSquare',
-  clover: 'OnClover',
-  amazon: 'OnAmazon',
-  ebay: 'OnEbay',
-  facebook: 'OnFacebook',
-};
+/** Platforms with a registry `onColumn`, in registry order. */
+export const listVariantPlatforms = (): PlatformType[] =>
+  listPlatforms()
+    .filter((def) => !!def.onColumn)
+    .map((def) => def.key as PlatformType);
 
-export interface VariantPlatformFlags {
-  OnShopify?: boolean | null;
-  OnSquare?: boolean | null;
-  OnClover?: boolean | null;
-  OnAmazon?: boolean | null;
-  OnEbay?: boolean | null;
-  OnFacebook?: boolean | null;
-}
+/** Compatibility list, derived rather than hand-maintained. */
+export const PLATFORM_TYPES: readonly PlatformType[] = listVariantPlatforms();
+
+/** Resolve the current registry column for a variant-backed platform. */
+export const getPlatformFlagColumn = (platform: string): PlatformFlagColumn | undefined =>
+  getPlatform(platform)?.onColumn as PlatformFlagColumn | undefined;
+
+/**
+ * Compatibility map. Property reads and enumeration resolve from the live
+ * registry so a newly registered platform is visible without another edit.
+ */
+export const PLATFORM_FLAG_COLUMN = new Proxy(
+  {} as Record<PlatformType, PlatformFlagColumn>,
+  {
+    get: (_target, property) => (
+      typeof property === 'string' ? getPlatformFlagColumn(property) : undefined
+    ),
+    ownKeys: () => listVariantPlatforms(),
+    getOwnPropertyDescriptor: (_target, property) => (
+      typeof property === 'string' && getPlatformFlagColumn(property)
+        ? { configurable: true, enumerable: true }
+        : undefined
+    ),
+  },
+);
 
 /** Platforms a variant is currently listed on, derived from its `On*` flags. */
 export function getVariantPlatforms(
   variant: VariantPlatformFlags | null | undefined,
 ): PlatformType[] {
   if (!variant) return [];
-  return PLATFORM_TYPES.filter((p) => Boolean(variant[PLATFORM_FLAG_COLUMN[p]]));
+  return listVariantPlatforms().filter((platform) => {
+    const column = getPlatformFlagColumn(platform);
+    return column ? Boolean(variant[column]) : false;
+  });
 }
 
 /** Whether a variant is listed on a specific platform. */
@@ -51,5 +61,6 @@ export function isVariantOnPlatform(
   variant: VariantPlatformFlags | null | undefined,
   platform: PlatformType,
 ): boolean {
-  return Boolean(variant && variant[PLATFORM_FLAG_COLUMN[platform]]);
+  const column = getPlatformFlagColumn(platform);
+  return Boolean(variant && column && variant[column]);
 }
