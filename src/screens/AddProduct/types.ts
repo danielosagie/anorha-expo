@@ -2,6 +2,7 @@
 // NOTE: AddProductScreen.tsx still has local copies of several of these (structurally
 // compatible). Consolidating to this single source is a cleanup follow-up.
 import { QuickScanPhase } from '../../lib/quickScanStream';
+import type { MatchSelectionSource } from './matchConfidence';
 
 export type CameraMode = 'camera' | 'barcode' | 'manifest' | 'receipt' | 'shelf';
 
@@ -33,6 +34,9 @@ export interface MatchCandidate {
 export interface MatchResponse {
   systemAction: 'show_single_match' | 'show_multiple_matches' | 'show_multiple_candidates' | 'fallback_to_manual';
   confidence: 'high' | 'medium' | 'low';
+  confidenceKind?: 'match';
+  selectedBy?: MatchSelectionSource;
+  matchEvidence?: { selectedBy?: MatchSelectionSource };
   rankedCandidates: MatchCandidate[];
   totalMatches: number;
   canAutoConfirm?: boolean;

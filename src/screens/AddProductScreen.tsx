@@ -432,7 +432,6 @@ const SCREEN_HEIGHT = Number.isFinite(windowDimensions.height) && windowDimensio
   : Number.isFinite(screenDimensions.height) && screenDimensions.height > 0
     ? screenDimensions.height
     : 800;
-const BULK_MODAL_FTUX_KEY = '@anorha_hasSeenBulkItemsModal';
 const MAX_BATCH_ITEMS = 100;
 const QUICK_SCAN_QUEUE_LIMIT = 100;
 const SCAN_POOL_LIMIT = 8;
@@ -896,7 +895,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   );
   const saveDraftTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftSessionCreatePromiseRef = useRef<Promise<string | null> | null>(null);
-  const hasAutoOpenedFtuxRef = useRef(false);
 
   log.debug('[RENDER] AddProductScreen rendered');
 
@@ -1213,7 +1211,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   const [showDeepSearchSheet, setShowDeepSearchSheet] = useState(() => __ds === 'shelfScanning' || __ds === 'shelfComplete');
   const showDeepSearchSheetRef = useRef(showDeepSearchSheet);
   showDeepSearchSheetRef.current = showDeepSearchSheet;
-  const [hasSeenBulkModalFtux, setHasSeenBulkModalFtux] = useState<boolean | null>(null);
   const [matchData, setMatchData] = useState<MatchResponse | null>(() => __ds === 'matchSheet' ? DS_MATCH : null);
   // Quick scan / match sheet context
   const [currentMatchItemId, setCurrentMatchItemId] = useState<string | null>(null);
@@ -1304,6 +1301,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       title: chosen?.title || item?.title || 'Item',
       description: chosen?.description,
       confidence: qs?.matchData?.confidence,
+      confidenceKind: qs?.matchData?.confidenceKind,
+      selectedBy: qs?.matchData?.selectedBy ?? qs?.matchData?.matchEvidence?.selectedBy,
       // Match chosen but pricing not yet stored → still researching ("Finding comps…").
       pricingLoading: !!chosen && pr === undefined,
       pricing: pr
@@ -1823,7 +1822,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
   // consumeShelfStreamEvent is declared before the uploader callback. Late-bind it
   // so streamed crop jobs can use the exact same upload path as camera photos.
   const uploadImageToSupabaseRef = useRef<((localUri: string, photoId: string) => Promise<string>) | null>(null);
-  const hasTriggeredBulkModalFtuxRef = useRef(false);
   // Deferred cart-Modal unmount after the close spring settles (cleared on reopen).
   const cartCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Always-fresh handle for callbacks declared above closeBulkItemsSheet (avoids
@@ -3313,6 +3311,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               canAutoConfirm: res?.canAutoConfirm,
               confidenceState: res?.confidenceState,
               reasonCode: res?.reasonCode,
+              confidenceKind: res?.confidenceKind,
+              selectedBy: res?.selectedBy ?? res?.matchEvidence?.selectedBy,
+              matchEvidence: res?.matchEvidence,
             },
             matchRows: rankedCandidates,
           },
@@ -3826,6 +3827,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
                   canAutoConfirm: res?.canAutoConfirm,
                   confidenceState: res?.confidenceState,
                   reasonCode: res?.reasonCode,
+                  confidenceKind: res?.confidenceKind,
+                  selectedBy: res?.selectedBy ?? res?.matchEvidence?.selectedBy,
+                  matchEvidence: res?.matchEvidence,
                 },
                 matchRows: matches.map((match: any) => ({ ...withResolvedImageUrl(match), queryKey: newQuery })),
               },
@@ -4542,6 +4546,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         confidenceState?: string;
         confidenceScore?: number;
         reasonCode?: string;
+        confidenceKind?: 'match';
+        selectedBy?: MatchResponse['selectedBy'];
+        matchEvidence?: MatchResponse['matchEvidence'];
         rerankerAnalysis?: any;
         observedCondition?: string;
         alreadyInInventory?: boolean;
@@ -4653,11 +4660,21 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
               latestVerdict.observedCondition = rawObservedCondition.trim().toLowerCase();
             }
 
+            const metadataSrc = evt.result ?? evt.data?.results?.[0] ?? evt.data;
+            if (metadataSrc) {
+              latestVerdict.confidenceKind = metadataSrc.confidenceKind ?? latestVerdict.confidenceKind;
+              latestVerdict.selectedBy = metadataSrc.selectedBy
+                ?? metadataSrc.matchEvidence?.selectedBy
+                ?? latestVerdict.selectedBy;
+              latestVerdict.matchEvidence = metadataSrc.matchEvidence ?? latestVerdict.matchEvidence;
+            }
+
             const verdictSrc = (evt.result && typeof evt.result.canAutoConfirm === 'boolean') ? evt.result
               : (evt.data?.results?.[0] && typeof evt.data.results[0].canAutoConfirm === 'boolean') ? evt.data.results[0]
               : (typeof evt.data?.canAutoConfirm === 'boolean' ? evt.data : null);
             if (verdictSrc) {
               latestVerdict = {
+                ...latestVerdict,
                 canAutoConfirm: verdictSrc.canAutoConfirm,
                 confidenceState: verdictSrc.confidenceState,
                 confidenceScore: verdictSrc.confidenceScore,
@@ -4782,6 +4799,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           canAutoConfirm: backendAutoConfirm,
           confidenceState: backendState,
           reasonCode: streamResult.reasonCode,
+          confidenceKind: streamResult.confidenceKind,
+          selectedBy: streamResult.selectedBy ?? streamResult.matchEvidence?.selectedBy,
+          matchEvidence: streamResult.matchEvidence,
           rankedCandidates: allMatches.map((match: any) => ({
             id: String(match.ProductVariantId || match.variantId || match.productId || `match-${Date.now()}`),
             productId: match.productId ? String(match.productId) : undefined,
@@ -5009,6 +5029,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
           canAutoConfirm: false,
           confidenceState: backendState || 'NO_CANDIDATES',
           reasonCode: streamResult.reasonCode || 'no_confident_match',
+          confidenceKind: streamResult.confidenceKind,
+          selectedBy: streamResult.selectedBy ?? streamResult.matchEvidence?.selectedBy,
+          matchEvidence: streamResult.matchEvidence,
         };
         // Zero candidates replace the prior result so previews cannot fall back to an old match.
         setQuickScanStore(prev => ({
@@ -5925,51 +5948,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (showDeepSearchSheet || isProcessingShelfScan) return;
     openBulkItemsSheet();
   }, [showDeepSearchSheet, isProcessingShelfScan, openBulkItemsSheet]);
-
-  // First-time walkthrough: briefly show bulk modal so users discover multi-item flow.
-  useEffect(() => {
-    AsyncStorage.getItem(BULK_MODAL_FTUX_KEY)
-      .then((value) => setHasSeenBulkModalFtux(value === '1'))
-      .catch(() => setHasSeenBulkModalFtux(true));
-  }, []);
-
-  useEffect(() => {
-    if (hasSeenBulkModalFtux !== false || hasTriggeredBulkModalFtuxRef.current) return;
-    if (!isFocused) return;
-    if (sessionIdParam) return;
-    if (hasAutoOpenedFtuxRef.current) return;
-    if (showDeepSearchSheet || showMatchSheet || showBarcodeResultModal) return;
-    if (cameraMode === 'shelf') return; // In shelf mode, don't auto-close the sheet
-
-    const hasAnyPhoto = capturedPhotos.length > 0 || bulkItems.some((item) => item.photos.length > 0);
-    if (!hasAnyPhoto) return;
-
-    hasAutoOpenedFtuxRef.current = true;
-    hasTriggeredBulkModalFtuxRef.current = true;
-    openBulkItemsSheet();
-    setHasSeenBulkModalFtux(true);
-    void AsyncStorage.setItem(BULK_MODAL_FTUX_KEY, '1').catch(() => {
-      // non-blocking
-    });
-
-    const timer = setTimeout(async () => {
-      // Don't auto-close the sheet — let the user decide when to dismiss.
-    }, 2200);
-
-    return () => clearTimeout(timer);
-  }, [
-    isFocused,
-    sessionIdParam,
-    hasSeenBulkModalFtux,
-    showDeepSearchSheet,
-    showMatchSheet,
-    showBarcodeResultModal,
-    cameraMode,
-    capturedPhotos.length,
-    bulkItems,
-    closeBulkItemsSheet,
-    openBulkItemsSheet,
-  ]);
 
   // Close match results sheet
   const closeMatchSheet = useCallback(() => {

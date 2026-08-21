@@ -13,6 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PriceHistorySlider, HistoryPoint } from './PriceHistorySlider';
 import { CompsPriceChart } from './CompsPriceChart';
 import { resolveImageUri } from '../../utils/resolveImageUri';
+import { hasUsablePricingData, usablePrice } from './pricingData';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -67,7 +68,10 @@ export interface PricingGuidanceCardProps {
   loading?: boolean;
 }
 
-const money = (n?: number | null) => (typeof n === 'number' && isFinite(n) ? `$${Math.round(n)}` : '—');
+const money = (n?: number | null) => {
+  if (typeof n !== 'number' || !isFinite(n)) return '—';
+  return n > 0 && n < 1 ? `$${n.toFixed(2)}` : `$${Math.round(n)}`;
+};
 const rangeText = (low?: number, high?: number) =>
   typeof low === 'number' && typeof high === 'number' ? `${money(low)} - ${money(high)}` : '—';
 
@@ -88,18 +92,19 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   loading = false,
 }) => {
   const p = pricing ?? {};
-  const samples = p.samples ?? [];
+  const samples = (p.samples ?? []).filter((sample) => usablePrice(sample.price) !== undefined);
   // Modals (headers="none") render the stripped-down sheet: sold avg/median + the
   // three price chips, then history/comps. The full preview screen keeps the
   // richer breakdown (current value + suggested-range slider).
   const compact = headers === 'none';
 
-  const low = p.low;
-  const high = p.high;
-  const median = p.median;
+  const low = usablePrice(p.low) ?? usablePrice(p.livePricing?.low);
+  const high = usablePrice(p.high) ?? usablePrice(p.livePricing?.high);
+  const median = usablePrice(p.median) ?? usablePrice(p.livePricing?.median);
+  const directAverage = usablePrice(p.average);
   const average =
-    typeof p.average === 'number'
-      ? p.average
+    directAverage !== undefined
+      ? directAverage
       : samples.length
       ? samples.reduce((s, c) => s + (c.price ?? 0), 0) / samples.length
       : median;
@@ -114,7 +119,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   const fillRight = hasRange ? pct(high!) : 1;
   const centerVal = typeof median === 'number' ? median : hasRange ? (low! + high!) / 2 : 0;
 
-  const recommended = typeof p.recommended === 'number' ? p.recommended : median;
+  const recommended = usablePrice(p.recommended) ?? median;
   const sampleCount = p.sampleCount ?? (samples.length || undefined);
   const cached = cachedLabel(p.cachedAt);
   const conditionLabel = p.condition === 'mixed' ? 'Mixed condition' : null;
@@ -184,8 +189,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   // Nothing usable to show yet: either still fetching ("Finding comps…") or the
   // research genuinely came back empty ("No recent comps found"). Either way, show
   // an explicit state instead of a card full of silent "—" dashes.
-  const hasLive = !!(p.livePricing && (typeof p.livePricing.median === 'number' || typeof p.livePricing.low === 'number'));
-  const hasAnyData = hasRange || typeof median === 'number' || samples.length > 0 || hasLive;
+  const hasAnyData = hasUsablePricingData({ ...p, samples });
   if (!hasAnyData) {
     return (
       <View>

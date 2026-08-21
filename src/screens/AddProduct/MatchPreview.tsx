@@ -26,6 +26,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PricingGuidanceCard, PricingGuidanceData } from '../../components/pricing/PricingGuidanceCard';
 import { ProgressiveBlurView } from '../../components/ProgressiveBlurView';
+import { getMatchConfidenceLabel } from './matchConfidence';
+import type { MatchSelectionSource } from './matchConfidence';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -52,6 +54,8 @@ export interface MatchPreviewData {
   title: string;
   description?: string;
   confidence?: 'high' | 'medium' | 'low';
+  confidenceKind?: 'match';
+  selectedBy?: MatchSelectionSource;
   // The full pricing shape the card renders (live + sold comps + history + time-to-sell).
   pricing?: PricingGuidanceData;
   // Pricing research still in flight → card shows "Finding comps…" instead of blank dashes.
@@ -111,6 +115,9 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
     : data.confidence === 'medium'
       ? '#BA7517'
       : '#DC2626';
+  const confidenceLabel = data.confidence
+    ? getMatchConfidenceLabel(data.confidence, data.selectedBy)
+    : null;
 
   const handleWrongItem = () => {
     // Host wrong-item destination (the Add-details page) wins; the correction sheet is the fallback.
@@ -139,15 +146,15 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
 
         {/* Title / description card (wrong-item is now a secondary button in the footer) */}
         <View style={styles.infoCard}>
-          {data.confidence ? (
+          {confidenceLabel ? (
             <View
               accessible
-              accessibilityLabel={`${data.confidence} match confidence`}
+              accessibilityLabel={`${confidenceLabel} confidence`}
               style={[styles.confidenceBadge, { backgroundColor: `${confidenceColor}14` }]}
             >
               <View style={[styles.confidenceDot, { backgroundColor: confidenceColor }]} />
               <Text style={[styles.confidenceText, { color: confidenceColor }]}>
-                {data.confidence}
+                {confidenceLabel}
               </Text>
             </View>
           ) : null}
@@ -278,7 +285,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   confidenceDot: { width: 7, height: 7, borderRadius: 4 },
-  confidenceText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 },
+  confidenceText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.2 },
   title: { color: COLORS.text, fontSize: 28, fontWeight: '800', lineHeight: 34, letterSpacing: -0.5 },
   description: { color: COLORS.body, fontSize: 16, lineHeight: 24, marginTop: 16 },
 
