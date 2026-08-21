@@ -13,6 +13,8 @@ export type BrowserJobCode =
   | 'VELOCITY_PAUSED'
   | 'SIGNED_OUT'
   | 'FACEBOOK_CHECKPOINT'
+  | 'AUTH_CHECKPOINT'
+  | 'IDENTITY_PENDING'
   | 'EXECUTION_FAILED';
 
 type BrowserJobCopy = string | ((platform?: string | null) => string);
@@ -26,6 +28,8 @@ export const BROWSER_JOB_COPY: Record<BrowserJobCode, BrowserJobCopy> = {
   VELOCITY_PAUSED: 'Posting paused briefly',
   SIGNED_OUT: 'Sign in on your computer',
   FACEBOOK_CHECKPOINT: (platform) => computerNeedsCheckCopy(platform, true),
+  AUTH_CHECKPOINT: (platform) => computerNeedsCheckCopy(platform, true),
+  IDENTITY_PENDING: 'Confirming the post',
   EXECUTION_FAILED: "Couldn't post",
 };
 

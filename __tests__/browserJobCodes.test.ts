@@ -17,6 +17,8 @@ test('browser job codes resolve to seller-safe copy with one generic fallback', 
     'VELOCITY_PAUSED',
     'SIGNED_OUT',
     'FACEBOOK_CHECKPOINT',
+      'AUTH_CHECKPOINT',
+      'IDENTITY_PENDING',
     'EXECUTION_FAILED',
   ]);
   assert.equal(getBrowserJobCopy('CAPTCHA', 'facebook'), 'Facebook needs a check');

@@ -1,3 +1,4 @@
+import { getPlatformLabel } from '../config/platforms';
 import React from 'react';
 import { BRAND_PRIMARY } from '../design/tokens';
 import { TouchableOpacity, StyleSheet, Text, View, ActivityIndicator } from 'react-native';
@@ -29,7 +30,7 @@ const PlatformButton = ({ platform, onPress, isSelected, isConnected = false, lo
                     <PlatformLogo type={platform} size={34} style={styles.platformIcon} fallbackIcon="store" />
                 )}
                 <Text style={styles.platformLabel}>
-                    {platform.charAt(0).toUpperCase() + platform.slice(1)}
+                    {getPlatformLabel(platform)}
                 </Text>
             </View>
             {activeCount > 0 && (

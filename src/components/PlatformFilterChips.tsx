@@ -1,3 +1,4 @@
+import { getPlatformLabel } from '../config/platforms';
 import React from 'react';
 import {
   View,
@@ -68,7 +69,7 @@ const PlatformFilterChips: React.FC<PlatformFilterChipsProps> = ({
         {/* Dynamic Platform Filters */}
         {platforms.map((platform) => {
           const isSelected = selectedPlatform?.toLowerCase() === platform.type.toLowerCase();
-          const displayName = platform.name.charAt(0).toUpperCase() + platform.name.slice(1);
+          const displayName = getPlatformLabel(platform.type, platform.name);
 
           return (
             <ShadowSurface
