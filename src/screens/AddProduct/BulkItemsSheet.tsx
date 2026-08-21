@@ -12,7 +12,7 @@ import { CapturedPhoto } from '../../components/camera/PhotoStack';
 import { getShelfProgressPresentation } from './utils';
 import { MatchResponse, JobResponse, QuickMatchSelection, ItemLoadingState, ShelfProgressState } from './types';
 import type { CartTreeNode } from './hooks/useBulkItems';
-import { setItemPhotoUri } from '../../features/cart/cartStore';
+import { selectItem, setItemPhotoUri } from '../../features/cart/cartStore';
 import { uploadProductImage } from '../../utils/uploadProductImage';
 import { createLogger } from '../../utils/logger';
 import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
@@ -893,6 +893,7 @@ export const BulkItemsSheet: React.FC<{
       coverImageIndex: number;
       selectedMatches?: any[];
       quantity?: number;
+      condition?: string;
     }>
   ) => {
     const token = await ensureSupabaseJwt();
@@ -1090,14 +1091,18 @@ export const BulkItemsSheet: React.FC<{
               }
             : null
         );
+        const commerceCondition = selectItem(item.id)?.condition;
+        const conditionedCandidate = selectedCandidate && commerceCondition
+          ? { ...selectedCandidate, condition: commerceCondition }
+          : selectedCandidate;
         const imageUrls = item.photos.map((photo) => photo.uri).filter(Boolean);
         const fallbackId = item.id || `quick-generate-${index}`;
 
         return {
           originalIndex: index,
           item,
-          selectedCandidate,
-          generateProduct: selectedCandidate ? {
+          selectedCandidate: conditionedCandidate,
+          generateProduct: conditionedCandidate ? {
             productIndex: index,
             productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
             clientItemId: item.id,
@@ -1105,8 +1110,9 @@ export const BulkItemsSheet: React.FC<{
             variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
             imageUrls,
             coverImageIndex: 0,
-            selectedMatches: [selectedCandidate],
+            selectedMatches: [conditionedCandidate],
             quantity: item.quantity,
+            condition: commerceCondition,
           } : null,
         };
       });

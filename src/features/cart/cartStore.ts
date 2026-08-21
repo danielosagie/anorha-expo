@@ -31,6 +31,10 @@ import type {
 import { isFolder, isItem } from './types';
 import { canTransition, STATUS_HISTORY_LIMIT } from './transitions';
 import { createLogger } from '../../utils/logger';
+import {
+  buildConditionDraftPatch,
+  type ConditionSelection,
+} from '../../lib/conditionGrading';
 const log = createLogger('cartStore');
 
 
@@ -251,6 +255,15 @@ export function setItemQuantity(itemId: string, quantity: number) {
   if (!isItem(getEntry(itemId))) return;
   const q = Math.max(1, Math.floor(quantity) || 1);
   cart$.entries[itemId].assign({ quantity: q, updatedAt: now() });
+}
+
+/** Persist scan-review grading on the cart item and its canonical commerce.Condition. */
+export function setItemConditionSelection(itemId: string, selection: ConditionSelection) {
+  if (!isItem(getEntry(itemId))) return;
+  cart$.entries[itemId].assign({
+    ...buildConditionDraftPatch(selection),
+    updatedAt: now(),
+  });
 }
 
 /**
@@ -818,6 +831,9 @@ export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }):
     isActive: activeItemId === it.id,
     preSelectedSource: it.preSelectedSource,
     quantity: it.quantity,
+    condition: it.condition,
+    conditionGrade: it.conditionGrade,
+    testedStatus: it.testedStatus,
     parentId: it.parentId ?? null,
     shelfBox: it.shelfBox,
   }));
@@ -873,6 +889,9 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
       photos,
       title: s.title,
       quantity: typeof s.quantity === 'number' ? s.quantity : 1,
+      condition: typeof s.condition === 'string' ? s.condition : undefined,
+      conditionGrade: s.conditionGrade,
+      testedStatus: s.testedStatus,
       status: ctx ? 'matched' : photos.length ? 'searching' : 'capturing',
       match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows, confirmed: ctx.confirmed } : undefined,
       preSelectedSource: s.preSelectedSource,

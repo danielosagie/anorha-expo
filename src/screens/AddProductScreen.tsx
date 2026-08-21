@@ -30,12 +30,16 @@ import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, setItemConditionSelection, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import { enrichmentLabel } from '../features/generation/progressiveEnrichment';
 import { enqueueShelfItemCrop } from '../features/cart/shelfItemCropPipeline';
 import { resolveImageUri, withResolvedImageUrl } from '../utils/resolveImageUri';
+import {
+  conditionGradeFromCommerceCondition,
+  conditionGradeLabel,
+} from '../lib/conditionGrading';
 import {
   View,
   Text,
@@ -1291,6 +1295,10 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     const matchedCandidate: any = candidates[chosenIdx] || candidates[0];
     const chosen: any =
       (confirmed?.matchRows && confirmed.matchRows[chosenIdx]) || matchedCandidate;
+    const cartItem = selectItem(previewItemId);
+    const itemIdentity = (qs?.matchData as any)?.itemIdentity ?? chosen?.itemIdentity ?? matchedCandidate?.itemIdentity;
+    const conditionGrade = cartItem?.conditionGrade
+      ?? conditionGradeFromCommerceCondition(cartItem?.condition);
     // pricingResearch (the instant livePricing seed AND the enriched sold comps) is stored on the
     // matchData ranked candidate — NOT on confirmed.matchRows. For an AUTO-CONFIRMED match `chosen`
     // is the confirmed entry, which has no pricingResearch → without this fallback pricingLoading
@@ -1299,10 +1307,18 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     return {
       photoUri,
       title: chosen?.title || item?.title || 'Item',
+      productType: itemIdentity?.productType
+        || chosen?.productType
+        || chosen?.category
+        || chosen?.categorySuggestion
+        || matchedCandidate?.productType
+        || matchedCandidate?.category,
       description: chosen?.description,
       confidence: qs?.matchData?.confidence,
       confidenceKind: qs?.matchData?.confidenceKind,
       selectedBy: qs?.matchData?.selectedBy ?? qs?.matchData?.matchEvidence?.selectedBy,
+      conditionGrade,
+      testedStatus: cartItem?.testedStatus,
       // Match chosen but pricing not yet stored → still researching ("Finding comps…").
       pricingLoading: !!chosen && pr === undefined,
       pricing: pr
@@ -1312,6 +1328,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             median: pr.median,
             average: pr.average,
             recommended: pr.recommended,
+            condition: conditionGradeLabel(conditionGrade) ?? pr.condition,
             sampleCount: pr.sampleCount,
             cachedAt: pr.cachedAt,
             livePricing: pr.livePricing,
@@ -1633,6 +1650,25 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         // add: it does NOT re-run the match (rescan defaults false) unless it's the item's
         // first/cover photo. Keep previewItemId so we land back.
         if (previewItemId) openPhotoCaptureForItem(previewItemId);
+      }}
+      onConditionGradeChange={(conditionGrade) => {
+        const id = previewItemId;
+        if (!id) return;
+        const current = selectItem(id);
+        setItemConditionSelection(id, {
+          conditionGrade,
+          testedStatus: current?.testedStatus,
+        });
+      }}
+      onTestedStatusChange={(testedStatus) => {
+        const id = previewItemId;
+        if (!id) return;
+        const current = selectItem(id);
+        setItemConditionSelection(id, {
+          conditionGrade: current?.conditionGrade
+            ?? conditionGradeFromCommerceCondition(current?.condition),
+          testedStatus,
+        });
       }}
       sellLabel="Confirm item"
       onSell={() => {

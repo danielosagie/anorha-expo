@@ -14,6 +14,10 @@ import { PriceHistorySlider, HistoryPoint } from './PriceHistorySlider';
 import { CompsPriceChart } from './CompsPriceChart';
 import { resolveImageUri } from '../../utils/resolveImageUri';
 import { hasUsablePricingData, usablePrice } from './pricingData';
+import {
+  conditionGradeFromCommerceCondition,
+  conditionGradeLabel,
+} from '../../lib/conditionGrading';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -142,7 +146,10 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   const recommended = usablePrice(p.recommended) ?? median;
   const sampleCount = p.sampleCount ?? (samples.length || undefined);
   const cached = cachedLabel(p.cachedAt);
-  const conditionLabel = p.condition === 'mixed' ? 'Mixed condition' : null;
+  const mappedConditionGrade = conditionGradeFromCommerceCondition(p.condition);
+  const conditionLabel = p.condition === 'mixed'
+    ? 'Mixed condition'
+    : conditionGradeLabel(mappedConditionGrade) ?? null;
   const sampleLabel = sampleCount
     ? `Based on ${sampleCount} sold listings${cached ? `, ${cached}` : ''}`
     : null;
@@ -241,6 +248,10 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
             <Text style={styles.kicker}>CURRENT VALUE</Text>
             <Text style={styles.bigValue}>{rangeText(low, high)}</Text>
           </>
+        ) : null}
+
+        {metaLine ? (
+          <Text style={[styles.metaLine, compact ? styles.metaLineCompact : null]}>{metaLine}</Text>
         ) : null}
 
         <View style={[styles.metricRow, !showsRange && styles.metricRowFirst]}>
@@ -412,6 +423,8 @@ const styles = StyleSheet.create({
   emptyText: { color: COLORS.label, fontSize: 13.5, fontFamily: FONT.medium },
   kicker: { color: COLORS.label, fontSize: 10.5, fontFamily: FONT.semibold, letterSpacing: 0.8 },
   bigValue: { color: COLORS.text, fontSize: 26, fontFamily: FONT.bold, letterSpacing: -0.5, marginTop: 4 },
+  metaLine: { color: COLORS.label, fontSize: 12, fontFamily: FONT.regular, marginTop: 6 },
+  metaLineCompact: { marginTop: 0, marginBottom: 12 },
 
   metricRow: { flexDirection: 'row', marginTop: 14 },
   metricRowFirst: { marginTop: 0 },

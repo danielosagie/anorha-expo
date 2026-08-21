@@ -12,6 +12,7 @@ import type { MatchResponse, QuickMatchSelection } from '../../screens/AddProduc
 import type { MatchJobResult } from '../../contracts';
 import type { StatusTransition } from './transitions';
 import type { ProgressiveGenerateResult } from '../generation/progressiveEnrichment';
+import type { ConditionGrade, TestedStatus } from '../../lib/conditionGrading';
 
 /**
  * Lifecycle status for a cart item — the cart's canonical state. Supersedes the
@@ -73,6 +74,12 @@ export interface CartItem {
   match?: CartItemMatch;
   /** PricingResearchResult (low / median / high / recommended / samples). */
   pricing?: any;
+  /** Seller-selected canonical commerce.Condition for the listing draft. */
+  condition?: string;
+  /** Stable UI grade retained alongside the free-text commerce condition. */
+  conditionGrade?: ConditionGrade;
+  /** Optional powered-item inspection state folded into the commerce condition. */
+  testedStatus?: TestedStatus;
   /** Why the item is in `needs_context` — surfaced to the user. */
   needsContextReason?: string;
   /** Preserved from legacy bulkItems for source pre-selection. */

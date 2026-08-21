@@ -28,6 +28,13 @@ import { PricingGuidanceCard, PricingGuidanceData } from '../../components/prici
 import { ProgressiveBlurView } from '../../components/ProgressiveBlurView';
 import { getMatchConfidenceLabel } from './matchConfidence';
 import type { MatchSelectionSource } from './matchConfidence';
+import {
+  CONDITION_GRADES,
+  TESTED_STATUSES,
+  isPoweredEquipment,
+  type ConditionGrade,
+  type TestedStatus,
+} from '../../lib/conditionGrading';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -52,6 +59,7 @@ export interface MatchPreviewComp {
 export interface MatchPreviewData {
   photoUri?: string;
   title: string;
+  productType?: string;
   description?: string;
   confidence?: 'high' | 'medium' | 'low';
   confidenceKind?: 'match';
@@ -60,6 +68,8 @@ export interface MatchPreviewData {
   pricing?: PricingGuidanceData;
   // Pricing research still in flight → card shows "Finding comps…" instead of blank dashes.
   pricingLoading?: boolean;
+  conditionGrade?: ConditionGrade;
+  testedStatus?: TestedStatus;
 }
 
 export interface MatchPreviewProps {
@@ -72,6 +82,8 @@ export interface MatchPreviewProps {
   onAddPhoto?: () => void;
   onSell?: () => void;
   onOpenComp?: (comp: MatchPreviewComp, index: number) => void;
+  onConditionGradeChange?: (grade: ConditionGrade) => void;
+  onTestedStatusChange?: (status?: TestedStatus) => void;
   sellLabel?: string;
 }
 
@@ -104,6 +116,8 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
   onAddPhoto,
   onSell,
   onOpenComp,
+  onConditionGradeChange,
+  onTestedStatusChange,
   sellLabel = 'Confirm item',
 }) => {
   const insets = useSafeAreaInsets();
@@ -118,6 +132,7 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
   const confidenceLabel = data.confidence
     ? getMatchConfidenceLabel(data.confidence, data.selectedBy)
     : null;
+  const showsTestedStatus = isPoweredEquipment({ productType: data.productType, title: data.title });
 
   const handleWrongItem = () => {
     // Host wrong-item destination (the Add-details page) wins; the correction sheet is the fallback.
@@ -159,6 +174,49 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
             </View>
           ) : null}
           <Text style={styles.title}>{data.title}</Text>
+          <View style={styles.conditionBlock}>
+            <Text style={styles.conditionLabel}>Condition</Text>
+            <View style={styles.conditionChipRow}>
+              {CONDITION_GRADES.map((option) => {
+                const selected = data.conditionGrade === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="button"
+                    accessibilityLabel={option.label}
+                    accessibilityState={{ selected }}
+                    onPress={() => onConditionGradeChange?.(option.value)}
+                    style={[styles.conditionChip, selected ? styles.conditionChipSelected : null]}
+                  >
+                    <Text style={[styles.conditionChipText, selected ? styles.conditionChipTextSelected : null]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {showsTestedStatus ? (
+              <View style={styles.testedChipRow}>
+                {TESTED_STATUSES.map((option) => {
+                  const selected = data.testedStatus === option.value;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      accessibilityRole="button"
+                      accessibilityLabel={option.label}
+                      accessibilityState={{ selected }}
+                      onPress={() => onTestedStatusChange?.(selected ? undefined : option.value)}
+                      style={[styles.testedChip, selected ? styles.conditionChipSelected : null]}
+                    >
+                      <Text style={[styles.conditionChipText, selected ? styles.conditionChipTextSelected : null]}>
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+          </View>
           {!!data.description && <Text style={styles.description}>{data.description}</Text>}
         </View>
 
@@ -288,6 +346,36 @@ const styles = StyleSheet.create({
   confidenceText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.2 },
   title: { color: COLORS.text, fontSize: 28, fontWeight: '800', lineHeight: 34, letterSpacing: -0.5 },
   description: { color: COLORS.body, fontSize: 16, lineHeight: 24, marginTop: 16 },
+  conditionBlock: { gap: 8, marginTop: 18 },
+  conditionLabel: { color: COLORS.text, fontSize: 14, fontWeight: '700' },
+  conditionChipRow: { flexDirection: 'row', gap: 6 },
+  conditionChip: {
+    flex: 1,
+    minHeight: 38,
+    paddingHorizontal: 5,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: COLORS.hairline,
+    backgroundColor: COLORS.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  testedChipRow: { flexDirection: 'row', gap: 6 },
+  testedChip: {
+    minHeight: 36,
+    paddingHorizontal: 13,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: COLORS.hairline,
+    backgroundColor: COLORS.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  conditionChipSelected: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: 'rgba(147,200,34,0.38)' },
+  conditionChipText: { color: COLORS.body, fontSize: 12, fontWeight: '600' },
+  conditionChipTextSelected: { color: '#5D8111', fontWeight: '700' },
 
 
   footer: {

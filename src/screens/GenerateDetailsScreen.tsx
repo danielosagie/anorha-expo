@@ -568,11 +568,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       : null;
     if (!res || !res.platforms) return;
 
-    // Only hydrate if this is new data (different jobId or product index)
+    const routeItemIds = (route.params as any)?.itemIds as string[] | undefined;
+    const selectedScanCondition = Array.isArray(routeItemIds)
+      ? selectItem(routeItemIds[currentProductIndex])?.condition
+      : undefined;
+    // Only hydrate if this is new data (different job, product, or seller condition).
     const currentJobId = `${jobId || 'job'}-${currentProductIndex}-${JSON.stringify({
       platforms: res.platforms,
       draftReadyAt: res.draftReadyAt,
       enrichment: res.enrichment,
+      selectedScanCondition,
     })}`;
     if (lastHydratedJobRef.current === currentJobId) {
       log.debug('[GEN-DETAILS] Skipping re-hydration - same job/item');
@@ -637,6 +642,14 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         shippingTier: firstPlatformData.shippingTier,
         shippingTierReason: firstPlatformData.shippingTierReason,
       };
+    }
+
+    // Scan review is a seller assertion. Keep it authoritative across every generated
+    // channel so the condition field opens prefilled instead of reverting to AI output.
+    if (selectedScanCondition) {
+      for (const key of Object.keys(normalized)) {
+        normalized[key] = { ...normalized[key], condition: selectedScanCondition };
+      }
     }
 
     // Do NOT autofill price from generation. Strip the backend price (and per-variant /
@@ -707,11 +720,19 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         hydrated,
         res.enrichment,
       );
-      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(enriched));
-      updatePlatforms(() => enriched);
+      const conditioned = selectedScanCondition
+        ? Object.fromEntries(
+            Object.entries(enriched).map(([key, value]) => [
+              key,
+              { ...(value as Record<string, any>), condition: selectedScanCondition },
+            ]),
+          )
+        : enriched;
+      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(conditioned));
+      updatePlatforms(() => conditioned);
       lastHydratedJobRef.current = currentJobId;
     })();
-  }, [results, jobId, currentProductIndex, editorSessionKey]);
+  }, [results, jobId, currentProductIndex, editorSessionKey, route.params]);
 
 
   // ========== AUTO-SAVE: local-first, backend when possible ==========
