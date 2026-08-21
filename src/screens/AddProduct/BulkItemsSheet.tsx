@@ -19,6 +19,7 @@ import { CHAT_COLORS, CHAT_FONT } from '../../design/chatGlass';
 import type { ShelfItemBox } from '../../features/cart/types';
 import { ShelfItemCrop } from './ShelfItemCrop';
 import { resolveImageUri } from '../../utils/resolveImageUri';
+import { buildShippingPlatformPatch } from '../../lib/itemShipping';
 const log = createLogger('BulkItemsSheet');
 
 
@@ -894,6 +895,9 @@ export const BulkItemsSheet: React.FC<{
       selectedMatches?: any[];
       quantity?: number;
       condition?: string;
+      weight?: number;
+      weightUnit?: string;
+      estimatedDimensions?: { length: number; width: number; height: number; unit: 'in' };
     }>
   ) => {
     const token = await ensureSupabaseJwt();
@@ -1091,9 +1095,11 @@ export const BulkItemsSheet: React.FC<{
               }
             : null
         );
-        const commerceCondition = selectItem(item.id)?.condition;
-        const conditionedCandidate = selectedCandidate && commerceCondition
-          ? { ...selectedCandidate, condition: commerceCondition }
+        const cartItem = selectItem(item.id);
+        const commerceCondition = cartItem?.condition;
+        const shippingPatch = buildShippingPlatformPatch(cartItem ?? {});
+        const draftCandidate = selectedCandidate
+          ? { ...selectedCandidate, ...shippingPatch, ...(commerceCondition ? { condition: commerceCondition } : {}) }
           : selectedCandidate;
         const imageUrls = item.photos.map((photo) => photo.uri).filter(Boolean);
         const fallbackId = item.id || `quick-generate-${index}`;
@@ -1101,8 +1107,8 @@ export const BulkItemsSheet: React.FC<{
         return {
           originalIndex: index,
           item,
-          selectedCandidate: conditionedCandidate,
-          generateProduct: conditionedCandidate ? {
+          selectedCandidate: draftCandidate,
+          generateProduct: draftCandidate ? {
             productIndex: index,
             productId: String(selectedCandidate.productId || selectedCandidate.variantId || fallbackId),
             clientItemId: item.id,
@@ -1110,9 +1116,10 @@ export const BulkItemsSheet: React.FC<{
             variantId: selectedCandidate.variantId ? String(selectedCandidate.variantId) : undefined,
             imageUrls,
             coverImageIndex: 0,
-            selectedMatches: [conditionedCandidate],
+            selectedMatches: [draftCandidate],
             quantity: item.quantity,
             condition: commerceCondition,
+            ...shippingPatch,
           } : null,
         };
       });

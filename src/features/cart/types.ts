@@ -13,6 +13,7 @@ import type { MatchJobResult } from '../../contracts';
 import type { StatusTransition } from './transitions';
 import type { ProgressiveGenerateResult } from '../generation/progressiveEnrichment';
 import type { ConditionGrade, TestedStatus } from '../../lib/conditionGrading';
+import type { PackageDimensionsInches } from '../../lib/itemShipping';
 
 /**
  * Lifecycle status for a cart item — the cart's canonical state. Supersedes the
@@ -80,6 +81,12 @@ export interface CartItem {
   conditionGrade?: ConditionGrade;
   /** Optional powered-item inspection state folded into the commerce condition. */
   testedStatus?: TestedStatus;
+  /** Canonical ProductVariant.Weight value captured during scan review. */
+  weight?: number;
+  /** Canonical ProductVariant.WeightUnit value captured during scan review. */
+  weightUnit?: string;
+  /** Draft-only package dimensions until the product contract gains canonical columns. */
+  dimensions?: PackageDimensionsInches;
   /** Why the item is in `needs_context` — surfaced to the user. */
   needsContextReason?: string;
   /** Preserved from legacy bulkItems for source pre-selection. */

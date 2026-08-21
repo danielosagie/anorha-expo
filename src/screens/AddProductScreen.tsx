@@ -30,7 +30,7 @@ import FocusAwareStatusBar from '../components/FocusAwareStatusBar';
 import type { CartTreeNode } from './AddProduct/hooks/useBulkItems';
 import { observable } from '@legendapp/state';
 import { use$ } from '@legendapp/state/react';
-import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, setItemConditionSelection, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
+import { cart$, setItemGenerate, selectItem, addItemWithId, transitionItem, removeEntry, setFolderSourcePhoto, resetCart, startCartSnapshotAutosave, peekCartSnapshot, clearCartSnapshot, hydrateCartSnapshot, hydrateCartFromDraft, serializeCartToDraft, setItemPhotoUri, setItemConditionSelection, setItemShippingDetails, getActiveDraftSessionId, setActiveDraftSessionId, clearActiveDraftSessionId } from '../features/cart/cartStore';
 import type { ShelfItemBox } from '../features/cart/types';
 import { buildGenerateDetailsLaunch } from '../features/cart/flowPayloads';
 import { enrichmentLabel } from '../features/generation/progressiveEnrichment';
@@ -1319,6 +1319,9 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       selectedBy: qs?.matchData?.selectedBy ?? qs?.matchData?.matchEvidence?.selectedBy,
       conditionGrade,
       testedStatus: cartItem?.testedStatus,
+      weight: cartItem?.weight,
+      weightUnit: cartItem?.weightUnit,
+      dimensions: cartItem?.dimensions,
       // Match chosen but pricing not yet stored → still researching ("Finding comps…").
       pricingLoading: !!chosen && pr === undefined,
       pricing: pr
@@ -1669,6 +1672,11 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
             ?? conditionGradeFromCommerceCondition(current?.condition),
           testedStatus,
         });
+      }}
+      onSizeWeightChange={(value) => {
+        const id = previewItemId;
+        if (!id) return;
+        setItemShippingDetails(id, value);
       }}
       sellLabel="Confirm item"
       onSell={() => {

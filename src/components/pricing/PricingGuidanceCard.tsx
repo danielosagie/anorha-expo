@@ -18,6 +18,7 @@ import {
   conditionGradeFromCommerceCondition,
   conditionGradeLabel,
 } from '../../lib/conditionGrading';
+import type { ShippingVerdict } from '../../lib/itemShipping';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -80,6 +81,8 @@ export interface PricingGuidanceCardProps {
   showCompMeta?: boolean;
   /** Empty copy for surfaces with a more specific evidence contract. */
   emptyLabel?: string;
+  /** Optional parcel-fit recommendation shown inside the pricing card. */
+  shippingVerdict?: ShippingVerdict;
 }
 
 const money = (n?: number | null) => {
@@ -109,6 +112,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
   maxComps,
   showCompMeta = true,
   emptyLabel = 'No recent comps found',
+  shippingVerdict,
 }) => {
   const p = pricing ?? {};
   const samples = (p.samples ?? []).filter((sample) => usablePrice(sample.price) !== undefined);
@@ -213,6 +217,26 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
     return { fast: undefined, recommended: undefined, max: undefined };
   })();
 
+  const verdictChip = shippingVerdict ? (
+    <View
+      accessible
+      accessibilityLabel={shippingVerdict === 'pickup_better' ? 'Pickup better' : 'Ships fine'}
+      style={[
+        styles.verdictChip,
+        shippingVerdict === 'pickup_better' ? styles.verdictChipPickup : styles.verdictChipShips,
+      ]}
+    >
+      <Text
+        style={[
+          styles.verdictText,
+          shippingVerdict === 'pickup_better' ? styles.verdictTextPickup : styles.verdictTextShips,
+        ]}
+      >
+        {shippingVerdict === 'pickup_better' ? 'Pickup better' : 'Ships fine'}
+      </Text>
+    </View>
+  ) : null;
+
   // Nothing usable to show yet: either still fetching ("Finding comps…") or the
   // research genuinely came back empty ("No recent comps found"). Either way, show
   // an explicit state instead of a card full of silent "—" dashes.
@@ -221,18 +245,21 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
     return (
       <View>
         {headers === 'screen' ? <Text style={styles.sectionHeader}>Pricing guidance</Text> : null}
-        <View style={[styles.priceCard, styles.emptyState]}>
-          {loading ? (
-            <>
-              <ActivityIndicator size="small" color={GREEN} />
-              <Text style={styles.emptyText}>Finding comps…</Text>
-            </>
-          ) : (
-            <>
-              <Icon name="tag-search-outline" size={22} color="#C7C7CC" />
-              <Text style={styles.emptyText}>{emptyLabel}</Text>
-            </>
-          )}
+        <View style={styles.priceCard}>
+          {verdictChip}
+          <View style={styles.emptyState}>
+            {loading ? (
+              <>
+                <ActivityIndicator size="small" color={GREEN} />
+                <Text style={styles.emptyText}>Finding comps…</Text>
+              </>
+            ) : (
+              <>
+                <Icon name="tag-search-outline" size={22} color="#C7C7CC" />
+                <Text style={styles.emptyText}>{emptyLabel}</Text>
+              </>
+            )}
+          </View>
         </View>
       </View>
     );
@@ -243,6 +270,7 @@ export const PricingGuidanceCard: React.FC<PricingGuidanceCardProps> = ({
       {headers === 'screen' ? <Text style={styles.sectionHeader}>Pricing guidance</Text> : null}
 
       <View style={styles.priceCard}>
+        {verdictChip}
         {showsRange ? (
           <>
             <Text style={styles.kicker}>CURRENT VALUE</Text>
@@ -421,6 +449,19 @@ const styles = StyleSheet.create({
   priceCard: { marginHorizontal: 0, padding: 16, borderRadius: 16, backgroundColor: COLORS.card },
   emptyState: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 22 },
   emptyText: { color: COLORS.label, fontSize: 13.5, fontFamily: FONT.medium },
+  verdictChip: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  verdictChipShips: { backgroundColor: 'rgba(147,200,34,0.10)', borderColor: 'rgba(147,200,34,0.28)' },
+  verdictChipPickup: { backgroundColor: '#FFF7E8', borderColor: '#F2D19C' },
+  verdictText: { fontSize: 11.5, fontFamily: FONT.semibold },
+  verdictTextShips: { color: '#5D8111' },
+  verdictTextPickup: { color: '#A2611A' },
   kicker: { color: COLORS.label, fontSize: 10.5, fontFamily: FONT.semibold, letterSpacing: 0.8 },
   bigValue: { color: COLORS.text, fontSize: 26, fontFamily: FONT.bold, letterSpacing: -0.5, marginTop: 4 },
   metaLine: { color: COLORS.label, fontSize: 12, fontFamily: FONT.regular, marginTop: 6 },

@@ -35,6 +35,10 @@ import {
   buildConditionDraftPatch,
   type ConditionSelection,
 } from '../../lib/conditionGrading';
+import {
+  normalizePackageDimensions,
+  type ItemShippingDetails,
+} from '../../lib/itemShipping';
 const log = createLogger('cartStore');
 
 
@@ -262,6 +266,20 @@ export function setItemConditionSelection(itemId: string, selection: ConditionSe
   if (!isItem(getEntry(itemId))) return;
   cart$.entries[itemId].assign({
     ...buildConditionDraftPatch(selection),
+    updatedAt: now(),
+  });
+}
+
+/** Persist seller-measured package data on the cart item for draft and generate handoff. */
+export function setItemShippingDetails(itemId: string, details: ItemShippingDetails) {
+  if (!isItem(getEntry(itemId))) return;
+  const weight = typeof details.weight === 'number' && Number.isFinite(details.weight) && details.weight > 0
+    ? details.weight
+    : undefined;
+  cart$.entries[itemId].assign({
+    weight,
+    weightUnit: weight ? details.weightUnit || 'lb' : undefined,
+    dimensions: normalizePackageDimensions(details.dimensions),
     updatedAt: now(),
   });
 }
@@ -834,6 +852,9 @@ export function serializeCartToDraft(extra?: { shelfPhotoUri?: string | null }):
     condition: it.condition,
     conditionGrade: it.conditionGrade,
     testedStatus: it.testedStatus,
+    weight: it.weight,
+    weightUnit: it.weightUnit,
+    dimensions: it.dimensions,
     parentId: it.parentId ?? null,
     shelfBox: it.shelfBox,
   }));
@@ -892,6 +913,11 @@ export function hydrateCartFromDraft(payload: CartDraftPayload) {
       condition: typeof s.condition === 'string' ? s.condition : undefined,
       conditionGrade: s.conditionGrade,
       testedStatus: s.testedStatus,
+      weight: typeof s.weight === 'number' && Number.isFinite(s.weight) && s.weight > 0
+        ? s.weight
+        : undefined,
+      weightUnit: typeof s.weightUnit === 'string' ? s.weightUnit : undefined,
+      dimensions: normalizePackageDimensions(s.dimensions),
       status: ctx ? 'matched' : photos.length ? 'searching' : 'capturing',
       match: ctx ? { response: ctx.matchData, matchRows: ctx.matchRows, confirmed: ctx.confirmed } : undefined,
       preSelectedSource: s.preSelectedSource,

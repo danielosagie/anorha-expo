@@ -40,6 +40,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { resolveItemsFromIds, resolveJobMapFromIds } from '../features/cart/flowPayloads';
 import { selectItem } from '../features/cart/cartStore';
+import { buildShippingPlatformPatch } from '../lib/itemShipping';
 import { fetchGenerateJobStatus } from '../lib/generateJobs';
 import { selectStoredPricingResearch } from '../lib/storedPricingResearch';
 import {
@@ -569,15 +570,22 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
     if (!res || !res.platforms) return;
 
     const routeItemIds = (route.params as any)?.itemIds as string[] | undefined;
-    const selectedScanCondition = Array.isArray(routeItemIds)
-      ? selectItem(routeItemIds[currentProductIndex])?.condition
+    const selectedScanItem = Array.isArray(routeItemIds)
+      ? selectItem(routeItemIds[currentProductIndex])
       : undefined;
-    // Only hydrate if this is new data (different job, product, or seller condition).
+    const selectedScanCondition = selectedScanItem?.condition;
+    const selectedScanShipping = buildShippingPlatformPatch(selectedScanItem ?? {});
+    const selectedScanPatch = {
+      ...selectedScanShipping,
+      ...(selectedScanCondition ? { condition: selectedScanCondition } : {}),
+    };
+    const hasSelectedScanPatch = Object.keys(selectedScanPatch).length > 0;
+    // Only hydrate if this is new data (different job, product, or seller-entered package data).
     const currentJobId = `${jobId || 'job'}-${currentProductIndex}-${JSON.stringify({
       platforms: res.platforms,
       draftReadyAt: res.draftReadyAt,
       enrichment: res.enrichment,
-      selectedScanCondition,
+      selectedScanPatch,
     })}`;
     if (lastHydratedJobRef.current === currentJobId) {
       log.debug('[GEN-DETAILS] Skipping re-hydration - same job/item');
@@ -644,11 +652,11 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
       };
     }
 
-    // Scan review is a seller assertion. Keep it authoritative across every generated
-    // channel so the condition field opens prefilled instead of reverting to AI output.
-    if (selectedScanCondition) {
+    // Scan review is a seller assertion. Keep condition and canonical Weight/WeightUnit
+    // authoritative; dimensions use the listing editor's existing estimatedDimensions field.
+    if (hasSelectedScanPatch) {
       for (const key of Object.keys(normalized)) {
-        normalized[key] = { ...normalized[key], condition: selectedScanCondition };
+        normalized[key] = { ...normalized[key], ...selectedScanPatch };
       }
     }
 
@@ -720,16 +728,16 @@ function GenerateDetailsScreen({ route, navigation }: Props) {
         hydrated,
         res.enrichment,
       );
-      const conditioned = selectedScanCondition
+      const scanPrefilled = hasSelectedScanPatch
         ? Object.fromEntries(
             Object.entries(enriched).map(([key, value]) => [
               key,
-              { ...(value as Record<string, any>), condition: selectedScanCondition },
+              { ...(value as Record<string, any>), ...selectedScanPatch },
             ]),
           )
         : enriched;
-      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(conditioned));
-      updatePlatforms(() => conditioned);
+      log.debug('[GEN-DETAILS] Hydrated platforms (draft-merged):', Object.keys(scanPrefilled));
+      updatePlatforms(() => scanPrefilled);
       lastHydratedJobRef.current = currentJobId;
     })();
   }, [results, jobId, currentProductIndex, editorSessionKey, route.params]);

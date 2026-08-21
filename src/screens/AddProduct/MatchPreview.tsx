@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { PricingGuidanceCard, PricingGuidanceData } from '../../components/pricing/PricingGuidanceCard';
+import SizeWeightSheet from '../../components/pricing/SizeWeightSheet';
 import { ProgressiveBlurView } from '../../components/ProgressiveBlurView';
 import { getMatchConfidenceLabel } from './matchConfidence';
 import type { MatchSelectionSource } from './matchConfidence';
@@ -35,6 +36,12 @@ import {
   type ConditionGrade,
   type TestedStatus,
 } from '../../lib/conditionGrading';
+import {
+  formatSizeWeight,
+  getShippingVerdict,
+  type ItemShippingDetails,
+  type PackageDimensionsInches,
+} from '../../lib/itemShipping';
 
 const GREEN = '#93C822';
 const COLORS = {
@@ -70,6 +77,9 @@ export interface MatchPreviewData {
   pricingLoading?: boolean;
   conditionGrade?: ConditionGrade;
   testedStatus?: TestedStatus;
+  weight?: number;
+  weightUnit?: string;
+  dimensions?: PackageDimensionsInches;
 }
 
 export interface MatchPreviewProps {
@@ -84,6 +94,7 @@ export interface MatchPreviewProps {
   onOpenComp?: (comp: MatchPreviewComp, index: number) => void;
   onConditionGradeChange?: (grade: ConditionGrade) => void;
   onTestedStatusChange?: (status?: TestedStatus) => void;
+  onSizeWeightChange?: (value: ItemShippingDetails) => void;
   sellLabel?: string;
 }
 
@@ -118,12 +129,16 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
   onOpenComp,
   onConditionGradeChange,
   onTestedStatusChange,
+  onSizeWeightChange,
   sellLabel = 'Confirm item',
 }) => {
   const insets = useSafeAreaInsets();
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionText, setCorrectionText] = useState('');
+  const [sizeWeightOpen, setSizeWeightOpen] = useState(false);
   const p = data.pricing ?? {};
+  const sizeWeightText = formatSizeWeight(data);
+  const shippingVerdict = getShippingVerdict(data);
   const confidenceColor = data.confidence === 'high'
     ? '#93C822'
     : data.confidence === 'medium'
@@ -221,8 +236,27 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
         </View>
 
         {/* Pricing guidance + recent comps — the one shared pricing overview */}
-       <View style={{marginHorizontal: 12 }}>
-            <PricingGuidanceCard pricing={p} loading={data.pricingLoading} onOpenComp={onOpenComp} />
+       <View style={styles.pricingWrap}>
+            <PricingGuidanceCard
+              pricing={p}
+              loading={data.pricingLoading}
+              onOpenComp={onOpenComp}
+              shippingVerdict={shippingVerdict}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={sizeWeightText ? `Size and weight, ${sizeWeightText}` : 'Size and weight'}
+              onPress={() => setSizeWeightOpen(true)}
+              style={styles.sizeWeightRow}
+            >
+              <Text style={styles.sizeWeightLabel}>Size & weight</Text>
+              <View style={styles.sizeWeightValueWrap}>
+                {sizeWeightText ? (
+                  <Text numberOfLines={1} style={styles.sizeWeightValue}>{sizeWeightText}</Text>
+                ) : null}
+                <Icon name="chevron-right" size={21} color={COLORS.label} />
+              </View>
+            </Pressable>
         </View>
       </ScrollView>
 
@@ -303,6 +337,13 @@ export const MatchPreview: React.FC<MatchPreviewProps> = ({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <SizeWeightSheet
+        visible={sizeWeightOpen}
+        value={data}
+        onChange={(value) => onSizeWeightChange?.(value)}
+        onClose={() => setSizeWeightOpen(false)}
+      />
     </View>
   );
 };
@@ -376,6 +417,22 @@ const styles = StyleSheet.create({
   conditionChipSelected: { backgroundColor: 'rgba(147,200,34,0.12)', borderColor: 'rgba(147,200,34,0.38)' },
   conditionChipText: { color: COLORS.body, fontSize: 12, fontWeight: '600' },
   conditionChipTextSelected: { color: '#5D8111', fontWeight: '700' },
+
+  pricingWrap: { marginHorizontal: 12 },
+  sizeWeightRow: {
+    minHeight: 56,
+    marginTop: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    backgroundColor: COLORS.card,
+  },
+  sizeWeightLabel: { color: COLORS.text, fontSize: 14.5, fontWeight: '700' },
+  sizeWeightValueWrap: { flex: 1, minWidth: 0, marginLeft: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  sizeWeightValue: { flexShrink: 1, color: COLORS.label, fontSize: 13.5, fontWeight: '500', textAlign: 'right' },
 
 
   footer: {
