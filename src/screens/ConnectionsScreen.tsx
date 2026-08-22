@@ -31,6 +31,10 @@ import {
 } from '../lib/connectionImportPresentation';
 import { connectionRowModel } from '../lib/connectionRowModel';
 import { shouldOpenImportQuestionQueue } from '../lib/connectionImportRoute';
+import {
+  alreadyTerminalCancelCopy,
+  parseCancelImportReceipt,
+} from '../lib/cancelImportReceipt';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -251,10 +255,17 @@ const ConnectionsScreen = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              await api.post(`/api/sync/connections/${connection.Id}/cancel-import`);
-              await Promise.all([refresh?.(), importStatus.refresh()]);
+              const receipt = parseCancelImportReceipt(
+                await api.post(`/api/sync/connections/${connection.Id}/cancel-import`),
+              );
+              if (receipt.alreadyTerminal) {
+                const copy = alreadyTerminalCancelCopy(receipt);
+                Alert.alert(copy.title, copy.message);
+              }
             } catch (error: any) {
               Alert.alert('Couldn’t cancel import', error?.message || 'Please try again.');
+            } finally {
+              await Promise.allSettled([refresh?.(), importStatus.refresh()]);
             }
           },
         },
