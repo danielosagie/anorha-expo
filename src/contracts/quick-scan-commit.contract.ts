@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/quick-scan-commit.contract.ts (sha256:95259f539b23)
+// @generated from sssync-bknd/src/contracts/quick-scan-commit.contract.ts (sha256:1c893fa5b40b)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * QUICK-SCAN COMMIT CONTRACT — camera-scan items join the import spine.
@@ -86,6 +86,10 @@ export const zQuickScanCommitResponse = z.object({
   queuedCount: z.number(),
   /** Items parked in the attention inbox. */
   attentionCount: z.number(),
+  /** Items already owned by another open batch and left with that owner. */
+  alreadyPendingCount: z.number(),
+  /** Items that settled under another batch before this request acquired them. */
+  completedElsewhereCount: z.number(),
   /** Initial-sync job materializing the queued items (null when nothing queued). */
   jobId: z.string().nullable(),
   operationId: z.string().nullable(),

@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/index.ts (sha256:16f68023a3a1)
+// @generated from sssync-bknd/src/contracts/index.ts (sha256:e3b939f2fd89)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 /**
  * sssync mobile↔backend API contract (Zod).
@@ -12,3 +12,4 @@ export * from './quick-scan-session.contract';
 export * from './quick-scan-commit.contract';
 export * from './import.contract';
 export * from './import-status.contract';
+export * from './connection-activity.contract';
