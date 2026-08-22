@@ -514,14 +514,16 @@ export function deriveConnectionImportPresentation({
   // A reconciled zero is authoritative for item-review obligations. It retires
   // stale aggregate, connection, run, and recommendation review signals, while
   // credential failures above (NeedsReauth/error/reconnect) remain authoritative.
-  const hasReviewEvidence = !hasVerifiedZeroAttention && (
-    ATTENTION_STATUSES.has(connection)
-    || syncState === 'needs-attention'
-    || ATTENTION_STATUSES.has(aggregate)
-    || ATTENTION_STATUSES.has(latestStatus)
-    || recommendedAction === 'rescan'
-    || recommendedAction === 'fix_resume'
-    || recommendedAction === 'manage'
+  const hasReviewEvidence = attentionCount > 0 || (
+    !hasVerifiedZeroAttention
+    && (
+      ATTENTION_STATUSES.has(connection)
+      || syncState === 'needs-attention'
+      || ATTENTION_STATUSES.has(aggregate)
+      || ATTENTION_STATUSES.has(latestStatus)
+      || recommendedAction === 'rescan'
+      || recommendedAction === 'fix_resume'
+    )
   );
   if (hasReviewEvidence) {
     return withFailureReason({
