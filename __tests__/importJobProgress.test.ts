@@ -24,7 +24,15 @@ registerHooks({
   },
 });
 
-const { parseImportJobProgress } = await import('../src/hooks/useImportJobProgress.ts');
+const {
+  parseImportJobProgress,
+  resolveImportJobId,
+} = await import('../src/hooks/useImportJobProgress.ts');
+
+test('job polling resumes from the summary job id after local state is lost', () => {
+  assert.equal(resolveImportJobId(undefined, 'summary-job-1'), 'summary-job-1');
+  assert.equal(resolveImportJobId('live-job-2', 'summary-job-1'), 'live-job-2');
+});
 
 test('job progress treats inactive incomplete work as failed', () => {
   assert.equal(parseImportJobProgress({ isActive: false, isCompleted: false })?.state, 'failed');

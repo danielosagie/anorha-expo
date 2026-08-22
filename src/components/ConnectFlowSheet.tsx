@@ -278,7 +278,7 @@ export default function ConnectFlowSheet({
     const attemptRun = [...importStatus.recentImports]
       .filter((run) => (
         timestamp(run.createdAt) >= cutoff
-        && (matchingIds.has(run.connectionId) || platformKey(run.source) === expectedPlatform)
+        && (matchingIds.has(run.connectionId || '') || platformKey(run.source) === expectedPlatform)
       ))
       .sort((left, right) => timestamp(right.createdAt) - timestamp(left.createdAt))[0];
     if (attemptRun?.connectionId) return attemptRun.connectionId;
@@ -311,6 +311,9 @@ export default function ConnectFlowSheet({
   const importPresentation = resolvedConnectionId
     ? presentationByConnectionId.get(resolvedConnectionId)
     : undefined;
+  const summaryConnection = resolvedConnectionId
+    ? importStatus.connections.find((connection) => connection.connectionId === resolvedConnectionId)
+    : undefined;
   const socketProgress = resolvedConnectionId
     ? progressByConnectionId[resolvedConnectionId]
     : undefined;
@@ -323,8 +326,13 @@ export default function ConnectFlowSheet({
   }, [activeJobId, observedJobId]);
 
   const { progress: jobProgress } = useImportJobProgress({
-    jobId: activeJobId || observedJobId,
-    enabled: visible && (phase === 'importing' || phase === 'checking'),
+    jobId: activeJobId || socketProgress?.jobId || latestAttemptRun?.jobId,
+    summaryJobId: summaryConnection?.jobId,
+    enabled: visible && (
+      phase === 'importing'
+      || phase === 'checking'
+      || !!summaryConnection?.jobId
+    ),
     lastSocketAt: socketProgress?.receivedAt,
   });
   const presentationBelongsToAttempt = !!importPresentation?.occurredAt
@@ -604,12 +612,13 @@ export default function ConnectFlowSheet({
   const liveProcessed = primaryProgress?.processed ?? fallbackProgress?.processed ?? null;
   const liveTotal = primaryProgress?.total
     ?? fallbackProgress?.total
+    ?? importPresentation?.total
     ?? (latestAttemptRun && latestAttemptRun.itemsTotal > 0 ? latestAttemptRun.itemsTotal : null);
   const liveItems = primaryProgress?.itemsSoFar
     ?? primaryProgress?.processed
     ?? fallbackProgress?.itemsSoFar
     ?? fallbackProgress?.processed
-    ?? latestAttemptRun?.itemsSoFar
+    ?? importPresentation?.itemsSoFar
     ?? (latestAttemptRun && latestAttemptRun.itemsCommitted > 0
       ? latestAttemptRun.itemsCommitted
       : null);

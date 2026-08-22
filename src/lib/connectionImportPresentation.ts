@@ -8,7 +8,7 @@ import {
 } from './platformConnectionVisibility.ts';
 
 export interface RecentImportOutcome {
-  connectionId: string;
+  connectionId: string | null;
   status: string;
   createdAt: string;
   completedAt?: string | null;
@@ -211,6 +211,7 @@ export function deriveConnectionImportPresentation({
   aggregateAttentionCount = 0,
   aggregateAttentionVerified = false,
   aggregateItemsSoFar,
+  aggregateItemsTotal,
   aggregatePhase,
   aggregateStartedAt,
   aggregateP50DurationMs,
@@ -243,6 +244,7 @@ export function deriveConnectionImportPresentation({
   aggregateAttentionCount?: number | null;
   aggregateAttentionVerified?: boolean;
   aggregateItemsSoFar?: number | null;
+  aggregateItemsTotal?: number | null;
   aggregatePhase?: string | null;
   aggregateStartedAt?: string | null;
   aggregateP50DurationMs?: number | null;
@@ -297,6 +299,7 @@ export function deriveConnectionImportPresentation({
     ?? finiteNonNegativeNumber(latestImport?.itemsCommitted);
   const presentedProcessed = finiteNonNegativeNumber(progressProcessed);
   const presentedTotal = finiteNonNegativeNumber(progressTotal)
+    ?? finiteNonNegativeNumber(aggregateItemsTotal)
     ?? finiteNonNegativeNumber(latestImport?.itemsTotal);
   const presentedPhase = progressPhase || aggregatePhase || latestImport?.phase || null;
   const presentedStartedAt = progressStartedAt
@@ -588,6 +591,7 @@ export interface ConnectionImportAggregateState {
   attentionVerified?: boolean;
   observedAt?: number | null;
   itemsSoFar?: number | null;
+  itemsTotal?: number | null;
   phase?: string | null;
   startedAt?: string | null;
   p50DurationMs?: number | null;
@@ -653,6 +657,7 @@ export function connectionImportPresentationsById({
         aggregateAttentionCount: aggregate?.needsAttention,
         aggregateAttentionVerified: aggregate?.attentionVerified === true,
         aggregateItemsSoFar: aggregate?.itemsSoFar,
+        aggregateItemsTotal: aggregate?.itemsTotal,
         aggregatePhase: aggregate?.phase,
         aggregateStartedAt: aggregate?.startedAt,
         aggregateP50DurationMs: aggregate?.p50DurationMs,

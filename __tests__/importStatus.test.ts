@@ -70,6 +70,12 @@ function summary() {
         displayName: 'Square',
         state: 'live' as const,
         needsAttention: 0,
+        attentionCount: 0,
+        jobId: null,
+        phase: null,
+        itemsSoFar: 0,
+        itemsTotal: 0,
+        startedAt: null,
         observedAt: 1,
       },
       {
@@ -78,6 +84,12 @@ function summary() {
         displayName: 'Shopify',
         state: 'needs-attention' as const,
         needsAttention: 9,
+        attentionCount: 9,
+        jobId: null,
+        phase: null,
+        itemsSoFar: 0,
+        itemsTotal: 0,
+        startedAt: null,
         observedAt: 1,
       },
     ],
@@ -108,6 +120,12 @@ test('one failed resolution uses only that connection server count', async () =>
     displayName: 'eBay',
     state: 'needs-attention',
     needsAttention: 4,
+    attentionCount: 4,
+    jobId: null,
+    phase: null,
+    itemsSoFar: 0,
+    itemsTotal: 0,
+    startedAt: null,
     observedAt: 1,
   });
 
@@ -134,56 +152,93 @@ test('truth: switching account owner resets the shared inbox snapshot', () => {
   assert.notEqual(switched, accountA, 'expected a new empty snapshot after account switch');
 });
 
-test('additive import progress fields parse without breaking the old receipt shape', () => {
+test('shared contract parses durable summary progress without manufacturing receipt fields', () => {
   const parsed = parseInboxSummaryPayload({
     totalNeedsAttention: 2,
+    byReason: { weak_match: 2 },
     connections: [{
       connectionId: 'square',
-      state: 'active',
+      platformType: 'square',
+      displayName: 'Square',
+      state: 'syncing',
+      needsAttention: 2,
       attentionCount: 2,
       itemsSoFar: 14,
+      itemsTotal: 20,
       phase: 'committing',
       startedAt: '2026-08-16T12:00:00.000Z',
-      p50DurationMs: 45_000,
       jobId: 'job-1',
     }],
     recentImports: [{
       importId: 'import-1',
       connectionId: 'square',
-      status: 'active',
+      source: 'platform_scan',
+      status: 'in_progress',
+      itemsTotal: 20,
+      itemsCommitted: 6,
+      itemsFailed: 0,
       createdAt: '2026-08-16T12:00:00.000Z',
+      completedAt: null,
+      jobId: 'receipt-job-1',
+      phase: 'staging',
     }],
   }, 123_000);
 
   assert.equal(parsed?.connections[0]?.observedAt, 123_000, `expected observedAt=123000, got ${parsed?.connections[0]?.observedAt}`);
   assert.equal(parsed?.connections[0]?.itemsSoFar, 14, `expected itemsSoFar=14, got ${parsed?.connections[0]?.itemsSoFar}`);
+  assert.equal(parsed?.connections[0]?.itemsTotal, 20, `expected itemsTotal=20, got ${parsed?.connections[0]?.itemsTotal}`);
   assert.equal(parsed?.connections[0]?.phase, 'committing', `expected phase=committing, got ${parsed?.connections[0]?.phase}`);
-  assert.equal(parsed?.recentImports[0]?.itemsCommitted, 14, `expected RW3 itemsCommitted fallback=14, got ${parsed?.recentImports[0]?.itemsCommitted}`);
+  assert.equal(parsed?.connections[0]?.startedAt, '2026-08-16T12:00:00.000Z');
+  assert.equal(parsed?.connections[0]?.jobId, 'job-1');
+  assert.equal(parsed?.recentImports[0]?.itemsCommitted, 6);
+  assert.equal(parsed?.recentImports[0]?.jobId, 'receipt-job-1');
+  assert.equal(parsed?.recentImports[0]?.phase, 'staging');
 });
 
+function serverSummaryConnection(overrides: Record<string, unknown> = {}) {
+  return {
+    connectionId: 'square',
+    platformType: 'square',
+    displayName: 'Square',
+    state: 'syncing',
+    needsAttention: 0,
+    attentionCount: 0,
+    jobId: 'job-1',
+    phase: 'matching',
+    itemsSoFar: 4,
+    itemsTotal: 10,
+    startedAt: '2026-08-16T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function serverSummaryPayload(connection: Record<string, unknown>) {
+  return {
+    totalNeedsAttention: 0,
+    byReason: {},
+    connections: [connection],
+    recentImports: [],
+  };
+}
+
 test('unchanged server evidence keeps its original observed time', () => {
-  const first = parseInboxSummaryPayload({
-    totalNeedsAttention: 0,
-    connections: [{ connectionId: 'square', state: 'syncing', phase: 'matching', itemsSoFar: 4 }],
-  }, 1_000)!;
-  const repeated = parseInboxSummaryPayload({
-    totalNeedsAttention: 0,
-    connections: [{ connectionId: 'square', state: 'syncing', phase: 'matching', itemsSoFar: 4 }],
-  }, 21_000)!;
+  const payload = serverSummaryPayload(serverSummaryConnection());
+  const first = parseInboxSummaryPayload(payload, 1_000)!;
+  const repeated = parseInboxSummaryPayload(payload, 21_000)!;
 
   const preserved = preserveImportEvidenceObservedAt(first, repeated);
   assert.equal(preserved.connections[0]?.observedAt, 1_000);
 });
 
 test('changed server evidence receives the new observed time', () => {
-  const first = parseInboxSummaryPayload({
-    totalNeedsAttention: 0,
-    connections: [{ connectionId: 'square', state: 'syncing', phase: 'matching', itemsSoFar: 4 }],
-  }, 1_000)!;
-  const changed = parseInboxSummaryPayload({
-    totalNeedsAttention: 0,
-    connections: [{ connectionId: 'square', state: 'syncing', phase: 'committing', itemsSoFar: 5 }],
-  }, 21_000)!;
+  const first = parseInboxSummaryPayload(
+    serverSummaryPayload(serverSummaryConnection()),
+    1_000,
+  )!;
+  const changed = parseInboxSummaryPayload(
+    serverSummaryPayload(serverSummaryConnection({ phase: 'committing', itemsSoFar: 5 })),
+    21_000,
+  )!;
 
   const preserved = preserveImportEvidenceObservedAt(first, changed);
   assert.equal(preserved.connections[0]?.observedAt, 21_000);
