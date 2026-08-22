@@ -1,4 +1,4 @@
-// @generated from sssync-bknd/src/contracts/import-status.contract.ts (sha256:3d00af22097d)
+// @generated from sssync-bknd/src/contracts/import-status.contract.ts (sha256:9bf880455a2f)
 // DO NOT EDIT — change the backend copy, then run `npm run contracts:sync` there.
 import { z } from 'zod';
 
@@ -48,7 +48,8 @@ export const zInboxConnectionSummary = z.object({
   state: zInboxConnectionState,
   needsAttention: z.number().int().nonnegative(),
   attentionCount: z.number().int().nonnegative(),
-  reviewRunId: z.string().nullable(),
+  /** Additive: absent on replicas older than P1 and in older fixtures. */
+  reviewRunId: z.string().nullable().optional(),
   jobId: z.string().nullable(),
   phase: z.string().nullable(),
   itemsSoFar: z.number().int().nonnegative(),
