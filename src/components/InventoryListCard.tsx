@@ -14,6 +14,7 @@ import PlatformAvatar from './PlatformAvatar';
 import PartnerBadge from './PartnerBadge';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Animated, { FadeInLeft, FadeOutLeft, Layout, ZoomIn } from 'react-native-reanimated';
+import { formatInventoryListPrice } from '../lib/inventoryPrice';
 
 /*
   InventoryListCard - Matches "Needs Attention" design
@@ -96,22 +97,8 @@ const InventoryListCard: React.FC<InventoryListCardProps> = memo(({
   const isLowStock = (totalQuantity ?? 0) <= 5;
   const isOutOfStock = (totalQuantity ?? 0) === 0;
 
-  // Format price display - show range if min and max are different
-  const formatPriceDisplay = (): string => {
-    // If minPrice and maxPrice are provided and different, show range
-    if (minPrice !== undefined && maxPrice !== undefined && minPrice !== maxPrice) {
-      return `$${minPrice.toFixed(2)} - $${maxPrice.toFixed(2)}`;
-    }
-    // If only minPrice or maxPrice provided, use that
-    if (minPrice !== undefined) {
-      return `$${minPrice.toFixed(2)}`;
-    }
-    if (maxPrice !== undefined) {
-      return `$${maxPrice.toFixed(2)}`;
-    }
-    // Fallback to single price prop
-    return `$${price?.toFixed(2) ?? '0.00'}`;
-  };
+  // Shared with ProductDetail so null and zero keep distinct meanings.
+  const formatPriceDisplay = (): string => formatInventoryListPrice({ price, minPrice, maxPrice });
 
   // Get display label for match location
   const getMatchLabel = (location: MatchLocation): string => {

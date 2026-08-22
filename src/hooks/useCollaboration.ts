@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useContext } from 'react';
 import { useAuth, useUser } from '@clerk/expo';
 import { acquireCollaborationSocket, releaseCollaborationSocket, type Socket } from '../lib/collaborationSocket';
 import { applyLevelPatch, applyVariantPatch, markCatalogStale } from '../lib/catalogPatches';
 import { createLogger } from '../utils/logger';
+import { SessionContext } from '../context/SessionContext';
+import { excludeSelfFromPresence, isOtherUserEditEvent } from '../lib/collaborationPresence';
 const log = createLogger('useCollaboration');
 
 
@@ -54,6 +56,7 @@ interface PresenceUser {
 export function useCollaboration() {
   const { user } = useUser();
   const { getToken } = useAuth();
+  const appUserId = useContext(SessionContext)?.user?.id ?? null;
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
   const socketRef = useRef<Socket | null>(null);
@@ -97,7 +100,10 @@ export function useCollaboration() {
       log.error('[Collaboration] Connection error:', error.message);
     };
     const handlePresence = ({ users }: { users: PresenceUser[] }) => {
-      setOnlineUsers(users.filter((u) => u.status === 'online'));
+      setOnlineUsers(excludeSelfFromPresence(
+        users.filter((u) => u.status === 'online'),
+        appUserId,
+      ));
     };
 
     // Share the single /collaboration connection instead of opening our own.
@@ -144,7 +150,7 @@ export function useCollaboration() {
       socketRef.current = null;
       releaseCollaborationSocket();
     };
-  }, [user]);
+  }, [user, appUserId]);
 
   /**
    * Request edit lock for a product
@@ -250,19 +256,12 @@ export function useCollaboration() {
    * Listen for edit started events
    */
   const onEditStarted = useCallback((callback: (event: ProductEditEvent) => void) => {
-    if (!socketRef.current) return () => { };
-
-    const handler = (data: ProductEditEvent) => {
+    return registerRobustListener('product:editStarted', (data: ProductEditEvent) => {
+      if (!isOtherUserEditEvent(data, appUserId)) return;
       log.debug('[Collaboration] Edit started:', data);
       callback(data);
-    };
-
-    socketRef.current.on('product:editStarted', handler);
-
-    return () => {
-      socketRef.current?.off('product:editStarted', handler);
-    };
-  }, []);
+    });
+  }, [appUserId, registerRobustListener]);
 
   /**
    * Listen for edit ended events

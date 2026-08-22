@@ -69,6 +69,11 @@ import { getProductVariantDisplayTitle } from '../utils/productVariantTitle';
 import { useToast } from '../context/ToastContext';
 import { saveStarted } from '../context/saveStatusStore';
 import { getVariantPlatforms } from '../lib/platforms';
+import {
+  derivePlatformConnectStatus,
+  platformConnectStatusLabel,
+} from '../lib/platformConnectStatus';
+import { formatProductDetailPrice } from '../lib/inventoryPrice';
 const log = createLogger('ProductDetail');
 
 
@@ -391,6 +396,20 @@ const ProductDetailScreen = observer(
     const [mappings, setMappings] = useState<PlatformProductMapping[]>([]);
     const [groupedInventory, setGroupedInventory] = useState<GroupedInventoryLocations>({});
     const [connections, setConnections] = useState<PlatformConnection[]>([]);
+    const connectionPresence = useMemo(() => ({
+      computerOnline: computerDispatch.computerOnline,
+      presenceLoaded: computerDispatch.presenceLoaded,
+    }), [computerDispatch.computerOnline, computerDispatch.presenceLoaded]);
+    const platformConnectStatusFor = useCallback((platform: string) => (
+      derivePlatformConnectStatus(platform, connections as any, connectionPresence)
+    ), [connections, connectionPresence]);
+    const isUsableConnection = useCallback((connection: PlatformConnection) => (
+      derivePlatformConnectStatus(
+        connection.PlatformType,
+        [connection] as any,
+        connectionPresence,
+      ).uiState === 'connected'
+    ), [connectionPresence]);
     const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(!passedItem);
     // Inline error + retry for the by-productId Supabase load (fetch failure / timeout).
@@ -2516,8 +2535,7 @@ const ProductDetailScreen = observer(
       const hasRealConnections = connections.some(c =>
         c.PlatformType !== 'pool' &&
         c.PlatformType !== 'csv' &&
-        // Consider valid if enabled or active, even if needing reauth
-        c.IsEnabled
+        isUsableConnection(c)
       );
 
       return platformsInEditor.filter(platform => {
@@ -2532,7 +2550,7 @@ const ProductDetailScreen = observer(
         const platformData = displayedPlatforms[platform];
         return platformData && Object.keys(platformData).length > 0;
       });
-    }, [displayedPlatforms, mappings, connections]);
+    }, [displayedPlatforms, mappings, connections, isUsableConnection]);
 
     // Publish product to a new platform
     const [isPublishing, setIsPublishing] = useState<string | null>(null);
@@ -2560,6 +2578,7 @@ const ProductDetailScreen = observer(
         // Find the connection for this platform
         targetConnection = connections.find(c =>
           c.PlatformType.toLowerCase() === platformKey.toLowerCase()
+          && isUsableConnection(c)
         );
 
         if (!targetConnection) {
@@ -2857,7 +2876,7 @@ const ProductDetailScreen = observer(
       } finally {
         setIsPublishing(null);
       }
-    }, [detailedItem, connections, displayedPlatforms, isPublishing, showToast, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation]);
+    }, [detailedItem, connections, displayedPlatforms, isPublishing, showToast, loadPlatformData, hasUnsavedChanges, performAutoSave, navigation, isUsableConnection]);
     // Handle Delist / Remove Mapping
     const handleDelist = useCallback(async (connectionId: string, mappingId: string, platformName: string) => {
       Alert.alert('Delist', `Remove listing from ${platformName}?`, [
@@ -4406,14 +4425,17 @@ const ProductDetailScreen = observer(
     useEffect(() => {
       if (!detailedItem?.ProductId || !collaboration.isConnected) return;
 
-      // Request edit lock when opening product
-      collaboration.startEditing(detailedItem.ProductId).then((response) => {
-        // Advisory presence only — editing is never blocked. If a teammate also
-        // has this open, give a quiet heads-up instead of the old blocking alert.
-        if (!response.success && response.lockedBy) {
-          showToast({ title: `Editing with ${response.lockedBy}`, tone: 'warn' });
-        }
-      });
+      // A read-only overview is not an editor. Only announce an edit presence
+      // after the user explicitly enters edit mode.
+      if (mode === 'edit') {
+        collaboration.startEditing(detailedItem.ProductId).then((response) => {
+          // Advisory presence only — editing is never blocked. If a teammate also
+          // has this open, give a quiet heads-up instead of the old blocking alert.
+          if (!response.success && response.lockedBy) {
+            showToast({ title: `Editing with ${response.lockedBy}`, tone: 'warn' });
+          }
+        });
+      }
 
       // Listen for product updates from other team members
       const unsubscribeUpdate = collaboration.onProductUpdate((update) => {
@@ -4471,12 +4493,12 @@ const ProductDetailScreen = observer(
 
       // Cleanup: Release lock when leaving
       return () => {
-        collaboration.stopEditing(detailedItem.ProductId);
+        if (mode === 'edit') collaboration.stopEditing(detailedItem.ProductId);
         unsubscribeUpdate();
         unsubscribeEditStart();
         unsubscribeEditEnd();
       };
-    }, [detailedItem?.ProductId, collaboration.isConnected]);
+    }, [detailedItem?.ProductId, collaboration.isConnected, mode]);
 
 
     if (isLoading) {
@@ -4511,8 +4533,7 @@ const ProductDetailScreen = observer(
       const imgs = (editorImages || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
       const cover = imgs[0];
       const thumbs = imgs.slice(1, 4);
-      const priceNum = Number(detailedItem!.Price);
-      const priceText = Number.isFinite(priceNum) && priceNum > 0 ? `$${priceNum.toFixed(2)}` : '—';
+      const priceText = formatProductDetailPrice(detailedItem!.Price);
       const realVariants = (allProductVariants || []).filter((v: any) => String(v?.VariantType || '').toLowerCase() !== 'base');
       const sizeCount = realVariants.length;
       const stockByVariant: Record<string, number> = {};
@@ -4621,8 +4642,7 @@ const ProductDetailScreen = observer(
                 </View>
               </View>
               {realVariants.map((v: any, i: number) => {
-                const vPrice = Number(v?.Price);
-                const vPriceText = Number.isFinite(vPrice) && vPrice > 0 ? `$${vPrice.toFixed(2)}` : '—';
+                const vPriceText = formatProductDetailPrice(v?.Price);
                 const vStock = stockByVariant[v?.Id] ?? 0;
                 const vName = v?.Title || v?.Sku || `Variant ${i + 1}`;
                 const vSku = v?.Sku || null;
@@ -4859,6 +4879,12 @@ const ProductDetailScreen = observer(
                     const rawType = channelName.platformType;
                     const typeLabel = channelName.platformLabel;
                     const platformName = channelName.rowLabel;
+                    const connectionStatus = derivePlatformConnectStatus(
+                      rawType,
+                      connection ? [connection] as any : [],
+                      connectionPresence,
+                    );
+                    const connectionUsable = connectionStatus.uiState === 'connected';
                     const hasRealPlatformProductId = (value: unknown): boolean => {
                       const platformProductId = String(value || '').trim();
                       return Boolean(platformProductId) && !platformProductId.startsWith('facebook-personal-job:');
@@ -4902,15 +4928,17 @@ const ProductDetailScreen = observer(
                       : null;
                     const waitingForComputerDispatch =
                       requiresComputer && !hasRealPlatformProductId(mapping.PlatformProductId);
-                    const computerStatus = computerJobStatus || (waitingForComputerDispatch && (computerDispatch.degraded || computerDispatch.jobsUnavailable)
+                    const computerStatus = connectionUsable ? (computerJobStatus || (waitingForComputerDispatch && (computerDispatch.degraded || computerDispatch.jobsUnavailable)
                       ? { label: "Can't check now", color: '#71717A', dotColor: '#9CA3AF', tone: 'quiet' as const }
                       : waitingForComputerDispatch && !computerDispatch.jobsLoaded
                         ? { label: 'Checking', color: '#71717A', dotColor: '#9CA3AF', tone: 'quiet' as const }
-                        : null);
+                        : null)) : null;
                     const canRetryDispatch = requiresComputer && !!computerStatus?.canRetry;
-                    const dotColor = computerStatus ? computerStatus.dotColor : statusColor;
-                    const textColor = computerStatus ? computerStatus.color : statusColor;
-                    const rowStatusText = computerStatus ? computerStatus.label : statusText;
+                    const dotColor = !connectionUsable ? '#9CA3AF' : computerStatus ? computerStatus.dotColor : statusColor;
+                    const textColor = !connectionUsable ? '#71717A' : computerStatus ? computerStatus.color : statusColor;
+                    const rowStatusText = !connectionUsable
+                      ? platformConnectStatusLabel(connectionStatus)
+                      : computerStatus ? computerStatus.label : statusText;
                     return (
                       <View key={mapping.Id} style={styles.alRow}>
                         <View style={styles.alLogo}><PlatformLogo type={rawType} size={20} fallbackIcon="store" /></View>
@@ -4954,7 +4982,14 @@ const ProductDetailScreen = observer(
                           })()}
                         </View>
                         <View style={styles.alActions}>
-                          {canRetryDispatch ? (
+                          {!connectionUsable ? (
+                            <TouchableOpacity
+                              style={styles.alActionGreen}
+                              onPress={() => navigation.navigate('ConnectPlatforms')}
+                            >
+                              <Text style={styles.alActionGreenText}>Connect</Text>
+                            </TouchableOpacity>
+                          ) : canRetryDispatch ? (
                             <TouchableOpacity
                               style={styles.alActionOutline}
                               disabled={isPublishing !== null}
@@ -4965,9 +5000,11 @@ const ProductDetailScreen = observer(
                                 : <Text style={styles.alActionOutlineText}>Retry</Text>}
                             </TouchableOpacity>
                           ) : null}
-                          <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
-                            <Text style={styles.alActionOutlineText}>Delist</Text>
-                          </TouchableOpacity>
+                          {connectionUsable ? (
+                            <TouchableOpacity style={styles.alActionOutline} onPress={() => handleDelist(mapping.PlatformConnectionId, mapping.Id, platformName)}>
+                              <Text style={styles.alActionOutlineText}>Delist</Text>
+                            </TouchableOpacity>
+                          ) : null}
                         </View>
                       </View>
                     );
@@ -4976,6 +5013,11 @@ const ProductDetailScreen = observer(
                   {unpublishedPlatforms.map((platform) => {
                     const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
                     const isCurrentlyPublishing = isPublishing === platform;
+                    const connectStatus = platformConnectStatusFor(platform);
+                    const platformUsable = connectStatus.uiState === 'connected';
+                    const statusLabel = platformUsable
+                      ? 'Connected · not listed'
+                      : platformConnectStatusLabel(connectStatus);
                     return (
                       <View key={platform} style={styles.alRow}>
                         <View style={styles.alLogo}>{getPlatform(platform) ? <PlatformLogo type={platform} size={20} /> : <Icon name="store" size={20} color={BRAND_PRIMARY} />}</View>
@@ -4983,7 +5025,7 @@ const ProductDetailScreen = observer(
                           <Text style={styles.alName} numberOfLines={1}>{platformLabel}</Text>
                           <View style={styles.alStatusLine}>
                             <View style={[styles.alDot, { backgroundColor: '#9CA3AF' }]} />
-                            <Text style={[styles.alStatusText, { color: '#71717A' }]}>Connected · not listed</Text>
+                            <Text style={[styles.alStatusText, { color: '#71717A' }]}>{statusLabel}</Text>
                           </View>
                           {(() => {
                             const connId = resolveConnectionIdForPlatform(platform);
@@ -5010,8 +5052,16 @@ const ProductDetailScreen = observer(
                             );
                           })()}
                         </View>
-                        <TouchableOpacity style={styles.alActionGreen} onPress={() => handlePublishToPlatform(platform)} disabled={isCurrentlyPublishing}>
-                          {isCurrentlyPublishing ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.alActionGreenText}>Publish</Text>}
+                        <TouchableOpacity
+                          style={styles.alActionGreen}
+                          onPress={() => platformUsable
+                            ? handlePublishToPlatform(platform)
+                            : navigation.navigate('ConnectPlatforms')}
+                          disabled={platformUsable && isCurrentlyPublishing}
+                        >
+                          {platformUsable && isCurrentlyPublishing
+                            ? <ActivityIndicator size="small" color="#fff" />
+                            : <Text style={styles.alActionGreenText}>{platformUsable ? 'Publish' : 'Connect'}</Text>}
                         </TouchableOpacity>
                       </View>
                     );

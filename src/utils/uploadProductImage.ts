@@ -2,7 +2,8 @@ import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { ENV } from '../config/env';
-import { getCurrentSupabaseJwt, supabase } from '../lib/supabase';
+import { getCurrentSupabaseJwt, getUserLike, supabase } from '../lib/supabase';
+import { buildProductImageObjectPath } from '../lib/productImageUploadIdentity';
 import { createConcurrencyLimiter } from './mapWithConcurrency';
 import { createLogger } from './logger';
 
@@ -27,30 +28,24 @@ type CachedUploadIdentity = {
 
 let cachedUploadIdentity: CachedUploadIdentity | null = null;
 let sessionIdentityPromise: Promise<CachedUploadIdentity> | null = null;
+let appIdentityPromise: { accessToken: string; promise: Promise<CachedUploadIdentity> } | null = null;
 
-function readJwtSubject(accessToken: string): string | null {
-  try {
-    const encodedPayload = accessToken.split('.')[1];
-    if (!encodedPayload) return null;
-    const normalized = encodedPayload.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-    const json = typeof atob === 'function'
-      ? atob(padded)
-      : (globalThis as any).Buffer?.from(padded, 'base64').toString('utf8');
-    if (!json) return null;
-    const subject = JSON.parse(json)?.sub;
-    return typeof subject === 'string' && subject.trim() ? subject.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function identityFromToken(accessToken: string): CachedUploadIdentity {
+async function identityFromToken(accessToken: string): Promise<CachedUploadIdentity> {
   if (cachedUploadIdentity?.accessToken === accessToken) return cachedUploadIdentity;
-  const userId = readJwtSubject(accessToken);
-  if (!userId) throw new Error('Authenticated session has no user id');
-  cachedUploadIdentity = { accessToken, userId };
-  return cachedUploadIdentity;
+  if (appIdentityPromise?.accessToken === accessToken) return appIdentityPromise.promise;
+
+  const promise = getUserLike()
+    .then(({ user }) => {
+      const userId = user?.id?.trim();
+      if (!userId) throw new Error('Authenticated session has no canonical app user');
+      cachedUploadIdentity = { accessToken, userId };
+      return cachedUploadIdentity;
+    })
+    .finally(() => {
+      if (appIdentityPromise?.accessToken === accessToken) appIdentityPromise = null;
+    });
+  appIdentityPromise = { accessToken, promise };
+  return promise;
 }
 
 async function getLocalUploadIdentity(providedAccessToken?: string | null): Promise<CachedUploadIdentity> {
@@ -73,10 +68,6 @@ async function getLocalUploadIdentity(providedAccessToken?: string | null): Prom
       });
   }
   return sessionIdentityPromise;
-}
-
-function safePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 function storageObjectUrl(fileName: string): { uploadUrl: string; anonKey: string } {
@@ -122,7 +113,7 @@ export async function uploadProductImage(
     const manipulateMs = Date.now() - manipulateStartedAt;
     log.debug(`[UPLOAD_TIMING] photo=${photoId} manipulate_ms=${manipulateMs}`);
 
-    const fileName = `${safePathSegment(identity.userId)}/${safePathSegment(photoId)}-${Date.now()}.jpg`;
+    const fileName = buildProductImageObjectPath(identity.userId, photoId, Date.now());
     const { uploadUrl, anonKey } = storageObjectUrl(fileName);
 
     // There is no JS read/decode phase: uploadAsync hands the file URI directly to

@@ -13,17 +13,17 @@ import {
   connectStepsFor,
   resolvePlatformKey,
   type ConnectStepKind,
-} from '../config/platforms';
+} from '../config/platforms.ts';
 import type { PlatformConnectionRow } from '../context/PlatformConnectionsContext';
 import {
   isListedPlatformConnection,
   isUnhealthyPlatformConnection,
   NOT_CONNECTED_STATUSES,
-} from './platformConnectionVisibility';
+} from './platformConnectionVisibility.ts';
 import {
   isActiveConnectionImportStatus,
   type ConnectionImportPresentation,
-} from './connectionImportPresentation';
+} from './connectionImportPresentation.ts';
 
 // The row-visibility predicates are pure and live in their own dependency-free
 // module (platformConnectionVisibility) so node:test can import them without
@@ -35,7 +35,7 @@ export {
   isDisconnectedPlatformConnection,
   isUnhealthyPlatformConnection,
   isImportingConnectionStatus,
-} from './platformConnectionVisibility';
+} from './platformConnectionVisibility.ts';
 
 /** Live computer-presence signal (from useComputerJobStatus). */
 export interface ComputerPresence {
@@ -75,6 +75,16 @@ export interface PlatformConnectStatus {
 
 export interface PlatformConnectStatusOptions {
   presentationByConnectionId?: ReadonlyMap<string, ConnectionImportPresentation>;
+}
+
+export function platformConnectStatusLabel(status: PlatformConnectStatus): string {
+  switch (status.uiState) {
+    case 'importing': return 'Importing';
+    case 'connected': return 'Connected';
+    case 'needs-computer': return 'Needs computer';
+    case 'checking': return 'Checking';
+    case 'not-connected': return 'Not connected';
+  }
 }
 
 export function derivePlatformConnectStatus(
