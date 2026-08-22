@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { X } from 'lucide-react-native';
 import BaseModal from './BaseModal';
-import { BillingGateResponse } from '../types/billingGate';
+import { billingGateCopy, BillingGateResponse } from '../types/billingGate';
 import { BRAND_PRIMARY } from '../design/tokens';
 
 interface BillingGateSheetProps {
@@ -33,22 +33,15 @@ export default function BillingGateSheet({
 
   const invoiceable = gate.code === 'credits_exhausted_but_invoiceable';
   const unavailable = gate.code === 'billing_status_unavailable';
-  const title = unavailable
-    ? 'Could not check your scans'
-    : invoiceable
-      ? 'This scan can continue'
-      : "You're out of free scans";
-  const body = unavailable
-    ? gate.message
-    : invoiceable
-      ? 'You can finish this scan now or review billing first.'
-      : typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number'
-        ? `${gate.freeUsageCount} of ${gate.freeLimit} free scans used.`
-        : 'Choose a plan or add credits to keep scanning.';
+  const billingAttention = gate.code === 'invoice_required' || gate.code === 'hard_cap_blocked';
+  const { title, body } = billingGateCopy(gate);
   const seePlans = onSeePlans || onOpenBilling || onClose;
 
   // Usage bar: free-tier gates show scans used; paid gates show AI usage cents.
-  const usesFreeTier = typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number' && gate.freeLimit > 0;
+  const usesFreeTier = gate.code === 'free_tier_exhausted'
+    && typeof gate.freeUsageCount === 'number'
+    && typeof gate.freeLimit === 'number'
+    && gate.freeLimit > 0;
   const barUsed = usesFreeTier ? gate.freeUsageCount! : gate.currentUsageCents;
   const barLimit = usesFreeTier ? gate.freeLimit! : gate.allowanceCents;
   // Fill clamps at 100; the label tells the truth past it (149%, not "100%").
@@ -64,13 +57,23 @@ export default function BillingGateSheet({
     ? 'Try again'
     : invoiceable
       ? (onAddCredits ? 'Add credits' : 'Continue scan')
-      : 'See plans';
+      : billingAttention
+        ? 'Review billing'
+        : gate.code === 'ok'
+          ? 'Continue scan'
+          : 'See plans';
   const primaryAction = unavailable
     ? onClose
     : invoiceable
       ? (onAddCredits || onContinue || onClose)
-      : seePlans;
-  const secondaryLabel = !unavailable && invoiceable && onAddCredits ? 'Continue scan' : !unavailable && !invoiceable && onAddCredits ? 'Add credits' : null;
+      : gate.code === 'ok'
+        ? (onContinue || onClose)
+        : seePlans;
+  const secondaryLabel = invoiceable && onAddCredits
+    ? 'Continue scan'
+    : (gate.code === 'free_tier_exhausted' || gate.code === 'hard_cap_blocked') && onAddCredits
+      ? 'Add credits'
+      : null;
   const secondaryAction = invoiceable ? (onContinue || onClose) : onAddCredits;
 
   return (

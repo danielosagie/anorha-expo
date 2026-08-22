@@ -409,7 +409,7 @@ import { notifyListingReady } from '../utils/localNotify';
 import { openQuickScanStream, QuickScanPhase, QuickScanStreamEvent } from '../lib/quickScanStream';
 import { ShelfScanPlaceholderRow } from '../components/camera/ShelfScanProgressCard';
 import BottomActionBar from '../components/BottomActionBar';
-import { BillingGateResponse, normalizeBillingGateResponse } from '../types/billingGate';
+import { BillingGateResponse } from '../types/billingGate';
 import { ToastHost } from '../components/Toast';
 import { useToast } from '../context/ToastContext';
 import {
@@ -2589,22 +2589,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     await clearPendingBillingAction();
   }, []);
 
-  const buildFreemiumBlockedGate = useCallback((): BillingGateResponse => normalizeBillingGateResponse({
-    code: 'free_tier_exhausted',
-    message: freemiumStatus
-      ? `Free scans used (${freemiumStatus.usageCount}/${freemiumStatus.freeLimit}). Upgrade billing to keep scanning.`
-      : 'Free scans are used up. Upgrade billing to keep scanning.',
-    featureKey: 'ai_quick_scan',
-    blockingState: 'free_tier_exhausted',
-    canProceed: false,
-    freeUsageCount: freemiumStatus?.usageCount,
-    freeLimit: freemiumStatus?.freeLimit,
-  }), [freemiumStatus]);
-
-  const isQuickScanLocallyBlocked = Boolean(
-    freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted,
-  );
-
   const beginQuickScanAccessCheck = useCallback((source: 'capture' | 'picker') => {
     const startedAt = Date.now();
     const promise = preflightAIGate('ai_quick_scan', 1).then((gate) => {
@@ -2624,9 +2608,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     source: 'capture' | 'picker' | 'scan' = 'scan',
   ): Promise<boolean> => {
     const waitStartedAt = Date.now();
-    const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
-      ? buildFreemiumBlockedGate()
-      : await (startedGate ?? preflightAIGate('ai_quick_scan', 1));
+    const gate = await (startedGate ?? preflightAIGate('ai_quick_scan', 1));
 
     if (gate.code === 'credits_exhausted_but_invoiceable') {
       const canContinue = (await presentBillingGateSheet(gate)) === 'continue';
@@ -2640,7 +2622,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     }
     log.debug(`[UPLOAD_TIMING] source=${source} gate_wait_ms=${Date.now() - waitStartedAt} allowed=true`);
     return true;
-  }, [buildFreemiumBlockedGate, freemiumStatus, preflightAIGate, presentBillingGateSheet]);
+  }, [preflightAIGate, presentBillingGateSheet]);
 
   const markQuickScanRetryable = useCallback((itemId: string, errorMessage: string) => {
     transitionItem(itemId, 'error', { error: errorMessage });
@@ -2857,13 +2839,8 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       return;
     }
 
-    // Exhausted free-tier state is already local, so keep that deterministic block
-    // before the shutter. Otherwise overlap the network preflight with the camera
-    // capture and resolve it only before starting the billable scan.
-    if (isQuickScanLocallyBlocked) {
-      await requestQuickScanAccess(undefined, 'capture');
-      return;
-    }
+    // Overlap the server-owned billing preflight with camera capture and resolve
+    // it only before starting the billable scan.
     const captureTapStartedAt = Date.now();
     const startedGate = beginQuickScanAccessCheck('capture');
 
@@ -3016,7 +2993,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     } finally {
       setIsCapturing(false);
     }
-  }, [beginQuickScanAccessCheck, isQuickScanLocallyBlocked, isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess, scheduleDelayedScan]);
+  }, [beginQuickScanAccessCheck, isCapturing, capturedPhotos.length, flash, captureButtonScale, flashOpacity, canAddAnotherItem, cameraMode, bulkItems, requestQuickScanAccess, scheduleDelayedScan]);
 
   // Handle barcode scan - with debouncing to prevent duplicates
   const barcodeLastScannedRef = useRef<string | null>(null);
@@ -4168,13 +4145,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     if (typeof targetItemId !== 'string') targetItemId = undefined;
     const pickerTapStartedAt = Date.now();
 
-    // Preserve the synchronous local free-tier block. Every non-local billing check
-    // starts before the picker but is not awaited until a selected photo needs a scan.
-    if (isQuickScanLocallyBlocked) {
-      await requestQuickScanAccess(undefined, 'picker');
-      return;
-    }
-
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission needed', 'We need camera roll permissions to upload images.');
@@ -4337,7 +4307,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
         if (canScan) startApprovedScan();
       }
     }
-  }, [beginQuickScanAccessCheck, cameraMode, canAddAnotherItem, handleShelfModeScan, isQuickScanLocallyBlocked, requestQuickScanAccess, scheduleDelayedScan, setActiveItemId, setBulkItems]);
+  }, [beginQuickScanAccessCheck, cameraMode, canAddAnotherItem, handleShelfModeScan, requestQuickScanAccess, scheduleDelayedScan, setActiveItemId, setBulkItems]);
 
   // Copy barcode to clipboard
   const copyBarcodeToClipboard = useCallback(() => {
@@ -4494,9 +4464,7 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
       // reading it is not a hang, and no clock should decide for them.
       armRunDeadline();
       if (!options?.skipPreflight) {
-        const gate = freemiumStatus && !freemiumStatus.hasSubscription && freemiumStatus.isFreeTierExhausted
-          ? buildFreemiumBlockedGate()
-          : await preflightAIGate('ai_quick_scan', 1);
+        const gate = await preflightAIGate('ai_quick_scan', 1);
 
         if (isRunCancelled()) return;
 
@@ -5159,8 +5127,6 @@ const AddProductScreen: React.FC<AddProductScreenProps | {}> = () => {
     quickScanStore,
     showToast,
     incrementLocalUsage,
-    freemiumStatus,
-    buildFreemiumBlockedGate,
     preflightAIGate,
     persistPendingQuickScan,
     presentBillingGateSheet,
