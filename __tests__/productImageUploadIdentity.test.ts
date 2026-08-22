@@ -35,3 +35,14 @@ test('the upload resolver falls back to the me view when the subject is not a UU
   assert.match(source, /UUID_PATTERN\.test\(subject\)/);
   assert.match(source, /buildProductImageObjectPath/);
 });
+
+test('the in-flight identity lookup is keyed by token, never shared across sellers', () => {
+  const source = readFileSync(
+    '/Users/dosagie/Documents/CodeProjects/sssync_mobile_test/src/utils/uploadProductImage.ts',
+    'utf8',
+  );
+  // A bare `if (!meIdentityPromise)` guard would hand seller B the promise started
+  // for seller A, so B's photos would land in A's folder under a valid UUID.
+  assert.match(source, /meIdentityPromise\?\.accessToken === accessToken/);
+  assert.doesNotMatch(source, /if \(!meIdentityPromise\)/);
+});

@@ -48,7 +48,7 @@ function readJwtSubject(accessToken: string): string | null {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-let meIdentityPromise: Promise<CachedUploadIdentity> | null = null;
+let meIdentityPromise: { accessToken: string; promise: Promise<CachedUploadIdentity> } | null = null;
 
 // The storage policy on product-images compares the first folder to app_user_id(),
 // the internal Users.Id UUID. The JWT `sub` equals that UUID only under the mint
@@ -63,18 +63,21 @@ async function identityFromToken(accessToken: string): Promise<CachedUploadIdent
     cachedUploadIdentity = { accessToken, userId: subject };
     return cachedUploadIdentity;
   }
-  if (!meIdentityPromise) {
-    meIdentityPromise = getUserLike()
-      .then(({ user }) => {
-        if (!user?.id) throw new Error('Authenticated session has no user id');
-        cachedUploadIdentity = { accessToken, userId: user.id };
-        return cachedUploadIdentity;
-      })
-      .finally(() => {
-        meIdentityPromise = null;
-      });
-  }
-  return meIdentityPromise;
+  // Key the in-flight lookup by token. An unkeyed promise hands the second caller
+  // the first caller's user id, so a sign-out/sign-in during a photo batch could
+  // upload into the previous seller's folder: a valid UUID, the wrong person.
+  if (meIdentityPromise?.accessToken === accessToken) return meIdentityPromise.promise;
+  const promise = getUserLike()
+    .then(({ user }) => {
+      if (!user?.id) throw new Error('Authenticated session has no user id');
+      cachedUploadIdentity = { accessToken, userId: user.id };
+      return cachedUploadIdentity;
+    })
+    .finally(() => {
+      if (meIdentityPromise?.accessToken === accessToken) meIdentityPromise = null;
+    });
+  meIdentityPromise = { accessToken, promise };
+  return promise;
 }
 
 async function getLocalUploadIdentity(providedAccessToken?: string | null): Promise<CachedUploadIdentity> {
