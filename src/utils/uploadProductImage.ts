@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { ENV } from '../config/env';
-import { getCurrentSupabaseJwt, supabase } from '../lib/supabase';
+import { getCurrentSupabaseJwt, getUserLike, supabase } from '../lib/supabase';
 import { createConcurrencyLimiter } from './mapWithConcurrency';
 import { createLogger } from './logger';
 
@@ -45,12 +45,34 @@ function readJwtSubject(accessToken: string): string | null {
   }
 }
 
-function identityFromToken(accessToken: string): CachedUploadIdentity {
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let meIdentityPromise: Promise<CachedUploadIdentity> | null = null;
+
+// The storage policy on product-images compares the first folder to app_user_id(),
+// the internal Users.Id UUID. The JWT `sub` equals that UUID only under the mint
+// bridge; under native Clerk auth it is the Clerk id (user_xxx) and the upload is
+// rejected with "invalid input syntax for type uuid" (reproduced on the simulator
+// 2026-08-21). Use `sub` only when it already is a UUID; otherwise read the `me`
+// view once per token and cache it, so uploads still do no identity I/O per photo.
+async function identityFromToken(accessToken: string): Promise<CachedUploadIdentity> {
   if (cachedUploadIdentity?.accessToken === accessToken) return cachedUploadIdentity;
-  const userId = readJwtSubject(accessToken);
-  if (!userId) throw new Error('Authenticated session has no user id');
-  cachedUploadIdentity = { accessToken, userId };
-  return cachedUploadIdentity;
+  const subject = readJwtSubject(accessToken);
+  if (subject && UUID_PATTERN.test(subject)) {
+    cachedUploadIdentity = { accessToken, userId: subject };
+    return cachedUploadIdentity;
+  }
+  if (!meIdentityPromise) {
+    meIdentityPromise = getUserLike()
+      .then(({ user }) => {
+        if (!user?.id) throw new Error('Authenticated session has no user id');
+        cachedUploadIdentity = { accessToken, userId: user.id };
+        return cachedUploadIdentity;
+      })
+      .finally(() => {
+        meIdentityPromise = null;
+      });
+  }
+  return meIdentityPromise;
 }
 
 async function getLocalUploadIdentity(providedAccessToken?: string | null): Promise<CachedUploadIdentity> {
