@@ -34,6 +34,7 @@ import { usePlatformConnectStatus } from '../hooks/usePlatformConnectStatus';
 import { connectErrorCopy } from '../lib/connectErrorCopy';
 import { decideConnectImportPhase } from '../lib/connectImportFlow';
 import { trackDismissedConnectImport } from '../lib/connectImportDismissals';
+import { decideReconnectVerification } from '../lib/reconnectVerification';
 import {
   connectionImportPresentationsById,
   connectionImportPhaseLabel,
@@ -48,6 +49,8 @@ type FlowPhase =
   | 'checking'
   | 'importFailed'
   | 'linkComputer'
+  | 'verifyingConnection'
+  | 'verificationFailed'
   | 'done';
 
 interface Props {
@@ -134,6 +137,8 @@ export default function ConnectFlowSheet({
   const doneCallbackSentRef = useRef(false);
   const nudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const verificationAttemptIdRef = useRef(0);
+  const verificationRunningRef = useRef(false);
 
   const activePlatform = platform || activePlatformRef.current;
   const def = activePlatform ? getPlatform(activePlatform) : undefined;
@@ -148,8 +153,8 @@ export default function ConnectFlowSheet({
 
   useEffect(() => clearReconcileTimers, [clearReconcileTimers]);
 
-  const refreshSharedStores = useCallback(() => {
-    void Promise.allSettled([refresh(), refreshInboxSummary()]);
+  const refreshSharedStores = useCallback(async () => {
+    await Promise.allSettled([refresh(), refreshInboxSummary()]);
   }, [refresh]);
 
   const beginImportReconciliation = useCallback((connectionId?: string) => {
@@ -161,7 +166,7 @@ export default function ConnectFlowSheet({
     dismissedDuringImportRef.current = false;
     doneCallbackSentRef.current = false;
 
-    refreshSharedStores();
+    void refreshSharedStores();
     if (connectionId) {
       void startScan(connectionId).then((started) => {
         if (importAttemptIdRef.current !== attemptId) return;
@@ -172,7 +177,7 @@ export default function ConnectFlowSheet({
 
     nudgeTimerRef.current = setTimeout(() => {
       if (importAttemptIdRef.current !== attemptId) return;
-      refreshSharedStores();
+      void refreshSharedStores();
     }, RECONCILE_NUDGE_MS);
 
     graceTimerRef.current = setTimeout(() => {
@@ -189,6 +194,8 @@ export default function ConnectFlowSheet({
 
     oauthAttemptIdRef.current += 1;
     importAttemptIdRef.current += 1;
+    verificationAttemptIdRef.current += 1;
+    verificationRunningRef.current = false;
     clearReconcileTimers();
     activePlatformRef.current = platform;
     platformLabelRef.current = getPlatform(platform)?.label || platform;
@@ -213,16 +220,23 @@ export default function ConnectFlowSheet({
     } else if (currentStatus.requiresComputer && !currentStatus.computerOnline) {
       setPhase('linkComputer');
     } else {
-      const activeConnection = connections
+      const platformConnections = connections
         .filter((connection) => platformKey(connection.PlatformType) === platformKey(platform))
-        .find((connection) => {
+        .sort((left, right) => timestamp(right.UpdatedAt) - timestamp(left.UpdatedAt));
+      const activeConnection = platformConnections.find((connection) => {
           const presentation = presentationByConnectionId.get(connection.Id);
           return presentation?.importInProgress || presentation?.kind === 'checking';
         });
       const activePresentation = activeConnection
         ? presentationByConnectionId.get(activeConnection.Id)
         : undefined;
-      if (activeConnection) setActiveConnectionId(activeConnection.Id);
+      const failedRetryable = platformConnections.find((connection) => {
+        const presentation = presentationByConnectionId.get(connection.Id);
+        return presentation?.kind === 'failed' && presentation.canRetryImport;
+      });
+      const selectedConnection = activeConnection || failedRetryable || platformConnections[0];
+      if (selectedConnection) setActiveConnectionId(selectedConnection.Id);
+
       if (currentStatus.importing) {
         importStartedAtRef.current = Math.max(
           0,
@@ -238,8 +252,11 @@ export default function ConnectFlowSheet({
         importObservedRef.current = true;
         setActiveJobId(activePresentation.jobId || undefined);
         setPhase('checking');
+      } else if (failedRetryable) {
+        setFailedConnectionId(failedRetryable.Id);
+        setPhase('importFailed');
       } else {
-        setPhase('done');
+        setPhase('verifyingConnection');
       }
     }
   // Live stores intentionally do not belong in this open-boundary effect.
@@ -353,18 +370,11 @@ export default function ConnectFlowSheet({
     return Math.max(summaryCount || 0, laneCount || 0);
   }, []);
 
-  const enterDone = useCallback(() => {
+  const verifyConnection = useCallback(async () => {
+    if (verificationRunningRef.current) return;
     clearReconcileTimers();
-    refreshSharedStores();
-    doneCallbackSentRef.current = false;
-    setPhase('done');
-  }, [clearReconcileTimers, refreshSharedStores]);
-
-  const completeImport = useCallback(() => {
-    clearReconcileTimers();
-    refreshSharedStores();
-
     if (dismissedDuringImportRef.current) {
+      await refreshSharedStores();
       setPhase('done');
       return;
     }
@@ -374,8 +384,40 @@ export default function ConnectFlowSheet({
       setPhase('linkComputer');
       return;
     }
-    enterDone();
-  }, [clearReconcileTimers, enterDone, refreshSharedStores]);
+
+    const attemptId = ++verificationAttemptIdRef.current;
+    verificationRunningRef.current = true;
+    setPhase('verifyingConnection');
+    const [freshConnections] = await Promise.all([
+      refresh(),
+      refreshInboxSummary(),
+    ]);
+    if (verificationAttemptIdRef.current !== attemptId) {
+      verificationRunningRef.current = false;
+      return;
+    }
+
+    const refreshedConnection = resolvedConnectionId
+      ? freshConnections?.find((connection) => connection.Id === resolvedConnectionId)
+      : null;
+    const verdict = decideReconnectVerification({
+      refreshSucceeded: freshConnections !== null,
+      connection: refreshedConnection,
+    });
+    doneCallbackSentRef.current = false;
+    verificationRunningRef.current = false;
+    setPhase(verdict === 'verified' ? 'done' : 'verificationFailed');
+  }, [clearReconcileTimers, refresh, refreshSharedStores, resolvedConnectionId]);
+
+  const completeImport = useCallback(() => {
+    void verifyConnection();
+  }, [verifyConnection]);
+
+  useEffect(() => {
+    if (phase === 'verifyingConnection' && !verificationRunningRef.current) {
+      void verifyConnection();
+    }
+  }, [phase, verifyConnection]);
 
   useEffect(() => {
     if (phase !== 'importing' && phase !== 'checking') return;
@@ -426,15 +468,15 @@ export default function ConnectFlowSheet({
     if (currentStatus.requiresComputer && !currentStatus.computerOnline) {
       setPhase('linkComputer');
     } else {
-      enterDone();
+      void verifyConnection();
     }
-  }, [enterDone]);
+  }, [verifyConnection]);
 
   useEffect(() => {
     if (phase === 'linkComputer' && status.computerOnline) {
-      enterDone();
+      void verifyConnection();
     }
-  }, [enterDone, phase, status.computerOnline]);
+  }, [phase, status.computerOnline, verifyConnection]);
 
   const completeOAuth = useCallback(async (shopifyShop?: string) => {
     if (!platform) return;
@@ -525,6 +567,8 @@ export default function ConnectFlowSheet({
     }
     oauthAttemptIdRef.current += 1;
     importAttemptIdRef.current += 1;
+    verificationAttemptIdRef.current += 1;
+    verificationRunningRef.current = false;
     clearReconcileTimers();
     onCancel();
   }, [clearReconcileTimers, onCancel, phase, platform, resolvedConnectionId]);
@@ -550,6 +594,8 @@ export default function ConnectFlowSheet({
   const importPhase = phase === 'importing'
     || phase === 'checking'
     || phase === 'importFailed'
+    || phase === 'verifyingConnection'
+    || phase === 'verificationFailed'
     || phase === 'done';
   const socketIsRecent = typeof socketProgress?.receivedAt === 'number'
     && Date.now() - socketProgress.receivedAt <= IMPORT_SOCKET_QUIET_MS;
@@ -687,6 +733,39 @@ export default function ConnectFlowSheet({
               style={({ pressed }) => [styles.retryButton, pressed && styles.buttonPressed]}
             >
               <Text style={styles.retryButtonText}>Retry</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={closeFlow}
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.secondaryButtonText}>Close</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {phase === 'verifyingConnection' ? (
+          <View style={styles.importBody}>
+            <ActivityIndicator color={BRAND_PRIMARY} />
+            <Text style={styles.importTitle}>Checking connection</Text>
+            <Text style={styles.importSubline}>Verifying account access.</Text>
+          </View>
+        ) : null}
+
+        {phase === 'verificationFailed' ? (
+          <View style={styles.importBody}>
+            <Icon name="alert-circle-outline" size={42} color="#BA7517" />
+            <Text style={styles.importTitle}>Couldn’t verify</Text>
+            <Text style={styles.importSubline}>Try again.</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                setConnectError(null);
+                setPhase('consent');
+              }}
+              style={({ pressed }) => [styles.retryButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.retryButtonText}>Reconnect</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"

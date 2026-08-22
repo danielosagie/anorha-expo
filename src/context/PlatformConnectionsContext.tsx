@@ -61,7 +61,8 @@ type ContextValue = {
   connectedByPlatform: Record<string, boolean>;
   isConnected: (platform: PlatformKey | string) => boolean;
   updateConnectionLocally: (connectionId: string, patch: Partial<PlatformConnectionRow>) => void;
-  refresh: () => Promise<void>;
+  /** Returns the fresh authoritative rows, or null when they could not be read. */
+  refresh: () => Promise<PlatformConnectionRow[] | null>;
   loading: boolean;
   hasResolvedConnections: boolean;
   error?: string;
@@ -156,31 +157,31 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
     return () => { cancelled = true; };
   }, [cacheOwnerId, clerkLoaded]);
 
-  const fetchConnections = useCallback(async () => {
-    if (!cacheOwnerId) return;
+  const fetchConnections = useCallback(async (): Promise<PlatformConnectionRow[] | null> => {
+    if (!cacheOwnerId) return null;
     const requestedOwnerId = cacheOwnerId;
     const startedAt = Date.now();
     setLoading(true);
     setError(undefined);
     try {
       const token = await ensureSupabaseJwt();
-      if (activeOwnerRef.current !== requestedOwnerId) return;
+      if (activeOwnerRef.current !== requestedOwnerId) return null;
       if (!token) {
         setError('Authentication required to load connections');
         setAuthReady(false);
-        return;
+        return null;
       }
       setAuthReady(true);
       const resp = await fetch(`${API_BASE}/api/platform-connections?includeDisabled=true`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (activeOwnerRef.current !== requestedOwnerId) return;
+      if (activeOwnerRef.current !== requestedOwnerId) return null;
       if (!resp.ok) {
         setError(`Failed to load connections (${resp.status})`);
-        return;
+        return null;
       }
       const rows: PlatformConnectionRow[] = await resp.json();
-      if (activeOwnerRef.current !== requestedOwnerId) return;
+      if (activeOwnerRef.current !== requestedOwnerId) return null;
       const safeRows = Array.isArray(rows) ? rows : [];
       setConnections(safeRows);
       setConnectionsOwnerId(requestedOwnerId);
@@ -204,6 +205,8 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
         return next;
       });
 
+      return safeRows;
+
       // NOTE: no toggles fetch. GET /api/platform-connections/toggles no longer
       // exists on the backend. The path fell into the :id route and 400'd on
       // every refresh. Nothing consumed the result.
@@ -211,6 +214,7 @@ export const PlatformConnectionsProvider: React.FC<{ children: React.ReactNode }
       if (activeOwnerRef.current === requestedOwnerId) {
         setError(e?.message || 'Failed to load connections');
       }
+      return null;
     } finally {
       if (activeOwnerRef.current === requestedOwnerId) setLoading(false);
     }

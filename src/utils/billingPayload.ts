@@ -19,6 +19,14 @@ export interface BillingSummaryPayload extends RawBillingSummary {
   usage: Record<string, BillingUsagePayload>;
   compute_allowance_cents: number;
   compute_used_cents: number;
+  ai_credits_cents?: number;
+  ai_allowance_cents?: number;
+  ai_used_cents?: number;
+  ai_remaining_cents?: number;
+  ai_topup_remaining_cents?: number;
+  ai_topup_total_cents?: number;
+  last_topup_cents?: number;
+  last_topup_at?: string | null;
   ai_overage_cents: number;
   total_cost_cents: number;
   team_members_count: number;
@@ -72,7 +80,7 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
-export function parseBillingSummaryResponse(
+export function parseBillingSummaryPayload(
   payload: unknown,
 ): BillingPayloadResult<BillingSummaryPayload> {
   if (!isRecord(payload)) return invalid('summary');
@@ -86,7 +94,9 @@ export function parseBillingSummaryResponse(
   }
 
   if (isRecord(payload.subscription)) {
-    if (typeof payload.subscription.CurrentPlan !== 'string') {
+    const currentPlan = payload.subscription.CurrentPlan
+      ?? payload.subscription.current_plan;
+    if (typeof currentPlan !== 'string') {
       return invalid('summary.subscription.CurrentPlan');
     }
     if (typeof payload.subscription.Status !== 'string') {
@@ -113,6 +123,25 @@ export function parseBillingSummaryResponse(
 
   for (const field of numericFields) {
     if (!isFiniteNumber(payload[field])) return invalid(`summary.${field}`);
+  }
+
+  const optionalNumericFields = [
+    'ai_credits_cents',
+    'ai_allowance_cents',
+    'ai_used_cents',
+    'ai_remaining_cents',
+    'ai_topup_remaining_cents',
+    'ai_topup_total_cents',
+    'last_topup_cents',
+  ] as const;
+
+  for (const field of optionalNumericFields) {
+    if (payload[field] !== undefined && !isFiniteNumber(payload[field])) {
+      return invalid(`summary.${field}`);
+    }
+  }
+  if (payload.last_topup_at !== undefined && !isNullableString(payload.last_topup_at)) {
+    return invalid('summary.last_topup_at');
   }
 
   const usage: Record<string, BillingUsagePayload> = {};
@@ -142,6 +171,30 @@ export function parseBillingSummaryResponse(
       usage,
       compute_allowance_cents: payload.compute_allowance_cents as number,
       compute_used_cents: payload.compute_used_cents as number,
+      ...(payload.ai_credits_cents === undefined
+        ? {}
+        : { ai_credits_cents: payload.ai_credits_cents as number }),
+      ...(payload.ai_allowance_cents === undefined
+        ? {}
+        : { ai_allowance_cents: payload.ai_allowance_cents as number }),
+      ...(payload.ai_used_cents === undefined
+        ? {}
+        : { ai_used_cents: payload.ai_used_cents as number }),
+      ...(payload.ai_remaining_cents === undefined
+        ? {}
+        : { ai_remaining_cents: payload.ai_remaining_cents as number }),
+      ...(payload.ai_topup_remaining_cents === undefined
+        ? {}
+        : { ai_topup_remaining_cents: payload.ai_topup_remaining_cents as number }),
+      ...(payload.ai_topup_total_cents === undefined
+        ? {}
+        : { ai_topup_total_cents: payload.ai_topup_total_cents as number }),
+      ...(payload.last_topup_cents === undefined
+        ? {}
+        : { last_topup_cents: payload.last_topup_cents as number }),
+      ...(payload.last_topup_at === undefined
+        ? {}
+        : { last_topup_at: payload.last_topup_at as string | null }),
       ai_overage_cents: payload.ai_overage_cents as number,
       total_cost_cents: payload.total_cost_cents as number,
       team_members_count: payload.team_members_count as number,
@@ -151,6 +204,12 @@ export function parseBillingSummaryResponse(
       billing_state: payload.billing_state as RawBillingState,
     },
   };
+}
+
+export function parseBillingSummaryResponse(
+  payload: unknown,
+): BillingPayloadResult<BillingSummaryPayload> {
+  return parseBillingSummaryPayload(payload);
 }
 
 export function parseBillingInvoicesResponse(

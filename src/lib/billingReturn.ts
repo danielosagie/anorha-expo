@@ -3,7 +3,7 @@ import * as WebBrowser from 'expo-web-browser';
 /**
  * Where a hosted checkout or billing portal sends the user back to.
  *
- * The in-app auth session watches for this URL and closes itself the moment the page
+ * The system auth session watches for this URL and closes itself the moment the page
  * redirects to it. App.tsx handles the same URL as a normal deep link for the other case:
  * the session was already dismissed, or the OS delivered the link cold.
  */
@@ -19,8 +19,11 @@ export const withMobileReturn = (url: string): string =>
 
 /**
  * Open a checkout or portal URL and resolve once the user is back in the app — whether the
- * page redirected to BILLING_RETURN_URL or they closed the sheet themselves. Callers refresh
+ * page redirected to BILLING_RETURN_URL or they closed the browser themselves. Callers refresh
  * billing on the resolved promise, so both endings are covered by one line.
  */
 export const openBillingUrl = (url: string) =>
-  WebBrowser.openAuthSessionAsync(url, BILLING_RETURN_URL);
+  WebBrowser.openAuthSessionAsync(url, BILLING_RETURN_URL, {
+    // Keep the normal browser cookie jar so hosted checkout does not force a fresh login.
+    preferEphemeralSession: false,
+  });

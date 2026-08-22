@@ -42,8 +42,8 @@ export function useResolution(connectionId: string | null | undefined, importId?
   const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!connectionId) return;
-    if (inFlightRef.current) return;
+    if (!connectionId) return null;
+    if (inFlightRef.current) return null;
     inFlightRef.current = true;
     // The shared client's timeout keeps a stalled review fetch from leaving a permanent
     // spinner and lands in the error state the screen already renders (with Retry).
@@ -64,12 +64,14 @@ export function useResolution(connectionId: string | null | undefined, importId?
           : [],
       };
       setResult(payload);
+      return payload;
     } catch (err: any) {
       const msg = err?.name === 'AbortError' || err?.message === 'Request timed out'
         ? 'Loading the inbox timed out — pull to retry.'
         : (err?.message ?? 'Failed to load inbox');
       log.warn('refresh failed', msg);
       setError(msg);
+      return null;
     } finally {
       inFlightRef.current = false;
       setLoading(false);
