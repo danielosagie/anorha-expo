@@ -8,7 +8,7 @@ import {
 } from './platformConnectionVisibility.ts';
 
 export interface RecentImportOutcome {
-  connectionId: string;
+  connectionId: string | null;
   status: string;
   createdAt: string;
   completedAt?: string | null;
@@ -209,7 +209,9 @@ export function deriveConnectionImportPresentation({
   aggregateState,
   aggregateObservedAt,
   aggregateAttentionCount = 0,
+  aggregateAttentionVerified = false,
   aggregateItemsSoFar,
+  aggregateItemsTotal,
   aggregatePhase,
   aggregateStartedAt,
   aggregateP50DurationMs,
@@ -240,7 +242,9 @@ export function deriveConnectionImportPresentation({
   aggregateState?: string | null;
   aggregateObservedAt?: number | null;
   aggregateAttentionCount?: number | null;
+  aggregateAttentionVerified?: boolean;
   aggregateItemsSoFar?: number | null;
+  aggregateItemsTotal?: number | null;
   aggregatePhase?: string | null;
   aggregateStartedAt?: string | null;
   aggregateP50DurationMs?: number | null;
@@ -288,12 +292,14 @@ export function deriveConnectionImportPresentation({
     ? { label: 'Import failed', occurredAt: failedAt }
     : null;
   const attentionCount = finiteNonNegativeNumber(aggregateAttentionCount) || 0;
+  const hasVerifiedZeroAttention = aggregateAttentionVerified && attentionCount === 0;
   const presentedItemsSoFar = finiteNonNegativeNumber(progressItemsSoFar)
     ?? finiteNonNegativeNumber(aggregateItemsSoFar)
     ?? finiteNonNegativeNumber(latestImport?.itemsSoFar)
     ?? finiteNonNegativeNumber(latestImport?.itemsCommitted);
   const presentedProcessed = finiteNonNegativeNumber(progressProcessed);
   const presentedTotal = finiteNonNegativeNumber(progressTotal)
+    ?? finiteNonNegativeNumber(aggregateItemsTotal)
     ?? finiteNonNegativeNumber(latestImport?.itemsTotal);
   const presentedPhase = progressPhase || aggregatePhase || latestImport?.phase || null;
   const presentedStartedAt = progressStartedAt
@@ -505,13 +511,20 @@ export function deriveConnectionImportPresentation({
     });
   }
 
-  const hasReviewEvidence = ATTENTION_STATUSES.has(connection)
-    || syncState === 'needs-attention'
-    || ATTENTION_STATUSES.has(aggregate)
-    || ATTENTION_STATUSES.has(latestStatus)
-    || recommendedAction === 'rescan'
-    || recommendedAction === 'fix_resume'
-    || recommendedAction === 'manage';
+  // A reconciled zero is authoritative for item-review obligations. It retires
+  // stale aggregate, connection, run, and recommendation review signals, while
+  // credential failures above (NeedsReauth/error/reconnect) remain authoritative.
+  const hasReviewEvidence = attentionCount > 0 || (
+    !hasVerifiedZeroAttention
+    && (
+      ATTENTION_STATUSES.has(connection)
+      || syncState === 'needs-attention'
+      || ATTENTION_STATUSES.has(aggregate)
+      || ATTENTION_STATUSES.has(latestStatus)
+      || recommendedAction === 'rescan'
+      || recommendedAction === 'fix_resume'
+    )
+  );
   if (hasReviewEvidence) {
     return withFailureReason({
       kind: 'review',
@@ -530,6 +543,16 @@ export function deriveConnectionImportPresentation({
       occurredAt: latestSuccessAt,
       importInProgress: false,
     }, { allowRetry: !!secondaryFailure });
+  }
+
+  if (hasVerifiedZeroAttention && HEALTHY_CONNECTION_STATUSES.has(aggregate)) {
+    return withFailureReason({
+      kind: 'synced',
+      label: 'Synced',
+      color: '#93C822',
+      occurredAt: connectionUpdatedAt || null,
+      importInProgress: false,
+    });
   }
 
   // A healthy row is itself enough to say Synced. This is also the new backend's
@@ -567,8 +590,10 @@ export interface ConnectionImportAggregateState {
   connectionId: string;
   state?: string | null;
   needsAttention?: number | null;
+  attentionVerified?: boolean;
   observedAt?: number | null;
   itemsSoFar?: number | null;
+  itemsTotal?: number | null;
   phase?: string | null;
   startedAt?: string | null;
   p50DurationMs?: number | null;
@@ -632,7 +657,9 @@ export function connectionImportPresentationsById({
         aggregateState: aggregate?.state,
         aggregateObservedAt: aggregate?.observedAt,
         aggregateAttentionCount: aggregate?.needsAttention,
+        aggregateAttentionVerified: aggregate?.attentionVerified === true,
         aggregateItemsSoFar: aggregate?.itemsSoFar,
+        aggregateItemsTotal: aggregate?.itemsTotal,
         aggregatePhase: aggregate?.phase,
         aggregateStartedAt: aggregate?.startedAt,
         aggregateP50DurationMs: aggregate?.p50DurationMs,

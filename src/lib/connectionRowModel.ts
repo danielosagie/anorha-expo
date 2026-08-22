@@ -44,7 +44,7 @@ const RECONNECT_STATUS: ConnectionRowStatus = {
  * connection list row may render: one status and one trailing affordance.
  */
 export function connectionRowModel(
-  presentation: Pick<
+  presentation?: Pick<
     ConnectionImportPresentation,
     'kind' | 'requiresReconnect' | 'canRetryImport' | 'attentionCount'
   > & Partial<Pick<
@@ -53,6 +53,11 @@ export function connectionRowModel(
   >>,
   options: { showCancelImport?: boolean } = {},
 ): ConnectionRowModel {
+  // A row can render one frame before its presentation exists (store refresh,
+  // account switch, unknown backend kind). A neutral model beats a crash.
+  if (!presentation) {
+    return { status: STATUS_BY_KIND.checking, trailing: { type: 'chevron' } };
+  }
   if (presentation.requiresReconnect) {
     return {
       status: RECONNECT_STATUS,
@@ -62,7 +67,7 @@ export function connectionRowModel(
 
   const status = presentation.importInProgress && presentation.label
     ? { label: presentation.label, color: presentation.kind === 'checking' ? GRAY : AMBER }
-    : STATUS_BY_KIND[presentation.kind];
+    : STATUS_BY_KIND[presentation.kind] ?? STATUS_BY_KIND.checking;
 
   if (presentation.importInProgress && options.showCancelImport) {
     return { status, trailing: { type: 'action', label: 'Cancel' } };

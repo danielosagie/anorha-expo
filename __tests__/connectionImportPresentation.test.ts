@@ -153,7 +153,7 @@ test('truth: transient needs-attention SyncState is suppressed mid-import', () =
   });
 });
 
-test('truth: partial success is synced with a separate amber attention badge', () => {
+test('truth: a positive attention count is explicit review evidence', () => {
   const presentation = connectionImportPresentationsById({
     connections: [{ Id: 'square', IsEnabled: true, Status: 'active' }],
     aggregateConnections: [{
@@ -164,11 +164,45 @@ test('truth: partial success is synced with a separate amber attention badge', (
     }],
   }).get('square');
 
-  assert.equal(presentation?.kind, 'synced', `expected kind=synced, got ${presentation?.kind}`);
-  assert.equal(presentation?.color, '#93C822', `expected color=#93C822, got ${presentation?.color}`);
+  assert.equal(presentation?.kind, 'review', `expected kind=review, got ${presentation?.kind}`);
+  assert.equal(presentation?.color, '#A2611A', `expected color=#A2611A, got ${presentation?.color}`);
   assert.equal(presentation?.attentionCount, 4, `expected attentionCount=4, got ${presentation?.attentionCount}`);
   assert.equal(presentation?.attentionColor, '#A2611A', `expected attentionColor=#A2611A, got ${presentation?.attentionColor}`);
   assert.notEqual(presentation?.color, '#DC2626', `expected non-red primary color, got ${presentation?.color}`);
+});
+
+test('real backend healthy projection stays synced', () => {
+  const presentation = connectionImportPresentationsById({
+    connections: [{
+      Id: 'square-healthy',
+      IsEnabled: true,
+      Status: 'active',
+      SyncState: 'live',
+      NeedsReauth: false,
+      RecommendedAction: null,
+      FailureReason: null,
+      LastSyncSuccessAt: '2026-08-21T14:00:00.000Z',
+      UpdatedAt: '2026-08-21T14:00:00.000Z',
+    }],
+  }).get('square-healthy');
+
+  assert.equal(presentation?.kind, 'synced');
+  assert.equal(presentation?.label, 'Synced');
+  assert.equal(presentation?.blocking, false);
+});
+
+test('an unknown recommendation is not review evidence', () => {
+  const presentation = connectionImportPresentationsById({
+    connections: [{
+      Id: 'legacy-manage',
+      IsEnabled: true,
+      Status: 'active',
+      SyncState: 'live',
+      RecommendedAction: 'manage' as never,
+    }],
+  }).get('legacy-manage');
+
+  assert.equal(presentation?.kind, 'synced');
 });
 
 test('truth: recovery with cleared health fields is synced', () => {

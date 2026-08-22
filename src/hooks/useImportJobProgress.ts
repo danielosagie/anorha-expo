@@ -59,15 +59,25 @@ export function parseImportJobProgress(payload: unknown): ImportJobProgress | nu
   };
 }
 
+export function resolveImportJobId(
+  jobId?: string | null,
+  summaryJobId?: string | null,
+): string | null {
+  return jobId || summaryJobId || null;
+}
+
 export function useImportJobProgress({
   jobId,
+  summaryJobId,
   enabled,
   lastSocketAt,
 }: {
   jobId?: string | null;
+  summaryJobId?: string | null;
   enabled: boolean;
   lastSocketAt?: number | null;
 }): { progress: ImportJobProgress | null; polling: boolean } {
+  const resolvedJobId = resolveImportJobId(jobId, summaryJobId);
   const isFocused = useIsFocused();
   const [progress, setProgress] = useState<ImportJobProgress | null>(null);
   const [polling, setPolling] = useState(false);
@@ -78,18 +88,18 @@ export function useImportJobProgress({
     enabledAtRef.current = Date.now();
     setProgress(null);
     setPolling(false);
-  }, [jobId]);
+  }, [resolvedJobId]);
 
   useEffect(() => {
     if (enabled) enabledAtRef.current = Date.now();
   }, [enabled]);
 
   const poll = useCallback(async (signal?: AbortSignal) => {
-    if (!jobId || inFlightRef.current) return;
+    if (!resolvedJobId || inFlightRef.current) return;
     inFlightRef.current = true;
     try {
       const response = await apiFetch(
-        `/api/sync/jobs/${encodeURIComponent(jobId)}/progress`,
+        `/api/sync/jobs/${encodeURIComponent(resolvedJobId)}/progress`,
         { signal },
       );
       if (!response.ok) throw new Error(`Job progress failed: ${response.status}`);
@@ -102,11 +112,11 @@ export function useImportJobProgress({
     } finally {
       inFlightRef.current = false;
     }
-  }, [jobId]);
+  }, [resolvedJobId]);
 
   const terminal = progress?.state === 'completed' || progress?.state === 'failed';
   useEffect(() => {
-    if (!enabled || !isFocused || !jobId || terminal) {
+    if (!enabled || !isFocused || !resolvedJobId || terminal) {
       setPolling(false);
       return;
     }
@@ -126,7 +136,7 @@ export function useImportJobProgress({
       if (interval) clearInterval(interval);
       controller.abort();
     };
-  }, [enabled, isFocused, jobId, lastSocketAt, poll, terminal]);
+  }, [enabled, isFocused, resolvedJobId, lastSocketAt, poll, terminal]);
 
   return { progress, polling };
 }

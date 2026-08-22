@@ -25,9 +25,12 @@ import {
     formatBillingTimestamp,
     isCheckoutBlocked,
     type BillingStateViewModel,
-    type RawBillingSummary,
     type RawCheckoutConflict,
 } from '../utils/billingState';
+import {
+    parseBillingSummaryPayload,
+    type BillingSummaryPayload,
+} from '../utils/billingPayload';
 import { createLogger } from '../utils/logger';
 const log = createLogger('TierSelectorModal');
 
@@ -90,7 +93,7 @@ interface TierSelectorModalProps {
         remaining: number;
     };
     usagePercent?: number;
-    initialSummary?: RawBillingSummary | null;
+    initialSummary?: BillingSummaryPayload | null;
 }
 
 const ANORHA_GREEN = BRAND_PRIMARY;
@@ -129,8 +132,10 @@ const TierSelectorModal: React.FC<TierSelectorModalProps> = ({
     const refreshBillingState = useCallback(async () => {
         setIsBillingStateLoading(true);
         try {
-            const nextSummary = await apiJson<RawBillingSummary>('/api/billing/summary');
-            const nextBillingState = deriveBillingState(nextSummary, new Date());
+            const payload = await apiJson<unknown>('/api/billing/summary');
+            const parsed = parseBillingSummaryPayload(payload);
+            if (!parsed.ok) throw new Error(`Invalid billing summary at ${parsed.field}`);
+            const nextBillingState = deriveBillingState(parsed.value, new Date());
             setBillingState(current => nextBillingState.knowledge === 'unknown'
                 && isCheckoutBlocked(current.checkout.allowed)
                 ? current

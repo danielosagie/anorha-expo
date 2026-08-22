@@ -30,6 +30,30 @@ export interface BillingGateResponse {
   resumeToken?: string | null;
 }
 
+export function billingGateCopy(
+  gate: Pick<BillingGateResponse, 'code' | 'freeUsageCount' | 'freeLimit'>,
+): { title: string; body: string } {
+  switch (gate.code) {
+    case 'ok':
+      return { title: 'Ready to scan', body: 'You can continue.' };
+    case 'free_tier_exhausted':
+      return {
+        title: 'Out of free scans',
+        body: typeof gate.freeUsageCount === 'number' && typeof gate.freeLimit === 'number'
+          ? `${gate.freeUsageCount} of ${gate.freeLimit} free scans used.`
+          : 'Choose a plan or add credits.',
+      };
+    case 'credits_exhausted_but_invoiceable':
+      return { title: 'This scan can continue', body: 'Continue or add credits.' };
+    case 'invoice_required':
+      return { title: 'Billing needs attention', body: 'Review billing to keep scanning.' };
+    case 'hard_cap_blocked':
+      return { title: 'Usage cap reached', body: 'Review billing to keep scanning.' };
+    case 'billing_status_unavailable':
+      return { title: 'Could not verify billing', body: 'Try again.' };
+  }
+}
+
 const BILLING_GATE_CODES: ReadonlySet<BillingGateCode> = new Set([
   'ok',
   'free_tier_exhausted',

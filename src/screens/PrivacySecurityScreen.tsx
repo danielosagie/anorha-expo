@@ -23,8 +23,11 @@ import { apiJson, ApiError } from '../lib/apiClient';
 import {
   deriveBillingState,
   formatBillingDate,
-  type RawBillingSummary,
 } from '../utils/billingState';
+import {
+  parseBillingSummaryPayload,
+  type BillingSummaryPayload,
+} from '../utils/billingPayload';
 
 type DeletionResponse = {
   status?: 'scheduled' | 'deleted';
@@ -43,7 +46,7 @@ const PrivacySecurityScreen = () => {
   const [deleting, setDeleting] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
-  const [billingSummary, setBillingSummary] = useState<RawBillingSummary | null>(null);
+  const [billingSummary, setBillingSummary] = useState<BillingSummaryPayload | null>(null);
 
   const confirmationText = currentOrg?.name || 'DELETE';
   const billingState = deriveBillingState(billingSummary, new Date());
@@ -65,17 +68,10 @@ const PrivacySecurityScreen = () => {
     setBillingError(null);
     setBillingSummary(null);
     try {
-      const summary = await apiJson<RawBillingSummary>('/api/billing/summary');
-      const hasSubscriptionField = summary !== null
-        && typeof summary === 'object'
-        && Object.prototype.hasOwnProperty.call(summary, 'subscription');
-      const hasUsableSubscription = hasSubscriptionField
-        && (summary.subscription === null
-          || typeof (summary.subscription?.Status || summary.subscription?.status) === 'string');
-      if (!hasUsableSubscription) {
-        throw new Error('Billing response did not include subscription status.');
-      }
-      setBillingSummary(summary);
+      const payload = await apiJson<unknown>('/api/billing/summary');
+      const parsed = parseBillingSummaryPayload(payload);
+      if (!parsed.ok) throw new Error(`Invalid billing summary at ${parsed.field}`);
+      setBillingSummary(parsed.value);
     } catch {
       setBillingError('Billing status is unavailable. Try again before deleting your account.');
     } finally {

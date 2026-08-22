@@ -21,8 +21,7 @@ export type PlatformConnectionSyncState =
 export type PlatformConnectionRecommendedAction =
   | 'reconnect'
   | 'rescan'
-  | 'fix_resume'
-  | 'manage';
+  | 'fix_resume';
 
 /** Structural subset of PlatformConnectionRow these predicates read. */
 export interface ConnectionVisibilityFields {

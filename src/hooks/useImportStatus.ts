@@ -12,7 +12,14 @@ import {
   isFreshActiveImportEvidence,
   resetOwnerScopedImportState,
 } from '../lib/connectionImportPresentation';
+import { reconcileVerifiedAttentionCount } from '../lib/reviewQueueTruth';
 import { deriveV7AttentionCounts } from '../components/import/questionQueue';
+import {
+  zInboxSummary,
+  type InboxConnectionSummary,
+  type InboxSummary,
+  type RecentImport,
+} from '../contracts/import-status.contract.ts';
 import type { SyncItem } from '../types/syncItem';
 
 const log = createLogger('useImportStatus');
@@ -39,13 +46,15 @@ export interface HubConnection {
   state: string;
   /** Items parked in this connection's inbox (0 ⇒ show the quiet "Synced" state). */
   needsAttention: number;
+  /** True once this count has been reconciled by the inbox refresh cycle. */
+  attentionVerified: boolean;
   /** Time when the import evidence last changed. */
   observedAt: number;
-  itemsSoFar?: number;
-  phase?: string;
-  startedAt?: string;
-  p50DurationMs?: number;
-  jobId?: string;
+  itemsSoFar: number;
+  itemsTotal: number;
+  phase: string | null;
+  startedAt: string | null;
+  jobId: string | null;
 }
 
 export interface ImportScanning {
@@ -79,116 +88,39 @@ export interface ImportStatusData {
 // connection's exact V7 resolution payload before any attention count renders.
 // Exported so a future typed client can reuse the exact shape.
 // ---------------------------------------------------------------------------
-export interface InboxSummaryConnection {
-  connectionId: string;
-  platformType: string;
-  displayName: string;
-  state: 'active' | 'scanning' | 'syncing' | 'live' | 'review' | 'needs-attention' | 'error';
-  needsAttention: number;
+export interface InboxSummaryConnection extends InboxConnectionSummary {
+  attentionVerified?: boolean;
   observedAt: number;
-  itemsSoFar?: number;
-  phase?: string;
-  startedAt?: string;
-  p50DurationMs?: number;
-  jobId?: string;
 }
 
-export interface InboxRecentImport {
-  importId: string;
-  connectionId: string;
-  source: string;
-  status: string;
-  itemsTotal: number;
-  itemsCommitted: number;
-  itemsFailed: number;
-  itemsSoFar?: number;
-  phase?: string;
-  startedAt?: string;
-  p50DurationMs?: number;
-  jobId?: string;
-  createdAt: string;
-  completedAt: string | null;
-}
-
-const optionalNumber = (value: unknown): number | undefined => {
-  if (value == null || value === '') return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-};
-
-const optionalString = (value: unknown): string | undefined => {
-  if (value == null) return undefined;
-  const parsed = String(value).trim();
-  return parsed || undefined;
-};
+export type InboxRecentImport = RecentImport;
 
 export function parseInboxSummaryPayload(
   payload: unknown,
   observedAt = Date.now(),
 ): InboxSummaryResponse | null {
-  const j = payload as any;
-  if (!j || typeof j.totalNeedsAttention !== 'number' || !Array.isArray(j.connections)) {
-    return null;
-  }
-
-  const connections: InboxSummaryConnection[] = j.connections.map((c: any) => ({
-      connectionId: String(c?.connectionId ?? ''),
-      platformType: String(c?.platformType ?? ''),
-      displayName: String(c?.displayName ?? ''),
-      state: String(c?.state ?? '').toLowerCase() as InboxSummaryConnection['state'],
-      needsAttention: Number(c?.needsAttention ?? c?.attentionCount ?? 0) || 0,
-      observedAt,
-      itemsSoFar: optionalNumber(c?.itemsSoFar),
-      phase: optionalString(c?.phase ?? c?.scanState),
-      startedAt: optionalString(c?.startedAt),
-      p50DurationMs: optionalNumber(c?.p50DurationMs),
-      jobId: optionalString(c?.jobId),
-    }));
-  const connectionById = new Map(connections.map((connection) => [connection.connectionId, connection]));
-  const recentImports: InboxRecentImport[] = Array.isArray(j.recentImports)
-    ? j.recentImports.map((r: any) => {
-          const aggregateConnection = connectionById.get(String(r?.connectionId ?? ''));
-          const itemsSoFar = optionalNumber(r?.itemsSoFar) ?? aggregateConnection?.itemsSoFar;
-          return {
-            importId: String(r?.importId ?? ''),
-            connectionId: String(r?.connectionId ?? ''),
-            source: String(r?.source ?? ''),
-            status: String(r?.status ?? ''),
-            itemsTotal: Number(r?.itemsTotal ?? 0) || 0,
-            // RW3 already reads itemsCommitted for its live receipt. Falling back
-            // to the additive counter keeps that modal compatible with RW2.
-            itemsCommitted: Number(r?.itemsCommitted ?? itemsSoFar ?? 0) || 0,
-            itemsFailed: Number(r?.itemsFailed ?? 0) || 0,
-            itemsSoFar,
-            phase: optionalString(r?.phase ?? r?.scanState) ?? aggregateConnection?.phase,
-            startedAt: optionalString(r?.startedAt) ?? aggregateConnection?.startedAt,
-            p50DurationMs: optionalNumber(r?.p50DurationMs) ?? aggregateConnection?.p50DurationMs,
-            jobId: optionalString(r?.jobId) ?? aggregateConnection?.jobId,
-            createdAt: String(r?.createdAt ?? ''),
-            completedAt: r?.completedAt == null ? null : String(r.completedAt),
-          };
-        })
-    : [];
+  const parsed = zInboxSummary.safeParse(payload);
+  if (!parsed.success) return null;
 
   return {
-    totalNeedsAttention: Number(j.totalNeedsAttention) || 0,
-    byReason: j.byReason && typeof j.byReason === 'object' ? j.byReason : {},
-    connections,
-    recentImports,
+    ...parsed.data,
+    connections: parsed.data.connections.map((connection) => ({
+      ...connection,
+      attentionVerified: false,
+      observedAt,
+    })),
   };
 }
 
-export interface InboxSummaryResponse {
-  totalNeedsAttention: number;
-  byReason: Record<string, number>;
+export interface InboxSummaryResponse extends Omit<InboxSummary, 'connections'> {
   connections: InboxSummaryConnection[];
-  recentImports: InboxRecentImport[];
 }
 
 function connectionEvidenceSignature(connection: InboxSummaryConnection): string {
   return JSON.stringify([
     connection.state,
     connection.itemsSoFar ?? null,
+    connection.itemsTotal ?? null,
     connection.phase ?? null,
     connection.startedAt ?? null,
     connection.jobId ?? null,
@@ -222,7 +154,9 @@ export async function reconcileInboxAttention(
   fetchResolutionItems: (connectionId: string) => Promise<SyncItem[]>,
 ): Promise<InboxSummaryResponse> {
   const connections = await Promise.all(aggregate.connections.map(async (connection) => {
-    if (connection.needsAttention === 0) return connection;
+    if (connection.needsAttention === 0) {
+      return reconcileVerifiedAttentionCount(connection, 0);
+    }
 
     try {
       const items = await fetchResolutionItems(connection.connectionId);
@@ -231,7 +165,7 @@ export async function reconcileInboxAttention(
         platformName: connection.displayName || connection.platformType,
         items,
       }]);
-      return { ...connection, needsAttention: derived.count };
+      return reconcileVerifiedAttentionCount(connection, derived.count);
     } catch {
       return connection;
     }
@@ -337,10 +271,12 @@ function activateInboxOwner(ownerKey: string): void {
  * re-enable so the inbox numbers move WITH the connection set instead of
  * waiting for the next focus/poll. Safe to fire-and-forget.
  */
-export async function refreshInboxSummary(expectedOwnerKey = inboxStore.ownerKey): Promise<void> {
+export async function refreshInboxSummary(
+  expectedOwnerKey = inboxStore.ownerKey,
+): Promise<InboxSummaryResponse | null> {
   if (!expectedOwnerKey) {
     activateInboxOwner('');
-    return;
+    return null;
   }
   activateInboxOwner(expectedOwnerKey);
   const myId = ++inboxRefreshSeq;
@@ -352,13 +288,14 @@ export async function refreshInboxSummary(expectedOwnerKey = inboxStore.ownerKey
     token = null;
   }
   const agg = token ? await fetchInboxSummary(inboxStore.summary) : null;
-  if (inboxRefreshSeq !== myId || inboxStore.ownerKey !== requestedOwnerKey) return;
+  if (inboxRefreshSeq !== myId || inboxStore.ownerKey !== requestedOwnerKey) return null;
   setInboxStore({
     summary: agg,
     error: agg ? null : 'Couldn’t verify your import status. Pull to retry.',
     loading: false,
     firstDone: true,
   });
+  return agg;
 }
 
 /**
@@ -506,11 +443,12 @@ export function useImportStatus(): ImportStatusData {
       platformType: c.platformType,
       state: c.state,
       needsAttention: c.needsAttention,
+      attentionVerified: c.attentionVerified === true,
       observedAt: c.observedAt,
       itemsSoFar: c.itemsSoFar,
+      itemsTotal: c.itemsTotal,
       phase: c.phase,
       startedAt: c.startedAt,
-      p50DurationMs: c.p50DurationMs,
       jobId: c.jobId,
     }));
   }, [summary]);

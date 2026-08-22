@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeBillingGateResponse } from '../src/types/billingGate.ts';
+import { billingGateCopy, normalizeBillingGateResponse } from '../src/types/billingGate.ts';
 
 test('preserves a complete free-tier exhaustion decision', () => {
   const gate = normalizeBillingGateResponse({
@@ -62,4 +62,39 @@ test('classifies a contradictory decision as unavailable', () => {
   assert.equal(gate.code, 'billing_status_unavailable');
   assert.equal(gate.blockingState, 'billing_status_unavailable');
   assert.equal(gate.canProceed, false);
+});
+
+test('gate copy distinguishes free, paid, invoice, cap, and unavailable states', () => {
+  assert.deepEqual(billingGateCopy({
+    code: 'free_tier_exhausted',
+    freeUsageCount: 3,
+    freeLimit: 3,
+  }), {
+    title: 'Out of free scans',
+    body: '3 of 3 free scans used.',
+  });
+  assert.deepEqual(billingGateCopy({ code: 'hard_cap_blocked' }), {
+    title: 'Usage cap reached',
+    body: 'Review billing to keep scanning.',
+  });
+  assert.deepEqual(billingGateCopy({ code: 'invoice_required' }), {
+    title: 'Billing needs attention',
+    body: 'Review billing to keep scanning.',
+  });
+  assert.deepEqual(billingGateCopy({ code: 'billing_status_unavailable' }), {
+    title: 'Could not verify billing',
+    body: 'Try again.',
+  });
+  assert.deepEqual(billingGateCopy({ code: 'credits_exhausted_but_invoiceable' }), {
+    title: 'This scan can continue',
+    body: 'Continue or add credits.',
+  });
+  assert.doesNotMatch(
+    JSON.stringify([
+      billingGateCopy({ code: 'hard_cap_blocked' }),
+      billingGateCopy({ code: 'invoice_required' }),
+      billingGateCopy({ code: 'credits_exhausted_but_invoiceable' }),
+    ]),
+    /free scans/i,
+  );
 });

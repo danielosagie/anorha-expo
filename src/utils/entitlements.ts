@@ -3,8 +3,8 @@ import {
   deriveBillingState,
   type BillingProvider,
   type CheckoutProvider,
-  type RawBillingSummary,
 } from './billingState';
+import { parseBillingSummaryPayload } from './billingPayload';
 
 export type UserEntitlements = {
   planName: string | null;
@@ -35,7 +35,12 @@ export type UserEntitlements = {
 };
 
 export async function fetchUserEntitlements(): Promise<UserEntitlements> {
-  const summary = await apiJson<RawBillingSummary>('/api/billing/summary');
+  const payload = await apiJson<unknown>('/api/billing/summary');
+  const parsed = parseBillingSummaryPayload(payload);
+  if (!parsed.ok) {
+    throw new Error(`Invalid billing summary at ${parsed.field}`);
+  }
+  const summary = parsed.value;
   const billingState = deriveBillingState(summary, new Date());
   const subscriptionState = billingState.subscription.state;
   const hasAccess = subscriptionState === 'active'
@@ -46,7 +51,9 @@ export async function fetchUserEntitlements(): Promise<UserEntitlements> {
         : null;
 
   return {
-    planName: summary.subscription?.CurrentPlan ?? null,
+    planName: summary.subscription?.CurrentPlan
+      ?? summary.subscription?.current_plan
+      ?? null,
     maxConnections: null,
     aiScanLimit: null,
     isPaid: hasAccess,

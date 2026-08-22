@@ -143,6 +143,78 @@ test('parses the exact billing summary usage and cost contract', () => {
   assert.equal(result.value.total_cost_cents, 2000);
 });
 
+test('accepts the alternate contracted plan-name field', () => {
+  const result = parseBillingSummaryResponse(billingSummary({
+    subscription: {
+      current_plan: 'Teams',
+      Status: 'active',
+      CurrentPeriodEnd: '2026-09-19T12:00:00.000Z',
+      CanceledAt: null,
+    },
+  }));
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.subscription?.current_plan, 'Teams');
+});
+
+test('parses the optional credit balance contract', () => {
+  const result = parseBillingSummaryResponse(billingSummary({
+    ai_credits_cents: 9000,
+    ai_allowance_cents: 6000,
+    ai_used_cents: 250,
+    ai_remaining_cents: 8750,
+    ai_topup_remaining_cents: 2750,
+    ai_topup_total_cents: 3000,
+    last_topup_cents: 3000,
+    last_topup_at: '2026-08-20T12:00:00.000Z',
+  }));
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.ai_credits_cents, 9000);
+  assert.equal(result.value.ai_allowance_cents, 6000);
+  assert.equal(result.value.ai_used_cents, 250);
+  assert.equal(result.value.ai_remaining_cents, 8750);
+  assert.equal(result.value.ai_topup_remaining_cents, 2750);
+  assert.equal(result.value.ai_topup_total_cents, 3000);
+  assert.equal(result.value.last_topup_cents, 3000);
+  assert.equal(result.value.last_topup_at, '2026-08-20T12:00:00.000Z');
+});
+
+test('keeps older summaries honest when credit balance fields are absent', () => {
+  const result = parseBillingSummaryResponse(billingSummary());
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.ai_credits_cents, undefined);
+  assert.equal(result.value.ai_topup_remaining_cents, undefined);
+  assert.equal(result.value.last_topup_at, undefined);
+});
+
+test('rejects invalid credit balance fields at their exact paths', () => {
+  const numericFields = [
+    'ai_credits_cents',
+    'ai_allowance_cents',
+    'ai_used_cents',
+    'ai_remaining_cents',
+    'ai_topup_remaining_cents',
+    'ai_topup_total_cents',
+    'last_topup_cents',
+  ];
+
+  for (const field of numericFields) {
+    assert.deepEqual(
+      parseBillingSummaryResponse(billingSummary({ [field]: '3000' })),
+      { ok: false, field: `summary.${field}` },
+    );
+  }
+  assert.deepEqual(
+    parseBillingSummaryResponse(billingSummary({ last_topup_at: 1_777_200_000 })),
+    { ok: false, field: 'summary.last_topup_at' },
+  );
+});
+
 test('rejects guessed usage aliases instead of silently zeroing data', () => {
   const result = parseBillingSummaryResponse(billingSummary({
     usage: {

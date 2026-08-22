@@ -30,22 +30,51 @@ let cachedUploadIdentity: CachedUploadIdentity | null = null;
 let sessionIdentityPromise: Promise<CachedUploadIdentity> | null = null;
 let appIdentityPromise: { accessToken: string; promise: Promise<CachedUploadIdentity> } | null = null;
 
+function readJwtSubject(accessToken: string): string | null {
+  try {
+    const encodedPayload = accessToken.split('.')[1];
+    if (!encodedPayload) return null;
+    const normalized = encodedPayload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const json = typeof atob === 'function'
+      ? atob(padded)
+      : (globalThis as any).Buffer?.from(padded, 'base64').toString('utf8');
+    if (!json) return null;
+    const subject = JSON.parse(json)?.sub;
+    return typeof subject === 'string' && subject.trim() ? subject.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let meIdentityPromise: Promise<CachedUploadIdentity> | null = null;
+
+// The storage policy on product-images compares the first folder to app_user_id(),
+// the internal Users.Id UUID. The JWT `sub` equals that UUID only under the mint
+// bridge; under native Clerk auth it is the Clerk id (user_xxx) and the upload is
+// rejected with "invalid input syntax for type uuid" (reproduced on the simulator
+// 2026-08-21). Use `sub` only when it already is a UUID; otherwise read the `me`
+// view once per token and cache it, so uploads still do no identity I/O per photo.
 async function identityFromToken(accessToken: string): Promise<CachedUploadIdentity> {
   if (cachedUploadIdentity?.accessToken === accessToken) return cachedUploadIdentity;
-  if (appIdentityPromise?.accessToken === accessToken) return appIdentityPromise.promise;
-
-  const promise = getUserLike()
-    .then(({ user }) => {
-      const userId = user?.id?.trim();
-      if (!userId) throw new Error('Authenticated session has no canonical app user');
-      cachedUploadIdentity = { accessToken, userId };
-      return cachedUploadIdentity;
-    })
-    .finally(() => {
-      if (appIdentityPromise?.accessToken === accessToken) appIdentityPromise = null;
-    });
-  appIdentityPromise = { accessToken, promise };
-  return promise;
+  const subject = readJwtSubject(accessToken);
+  if (subject && UUID_PATTERN.test(subject)) {
+    cachedUploadIdentity = { accessToken, userId: subject };
+    return cachedUploadIdentity;
+  }
+  if (!meIdentityPromise) {
+    meIdentityPromise = getUserLike()
+      .then(({ user }) => {
+        if (!user?.id) throw new Error('Authenticated session has no user id');
+        cachedUploadIdentity = { accessToken, userId: user.id };
+        return cachedUploadIdentity;
+      })
+      .finally(() => {
+        meIdentityPromise = null;
+      });
+  }
+  return meIdentityPromise;
 }
 
 async function getLocalUploadIdentity(providedAccessToken?: string | null): Promise<CachedUploadIdentity> {
